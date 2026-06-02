@@ -1,13 +1,13 @@
 # x442-skills
 
-Collection of agent skills for Claude Code, Gemini CLI, and GitHub Copilot.
+Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CLI, and GitHub Copilot.
 
-> **Status:** iteration zero — bootstrap only. No skills shipped yet.
+> **Status:** iteration zero — bootstrap complete; `skills/engineering/` and `scripts/` scaffolded, first skill content WIP.
 
 ## Roadmap
 
-- [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config.
-- [ ] **Iteration 1** — first skills land under `skills/`. <!-- TODO -->
+- [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
+- [ ] **Iteration 1** — first skills land under `skills/` (`skills/engineering/` scaffold exists). <!-- TODO -->
 - [ ] **Iteration 2** — skill lint / validation tooling. <!-- TODO -->
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
@@ -17,16 +17,35 @@ Collection of agent skills for Claude Code, Gemini CLI, and GitHub Copilot.
 .
 ├── AGENTS.md                       # shared rules for all AIs
 ├── CLAUDE.md                       # Claude Code overrides
-├── GEMINI.md                       # Gemini CLI overrides
+├── ANTIGRAVITY.md                  # Antigravity overrides
+├── GEMINI.md                       # Gemini CLI overrides (deprecating)
 ├── .github/copilot-instructions.md # GitHub Copilot overrides
 ├── .vscode/settings.json           # wires Copilot to AGENTS.md
 ├── LICENSE                         # MIT
-└── skills/                         # (not yet created — iteration 1)
+├── scripts/
+│   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/
+│   └── list-skills.sh              # lists every SKILL.md in the repo
+└── skills/
+    └── engineering/                # category scaffold (first skills WIP)
 ```
 
 ## Install
 
-### Claude Code
+Pick one of three paths depending on your situation.
+
+### 1. Quickstart via `skills.sh` (recommended general path)
+
+The [`skills`](https://github.com/vercel-labs/skills) CLI installs this repo's skills into every supported agent in one shot:
+
+```bash
+npx skills add git@github.com:xyzxyz442/x442-skills.git
+```
+
+### 2. Tool-specific install
+
+Prefer your tool's native install path. The `npx skills add … -a <agent>` form is listed underneath each as an optional fallback (see [supported agents](https://github.com/vercel-labs/skills#supported-agents)).
+
+#### Claude Code
 
 ```bash
 claude plugin marketplace add xyzxyz442/x442-skills
@@ -38,23 +57,44 @@ Then, inside a Claude Code session:
 /plugin install <skill-name>@x442-skills
 ```
 
-`<skill-name>` is a placeholder until iteration 1 ships plugins. Overrides live in [CLAUDE.md](CLAUDE.md).
+Optional fallback: `npx skills add git@github.com:xyzxyz442/x442-skills.git -a claude-code`. Overrides live in [CLAUDE.md](CLAUDE.md).
 
-### Gemini CLI
+#### GitHub Copilot (VS Code)
 
-```bash
-npx skills add git@github.com:xyzxyz442/x442-skills.git
-```
+Open the repo in VS Code. [.vscode/settings.json](.vscode/settings.json) sets `chat.agentFilesLocations` so [AGENTS.md](AGENTS.md) loads automatically into Copilot Chat.
 
-Overrides live in [GEMINI.md](GEMINI.md).
+Optional fallback: `npx skills add git@github.com:xyzxyz442/x442-skills.git -a github-copilot`. Overrides live in [.github/copilot-instructions.md](.github/copilot-instructions.md).
 
-### GitHub Copilot (VS Code)
+#### Antigravity CLI
 
 ```bash
-npx skills add git@github.com:xyzxyz442/x442-skills.git
+antigravity install xyzxyz442/x442-skills
 ```
 
-[.vscode/settings.json](.vscode/settings.json) auto-loads `AGENTS.md` into Copilot Chat. Overrides live in [.github/copilot-instructions.md](.github/copilot-instructions.md).
+Optional fallback: `npx skills add git@github.com:xyzxyz442/x442-skills.git -a antigravity`. Overrides live in [ANTIGRAVITY.md](ANTIGRAVITY.md).
+
+#### Gemini CLI
+
+> [!WARNING]
+> Gemini CLI is transitioning to Antigravity CLI (sunset **2026-06-18** for consumer tiers). For new setups, prefer Antigravity. Details: <https://goo.gle/gemini-cli-migration>.
+
+```bash
+gemini extensions install xyzxyz442/x442-skills
+```
+
+Optional fallback: `npx skills add git@github.com:xyzxyz442/x442-skills.git -a gemini-cli`. Overrides live in [GEMINI.md](GEMINI.md).
+
+### 3. From source (dev loop / dogfooding)
+
+For working on a skill in this repo and having your AI pick it up immediately:
+
+```bash
+git clone git@github.com:xyzxyz442/x442-skills.git
+cd x442-skills
+./scripts/link-claude-skills.sh   # symlinks each skills/**/ into ~/.claude/skills/
+```
+
+Today the link script targets Claude Code only. Analogous link scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 

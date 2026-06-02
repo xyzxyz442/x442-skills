@@ -5,7 +5,8 @@
 This repository is the **single source of truth** for AI assistants working in this project. Tool-specific overrides live in:
 
 - [CLAUDE.md](CLAUDE.md) — Claude Code
-- [GEMINI.md](GEMINI.md) — Gemini CLI
+- [ANTIGRAVITY.md](ANTIGRAVITY.md) — Antigravity
+- [GEMINI.md](GEMINI.md) — Gemini CLI (transitioning to Antigravity, see migration link in GEMINI.md)
 - [.github/copilot-instructions.md](.github/copilot-instructions.md) — GitHub Copilot
 
 Read this file first, then your tool-specific file for any overrides.
@@ -24,7 +25,8 @@ The repo contains **no application code**. Everything ships as markdown plus the
 .
 ├── AGENTS.md                       # shared rules (this file)
 ├── CLAUDE.md                       # Claude-only overrides
-├── GEMINI.md                       # Gemini-only overrides
+├── ANTIGRAVITY.md                  # Antigravity-only overrides
+├── GEMINI.md                       # Gemini-only overrides (deprecating — see GEMINI.md)
 ├── .github/copilot-instructions.md # Copilot-only overrides
 ├── README.md                       # human-facing project docs
 └── skills/
