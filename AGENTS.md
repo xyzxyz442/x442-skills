@@ -1,4 +1,4 @@
-# x442-skills
+# AGENTS.md
 
 <!-- TODO: one-line description of this skills collection. -->
 
@@ -13,7 +13,7 @@ Read this file first, then your tool-specific file for any overrides.
 
 ## Project overview
 
-`x442-skills` is a collection of agent skills — reusable, model-agnostic capability packs written in markdown. Skills extend an AI assistant's behavior in a discoverable, on-demand way: the assistant reads a skill's frontmatter to decide *when* to invoke it, then loads the body for the *how*.
+`x442-skills` is a collection of agent skills — reusable, model-agnostic capability packs written in markdown. Skills extend an AI assistant's behavior in a discoverable, on-demand way: the assistant reads a skill's frontmatter to decide _when_ to invoke it, then loads the body for the _how_.
 
 The repo contains **no application code**. Everything ships as markdown plus the occasional supporting reference file.
 
@@ -73,7 +73,7 @@ Follow the [Karpathy coding guidelines](skills/engineering/initial-project/refer
 To add a new skill:
 
 1. Create `skills/<skill-name>/SKILL.md` with the frontmatter shape above.
-2. Write the body — start with *when to use*, then *how*, then *examples*.
+2. Write the body — start with _when to use_, then _how_, then _examples_.
 3. <!-- TODO: lint/validation command once one exists. -->
 4. Commit. One skill per commit keeps history reviewable.
 
