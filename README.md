@@ -23,7 +23,8 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 ├── .vscode/settings.json           # wires Copilot to AGENTS.md
 ├── LICENSE                         # MIT
 ├── scripts/
-│   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/
+│   ├── link-skills.sh              # symlinks skills/**/ into ~/.agents/skills/ (generic default)
+│   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
     └── engineering/                # category scaffold (first skills WIP)
@@ -91,10 +92,16 @@ For working on a skill in this repo and having your AI pick it up immediately:
 ```bash
 git clone git@github.com:xyzxyz442/x442-skills.git
 cd x442-skills
-./scripts/link-claude-skills.sh   # symlinks each skills/**/ into ~/.claude/skills/
+./scripts/link-skills.sh          # generic install: symlinks each skills/**/ into ~/.agents/skills/
+./scripts/link-claude-skills.sh   # Claude Code: symlinks ~/.agents/skills/ entries into ~/.claude/skills/
 ```
 
-Today the link script targets Claude Code only. Analogous link scripts for Antigravity / Gemini / Copilot land in a later iteration.
+Skills install once into the generic `~/.agents/skills/` location (read by any AGENTS.md-aware CLI);
+tool-specific scripts then symlink from there into the tool's own directory rather than back to the
+repo. `link-claude-skills.sh` runs the generic install for you first, so the chain is
+`repo → ~/.agents/skills → ~/.claude/skills`. Each linked skill is prefixed with `x442-`
+(e.g. `x442-initial-project`) so it can't collide with a same-named built-in skill. Dedicated
+scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
