@@ -64,6 +64,10 @@ Rules:
 - **Cite sources** when a skill encodes external API behavior or a vendor convention — link to the upstream doc so future-you can verify it still holds.
 - **Voice**: imperative, second person ("Do X", "Avoid Y"). No marketing language.
 
+## Coding guidelines
+
+Follow the [Karpathy coding guidelines](skills/engineering/initial-project/references/karpathy-guidelines.md) for all work in this project.
+
 ## Workflow
 
 To add a new skill:
