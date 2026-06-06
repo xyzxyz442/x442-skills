@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Points Claude Code's skill directory (~/.claude/skills) at the generic install.
-# Skills are installed once into ~/.agents/skills (via link-skills.sh, run first
+# Skills are installed once into ~/.agents/skills (via link-generic-skills.sh, run first
 # below); this script then symlinks each x442- skill from there into
 # ~/.claude/skills, so the tool dir tracks the generic location, not the repo.
 
@@ -11,7 +11,7 @@ GENERIC="$HOME/.agents/skills"
 DEST="$HOME/.claude/skills"
 
 # Install (or refresh) the generic location first, so it is present to link from.
-"$REPO/scripts/link-skills.sh"
+"$REPO/scripts/link-generic-skills.sh"
 
 # If DEST is a symlink into the repo or the generic dir, linking into it would
 # write back into a tree we read from. Detect and bail out instead.
