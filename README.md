@@ -23,7 +23,7 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 ├── .vscode/settings.json           # wires Copilot to AGENTS.md
 ├── LICENSE                         # MIT
 ├── scripts/
-│   ├── link-skills.sh              # symlinks skills/**/ into ~/.agents/skills/ (generic default)
+│   ├── link-generic-skills.sh      # symlinks skills/**/ into ~/.agents/skills/ (generic default)
 │   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
@@ -92,7 +92,7 @@ For working on a skill in this repo and having your AI pick it up immediately:
 ```bash
 git clone git@github.com:xyzxyz442/x442-skills.git
 cd x442-skills
-./scripts/link-skills.sh          # generic install: symlinks each skills/**/ into ~/.agents/skills/
+./scripts/link-generic-skills.sh  # generic install: symlinks each skills/**/ into ~/.agents/skills/
 ./scripts/link-claude-skills.sh   # Claude Code: symlinks ~/.agents/skills/ entries into ~/.claude/skills/
 ```
 
