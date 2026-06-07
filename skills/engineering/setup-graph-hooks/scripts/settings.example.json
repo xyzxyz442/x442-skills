@@ -1,14 +1,13 @@
 {
-  "_README": "Merged graph hooks. Commit this as .claude/settings.example.json. Each teammate copies it to .claude/settings.local.json (or ~/.claude/settings.json for all repos). Every hook silently no-ops when CRG/graphify is not installed or no graph exists. No hardcoded repo paths. graphify is intentionally NOT in any Claude hook (too slow ~10s; runs only via git hooks).",
+  "_README": "Graph hooks for code-review-graph + graphify. Commit this as .claude/settings.example.json; each teammate copies it to .claude/settings.local.json (or ~/.claude/settings.json for all repos). Every hook COMMAND is a stable thin wrapper that resolves its script repo-first then home ($CLAUDE_PROJECT_DIR/.claude/scripts then $HOME/.claude/scripts) and runs it. Two reasons: (1) repo-first resolution means a repo-local copy WINS over the home copy; (2) the wrapper text never changes across versions, so Claude Code's native de-duplication (identical command string + args fire once) collapses a home install and a repo install into a SINGLE fire instead of double-running. Every hook silently no-ops when CRG/graphify is not installed or no graph exists. graphify is intentionally NOT in any Claude hook (too slow ~10s; runs only via git hooks).",
   "hooks": {
     "PostToolUse": [],
     "Stop": [
       {
-        "_comment": "CRG auto-update once per AI turn. PID-guarded (per-repo) so overlapping turns never stack. embed runs detached. No-op if CRG absent or graph not built.",
         "hooks": [
           {
             "type": "command",
-            "command": "command -v code-review-graph >/dev/null 2>&1 && [ -d .code-review-graph ] && { PF=\"/tmp/crg-claude-$(pwd | { md5sum 2>/dev/null || md5 2>/dev/null; } | cut -c1-8).pid\"; if [ -f \"$PF\" ] && kill -0 \"$(cat \"$PF\")\" 2>/dev/null; then true; else { code-review-graph update --skip-flows 2>/dev/null && nohup code-review-graph embed >/dev/null 2>&1 & } & echo $! > \"$PF\"; fi; } || true",
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/stop-graph-update.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/stop-graph-update.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
             "timeout": 5
           }
         ]
@@ -16,7 +15,6 @@
     ],
     "PreToolUse": [
       {
-        "_comment": "Bash grep/find interceptor. Uses the smart-grep-hook.sh from the article if present (repo copy first, then home copy). Silent no-op if the script is not installed, so teammates without it are unaffected.",
         "matcher": "Bash",
         "hooks": [
           {
@@ -27,43 +25,39 @@
         ]
       },
       {
-        "_comment": "Read/Glob on source files. Portable rewrite of Config A's nudge: no hardcoded path, detects CRG and/or graphify, suggests MCP tools first then graphify CLI. Inline so it needs no external script.",
         "matcher": "Read|Glob",
         "hooks": [
           {
             "type": "command",
-            "command": "HIT=$(python3 -c \"import json,sys;d=json.load(sys.stdin);t=d.get('tool_input',d);s=(str(t.get('file_path') or '')+' '+str(t.get('pattern') or '')+' '+str(t.get('path') or '')).lower().replace(chr(92),'/');exts=('.py','.js','.ts','.tsx','.jsx','.go','.rs','.java','.rb','.c','.h','.cpp','.hpp','.cc','.cs','.kt','.swift','.php','.scala','.lua','.sh');sys.stdout.write('1' if 'graphify-out/' not in s and '.code-review-graph/' not in s and any(e in s for e in exts) else '')\" 2>/dev/null || true); if [ \"$HIT\" = 1 ]; then HINT=\"\"; [ -f .code-review-graph/graph.db ] && HINT=\"semantic_search_nodes_tool / query_graph_tool / get_impact_radius_tool\"; [ -f graphify-out/graph.json ] && HINT=\"${HINT:+$HINT or }graphify query/explain/path --graph graphify-out/graph.json\"; [ -n \"$HINT\" ] && printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"For codebase questions prefer %s over reading source files one by one. Read raw files to modify or debug specific code.\"}}' \"$HINT\"; fi || true"
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/read-glob-nudge.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/read-glob-nudge.sh\"; [ -f \"$S\" ] && bash \"$S\" || true"
           }
         ]
       }
     ],
     "SessionStart": [
       {
-        "_comment": "CRG graph status on session open",
         "hooks": [
           {
             "type": "command",
-            "command": "command -v code-review-graph >/dev/null 2>&1 && code-review-graph status 2>/dev/null || true",
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/session-status.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/session-status.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
             "timeout": 10
           }
         ]
       },
       {
-        "_comment": "Setup nudge \u2014 prompt to initialize if CLI installed but no graph built yet",
         "hooks": [
           {
             "type": "command",
-            "command": "if command -v code-review-graph >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ ! -d .code-review-graph ]; then printf '{\"systemMessage\":\"Graph tool installed but not yet initialized. Ask me to set up: code-review-graph (code-review-graph install)\"}'; fi || true",
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/session-setup-nudge.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/session-setup-nudge.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
             "timeout": 10
           }
         ]
       },
       {
-        "_comment": "Graph query cheatsheet (~150 tokens), once per session. Calls graph-cheatsheet.py which emits valid JSON. No-op if no graph.",
         "hooks": [
           {
             "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] && python3 \"$S\" 2>/dev/null || true",
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] && python3 \"$S\" || true",
             "timeout": 5
           }
         ]

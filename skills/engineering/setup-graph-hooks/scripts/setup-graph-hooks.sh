@@ -5,12 +5,13 @@
 #   * Works whether or not code-review-graph / graphify were ever used in this repo.
 #   * Installs nothing heavy — only files + git hook wiring. Tools stay dormant until built.
 #
-# Keep these four files together in one folder, then run:
+# Keep these files together in one folder, then run:
 #     ./setup-graph-hooks.sh [/path/to/repo]      # defaults to the current directory
 #       - setup-graph-hooks.sh   (this file)
-#       - smart-grep-hook.sh
-#       - post-commit
 #       - settings.example.json
+#       - post-commit
+#       - hook scripts: smart-grep-hook.sh, graph-cheatsheet.py, stop-graph-update.sh,
+#         read-glob-nudge.sh, session-status.sh, session-setup-nudge.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -29,7 +30,7 @@ echo "Wiring files..."
 
 # 2. scripts (repo-local so they travel with the repo) ---------------------------------
 mkdir -p .claude/scripts
-for s in smart-grep-hook.sh graph-cheatsheet.py; do
+for s in smart-grep-hook.sh graph-cheatsheet.py stop-graph-update.sh read-glob-nudge.sh session-status.sh session-setup-nudge.sh; do
   if [ -f "$HERE/$s" ]; then
     cp "$HERE/$s" ".claude/scripts/$s"
     chmod +x ".claude/scripts/$s"

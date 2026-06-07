@@ -32,8 +32,10 @@ If either fails, report it and stop. Do not partially apply.
 Repo-local (committed, travels with the repo):
 - `.claude/settings.example.json` — the merged hook config (PostToolUse empty; Stop = CRG
   update+embed once per turn, PID-guarded; PreToolUse = smart-grep interceptor + Read/Glob
-  nudge; SessionStart = status + setup-nudge + cheatsheet).
-- `.claude/scripts/smart-grep-hook.sh`, `.claude/scripts/graph-cheatsheet.py`.
+  nudge; SessionStart = status + setup-nudge + cheatsheet). Every hook command is a stable thin
+  wrapper that resolves its script repo-first then home (see Notes).
+- `.claude/scripts/` — the six hook scripts: `smart-grep-hook.sh`, `graph-cheatsheet.py`,
+  `stop-graph-update.sh`, `read-glob-nudge.sh`, `session-status.sh`, `session-setup-nudge.sh`.
 - `.git/hooks/post-commit` (or `.husky/post-commit` for husky repos) — background, resource-
   guarded graph refresh. `graphify` lives here, never in a Claude hook (too slow per-turn).
 
@@ -104,8 +106,18 @@ command the user still needs to run (install a tool and/or build the graph). Kee
 - **Scope:** default is per-repo (committed `settings.example.json`, active `settings.local.json`).
   For a developer who wants it everywhere, the same files also work at `~/.claude/settings.json`
   and `~/.claude/scripts/`; the hooks resolve the repo copy first, then the home copy.
+- **Priority + no double-firing:** Claude Code merges hooks across user, project, and local scopes
+  and runs them all — but it de-duplicates identical handlers: *"identical handlers are
+  deduplicated automatically. Command hooks are deduplicated by command string and `args`"*
+  ([hooks doc](https://code.claude.com/docs/en/hooks.md)). That is why every hook command here is a
+  byte-identical thin wrapper with all logic in a script: a home install and a repo install register
+  the *same* command string, so Claude Code collapses them to a **single** fire, and the wrapper's
+  repo-first resolution makes that single fire run the **repo** copy. Keep the wrappers identical
+  across versions — putting logic inline (instead of in a script) would make the command strings
+  diverge and reintroduce double-firing.
 - **Bundled files:** `scripts/` holds the installer (`setup-graph-hooks.sh`), verifier
-  (`verify-graph-hooks.sh`), the two Claude hook scripts (`smart-grep-hook.sh`,
-  `graph-cheatsheet.py`), the git `post-commit` source, and `settings.example.json` — all kept
-  beside the installer because it resolves its payload from its own directory.
-  `assets/agents-knowledge-graph.md` is the canonical AGENTS.md block.
+  (`verify-graph-hooks.sh`), the six hook scripts (`smart-grep-hook.sh`, `graph-cheatsheet.py`,
+  `stop-graph-update.sh`, `read-glob-nudge.sh`, `session-status.sh`, `session-setup-nudge.sh`), the
+  git `post-commit` source, and `settings.example.json` — all kept beside the installer because it
+  resolves its payload from its own directory. `assets/agents-knowledge-graph.md` is the canonical
+  AGENTS.md block.
