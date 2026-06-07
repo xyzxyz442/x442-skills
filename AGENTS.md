@@ -32,7 +32,9 @@ The repo contains **no application code**. Everything ships as markdown plus the
 └── skills/
     └── <skill-name>/
         ├── SKILL.md                # frontmatter + body
-        └── references/             # optional supporting files
+        ├── references/             # optional supporting files (samples, data, docs)
+        ├── scripts/                # optional executables for setup/automation skills
+        └── assets/                 # optional bundled payloads (configs, templates)
 ```
 
 ## Skill authoring conventions
@@ -52,7 +54,7 @@ Rules:
 
 - **`name`**: lowercase kebab-case, must match the directory name.
 - **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"). Keep under ~200 chars.
-- **Markdown only**: no executable code shipped from the skill itself. Supporting reference files (JSON, YAML, sample inputs) go under `references/`.
+- **Markdown-first**: most skills ship markdown only, with supporting samples/data under `references/`. Setup and automation skills _may_ ship executables (shell, Python) and config payloads — put runnable scripts under `scripts/` and bundled payloads (templates, config) under `assets/`. The no-destructive-shell-commands house rule still applies to every shipped file.
 - **One skill, one purpose**: if a skill describes two unrelated workflows, split it.
 - **Link, don't duplicate**: cross-reference other skills with relative links instead of copying their content.
 
