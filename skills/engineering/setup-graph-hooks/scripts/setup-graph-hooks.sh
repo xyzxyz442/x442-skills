@@ -98,7 +98,24 @@ for entry in ".code-review-graph/" "graphify-out/" ".claude/settings.local.json"
 done
 echo "  = .gitignore ensured"
 
-# 7. detect tools, print tailored next steps -------------------------------------------
+# 7. graph ignore files (idempotent; never clobber a customized one) --------------------
+# Both code-review-graph and graphify honor a repo-root ignore file to keep generated,
+# vendored, and lockfile noise out of the graph. Seed each from the shared template only
+# when absent; leave existing (possibly hand-tuned) files untouched.
+if [ -f "$HERE/graphignore" ]; then
+  for ignore in .code-review-graphignore .graphifyignore; do
+    if [ -f "$ignore" ]; then
+      echo "  = $ignore exists — left untouched"
+    else
+      cp "$HERE/graphignore" "$ignore"
+      echo "  + $ignore"
+    fi
+  done
+else
+  echo "  ! graphignore template missing next to installer — skipping ignore files"
+fi
+
+# 8. detect tools, print tailored next steps -------------------------------------------
 HAVE_CRG=0; HAVE_GFY=0
 if command -v code-review-graph >/dev/null 2>&1; then HAVE_CRG=1; fi
 if command -v graphify >/dev/null 2>&1; then HAVE_GFY=1; fi

@@ -38,6 +38,9 @@ Repo-local (committed, travels with the repo):
   `stop-graph-update.sh`, `read-glob-nudge.sh`, `session-status.sh`, `session-setup-nudge.sh`.
 - `.git/hooks/post-commit` (or `.husky/post-commit` for husky repos) — background, resource-
   guarded graph refresh. `graphify` lives here, never in a Claude hook (too slow per-turn).
+- `.code-review-graphignore` and `.graphifyignore` — repo-root ignore files (seeded from the
+  shared `scripts/graphignore` template) that keep generated, vendored, lockfile, and secret
+  noise out of both graphs. Seeded only when absent; a hand-tuned existing file is left untouched.
 
 Local/runtime (gitignored):
 - `.claude/settings.local.json` — the active copy of the hooks.
@@ -59,8 +62,9 @@ REPO="$(git rev-parse --show-toplevel)"
 bash "$SKILL_DIR/scripts/setup-graph-hooks.sh" "$REPO"
 ```
 This copies the scripts, installs `settings.example.json`, activates `settings.local.json`
-(without clobbering an existing one), installs the husky-aware `post-commit`, and patches
-`.gitignore`. Re-running never duplicates.
+(without clobbering an existing one), installs the husky-aware `post-commit`, patches
+`.gitignore`, and seeds `.code-review-graphignore` / `.graphifyignore` (when absent).
+Re-running never duplicates.
 
 ### 3. Inject the AGENTS.md routing block (idempotent)
 Append the canonical block only if its marker is not already present. This is what makes both
@@ -118,6 +122,7 @@ command the user still needs to run (install a tool and/or build the graph). Kee
 - **Bundled files:** `scripts/` holds the installer (`setup-graph-hooks.sh`), verifier
   (`verify-graph-hooks.sh`), the six hook scripts (`smart-grep-hook.sh`, `graph-cheatsheet.py`,
   `stop-graph-update.sh`, `read-glob-nudge.sh`, `session-status.sh`, `session-setup-nudge.sh`), the
-  git `post-commit` source, and `settings.example.json` — all kept beside the installer because it
+  git `post-commit` source, the `graphignore` template (seeds `.code-review-graphignore` and
+  `.graphifyignore`), and `settings.example.json` — all kept beside the installer because it
   resolves its payload from its own directory. `assets/agents-knowledge-graph.md` is the canonical
   AGENTS.md block.
