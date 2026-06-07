@@ -1,0 +1,60 @@
+#!/bin/sh
+# post-commit — refresh code knowledge graphs in the background after a commit.
+# Safe on ANY repo: each block is skipped when its tool or graph dir is absent.
+# Works as .git/hooks/post-commit or .husky/post-commit. graphify lives here (not in a
+# Claude hook) because it is too slow (~10s) for a per-turn trigger; here it runs detached
+# after the commit returns, so the latency is invisible.
+
+# --- resource guard: skip rebuild if CPU is busy or memory is low (Linux + macOS) -------
+_resources_ok() {
+  case "$(uname -s 2>/dev/null)" in
+    Linux)
+      n=$(nproc 2>/dev/null || echo 1)
+      ok=$(awk -v n="$n" 'NR==1{print ($1/n<=0.5)?1:0}' /proc/loadavg 2>/dev/null)
+      [ "${ok:-1}" = 1 ] || { echo "[graph hook] skip rebuild: CPU load above 50%"; return 1; }
+      mok=$(awk '/^MemAvailable:/{print ($2/1024>=2048)?1:0}' /proc/meminfo 2>/dev/null)
+      [ "${mok:-1}" = 1 ] || { echo "[graph hook] skip rebuild: < 2 GB free"; return 1; }
+      ;;
+    Darwin)
+      n=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 1)
+      ok=$(sysctl -n vm.loadavg 2>/dev/null | awk -v n="$n" '{gsub(/[{}]/,"");print ($1/n<=0.5)?1:0}')
+      [ "${ok:-1}" = 1 ] || { echo "[graph hook] skip rebuild: CPU load above 50%"; return 1; }
+      ;;
+  esac
+  return 0
+}
+
+# skip during rebase / merge / cherry-pick (commits fire repeatedly there)
+GD=$(git rev-parse --git-dir 2>/dev/null)
+[ -d "$GD/rebase-merge" ] && exit 0
+[ -d "$GD/rebase-apply" ] && exit 0
+[ -f "$GD/MERGE_HEAD" ] && exit 0
+[ -f "$GD/CHERRY_PICK_HEAD" ] && exit 0
+
+# portable 5-minute cap: GNU `timeout`, Homebrew `gtimeout`, else run uncapped (stock macOS
+# ships neither — falling back to no cap beats failing with "timeout: command not found").
+if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 300"
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT="gtimeout 300"
+else TIMEOUT=""; fi
+
+# --- graphify: background AST rebuild (only if installed and initialised) ---------------
+if command -v graphify >/dev/null 2>&1 && [ -d graphify-out ]; then
+  if ! pgrep -qf 'graphify' 2>/dev/null && _resources_ok; then
+    LOG="${HOME}/.cache/graphify-rebuild.log"; mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+    echo "[graphify] launching background rebuild (log: $LOG)"
+    nohup sh -c "$TIMEOUT graphify update ." >"$LOG" 2>&1 </dev/null &
+    disown 2>/dev/null || true
+  fi
+fi
+
+# --- code-review-graph: incremental update + embed (only if installed and initialised) --
+if command -v code-review-graph >/dev/null 2>&1 && [ -d .code-review-graph ]; then
+  if ! pgrep -qf 'code-review-graph update' 2>/dev/null && _resources_ok; then
+    LOG="${HOME}/.cache/code-review-graph-update.log"; mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+    echo "[code-review-graph] launching background update (log: $LOG)"
+    nohup sh -c "$TIMEOUT sh -c 'code-review-graph update --skip-flows && code-review-graph embed'" >"$LOG" 2>&1 </dev/null &
+    disown 2>/dev/null || true
+  fi
+fi
+
+exit 0
