@@ -57,6 +57,11 @@ Run these in order from the target project root.
    - **GitHub Copilot** → ensure `.github/copilot-instructions.md` exists and points readers to
      `AGENTS.md`, and ensure `.vscode/settings.json` lists the project root in
      `chat.agentFilesLocations` (`".": true`) using the merge-safe procedure below.
+5. **Offer graph-hooks setup.** Once wiring and verification pass, `AGENTS.md` exists — the
+   precondition for [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md), which wires a
+   self-updating code knowledge graph so agents query the graph instead of grepping. Ask the user
+   whether to run it now (in Claude Code, use `AskUserQuestion` with `multiSelect: false`, yes/no).
+   On yes, invoke `setup-graph-hooks`. On no, name it as the recommended next step in your report.
 
 ## Merge-safe `.vscode/settings.json` (Copilot)
 
@@ -90,3 +95,4 @@ User: "init this project."
    `AGENTS.md` and `.vscode/settings.json` lists the root in `chat.agentFilesLocations`.
 5. Report what changed and run the verification steps. To undo, remove the added lines and
    `trash` any file you created — never `rm -rf`.
+6. Ask whether to set up graph hooks now; on yes, hand off to `setup-graph-hooks`.
