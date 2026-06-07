@@ -2,12 +2,12 @@
 
 Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CLI, and GitHub Copilot.
 
-> **Status:** iteration zero — bootstrap complete; `skills/engineering/` and `scripts/` scaffolded, first skill content WIP.
+> **Status:** iteration 1 in progress — bootstrap done; building the first skill, `initial-project`, under `skills/engineering/`.
 
 ## Roadmap
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
-- [ ] **Iteration 1** — first skills land under `skills/` (`skills/engineering/` scaffold exists). <!-- TODO -->
+- [ ] **Iteration 1** _(in progress)_ — first skill lands: [`initial-project`](skills/engineering/initial-project/SKILL.md) under `skills/engineering/`.
 - [ ] **Iteration 2** — skill lint / validation tooling. <!-- TODO -->
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
@@ -27,7 +27,8 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 │   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
-    └── engineering/                # category scaffold (first skills WIP)
+    └── engineering/
+        └── initial-project/        # first skill (WIP): SKILL.md + references/
 ```
 
 ## Install
@@ -105,7 +106,7 @@ scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
-No skills ship yet. Once iteration 1 begins, each skill is a directory under `skills/` containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. See [AGENTS.md](AGENTS.md) for the full authoring spec.
+The first skill, [`initial-project`](skills/engineering/initial-project/SKILL.md), is in progress under iteration 1 — it initializes a project's AI assistant config around a shared `AGENTS.md`. Each skill is a directory under `skills/` containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. See [AGENTS.md](AGENTS.md) for the full authoring spec.
 
 ## License
 
