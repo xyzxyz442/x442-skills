@@ -52,7 +52,7 @@ if [ -n "$SET" ]; then
   fi
 fi
 
-# smart-grep script
+# hook scripts (repo copy first, then home) — all must be present and executable
 SCRIPT=""
 [ -f .claude/scripts/smart-grep-hook.sh ] && SCRIPT=.claude/scripts/smart-grep-hook.sh
 [ -z "$SCRIPT" ] && [ -f "$HOME/.claude/scripts/smart-grep-hook.sh" ] && SCRIPT="$HOME/.claude/scripts/smart-grep-hook.sh"
@@ -62,6 +62,17 @@ if [ -n "$SCRIPT" ]; then
 else
   warn "smart-grep-hook.sh not found — Bash interceptor will no-op"
 fi
+
+for hs in graph-cheatsheet.py stop-graph-update.sh read-glob-nudge.sh session-status.sh session-setup-nudge.sh; do
+  P_HS=""
+  [ -f ".claude/scripts/$hs" ] && P_HS=".claude/scripts/$hs"
+  [ -z "$P_HS" ] && [ -f "$HOME/.claude/scripts/$hs" ] && P_HS="$HOME/.claude/scripts/$hs"
+  if [ -n "$P_HS" ]; then
+    [ -x "$P_HS" ] && ok "$hs present and executable: $P_HS" || warn "$hs present but not executable: $P_HS (chmod +x it)"
+  else
+    warn "$hs not found — its hook will no-op"
+  fi
+done
 
 # git hook
 HOOK=""
