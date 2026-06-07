@@ -121,6 +121,17 @@ Iteration 1 ships two skills under [`engineering`](skills/engineering/):
 
 This repo dogfoods `setup-graph-hooks` on itself — see [`.claude/`](.claude/) and [`.mcp.json`](.mcp.json).
 
+## References
+
+Some skills in this repo build on external prior art:
+
+- [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) adapts setup steps from
+  [_Graphify + code-review-graph: Build a Self-Updating Knowledge Graph for Claude Code and Other AI_](https://dev.to/mir_mursalin_ankur/graphify-code-review-graph-build-a-self-updating-knowledge-graph-for-claude-code-and-other-ai-j1m)
+  by Mir Mursalin Ankur.
+- [`initial-project`](skills/engineering/initial-project/SKILL.md) incorporates concepts from
+  [multica-ai/andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills) — the
+  Karpathy coding guidelines it wires into `AGENTS.md`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
