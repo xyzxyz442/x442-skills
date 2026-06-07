@@ -451,3 +451,5 @@ $RECYCLE.BIN/
 .code-review-graph/
 
 # End of https://www.toptal.com/developers/gitignore/api/node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
+graphify-out/
+.claude/settings.local.json
