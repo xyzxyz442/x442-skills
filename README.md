@@ -2,12 +2,12 @@
 
 Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CLI, and GitHub Copilot.
 
-> **Status:** iteration 1 in progress — bootstrap done; building the first skill, `initial-project`, under `skills/engineering/`.
+> **Status:** iteration 1 in progress — bootstrap done; building the first skills, `initial-project` and `setup-graph-hooks`, under `skills/engineering/`.
 
 ## Roadmap
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
-- [ ] **Iteration 1** _(in progress)_ — first skill lands: [`initial-project`](skills/engineering/initial-project/SKILL.md) under `skills/engineering/`.
+- [ ] **Iteration 1** _(in progress)_ — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md) and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (which `initial-project` offers to run on completion).
 - [ ] **Iteration 2** — skill lint / validation tooling. <!-- TODO -->
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
@@ -28,7 +28,8 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
     └── engineering/
-        └── initial-project/        # first skill (WIP): SKILL.md + references/
+        ├── initial-project/        # first skill: SKILL.md + references/
+        └── setup-graph-hooks/      # second skill: SKILL.md + scripts/ + assets/
 ```
 
 ## Install
@@ -106,7 +107,7 @@ scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
-The first skill, [`initial-project`](skills/engineering/initial-project/SKILL.md), is in progress under iteration 1 — it initializes a project's AI assistant config around a shared `AGENTS.md`. Each skill is a directory under `skills/` containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. See [AGENTS.md](AGENTS.md) for the full authoring spec.
+Iteration 1 ships two skills under `skills/engineering/`. [`initial-project`](skills/engineering/initial-project/SKILL.md) initializes a project's AI assistant config around a shared `AGENTS.md`, then offers to run [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md), which wires the repo for a self-updating code knowledge graph so agents query the graph instead of grepping. Each skill is a directory under `skills/` containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. See [AGENTS.md](AGENTS.md) for the full authoring spec.
 
 ## License
 
