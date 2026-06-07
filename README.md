@@ -15,28 +15,31 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 
 ```text
 .
-├── AGENTS.md                       # shared rules for all AIs
-├── CLAUDE.md                       # Claude Code overrides
+├── AGENTS.md                       # shared rules for all AIs (source of truth)
+├── CLAUDE.md                       # Claude Code overrides (imports AGENTS.md)
 ├── ANTIGRAVITY.md                  # Antigravity overrides
 ├── GEMINI.md                       # Gemini CLI overrides (deprecating)
 ├── .github/copilot-instructions.md # GitHub Copilot overrides
 ├── .vscode/settings.json           # wires Copilot to AGENTS.md
+├── .mcp.json                       # code-review-graph MCP server (repo dogfoods setup-graph-hooks)
+├── .claude/                        # Claude Code config: settings.example.json + hook scripts
+├── .editorconfig                   # UTF-8, LF, 2-space indent, final newline
 ├── LICENSE                         # MIT
 ├── scripts/
 │   ├── link-generic-skills.sh      # symlinks skills/**/ into ~/.agents/skills/ (generic default)
 │   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
-    └── engineering/
-        ├── initial-project/        # first skill: SKILL.md + references/
-        └── setup-graph-hooks/      # second skill: SKILL.md + scripts/ + assets/
+    └── engineering/                # category README + skills
+        ├── initial-project/        # SKILL.md + references/
+        └── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
 ```
 
 ## Install
 
 Pick one of three paths depending on your situation.
 
-### 1. Quickstart via `skills.sh` (recommended general path)
+### 1. Quickstart via the `skills` CLI (recommended general path)
 
 The [`skills`](https://github.com/vercel-labs/skills) CLI installs this repo's skills into every supported agent in one shot:
 
@@ -107,7 +110,16 @@ scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
-Iteration 1 ships two skills under `skills/engineering/`. [`initial-project`](skills/engineering/initial-project/SKILL.md) initializes a project's AI assistant config around a shared `AGENTS.md`, then offers to run [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md), which wires the repo for a self-updating code knowledge graph so agents query the graph instead of grepping. Each skill is a directory under `skills/` containing a `SKILL.md` with YAML frontmatter (`name`, `description`) and a markdown body. See [AGENTS.md](AGENTS.md) for the full authoring spec.
+Every skill is a directory under `skills/<category>/` containing a `SKILL.md` — YAML frontmatter (`name`, `description`) plus a markdown body. Setup skills may also ship `scripts/` and `assets/`. See [AGENTS.md](AGENTS.md) for the full authoring spec.
+
+Iteration 1 ships two skills under [`engineering`](skills/engineering/):
+
+| Skill | What it does |
+| --- | --- |
+| [`initial-project`](skills/engineering/initial-project/SKILL.md) | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-graph-hooks`. |
+| [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) | Wires a repo for a self-updating code knowledge graph (code-review-graph + graphify) so agents query the graph instead of grepping. |
+
+This repo dogfoods `setup-graph-hooks` on itself — see [`.claude/`](.claude/) and [`.mcp.json`](.mcp.json).
 
 ## License
 
