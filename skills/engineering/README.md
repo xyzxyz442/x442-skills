@@ -6,9 +6,10 @@ reason about code — independent of the specific stack.
 
 ## Skills in this category
 
-| Skill             | Purpose                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| Skill | Purpose |
+| --- | --- |
 | `initial-project` | Set up a project's AI assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it. |
+| `setup-graph-hooks` | Wire a repo for a self-updating code knowledge graph (code-review-graph + graphify): Claude Code hooks, a git post-commit refresh, and an `AGENTS.md` routing block. Chains after `initial-project`. |
 
 ## Authoring conventions
 
