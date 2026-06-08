@@ -1,15 +1,28 @@
 {
   "name": "x442-skills",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "A collection of model-agnostic agent skills.",
   "scripts": {
-    "prepare": "husky",
+    "format": "prettier --check .",
+    "prepare": "husky && pnpm run prepare:commit-msg && pnpm run prepare:pre-commit",
+    "prepare:commit-msg": "echo 'npx --no -- commitlint --edit $1' > .husky/commit-msg",
+    "prepare:pre-commit": "rm -f .husky/pre-commit && pnpm run prepare:pre-commit:lint-staged",
+    "prepare:pre-commit:lint-staged": "echo 'pnpm run lint-staged --concurrent false' >> .husky/pre-commit",
+    "lint-staged": "lint-staged",
+    "release": "release-it",
+    "release:dry-run": "release-it --dry-run",
+    "release:changelog": "release-it --no-git --no-github",
     "commitlint": "commitlint"
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
-    "husky": "^9.0.0"
+    "@commitlint/cli": "^21.0.2",
+    "@commitlint/config-conventional": "^21.0.2",
+    "@commitlint/types": "^21.0.1",
+    "@release-it/conventional-changelog": "^11.0.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.7",
+    "prettier": "^3.8.3",
+    "release-it": "^20.2.0"
   }
 }
