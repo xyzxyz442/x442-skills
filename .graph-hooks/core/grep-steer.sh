@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
-# smart-grep-hook.sh — graph-first grep/find interceptor for Claude Code (PreToolUse: Bash).
-# Routes the agent to the knowledge graph instead of grepping source. Safe no-op when no
-# graph exists, so it is harmless in any repo. Lives at <repo>/.claude/scripts/ so it
-# travels with the repo. No hardcoded paths.
+# grep-steer.sh — tool-neutral graph-first grep/find decision core.
+# stdin: a raw shell command string. stdout: neutral hook JSON, or nothing to pass.
+#   {"context":"..."}                          -> inject advice, allow the command
+#   {"decision":"deny","reason":..,"context":..} -> block the command, answer inline
+# emit.py maps this neutral shape to each tool's hook JSON. Ported from the original
+# smart-grep-hook.sh; behavior is unchanged — only the protocol wrapping was removed.
 #
 # Decision ladder (first match wins):
 #   1. Not a search command (grep/rg/find/fd/ack/ag)  -> pass silently
 #   2. Command contains --graph-tried                 -> pass silently (explicit override)
 #   3. Target is non-code (.md/.json/.yml/.log/...)   -> pass silently
 #   4. No local graph (CRG db or graphify json)       -> pass silently
-#   5. Local graph present, session-aware gating (one allowance per repo per hour):
-#        a. first grep + graph hit  -> show answer, ALLOW (one-shot lesson)
-#        b. first grep + miss       -> ALLOW, suggest the right tool for next time
-#        c. later grep + graph hit  -> BLOCK with the answer inline (kills the retry loop)
-#        d. later grep + miss       -> pass silently
+#   5. Local graph present, one allowance per repo per hour:
+#        a. first grep + hit  -> inject answer, ALLOW (one-shot lesson)
+#        b. first grep + miss -> ALLOW, suggest the right tool for next time
+#        c. later grep + hit  -> DENY with the answer inline (kills the retry loop)
+#        d. later grep + miss -> pass silently
 set -uo pipefail
 
-INPUT=$(cat 2>/dev/null || true)
-CMD=$(printf '%s' "$INPUT" | python3 -c "import json,sys
-try:
-    d=json.load(sys.stdin); print(d.get('tool_input',d).get('command',''))
-except Exception:
-    print('')" 2>/dev/null || true)
+CMD="$(cat 2>/dev/null || true)"
+[ -z "$CMD" ] && exit 0
 
 # Tier 1 — only intercept search commands
 case " $CMD " in
@@ -45,7 +43,7 @@ HAVE_CRG=0; HAVE_GFY=0
 [ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ] && exit 0
 
 # Extract a search term: first non-flag word > 2 chars that is not a path
-PATTERN=$(printf '%s' "$CMD" | python3 -c "import sys,shlex
+PATTERN="$(printf '%s' "$CMD" | python3 -c "import sys,shlex
 try: parts=shlex.split(sys.stdin.read())
 except Exception: parts=sys.stdin.read().split()
 bases={'grep','egrep','fgrep','rg','ripgrep','ag','ack','fd','find'}
@@ -53,10 +51,8 @@ i=next((k for k,p in enumerate(parts) if p.rsplit('/',1)[-1] in bases),-1)
 if i<0: sys.exit(0)
 for p in parts[i+1:]:
     if not p.startswith('-') and len(p)>2 and '/' not in p:
-        print(p[:60]); break" 2>/dev/null || true)
+        print(p[:60]); break" 2>/dev/null || true)"
 [ -z "$PATTERN" ] && exit 0
-
-json_esc() { python3 -c "import json,sys; print(json.dumps(sys.stdin.read())[1:-1])"; }
 
 query_crg() {  # $1=db $2=pattern  (FTS5, falls back to LIKE; read-only)
   python3 - "$1" "$2" <<'PY' 2>/dev/null
@@ -109,39 +105,46 @@ RESULT=""
 "
 [ "$HAVE_GFY" = 1 ] && RESULT="$RESULT$(query_gfy graphify-out/graph.json "$PATTERN")
 "
-RESULT=$(printf '%s' "$RESULT" | sed '/^[[:space:]]*$/d')
+RESULT="$(printf '%s' "$RESULT" | sed '/^[[:space:]]*$/d')"
 
 HINT=""
 [ "$HAVE_CRG" = 1 ] && HINT="semantic_search_nodes_tool(query='$PATTERN')"
 [ "$HAVE_GFY" = 1 ] && HINT="${HINT:+$HINT or }graphify query '$PATTERN' --graph graphify-out/graph.json"
 
 # One allowance per repo per hour
-KEY=$(printf '%s' "$PWD" | { md5sum 2>/dev/null || md5 2>/dev/null; } | cut -c1-8)
-DIR="${HOME}/.cache/claude-graph-hook"; mkdir -p "$DIR" 2>/dev/null || true
+KEY="$(printf '%s' "$PWD" | { md5sum 2>/dev/null || md5 2>/dev/null; } | cut -c1-8)"
+DIR="${HOME}/.cache/graph-steer-hook"; mkdir -p "$DIR" 2>/dev/null || true
 SLOT="${DIR}/first-${KEY:-x}-$(date +%Y%m%d%H)"
 
-emit_ctx()   { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}' "$(printf '%s' "$1" | json_esc)"; }
-emit_block() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"block","permissionDecisionReason":"%s"}}' "$(printf '%s' "$1" | json_esc)"; }
+emit_neutral() {  # $1=context|deny  $2=text   (python does the JSON escaping)
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+mode, text = sys.argv[1], sys.argv[2]
+if mode == "context":
+    print(json.dumps({"context": text}))
+elif mode == "deny":
+    print(json.dumps({"decision": "deny", "reason": text, "context": text}))
+PY
+}
 
 if [ ! -f "$SLOT" ]; then
   touch "$SLOT" 2>/dev/null || true
   if [ -n "$RESULT" ]; then
-    emit_ctx "Knowledge graph pre-answer for '$PATTERN':
+    emit_neutral context "Knowledge graph pre-answer for '$PATTERN':
 $RESULT
 
 If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbol greps get denied when the graph can answer. Bypass anytime: append --graph-tried."
   else
-    emit_ctx "No graph hit for '$PATTERN' — grep proceeding (one-shot). Next time try: $HINT. Append --graph-tried to bypass permanently."
+    emit_neutral context "No graph hit for '$PATTERN' — grep proceeding (one-shot). Next time try: $HINT. Append --graph-tried to bypass permanently."
   fi
   exit 0
 fi
 
 if [ -n "$RESULT" ]; then
-  emit_block "The knowledge graph already has this — no grep/retry needed:
+  emit_neutral deny "The knowledge graph already has this — no grep/retry needed:
 
 $RESULT
 
 Use: $HINT. Append --graph-tried to override."
-  exit 0
 fi
 exit 0

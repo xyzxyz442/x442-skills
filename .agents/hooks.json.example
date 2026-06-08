@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "_UNVERIFIED": "Antigravity hook contract is not yet confirmed; do not activate as-is.",
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool antigravity --kind pretool-shell || true"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool antigravity --kind sessionstart || true"
+          }
+        ]
+      }
+    ]
+  }
+}
