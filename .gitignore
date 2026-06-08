@@ -447,9 +447,13 @@ $RECYCLE.BIN/
 # and uncomment the following lines
 # .pnp.*
 
-# code-review-graph
-.code-review-graph/
-
 # End of https://www.toptal.com/developers/gitignore/api/node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
+
+# user-specific
+.husky
+.tmp
+
+# AI
+.code-review-graph/
 graphify-out/
 .claude/settings.local.json
