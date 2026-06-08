@@ -57,11 +57,52 @@ Run these in order from the target project root.
    - **GitHub Copilot** → ensure `.github/copilot-instructions.md` exists and points readers to
      `AGENTS.md`, and ensure `.vscode/settings.json` lists the project root in
      `chat.agentFilesLocations` (`".": true`) using the merge-safe procedure below.
-5. **Offer graph-hooks setup.** Once wiring and verification pass, `AGENTS.md` exists — the
+5. **Scaffold commit conventions (commitlint).** Standardize commit messages with
+   [Conventional Commits](https://www.conventionalcommits.org/) enforced by commitlint. Drop the
+   bundled config and wire local + CI enforcement (see *Commit conventions* below). Idempotent —
+   skip any piece already present.
+6. **Offer graph-hooks setup.** Once wiring and verification pass, `AGENTS.md` exists — the
    precondition for [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md), which wires a
    self-updating code knowledge graph so agents query the graph instead of grepping. Ask the user
    whether to run it now (in Claude Code, use `AskUserQuestion` with `multiSelect: false`, yes/no).
    On yes, invoke `setup-graph-hooks`. On no, name it as the recommended next step in your report.
+
+## Commit conventions (commitlint)
+
+Bundled in [assets/commitlint/](assets/commitlint/). The convention is Conventional Commits:
+`type(scope): subject` — lowercase imperative subject, no trailing period, header ≤100 chars.
+**Scope is optional** but, when present, must be one of the enum in the config. Valid `type`s:
+`feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+Valid scopes: `setup`, `config`, `deps`, `feature`, `bug`, `docs`, `style`, `refactor`, `test`,
+`build`, `ci`, `release`, `other`.
+
+Place three files (each idempotent — skip if already present):
+
+1. **Config** → copy `assets/commitlint/commitlint.config.mjs` to the repo root.
+2. **Local hook** → copy `assets/commitlint/commit-msg` to `.husky/commit-msg` (husky v9 hook;
+   runs `commitlint --edit` on every commit). `chmod +x` it.
+3. **CI** → copy `assets/commitlint/commitlint.yml` to `.github/workflows/commitlint.yml`
+   (validates every PR/push commit server-side, independent of local hooks).
+
+Then ensure `package.json` carries the dev dependencies and the husky `prepare` script, merging
+into an existing file (round-trip JSON — never splice with `sed`; preserve all other keys):
+
+```json
+{
+  "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
+    "husky": "^9.0.0"
+  },
+  "scripts": { "prepare": "husky" }
+}
+```
+
+Tell the user to run `npm install` once to install the tools and activate husky (the `prepare`
+script sets up the hook). Do not run it automatically. Note for repos that also use
+[`setup-graph-hooks`](../setup-graph-hooks/SKILL.md): husky points git at `.husky/`, so its
+git `post-commit` refresh installs to `.husky/post-commit` — `setup-graph-hooks` already detects
+husky and does this, so run/re-run it after husky exists.
 
 ## Merge-safe `.vscode/settings.json` (Copilot)
 
@@ -81,7 +122,12 @@ Run these in order from the target project root.
    file.
 4. **End-to-end:** start a fresh session in a wired tool; `AGENTS.md` (and its guidelines) is in
    context.
-5. **Idempotency:** re-running this skill is a no-op for every already-wired tool.
+5. **Commit conventions:** `commitlint.config.mjs`, `.husky/commit-msg`, and
+   `.github/workflows/commitlint.yml` exist, and `package.json` has the commitlint/husky
+   devDeps + `prepare` script. After `npm install`, a bad message is rejected — e.g.
+   `git commit -m "bad message"` fails, `git commit -m "chore: valid message"` passes. Confirm
+   directly with `npx commitlint --from HEAD~1 --to HEAD`.
+6. **Idempotency:** re-running this skill is a no-op for every already-wired tool.
 
 ## Example
 
