@@ -112,6 +112,6 @@ Routing (CRG first, graphify on miss, grep last):
 | string / config / log text | `grep` (append `--graph-tried` to bypass the graph gate) |
 
 If no graph exists yet, ask to run: `code-review-graph build && code-review-graph embed`.
-The graph refreshes automatically (Claude Code Stop hook + git post-commit); you do not need to
-rebuild it manually after edits.
+The graph refreshes automatically (the primary tool's end-of-turn hook + a git post-commit
+refresh that runs regardless of tool); you do not need to rebuild it manually after edits.
 <!-- graph-hooks:end -->

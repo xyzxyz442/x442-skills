@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool gemini --kind pretool-shell || true",
+            "timeout": 6000
+          }
+        ]
+      },
+      {
+        "matcher": "read_file|read_many_files|glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool gemini --kind pretool-read || true",
+            "timeout": 6000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool gemini --kind sessionstart || true",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

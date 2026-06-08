@@ -2,24 +2,13 @@
   "_README": "Graph hooks for code-review-graph + graphify. Commit this as .claude/settings.example.json; each teammate copies it to .claude/settings.local.json (or ~/.claude/settings.json for all repos). Every hook COMMAND is a stable thin wrapper that resolves its script repo-first then home ($CLAUDE_PROJECT_DIR/.claude/scripts then $HOME/.claude/scripts) and runs it. Two reasons: (1) repo-first resolution means a repo-local copy WINS over the home copy; (2) the wrapper text never changes across versions, so Claude Code's native de-duplication (identical command string + args fire once) collapses a home install and a repo install into a SINGLE fire instead of double-running. Every hook silently no-ops when CRG/graphify is not installed or no graph exists. graphify is intentionally NOT in any Claude hook (too slow ~10s; runs only via git hooks).",
   "hooks": {
     "PostToolUse": [],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/stop-graph-update.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/stop-graph-update.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/smart-grep-hook.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/smart-grep-hook.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind pretool-shell || true",
             "timeout": 6
           }
         ]
@@ -29,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/read-glob-nudge.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/read-glob-nudge.sh\"; [ -f \"$S\" ] && bash \"$S\" || true"
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind pretool-read || true"
           }
         ]
       }
@@ -39,25 +28,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/session-status.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/session-status.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind sessionstart || true",
             "timeout": 10
           }
         ]
-      },
+      }
+    ],
+    "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/session-setup-nudge.sh\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/session-setup-nudge.sh\"; [ -f \"$S\" ] && bash \"$S\" || true",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] || S=\"$HOME/.claude/scripts/graph-cheatsheet.py\"; [ -f \"$S\" ] && python3 \"$S\" || true",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind endturn || true",
             "timeout": 5
           }
         ]
