@@ -450,7 +450,7 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
 
 # user-specific
-.husky/_/
+.husky
 .tmp
 
 # AI
