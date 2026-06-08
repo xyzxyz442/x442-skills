@@ -28,6 +28,40 @@ fi
 
 mkdir -p "$DEST"
 
+# Prune pass: remove stale *unprefixed* leftovers from a pre-prefix install.
+# Deliberately narrow — a link is pruned only when ALL hold: it is a symlink,
+# its name lacks the x442- prefix, a prefixed counterpart exists in $GENERIC,
+# and it resolves back into $REPO or $GENERIC. Anything pointing elsewhere (e.g.
+# another tool's skills) is left untouched. Removal is prompted when interactive
+# and skipped (warned) otherwise — never auto-deleted without consent.
+for link in "$DEST"/*; do
+  [ -L "$link" ] || continue                  # symlinks only; never touch real dirs
+  name="$(basename "$link")"
+  case "$name" in x442-*) continue ;; esac     # only prune the unprefixed form
+  [ -e "$GENERIC/x442-$name" ] || continue     # needs a prefixed counterpart
+  resolved="$(readlink -f "$link" 2>/dev/null || true)"
+  case "$resolved" in
+    "$REPO"|"$REPO"/*|"$GENERIC"|"$GENERIC"/*) ;;   # same-context guard
+    *) continue ;;
+  esac
+
+  if [ -t 0 ]; then
+    printf 'stale unprefixed link: %s -> %s\n' "$link" "$resolved" >&2
+    printf '  superseded by: %s/x442-%s\n' "$DEST" "$name" >&2
+    printf '  remove it? [y/N] ' >&2
+    read -r reply
+    case "$reply" in
+      [yY]|[yY][eE][sS])
+        if command -v trash >/dev/null 2>&1; then trash "$link"; else unlink "$link"; fi
+        echo "pruned $name" >&2
+        ;;
+      *) echo "kept $name (declined)" >&2 ;;
+    esac
+  else
+    echo "stale $name — run interactively or remove manually: $link" >&2
+  fi
+done
+
 for src in "$GENERIC"/x442-*; do
   [ -e "$src" ] || continue   # no matches: glob stays literal, skip it
   name="$(basename "$src")"
