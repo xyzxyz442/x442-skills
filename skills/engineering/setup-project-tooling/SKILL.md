@@ -1,0 +1,217 @@
+---
+name: x442-setup-project-tooling
+description: >-
+  (Experimental) Use after initial-project, or whenever setting up project dev tooling — commit conventions
+  (commitlint + husky), staged-file linting/formatting (lint-staged, prettier, eslint, ruff/black,
+  sqlfluff), a VS Code workspace, or release automation (release-it + conventional-changelog).
+  Detects the project profile (category, language, framework, package manager) and scaffolds
+  tooling to match, idempotently.
+---
+
+# setup-project-tooling
+
+> **Status: experimental.** This skill scaffolds real config files, and its profile detection and
+> output may change between versions — review what it writes before relying on it.
+
+Scaffold a project's dev tooling to match what it actually is. This skill detects the project
+profile — category, language(s), framework, package manager — then wires commit conventions,
+staged-file lint/format, a VS Code workspace, and (optionally) release automation so they fit the
+stack. Everything is Node-rooted: husky, commitlint, lint-staged, and release-it live in
+`package.json`, so a `package.json` must exist (the skill creates a minimal one for a greenfield
+repo) even when the code itself is Python or SQL.
+
+Runs as a repo-onboarding step, typically right after [`initial-project`](../initial-project/SKILL.md)
+has created `AGENTS.md`. It is separate from `initial-project` on purpose: that skill owns
+AI-assistant configuration; this one owns dev tooling.
+
+## When to use
+
+Use when the user wants to set up or standardize commit messages, pre-commit lint/format, editor
+settings, or releases — e.g. "set up commitlint", "add lint-staged", "wire prettier/husky",
+"configure the VS Code workspace", "set up release-it". Run from the target project's root.
+
+Everything here is idempotent: detect each piece and skip what is already present. Never overwrite
+a config the repo already has unless the user asks; merge into `package.json` round-trip (parse →
+mutate → write), never splice with `sed`.
+
+## Step 1 — Detect the profile, then ask only for gaps
+
+Read the repo first; prompt only for what you cannot infer.
+
+| Dimension | Detect from | Ask only if |
+| --- | --- | --- |
+| Package manager | `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun | no lockfile (greenfield) → default **npm**, confirm |
+| Language(s) | `tsconfig.json`/`*.ts`→TypeScript, `pyproject.toml`/`*.py`→Python, `*.sql`→SQL | empty repo → ask |
+| Framework | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React | ambiguous or absent → ask |
+| Category | inferred from framework (Next/React→frontend, NestJS→backend, `"private": false` or a `bin`/`exports` field→library) | can't infer → ask: frontend / backend / library / other (ETL/data) |
+
+In Claude Code, gather gaps with `AskUserQuestion`. Record the resulting profile; it drives the
+preset below.
+
+### Preset matrix
+
+| Category | Framework | Language(s) | Lint / format | release-it default |
+| --- | --- | --- | --- | --- |
+| Frontend | Next.js (React) | TypeScript (strict) | eslint + prettier | optional (ask) |
+| Backend | NestJS | TypeScript (strict) | eslint + prettier | optional (ask) |
+| Library | Node.js / Python | TypeScript (strict) / Python | eslint + prettier / ruff + black | **on** |
+| Other (ETL/data) | — | Python (+ SQL) | ruff + black + sqlfluff | off |
+
+Commit conventions, husky, `.editorconfig`, and base VS Code settings apply to every profile.
+
+## Step 2 — Ensure `package.json` and the `prepare` chain
+
+If `package.json` is absent, create a minimal one (`name`, `version`, `"private": true` unless this
+is a public library). Then merge in the scripts that generate the git hooks at install time — the
+canonical pattern (matches the `.husky/`-gitignored convention). Adapt `pnpm`/`npm`/`yarn`/`bun` to
+the detected manager in `lint-staged`'s invocation:
+
+```json
+{
+  "scripts": {
+    "prepare": "husky && npm run prepare:commit-msg && npm run prepare:pre-commit",
+    "prepare:commit-msg": "echo 'npx --no -- commitlint --edit \"$1\"' > .husky/commit-msg",
+    "prepare:pre-commit": "echo 'npx --no -- lint-staged' > .husky/pre-commit",
+    "lint-staged": "lint-staged"
+  }
+}
+```
+
+This keeps `.husky/` out of version control (add `.husky` to `.gitignore` if not already ignored)
+and regenerates the hooks on every `install`. Teams that prefer **committed** hooks can instead copy
+[`assets/commit-msg`](assets/commit-msg) to `.husky/commit-msg`, `chmod +x` it, and set
+`"prepare": "husky"` — documented as a fallback, not the default.
+
+## Step 3 — Commit conventions (commitlint)
+
+Conventional Commits: `type(scope): subject` — lowercase imperative subject, no trailing period,
+header ≤100 chars. Scope is optional but, when present, must be in the config enum. The scope-enum
+is **universal** (not tailored per category).
+
+1. **Config** → copy [`assets/commitlint.config.mjs`](assets/commitlint.config.mjs) to the repo root
+   as `commitlint.config.mjs`.
+2. **Local hook** → generated by the `prepare:commit-msg` script above (or the committed-hook
+   fallback).
+3. **CI** → copy [`assets/commitlint.yml`](assets/commitlint.yml) to
+   `.github/workflows/commitlint.yml` (validates every PR/push commit server-side).
+
+## Step 4 — Staged-file lint/format (lint-staged)
+
+Author a `lint-staged` config trimmed to the languages detected. Add it under a `"lint-staged"` key
+in `package.json` (or `.lintstagedrc.json`). Use only the globs whose languages are present:
+
+```json
+{
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": ["eslint --fix", "prettier --write"],
+    "*.py": ["ruff check --fix", "black"],
+    "*.sql": "sqlfluff fix --dialect ansi",
+    "*.{json,yml,yaml,md,css}": "prettier --write"
+  }
+}
+```
+
+- **TypeScript/JS** → eslint (lint, `--fix`) then prettier (format).
+- **Python** → ruff is **lint-only** (`ruff check --fix`); **black** is the formatter. Do not enable
+  `ruff format` — it would double-format against black.
+- **SQL** (other/ETL profile only) → `sqlfluff fix`; copy [`assets/sqlfluff`](assets/sqlfluff) to
+  `.sqlfluff` (dialect `ansi`, templater `jinja` — edit per warehouse).
+- Languages outside the presets → add your own glob→command pair following the same shape.
+
+## Step 5 — TypeScript strict (TS profiles)
+
+Ensure `compilerOptions.strict` is `true` in `tsconfig.json`. Greenfield: create a minimal
+`tsconfig.json` with `"strict": true`. **Existing** project: set the flag, then **report** that
+enabling strict may surface pre-existing type errors, and offer to relax individual flags
+(`strictNullChecks`, `noImplicitAny`, …) rather than forcing a clean compile in one step. Do not
+silently rewrite type-checking behavior without surfacing the impact.
+
+## Step 6 — Editor + workspace
+
+1. Copy [`assets/editorconfig`](assets/editorconfig) to `.editorconfig` (covers ts/py/md/json/sh).
+2. Merge [`assets/vscode-settings.json`](assets/vscode-settings.json) into `.vscode/settings.json`
+   round-trip — format-on-save with prettier, eslint `fixAll`, and a `[python]` override using
+   black + ruff. Preserve any existing keys (e.g. `chat.agentFilesLocations` set by
+   `initial-project`).
+3. Write `.vscode/extensions.json` recommendations for the detected framework/languages:
+
+| Stack | Recommended extensions |
+| --- | --- |
+| TypeScript / JS | `dbaeumer.vscode-eslint`, `esbenp.prettier-vscode` |
+| Next.js / React | + `bradlc.vscode-tailwindcss` (only if Tailwind detected) |
+| NestJS | (eslint + prettier above) |
+| Python | `ms-python.python`, `charliermarsh.ruff`, `ms-python.black-formatter` |
+| SQL | `sqlfluff.sqlfluff` |
+
+Merge into an existing `extensions.json` (union the `recommendations` array; never drop entries).
+
+## Step 7 — Release automation (release-it)
+
+Wire by default for the **library** category; for frontend/backend, ask first; skip for other/ETL.
+When wiring:
+
+1. Copy [`assets/release-it.json`](assets/release-it.json) to `.release-it.json`
+   (`@release-it/conventional-changelog`, `npm.publish: false` by default — flip for a public
+   library the user wants to publish).
+2. Add the release scripts to `package.json`:
+
+```json
+{
+  "scripts": {
+    "release": "release-it",
+    "release:dry-run": "release-it --dry-run",
+    "release:changelog": "release-it --no-git --no-github"
+  }
+}
+```
+
+## Step 8 — Dev dependencies
+
+Merge the profile's devDeps into `package.json` (round-trip; preserve all other keys). Pin to the
+versions this repo runs:
+
+| Always | Python profiles add | release-it (when wired) |
+| --- | --- | --- |
+| `@commitlint/cli ^21`, `@commitlint/config-conventional ^21`, `@commitlint/types ^21`, `husky ^9.1`, `lint-staged ^17`, `prettier ^3` | (ruff/black/sqlfluff install via the Python toolchain — `pip`/`uv`, not npm) | `release-it ^20`, `@release-it/conventional-changelog ^11` |
+
+TS profiles also need `eslint` and its config; reuse the project's existing eslint setup if present
+rather than imposing one. Python tools (`ruff`, `black`, `sqlfluff`) are not npm packages — note
+them for the user to add to `pyproject.toml`/`requirements`; the lint-staged hook invokes whatever
+is on `PATH`.
+
+## Step 9 — Install and activate
+
+Tell the user to run the install once with the detected manager (do **not** run it automatically):
+
+| Manager | Command |
+| --- | --- |
+| pnpm | `pnpm install` |
+| npm | `npm install` |
+| yarn | `yarn install` |
+| bun | `bun install` |
+
+The `prepare` script then runs husky and writes `.husky/commit-msg` + `.husky/pre-commit`. After
+that, a bad message is rejected and staged files are linted on commit.
+
+**Ordering with `setup-graph-hooks`:** husky points git at `.husky/`, so the graph `post-commit`
+refresh installs to `.husky/post-commit`. `setup-graph-hooks` already detects husky and handles
+this — run or re-run it **after** husky exists.
+
+## Verification
+
+Run the bundled checker for a fast pass/fail:
+[`scripts/verify-project-tooling.sh`](scripts/verify-project-tooling.sh) — `bash
+scripts/verify-project-tooling.sh [repo-root]` (read-only; no network/LLM; exits non-zero on
+failure). Then spot-check:
+
+1. **Commitlint:** `commitlint.config.mjs` + `.github/workflows/commitlint.yml` exist; local
+   enforcement is present (committed `.husky/commit-msg` **or** a `prepare` script that generates
+   it). After install, `git commit -m "bad message"` fails and `git commit -m "chore: ok"` passes;
+   confirm with `npx commitlint --from HEAD~1 --to HEAD`.
+2. **lint-staged:** a `lint-staged` config resolves (package.json key or `.lintstagedrc*`) with
+   globs matching the detected languages.
+3. **Editor:** `.editorconfig` and `.vscode/settings.json` present; `.vscode/extensions.json` lists
+   the stack's extensions.
+4. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
+   `npm run release:dry-run` produces a changelog preview.
+5. **Idempotency:** re-running the skill is a no-op for every piece already present.
