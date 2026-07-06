@@ -177,6 +177,6 @@ if [ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ]; then
   echo "    pipx install graphifyy            # CLI only; installed command is 'graphify'"
 fi
 [ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ] && echo "  Build CRG:      code-review-graph install && code-review-graph build && code-review-graph embed"
-[ "$HAVE_GFY" = 1 ] && [ ! -d graphify-out ] && echo "  Build graphify: graphify init . && graphify update ."
+[ "$HAVE_GFY" = 1 ] && [ ! -d graphify-out ] && echo "  Build graphify: graphify update ."
 echo
 echo "Done. Re-run any time — this script is idempotent. Verify with: ./verify-graph-hooks.sh"

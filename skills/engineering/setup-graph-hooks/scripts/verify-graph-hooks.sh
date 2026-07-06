@@ -119,7 +119,7 @@ else
   warn "code-review-graph not installed (hooks stay silent until it is)"
 fi
 if command -v graphify >/dev/null 2>&1; then
-  ok "graphify installed"; [ -f graphify-out/graph.json ] && ok "graphify graph built" || warn "graphify graph not built — run: graphify init . && graphify update ."
+  ok "graphify installed"; [ -f graphify-out/graph.json ] && ok "graphify graph built" || warn "graphify graph not built — run: graphify update ."
 else
   warn "graphify not installed (optional)"
 fi
