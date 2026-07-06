@@ -43,7 +43,7 @@ Every skill is a directory under `skills/` containing a `SKILL.md` with YAML fro
 
 ```markdown
 ---
-name: kebab-case-skill-name
+name: x442-kebab-case-skill-name
 description: One sentence that tells the assistant WHEN to use this skill. Be specific about triggers.
 ---
 
@@ -52,11 +52,29 @@ Skill body — instructions, examples, checklists, references.
 
 Rules:
 
-- **`name`**: lowercase kebab-case, must match the directory name.
+- **`name`**: lowercase kebab-case, **`x442-`-prefixed**, matching the directory name's
+  unprefixed part (folder `initial-project` → `name: x442-initial-project`). The directory stays
+  **unprefixed**; the prefix lives in the frontmatter so the installed slash-command is
+  unambiguous across environments (a skill from this repo never collides with a same-named
+  personal or built-in skill) and shows on every install path — `npx skills add` and the Claude
+  plugin marketplace read the frontmatter `name`, while the dev-loop link scripts also prefix the
+  symlink directory.
 - **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"). Keep under ~200 chars.
 - **Markdown-first**: most skills ship markdown only, with supporting samples/data under `references/`. Setup and automation skills _may_ ship executables (shell, Python) and config payloads — put runnable scripts under `scripts/` and bundled payloads (templates, config) under `assets/`. The no-destructive-shell-commands house rule still applies to every shipped file.
 - **One skill, one purpose**: if a skill describes two unrelated workflows, split it.
 - **Link, don't duplicate**: cross-reference other skills with relative links instead of copying their content.
+
+## Skill Index
+
+| Category      | Skill                   | Status         | Purpose                                                                                                                                   |
+| ------------- | ----------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `engineering` | `initial-project`       | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                 |
+| `engineering` | `setup-project-tooling` | `experimental` | Detect the project profile and scaffold matching dev tooling (commitlint+husky, lint-staged, release-it). Chains after `initial-project`. |
+| `engineering` | `setup-graph-hooks`     | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                  |
+
+Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
+[skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
+skill's frontmatter `name` (e.g. `initial-project/` → `name: x442-initial-project`).
 
 ## House rules
 
@@ -69,6 +87,10 @@ Rules:
 ## Coding guidelines
 
 Follow the [Karpathy coding guidelines](skills/engineering/initial-project/references/karpathy-guidelines.md) for all work in this project.
+
+## Commit conventions
+
+Follow the [commit guidelines](skills/engineering/initial-project/references/commit-guidelines.md): Conventional Commits `type(scope): subject` (lowercase imperative subject, no trailing period). The enforced ruleset is [`commitlint.config.mjs`](commitlint.config.mjs) — the single source of truth; `setup-project-tooling` wires the husky `commit-msg` hook and CI that enforce it.
 
 ## Workflow
 

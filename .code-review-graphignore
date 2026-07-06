@@ -1,4 +1,7 @@
-node_modules/
+generated/**
+*.generated.ts
+vendor/**
+node_modules/**
 dist/
 build/
 .pnpm-store/

@@ -1,5 +1,5 @@
 ---
-name: setup-graph-hooks
+name: x442-setup-graph-hooks
 description: >-
   Use immediately after initial-project on a new repo, or whenever the user mentions a code
   knowledge graph, graph hooks, code-review-graph, graphify, smart-grep, or blast-radius/impact
@@ -62,6 +62,29 @@ contract against a live install, then rename the example to `.agents/hooks.json`
 2. The repo is a git working tree.
 
 If either fails, report it and stop. Do not partially apply.
+
+## Prerequisites & platform support
+
+Beyond the two preconditions above (`AGENTS.md` at root, and a git working tree), the installer,
+verifier, and hooks need:
+
+- **Hard runtime:** `bash`, `python3` (stdlib only — `json`, `sqlite3`, `argparse`; 3.6+ for
+  f-strings), and `git`. The graph read path uses `sqlite3` with FTS5 when available and falls
+  back to `LIKE` otherwise. No `node` or `jq` (husky is only *detected*, never executed).
+- **Optional graph tools — dormant until built, never required to install the hooks:**
+  `pipx install code-review-graph` (MCP + semantic search), and `pipx install graphifyy` (note the
+  double `y`: the PyPI package is `graphifyy`, the installed command is `graphify`). Every hook
+  `command -v`-checks its tool and silently no-ops when absent.
+- **Platform — macOS and Linux are first-class**, with the cross-platform differences already
+  shimmed in the scripts: `md5sum || md5` for key hashing, a `mkdir`-based lock instead of `flock`
+  (macOS ships no `flock`), `timeout || gtimeout ||` uncapped for the commit-time cap, and a
+  `uname -s`-branched resource guard (`nproc`/`/proc` on Linux, `sysctl` on Darwin).
+- **Windows is supported via WSL only** — everything is bash + POSIX sh + `python3` with no
+  PowerShell/cmd path. Under WSL: keep the repo on the **Linux filesystem** (a `/mnt/c` mount can
+  drop the hook exec bit — which the verifier reports as a *warning*, not a failure — and hurts
+  build speed), and ensure the shipped `.sh`/`.py` files check out with **LF** endings so the
+  `#!/usr/bin/env bash` shebangs are not broken by CRLF (the repo's `.gitattributes` enforces
+  this). The `post-commit` hook's `disown` is a guarded no-op under dash `/bin/sh`.
 
 ## Procedure
 
@@ -129,7 +152,7 @@ Do not auto-run heavy builds. Offer the one-time commands and run them only if t
 # CRG (recommended): MCP tools + semantic search
 code-review-graph install && code-review-graph build && code-review-graph embed
 # graphify (optional): CLI exploration + git-hook freshness
-graphify init . && graphify update . && graphify hook install
+graphify update . && graphify hook install
 ```
 
 If neither is installed, tell the user the hooks are wired and dormant, and give the install
