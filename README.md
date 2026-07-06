@@ -1,13 +1,33 @@
 # x442-skills
 
-Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CLI, and GitHub Copilot.
+My personal collection of agent skills — reusable, model-agnostic capability packs I use to wire
+any repo for AI coding assistants (Claude Code, Antigravity, Gemini CLI, GitHub Copilot). This is
+a personal-first workshop: I build, dogfood, and iterate on skills here, and may polish a few up
+for sharing later.
 
-> **Status:** iteration 1 in progress — bootstrap done; building the first skills, `initial-project` and `setup-graph-hooks`, under `skills/engineering/`.
+> **Status:** three engineering skills shipped under `skills/engineering/` —
+> [`initial-project`](skills/engineering/initial-project/SKILL.md),
+> [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_,
+> and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md). See the
+> [skills catalog](skills/README.md) for the full detail.
+
+## Philosophy
+
+The design these skills share — and what they wire into the repos they touch:
+
+- **One shared `AGENTS.md`.** Cross-tool guidance lives in a single source of truth; each tool's
+  own file just loads it. No copy-paste drift across `CLAUDE.md` / `GEMINI.md` / `ANTIGRAVITY.md`.
+- **Tool-generic.** A skill targets the behavior, not one vendor — the same skill wires Claude
+  Code, Antigravity, Gemini CLI, and GitHub Copilot.
+- **Model-agnostic markdown.** A skill is frontmatter (_when_ to use) plus a body (_how_). Setup
+  skills may also ship `scripts/` and `assets/`; everything else is plain markdown.
+- **Query, don't grep.** Repos get a self-updating code knowledge graph so agents ask the graph
+  for structure instead of re-reading files.
 
 ## Roadmap
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
-- [ ] **Iteration 1** _(in progress)_ — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md) and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (which `initial-project` offers to run on completion).
+- [x] **Iteration 1** — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md), [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_, and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (both of which `initial-project` offers to run on completion).
 - [ ] **Iteration 2** — skill lint / validation tooling. <!-- TODO -->
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
@@ -30,10 +50,16 @@ Collection of agent skills for Claude Code, Antigravity (recommended), Gemini CL
 │   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
 └── skills/
+    ├── README.md                   # skills catalog: categories, status, per-skill detail
     └── engineering/                # category README + skills
-        ├── initial-project/        # SKILL.md + references/
+        ├── initial-project/        # SKILL.md + references/ + scripts/
+        ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (experimental)
         └── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
 ```
+
+Skills are grouped by category under `skills/`; the [skills catalog](skills/README.md)
+documents the full set of categories (`engineering/`, `productivity/`, `misc/`, `personal/`,
+`in-progress/`, `deprecated/`) and which are promoted.
 
 ## Install
 
@@ -110,14 +136,14 @@ scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
-Every skill is a directory under `skills/<category>/` containing a `SKILL.md` — YAML frontmatter (`name`, `description`) plus a markdown body. Setup skills may also ship `scripts/` and `assets/`. See [AGENTS.md](AGENTS.md) for the full authoring spec.
+Three skills under [`engineering`](skills/engineering/); the [skills catalog](skills/README.md)
+has the full detail (status, prerequisites, verification harness, conventions):
 
-Iteration 1 ships two skills under [`engineering`](skills/engineering/):
-
-| Skill | What it does |
-| --- | --- |
-| [`initial-project`](skills/engineering/initial-project/SKILL.md) | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-graph-hooks`. |
-| [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) | Wires a repo for a self-updating code knowledge graph (code-review-graph + graphify) so agents query the graph instead of grepping. |
+| Skill | Status | What it does |
+| --- | --- | --- |
+| [`initial-project`](skills/engineering/initial-project/SKILL.md) | `stable` | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling` and `setup-graph-hooks`. |
+| [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `experimental` | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it. |
+| [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) | `stable` | Wires a repo for a self-updating code knowledge graph (code-review-graph + graphify) so agents query the graph instead of grepping. |
 
 This repo dogfoods `setup-graph-hooks` on itself — see [`.claude/`](.claude/) and [`.mcp.json`](.mcp.json).
 
