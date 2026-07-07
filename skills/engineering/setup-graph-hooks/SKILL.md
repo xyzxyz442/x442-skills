@@ -38,12 +38,12 @@ or graph is absent, so it is safe on any repo, with or without the tools install
 
 ### Per-tool support
 
-| Tool | Config file | Pre-tool event | Session event | End-of-turn | Deny shape |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | `.claude/settings*.json` | `PreToolUse` (matcher) | `SessionStart` | `Stop` | `permissionDecision:"block"` |
-| Gemini CLI | `.gemini/settings.json` | `BeforeTool` (regex) | `SessionStart` | `AfterAgent` | `decision:"deny"` |
-| GitHub Copilot | `.github/hooks/graph.json` | `preToolUse` | `sessionStart` | `agentStop` | `permissionDecision:"deny"` |
-| Antigravity | `.agents/hooks.json` | `PreToolUse` *(unverified)* | — | — | *(unverified)* |
+| Tool           | Config file                | Pre-tool event              | Session event  | End-of-turn  | Deny shape                   |
+| -------------- | -------------------------- | --------------------------- | -------------- | ------------ | ---------------------------- |
+| Claude Code    | `.claude/settings*.json`   | `PreToolUse` (matcher)      | `SessionStart` | `Stop`       | `permissionDecision:"block"` |
+| Gemini CLI     | `.gemini/settings.json`    | `BeforeTool` (regex)        | `SessionStart` | `AfterAgent` | `decision:"deny"`            |
+| GitHub Copilot | `.github/hooks/graph.json` | `preToolUse`                | `sessionStart` | `agentStop`  | `permissionDecision:"deny"`  |
+| Antigravity    | `.agents/hooks.json`       | `PreToolUse` _(unverified)_ | —              | —            | _(unverified)_               |
 
 Sources: [Claude Code hooks](https://code.claude.com/docs/en/hooks.md),
 [Gemini CLI hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md),
@@ -70,7 +70,7 @@ verifier, and hooks need:
 
 - **Hard runtime:** `bash`, `python3` (stdlib only — `json`, `sqlite3`, `argparse`; 3.6+ for
   f-strings), and `git`. The graph read path uses `sqlite3` with FTS5 when available and falls
-  back to `LIKE` otherwise. No `node` or `jq` (husky is only *detected*, never executed).
+  back to `LIKE` otherwise. No `node` or `jq` (husky is only _detected_, never executed).
 - **Optional graph tools — dormant until built, never required to install the hooks:**
   `pipx install code-review-graph` (MCP + semantic search), and `pipx install graphifyy` (note the
   double `y`: the PyPI package is `graphifyy`, the installed command is `graphify`). Every hook
@@ -81,7 +81,7 @@ verifier, and hooks need:
   `uname -s`-branched resource guard (`nproc`/`/proc` on Linux, `sysctl` on Darwin).
 - **Windows is supported via WSL only** — everything is bash + POSIX sh + `python3` with no
   PowerShell/cmd path. Under WSL: keep the repo on the **Linux filesystem** (a `/mnt/c` mount can
-  drop the hook exec bit — which the verifier reports as a *warning*, not a failure — and hurts
+  drop the hook exec bit — which the verifier reports as a _warning_, not a failure — and hurts
   build speed), and ensure the shipped `.sh`/`.py` files check out with **LF** endings so the
   `#!/usr/bin/env bash` shebangs are not broken by CRLF (the repo's `.gitattributes` enforces
   this). The `post-commit` hook's `disown` is a guarded no-op under dash `/bin/sh`.
@@ -108,7 +108,7 @@ of the choice.
 
 If more than one tool is chosen, ask (`AskUserQuestion`, single-select) which **one** tool owns
 the per-turn graph refresh — the heavy `code-review-graph update+embed`. Pre-select the
-most-used / first-detected tool, and include a *"None — refresh only on git commit"* option.
+most-used / first-detected tool, and include a _"None — refresh only on git commit"_ option.
 Only that tool gets the end-of-turn hook; the rest get the cheap read-side hooks. This is what
 keeps N wired tools from triggering N graph builds. (`graphify` is not part of this choice — it
 runs single-owner from the git `post-commit` hook.)
@@ -142,7 +142,8 @@ bash "$SKILL_DIR/scripts/verify-graph-hooks.sh" "$REPO"
 Healthy result is **0 failed** (warnings just mean a tool/graph isn't built yet). The verifier
 discovers the wired tools, fires the shared dispatcher with each tool's stdin shape, asserts the
 single-owner invariant, and smoke-tests the refresh lock. If anything reports `[FAIL]`, surface
-it and stop.
+it and stop — or hand off to [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md), which
+diagnoses and fixes wiring/graph-state drift (and smoke-tests that the graph tools actually run).
 
 ### 7. Build the graph (only if a tool is installed)
 
@@ -163,6 +164,19 @@ the PyPI package is `graphifyy`, but the command it installs is `graphify`).
 
 Summarize: tools wired, primary refresh owner, AGENTS.md updated (yes/no), verifier summary
 line, and the exact next command the user still needs to run. Keep it short.
+
+## Cross-repo read-only access (optional)
+
+By design each repo owns its **own** graph and refreshes it via its **own** hooks — CRG writes
+`<repo>/.code-review-graph/graph.db`, graphify writes `<repo>/graphify-out/graph.json`. Nothing
+here shares a graph across folders, so a session that needs a symbol in _another_ repo (a frontend
+agent resolving a backend type) otherwise falls back to grep across that tree — the token cost this
+layer exists to avoid.
+
+To give one repo **read-only** access to another's graph — keeping every graph single-writer (its
+own hooks) and many-reader — use [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md).
+It registers the foreign repo for CRG's `cross_repo_search_tool` (and/or merges it into graphify's
+global graph), then records it in `AGENTS.md` so agents actually query it instead of grepping.
 
 ## Notes
 
