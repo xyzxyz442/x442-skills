@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # verify-project-tooling.sh — confirm the `setup-project-tooling` skill wired a repo correctly:
-# commit conventions (commitlint + local hook + CI), staged-file lint/format (lint-staged),
+# commit conventions (commitlint + local hook), staged-file lint/format (lint-staged),
 # editor/workspace config (.editorconfig + .vscode), and release automation (release-it) when wired.
 #
 # Read-only: it inspects files only. It never writes, never calls an LLM, never hits the network —
@@ -27,7 +27,6 @@ echo "1. Commit conventions (commitlint)"
 echo "----------------------------------"
 if [ -f commitlint.config.mjs ]; then
   ok "commitlint.config.mjs present at repo root"
-  if [ -f .github/workflows/commitlint.yml ]; then ok ".github/workflows/commitlint.yml present (CI)"; else bad ".github/workflows/commitlint.yml missing (CI)"; fi
   # Local commit-msg enforcement: committed .husky/commit-msg OR a prepare script that generates it.
   if [ -f .husky/commit-msg ]; then ok ".husky/commit-msg present (committed local hook)"
   elif [ -f package.json ] && grep -qE '\.husky/commit-msg|commitlint --edit' package.json; then ok "commit-msg hook generated at install time (package.json prepare script)"
@@ -45,11 +44,11 @@ if [ -f package.json ] && is_json package.json; then
 import json,sys
 d=json.load(open("package.json"))
 dev=d.get("devDependencies",{})
-need={"@commitlint/cli","@commitlint/config-conventional","husky","lint-staged"}
+need={"@commitlint/cli","@commitlint/config-conventional","husky","lint-staged","prettier","prettier-plugin-sh"}
 prep=d.get("scripts",{}).get("prepare","")
 sys.exit(0 if need.issubset(dev) and "husky" in prep else 1)
 PY
-  if [ $? -eq 0 ]; then ok "package.json has commitlint/husky/lint-staged devDeps + a husky-invoking prepare script"; else bad "package.json missing commitlint/husky/lint-staged devDeps or a husky-invoking prepare script"; fi
+  if [ $? -eq 0 ]; then ok "package.json has commitlint/husky/lint-staged/prettier(+sh) devDeps + a husky-invoking prepare script"; else bad "package.json missing commitlint/husky/lint-staged/prettier(+sh) devDeps or a husky-invoking prepare script"; fi
 else
   bad "package.json missing or invalid JSON (needed for the Node-rooted tooling)"
 fi
@@ -76,6 +75,13 @@ echo
 echo "4. Editor + workspace"
 echo "---------------------"
 if [ -f .editorconfig ]; then ok ".editorconfig present"; else bad ".editorconfig missing"; fi
+if [ -f .prettierrc ]; then
+  if is_json .prettierrc; then ok ".prettierrc present and valid JSON"; else bad ".prettierrc is not valid JSON"; fi
+else
+  warn ".prettierrc absent (base Prettier config not written)"
+fi
+if [ -f .prettierignore ]; then ok ".prettierignore present"; else warn ".prettierignore absent"; fi
+if [ -f .gitignore ] && grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then ok ".gitignore ignores .husky (regenerated hooks stay untracked)"; else warn ".gitignore does not ignore .husky (base .gitignore not applied)"; fi
 if [ -f .vscode/settings.json ]; then
   if is_json .vscode/settings.json; then ok ".vscode/settings.json present and valid JSON"; else bad ".vscode/settings.json is not valid JSON"; fi
 else
@@ -85,6 +91,16 @@ if [ -f .vscode/extensions.json ]; then
   if is_json .vscode/extensions.json; then ok ".vscode/extensions.json present and valid JSON"; else bad ".vscode/extensions.json is not valid JSON"; fi
 else
   warn ".vscode/extensions.json absent (no recommended extensions)"
+fi
+if [ -f .vscode/tasks.json ]; then
+  if is_json .vscode/tasks.json; then ok ".vscode/tasks.json present and valid JSON"; else bad ".vscode/tasks.json is not valid JSON"; fi
+else
+  warn ".vscode/tasks.json absent (no workspace-bootstrap task)"
+fi
+if [ -f initialize.sh ]; then
+  if [ -x initialize.sh ]; then ok "initialize.sh present and executable"; else bad "initialize.sh present but not executable (chmod +x)"; fi
+else
+  warn "initialize.sh absent (workspace bootstrap not wired)"
 fi
 
 echo

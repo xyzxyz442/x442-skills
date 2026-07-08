@@ -1,0 +1,3 @@
+{
+  "*.{py,ipynb}": ["./.venv/bin/black --check --diff", "./.venv/bin/black ."]
+}

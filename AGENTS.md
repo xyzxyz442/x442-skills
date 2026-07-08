@@ -69,7 +69,7 @@ Rules:
 | Category      | Skill                       | Status         | Purpose                                                                                                                                                                    |
 | ------------- | --------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engineering` | `initial-project`           | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                                                  |
-| `engineering` | `setup-project-tooling`     | `experimental` | Detect the project profile and scaffold matching dev tooling (commitlint+husky, lint-staged, release-it). Chains after `initial-project`.                                  |
+| `engineering` | `setup-project-tooling`     | `experimental` | Detect language, recommend a category, then scaffold a common base + per-language tooling (commitlint, lint-staged, VS Code, release-it). Chains after `initial-project`.  |
 | `engineering` | `setup-graph-hooks`         | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                                                   |
 | `engineering` | `repair-graph-hooks`        | `experimental` | Smoke-test graph-tool integrity, then re-check, validate, and repair the graph-hooks wiring and graph state. Chains after `setup-graph-hooks`.                             |
 | `engineering` | `register-cross-repo-graph` | `experimental` | Register/merge another repo's graph for read-only cross-repo access and record it in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`. |
@@ -92,7 +92,7 @@ Follow the [Karpathy coding guidelines](skills/engineering/initial-project/refer
 
 ## Commit conventions
 
-Follow the [commit guidelines](skills/engineering/initial-project/references/commit-guidelines.md): Conventional Commits `type(scope): subject` (lowercase imperative subject, no trailing period). The enforced ruleset is [`commitlint.config.mjs`](commitlint.config.mjs) — the single source of truth; `setup-project-tooling` wires the husky `commit-msg` hook and CI that enforce it.
+Follow the [commit guidelines](skills/engineering/initial-project/references/commit-guidelines.md): Conventional Commits `type(scope): subject` (lowercase imperative subject, no trailing period). The enforced ruleset is [`commitlint.config.mjs`](commitlint.config.mjs) — the single source of truth; `setup-project-tooling` wires the husky `commit-msg` hook that enforces it locally.
 
 ## Workflow
 
