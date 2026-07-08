@@ -4,4 +4,5 @@ coverage
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+.venv
 .code-review-graphignore
