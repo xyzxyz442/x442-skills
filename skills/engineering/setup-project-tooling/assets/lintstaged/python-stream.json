@@ -1,0 +1,6 @@
+{
+  "*.sql": [
+    "./.venv/bin/sqlfluff fix --dialect flink --config .sqlfluff",
+    "./.venv/bin/sqlfluff lint --dialect flink --config .sqlfluff"
+  ]
+}

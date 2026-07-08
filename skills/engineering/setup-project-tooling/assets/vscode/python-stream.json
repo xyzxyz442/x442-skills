@@ -1,0 +1,4 @@
+{
+  "sqlfluff.executablePath": "${workspaceFolder}/.venv/bin/sqlfluff",
+  "sqlfluff.config": "${workspaceFolder}/.sqlfluff"
+}
