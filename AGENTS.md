@@ -136,7 +136,15 @@ Routing (CRG first, graphify on miss, grep last):
 | shortest path A→B               | `graphify path '<A>' '<B>' --graph graphify-out/graph.json`        |
 | string / config / log text      | `grep` (append `--graph-tried` to bypass the graph gate)           |
 
-If no graph exists yet, ask to run: `code-review-graph build && code-review-graph embed`.
+`semantic_search_nodes_tool` works whether or not this repo enabled vector embeddings — without
+them it falls back to keyword search over symbol names. Weaker phrasing-tolerance, same tool, not
+a failure. Do not reach for grep because a result looked shallow.
+
+This repo embeds via Ollama, and the tool's `provider` argument defaults to `local`. To get
+vector results rather than the keyword fallback, pin it:
+`semantic_search_nodes_tool(query=…, provider="openai", model="qwen3-embedding")`.
+
+If no graph exists yet, ask to run: `code-review-graph build`.
 The graph refreshes automatically (the primary tool's end-of-turn hook + a git post-commit
 refresh that runs regardless of tool); you do not need to rebuild it manually after edits.
 

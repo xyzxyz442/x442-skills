@@ -3,7 +3,12 @@
     "code-review-graph": {
       "command": "uvx",
       "args": ["code-review-graph", "serve"],
-      "type": "stdio"
+      "type": "stdio",
+      "env": {
+        "CRG_OPENAI_BASE_URL": "http://localhost:11434/v1",
+        "CRG_OPENAI_API_KEY": "ollama",
+        "CRG_OPENAI_MODEL": "qwen3-embedding"
+      }
     }
   }
 }
