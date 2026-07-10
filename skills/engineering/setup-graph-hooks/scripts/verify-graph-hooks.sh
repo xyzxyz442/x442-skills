@@ -19,6 +19,67 @@ bad()  { printf '  [FAIL] %s\n' "$1"; F=$((F+1)); }
 warn() { printf '  [warn] %s\n' "$1"; W=$((W+1)); }
 is_json() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; }
 
+# Semantic search is an opt-in tier, so ZERO embeddings is a healthy state, not a defect:
+# CRG's semantic_search() falls back to keyword search over node names. Only a half-finished
+# embed, or vectors the hooks can no longer refresh, deserve a warning.
+check_embeddings() {
+  read -r EMB NODES EPROV <<<"$(python3 - <<'PY' 2>/dev/null
+import sqlite3
+try:
+    c = sqlite3.connect("file:.code-review-graph/graph.db?mode=ro", uri=True, timeout=2)
+    nodes = c.execute("SELECT count(*) FROM nodes WHERE kind!='File'").fetchone()[0]
+    emb = c.execute("SELECT count(*) FROM embeddings").fetchone()[0]
+    row = c.execute("SELECT provider FROM embeddings GROUP BY provider "
+                    "ORDER BY count(*) DESC LIMIT 1").fetchone()
+    print(emb, nodes, (row[0] if row and row[0] else "-"))
+except Exception:
+    print(0, 0, "-")
+PY
+  )"
+
+  if [ "${EMB:-0}" = 0 ]; then
+    ok "semantic search: keyword mode (0 embeddings — optional; ./setup-embeddings.sh to enable)"
+    return 0
+  fi
+
+  if [ "${EMB:-0}" -lt "${NODES:-0}" ]; then
+    warn "semantic search: ${EMB}/${NODES} nodes embedded — interrupted embed; fix: code-review-graph embed"
+  else
+    ok "semantic search: vector mode (${EMB} embeddings, provider=${EPROV})"
+  fi
+
+  # Vectors exist but nothing can refresh them: the gate will skip embed from here on.
+  RESOLVED=$(bash .graph-hooks/core/embed-provider.sh 2>/dev/null)
+  if [ -z "$RESOLVED" ]; then
+    warn "embeddings cannot refresh — .code-review-graph/embed.env missing; vectors will go stale"
+    return 0
+  fi
+
+  # An Ollama-backed provider is only as live as its daemon.
+  if [ "$RESOLVED" = openai ] && [ -f .code-review-graph/embed.env ]; then
+    BASE=$(sed -n 's/^CRG_OPENAI_BASE_URL=//p' .code-review-graph/embed.env | head -1)
+    if [ -n "$BASE" ] && ! curl -sf --max-time 2 "${BASE%/v1}/api/tags" >/dev/null 2>&1; then
+      case "$BASE" in
+        *localhost* | *127.0.0.1*) warn "ollama not reachable at $BASE — embeddings will not refresh" ;;
+      esac
+    fi
+  fi
+
+  # The READ path is a different process from the refresh hooks. CRG's OpenAI provider needs
+  # CRG_OPENAI_* in the MCP server's own environment, and its `provider` argument defaults to
+  # `local` regardless — so a non-local graph whose MCP server is unconfigured writes vectors
+  # that semantic_search_nodes_tool will never read. The graph looks healthy; the feature is off.
+  case "$EPROV" in
+    openai:* | google:* | minimax:*)
+      if [ -f .mcp.json ] && grep -q 'CRG_OPENAI_BASE_URL' .mcp.json 2>/dev/null; then
+        ok "MCP read path configured — call the tool with provider=\"${EPROV%%:*}\" to use these vectors"
+      else
+        warn "MCP server has no CRG_OPENAI_* env — semantic_search will answer in keyword mode despite ${EMB} vectors"
+      fi
+      ;;
+  esac
+}
+
 echo "Repo: $ROOT"
 echo
 echo "1. Shared layer (.graph-hooks)"
@@ -114,7 +175,12 @@ echo "5. Tools and graph state"
 echo "------------------------"
 if command -v code-review-graph >/dev/null 2>&1; then
   ok "code-review-graph installed"
-  [ -f .code-review-graph/graph.db ] && ok "CRG graph built" || warn "CRG graph not built — run: code-review-graph install && code-review-graph build && code-review-graph embed"
+  if [ -f .code-review-graph/graph.db ]; then
+    ok "CRG graph built"
+    check_embeddings
+  else
+    warn "CRG graph not built — run: code-review-graph install && code-review-graph build"
+  fi
 else
   warn "code-review-graph not installed (hooks stay silent until it is)"
 fi
