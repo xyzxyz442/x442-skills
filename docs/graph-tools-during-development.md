@@ -21,7 +21,7 @@ The graph layer is installed and maintained by a small family of skills; this do
 | --------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
 | Surface         | MCP tools (`semantic_search_nodes_tool`, `query_graph_tool`, …) | CLI (`graphify query/path/explain`)                          |
 | Artifact        | `.code-review-graph/graph.db` (SQLite + FTS5)                   | `graphify-out/graph.json`                                    |
-| Best at         | semantic search, impact/blast-radius, review context            | neighborhood exploration, shortest path A→B, concept explain |
+| Best at         | symbol search, impact/blast-radius, review context              | neighborhood exploration, shortest path A→B, concept explain |
 | Refresh trigger | primary tool's end-of-turn hook **+** git `post-commit`         | git `post-commit` (single owner)                             |
 | Role in routing | **first** choice                                                | fallback on a CRG miss                                       |
 
@@ -57,7 +57,8 @@ flowchart TD
     GS -->|read-only query| GFY
     RN -.->|nudge: prefer graph| Q
 
-    GR -->|update + embed| CRG
+    GR -->|update| CRG
+    GR -.->|embed, only if enabled| CRG
     commit(["git commit"]) -->|post-commit| CRG
     commit -->|post-commit| GFY
 ```
@@ -85,6 +86,11 @@ many files. The decision order is **CRG first, graphify on a miss, grep last**:
 The graph indexes **code symbols** — functions, classes, imports, call edges. It does _not_
 index `.md`, `.json`, `.yml`, `.log`, or config text. For those, grep is correct and the hooks
 step out of the way.
+
+`semantic_search_nodes_tool` answers whether or not this repo enabled vector embeddings: with an
+empty embeddings table CRG falls back to keyword search over symbol names. That is a quality
+difference (worse tolerance for paraphrased queries), not an availability one — see
+[Semantic search is optional](#semantic-search-is-optional).
 
 ```mermaid
 flowchart LR
@@ -158,13 +164,14 @@ Keeping the graph current is the whole point, and it's arranged so N wired tools
 N rebuilds:
 
 - **Primary tool, end of turn.** Exactly one tool (chosen at setup as `--primary`) runs
-  `graph-refresh.sh` when a turn finishes. It launches `code-review-graph update --skip-flows`
-  then `code-review-graph embed` in the background.
+  `graph-refresh.sh` when a turn finishes. It launches `code-review-graph update --skip-flows` in
+  the background, then `embed` **only if this repo configured an embedding provider** — the gate
+  is `.graph-hooks/core/embed-provider.sh`, which prints nothing in keyword mode.
 - **Git `post-commit`, always.** A commit refreshes the graph regardless of which tool — or no
   tool — is driving. graphify refreshes from here as its single owner.
 
 Both paths are guarded against races by a **repo-global `mkdir` lock** (portable — macOS has no
-`flock`) plus a PID file: a second concurrent refresh no-ops instead of racing the embed. You
+`flock`) plus a PID file: a second concurrent refresh no-ops instead of racing the update. You
 do not need to rebuild the graph by hand after editing.
 
 ```mermaid
@@ -183,7 +190,9 @@ sequenceDiagram
             PID-->>Turn: yes → no-op (skip)
         else free
             Turn->>CRG: update --skip-flows
-            Turn->>CRG: embed (background)
+            opt embedding provider configured
+                Turn->>CRG: embed (background)
+            end
             Turn->>PID: record new PID
             Turn->>Lock: release on exit
         end
@@ -195,7 +204,7 @@ sequenceDiagram
 The payoff is measured in **context tokens the assistant burns to answer** — the graph returns
 a few compact rows (`kind  name  -> file:line`) where grep-and-read pulls whole files into
 context. The numbers below are **order-of-magnitude estimates** for a mid-size repo
-(~40 files, this repo's own graph is 81 nodes / 958 edges); they scale with repo size and the
+(~40 files, this repo's own graph is 98 nodes / 1,068 edges); they scale with repo size and the
 model, but the _ratio_ holds. A graph query result is typically 200–1,000 tokens regardless of
 repo size; the grep/read path grows with the codebase.
 
@@ -235,10 +244,15 @@ transitive dependents that a first-pass grep would miss.
   local JSON file (graphify) — sub-second, no network. Contrast with grep-then-read, whose cost
   is dominated by the model re-ingesting file contents.
 - **Refresh is background and non-blocking.** `graph-refresh.sh` launches
-  `update --skip-flows` then `embed` detached (`nohup … &`); your turn doesn't wait on it.
+  `update --skip-flows` detached (`nohup … &`); your turn doesn't wait on it.
 - **Refresh is incremental, not a full rebuild.** `update` re-parses only what changed via
-  Tree-sitter (AST parsing — no LLM/API cost). The one-time `build`/`embed` is the only heavy
-  step, and it's amortized across every later query.
+  Tree-sitter (AST parsing — no LLM/API cost), and `embed` is incremental too: `embed_nodes()`
+  hashes each node's text and skips rows whose hash and provider are unchanged.
+- **The embed's recurring cost is the import, not the inference.** CRG decides whether the local
+  provider is usable by `import sentence_transformers`, which pulls in torch — and it does that
+  _before_ the hash check can discover there is nothing to re-embed. So a no-op embed still costs
+  a torch import. That is exactly why the refresh skips `embed` entirely when no provider is
+  configured, instead of firing one and discarding the error.
 - **No redundant builds.** The single-owner rule (one `--primary` tool) plus the repo-global
   `mkdir` lock and PID file collapse N tools / concurrent sessions to **one** refresh — the rest
   no-op. Without this, N wired tools would each trigger a rebuild.
@@ -270,8 +284,8 @@ transitive dependents that a first-pass grep would miss.
 One-time build (only if you've installed the tools):
 
 ```bash
-# CRG (recommended): MCP tools + semantic search
-code-review-graph install && code-review-graph build && code-review-graph embed
+# CRG (recommended): MCP tools + graph search
+code-review-graph install && code-review-graph build
 # graphify (optional): CLI exploration + git-hook freshness
 graphify update . && graphify hook install
 ```
@@ -284,15 +298,83 @@ bash skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh .
 
 A healthy result is **0 failed** — warnings only mean a tool or graph isn't built yet.
 
+## Semantic search is optional
+
+A built graph answers every MCP tool, including `semantic_search_nodes_tool`. Vector embeddings
+are a separate, opt-in tier: without them CRG's `semantic_search` falls back to keyword search
+over symbol names. Nothing errors, and no hook fires an `embed`.
+
+Enable it when you want the tool to tolerate paraphrased queries ("where do we handle auth
+retries") rather than name-shaped ones. Pick a route with:
+
+```bash
+bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --list # what can this machine do?
+bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh        # choose
+```
+
+**1. Local provider — the default, and the only one that works transparently.** Model
+`all-MiniLM-L6-v2`, offline after the first run.
+
+```bash
+pipx inject code-review-graph sentence-transformers # pulls PyTorch, roughly 2 GB
+code-review-graph embed
+```
+
+Nothing else to configure: CRG's default provider _is_ `local`, so both the refresh hooks and
+the MCP server pick these vectors up on their own.
+
+**2. Ollama — no PyTorch, but two extra wires.** Ollama serves an OpenAI-compatible
+`/v1/embeddings` endpoint, so CRG's `openai` provider drives it locally. The setup script detects
+a running daemon and lists only its embedding-capable models (it asks `/api/show` for a
+`capabilities` array rather than guessing from the name), then writes the config for you.
+
+```bash
+ollama pull qwen3-embedding
+bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider ollama
+```
+
+CRG treats a `localhost` base URL as non-cloud, so this path prints no egress warning and needs
+no `CRG_ACCEPT_CLOUD_EMBEDDINGS=1`. Nothing leaves the machine.
+
+The catch is the **read path**. Writing vectors and reading them are different processes:
+
+- The MCP server needs `CRG_OPENAI_*` in **its own** environment — the refresh hooks' `embed.env`
+  is invisible to it, and CRG's OpenAI provider raises `ValueError` without those vars, which
+  `semantic_search` swallows into a keyword-mode answer. `setup-embeddings.sh` writes them into
+  `.mcp.json`'s `env` block for a localhost endpoint; **restart the server** afterwards.
+- The tool's `provider` argument defaults to `local` and never consults the environment, so a
+  default call ignores `openai:` vectors even with the env set. Pin it explicitly:
+
+  ```text
+  semantic_search_nodes_tool(query=…, provider="openai", model="qwen3-embedding")
+  ```
+
+Skip either wire and you get a graph full of embeddings that nothing reads —
+`verify-graph-hooks.sh` warns when it sees exactly that.
+
+Neither route is uniformly lighter — they move the cost. The local model is 22M parameters and
+embeds a short synthetic identifier string per node (the dotted `Parent.name`, the name split
+into words, the module directory, the language — never source bodies), so per-node compute is
+negligible on any machine that can run an editor. What you pay for is a ~2 GB install and a
+one-time model fetch. Ollama skips both, but keeps a multi-GB model resident in its daemon and
+serves wider vectors (`qwen3-embedding` returns 4,096 dimensions against MiniLM's 384), so the
+`embeddings` table grows accordingly.
+
+Your choice is written to `.code-review-graph/embed.env` — repo-local, not shell-local, because a
+commit made from a GUI git client inherits no shell rc and would otherwise stop refreshing your
+vectors. That directory's `.gitignore` is `*`, so the file is never committed. Once set, the
+hooks keep the vectors fresh with the provider recorded in the graph. Turn it back off with
+`setup-embeddings.sh --provider off`.
+
 ## When the graph misbehaves
 
-If the graph returns empty/stale results, `semantic_search` degrades, the MCP tools error, a
-hook never fires, or `verify-graph-hooks.sh` reports a `[FAIL]`/`[warn]`, don't hand-patch it —
+If the graph returns empty/stale results, the MCP tools error, a hook never fires, or
+`verify-graph-hooks.sh` reports a `[FAIL]`/`[warn]`, don't hand-patch it —
 run [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_.
 It goes further than the read-only verifier: it **smoke-tests that the tools actually run**
 (a present-but-broken `code-review-graph` binary fails every downstream fix silently), then adds
-graph-state probes the verifier lacks — staleness vs `HEAD`, DB integrity / zero-node, missing
-embeddings, ignore-file drift, exec-bit/CRLF breakage, and stale refresh locks — before applying
+graph-state probes the verifier lacks — staleness vs `HEAD`, DB integrity / zero-node, partial or
+unrefreshable embeddings, ignore-file drift, exec-bit/CRLF breakage, and stale refresh locks — before applying
 safe, idempotent wiring repairs and _offering_ (never auto-running) the heavy rebuild. On a
 healthy repo it is a clean no-op.
 
@@ -315,12 +397,12 @@ reach for it. The two backends work differently:
 ```bash
 # CRG — register the foreign repo once per machine (read-only), then query across the set
 code-review-graph register /abs/path/to/other-repo --alias other
-code-review-graph repos                              # confirm it's in scope
+code-review-graph repos # confirm it's in scope
 # → cross_repo_search_tool(query=…) / list_repos_tool span the registered repos
 
 # graphify — merge the foreign repo's built graph into the global graph under a tag
 graphify global add /abs/path/to/other-repo/graphify-out/graph.json --as other
-graphify query '<term>' --graph "$(graphify global path)"   # query the merged graph
+graphify query '<term>' --graph "$(graphify global path)" # query the merged graph
 # (ad-hoc, no merge: graphify query '<term>' --graph /abs/path/to/other-repo/graphify-out/graph.json)
 ```
 

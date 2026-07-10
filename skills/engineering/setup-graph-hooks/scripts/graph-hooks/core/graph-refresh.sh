@@ -26,6 +26,10 @@ if [ -f "$PF" ] && kill -0 "$(cat "$PF" 2>/dev/null)" 2>/dev/null; then
   exit 0
 fi
 
-{ code-review-graph update --skip-flows 2>/dev/null && nohup code-review-graph embed >/dev/null 2>&1 & } &
+# `embed` is an opt-in tier: embed-provider.sh --run resolves the configured provider and
+# no-ops when there is none. Without the gate, every turn on a repo with no embedding provider
+# spawned a doomed `code-review-graph embed` (a hard error, swallowed by the redirect below)
+# and paid a sentence-transformers/torch import to discover it had nothing to do.
+{ code-review-graph update --skip-flows 2>/dev/null && nohup bash .graph-hooks/core/embed-provider.sh --run >/dev/null 2>&1 & } &
 echo $! > "$PF"
 exit 0
