@@ -4,6 +4,9 @@
 # not installed or the graph is not built. Logic lives here (not inline in settings) so the hook
 # COMMAND string stays a stable thin wrapper — Claude Code de-dupes identical command strings, so
 # a home install and a repo install collapse to a single fire instead of double-running.
+#
+# LEGACY: superseded by .graph-hooks/core/graph-refresh.sh. Kept in step with it (including the
+# opt-in embed gate) for repos whose .claude/settings.json still points here.
 set -uo pipefail
 
 command -v code-review-graph >/dev/null 2>&1 || exit 0
@@ -14,6 +17,11 @@ if [ -f "$PF" ] && kill -0 "$(cat "$PF" 2>/dev/null)" 2>/dev/null; then
   exit 0   # an update for this repo is already running
 fi
 
-{ code-review-graph update --skip-flows 2>/dev/null && nohup code-review-graph embed >/dev/null 2>&1 & } &
+# Embeddings are opt-in: the gate no-ops unless a provider is configured, so a repo in keyword
+# mode never spawns a failing `embed`. Fall back to update-only when .graph-hooks/ is absent.
+EMBED='true'
+[ -f .graph-hooks/core/embed-provider.sh ] && EMBED='bash .graph-hooks/core/embed-provider.sh --run'
+
+{ code-review-graph update --skip-flows 2>/dev/null && nohup sh -c "$EMBED" >/dev/null 2>&1 & } &
 echo $! > "$PF"
 exit 0

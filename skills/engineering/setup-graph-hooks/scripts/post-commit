@@ -47,12 +47,17 @@ if command -v graphify >/dev/null 2>&1 && [ -d graphify-out ]; then
   fi
 fi
 
-# --- code-review-graph: incremental update + embed (only if installed and initialised) --
+# --- code-review-graph: incremental update, then embed only if a provider is configured ---
+# embed-provider.sh --run no-ops when semantic search is off (the default), so this hook costs
+# nothing on a repo that never opted in. It reads .code-review-graph/embed.env rather than the
+# environment because a commit from a GUI git client inherits no shell rc.
 if command -v code-review-graph >/dev/null 2>&1 && [ -d .code-review-graph ]; then
   if ! pgrep -qf 'code-review-graph update' 2>/dev/null && _resources_ok; then
     LOG="${HOME}/.cache/code-review-graph-update.log"; mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
     echo "[code-review-graph] launching background update (log: $LOG)"
-    nohup sh -c "$TIMEOUT sh -c 'code-review-graph update --skip-flows && code-review-graph embed'" >"$LOG" 2>&1 </dev/null &
+    EMBED='true'  # no .graph-hooks/ (post-commit installed alone): update only, never embed
+    [ -f .graph-hooks/core/embed-provider.sh ] && EMBED='bash .graph-hooks/core/embed-provider.sh --run'
+    nohup sh -c "$TIMEOUT sh -c 'code-review-graph update --skip-flows && $EMBED'" >"$LOG" 2>&1 </dev/null &
     disown 2>/dev/null || true
   fi
 fi

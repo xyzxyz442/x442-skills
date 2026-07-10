@@ -173,10 +173,17 @@ echo
 echo "Next steps:"
 if [ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ]; then
   echo "  No graph tool installed — hooks are wired and stay SILENT until you add one:"
-  echo "    pipx install code-review-graph    # MCP + semantic search + embeddings"
+  echo "    pipx install code-review-graph    # MCP tools + graph search"
   echo "    pipx install graphifyy            # CLI only; installed command is 'graphify'"
 fi
-[ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ] && echo "  Build CRG:      code-review-graph install && code-review-graph build && code-review-graph embed"
+[ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ] && echo "  Build CRG:      code-review-graph install && code-review-graph build"
 [ "$HAVE_GFY" = 1 ] && [ ! -d graphify-out ] && echo "  Build graphify: graphify update ."
+if [ "$HAVE_CRG" = 1 ]; then
+  echo
+  echo "  Optional — semantic search. The graph answers in keyword mode without it."
+  echo "  Enabling costs either a PyTorch install or a running Ollama daemon, so it is opt-in:"
+  echo "    ./setup-embeddings.sh --list     # see what this machine can do"
+  echo "    ./setup-embeddings.sh            # choose a provider"
+fi
 echo
 echo "Done. Re-run any time — this script is idempotent. Verify with: ./verify-graph-hooks.sh"
