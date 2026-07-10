@@ -26,8 +26,9 @@ force-pushes, and clears only empty lock directories (`rmdir`, never `rm -rf`).
 
 ## When to use
 
-- The graph tools "aren't working" — empty/stale results, `semantic_search` degraded, MCP tools
-  erroring, or a hook that never fires.
+- The graph tools "aren't working" — empty/stale results, MCP tools erroring, or a hook that never
+  fires. Note that `semantic_search` returning keyword-quality hits is **not** a fault on a repo
+  that never opted into embeddings; it is the designed fallback.
 - `verify-graph-hooks.sh` reported a `[FAIL]` or a `[warn]` you want resolved.
 - After changing which AI tools the repo uses (a tool dropped from a later install can leave a
   stale end-of-turn refresh owner → duplicate graph builds).
@@ -67,8 +68,8 @@ read-only and classify it `OK / broken / outdated / absent`:
 
 ```bash
 # code-review-graph: does it actually execute, and can it read this repo's graph?
-code-review-graph --version                     # exits 0? catch tracebacks / wrong-Python
-code-review-graph status                         # lightweight functional ping on $REPO
+code-review-graph --version # exits 0? catch tracebacks / wrong-Python
+code-review-graph status    # lightweight functional ping on $REPO
 
 # graphify: does the command resolve and run?
 graphify --version
@@ -101,8 +102,21 @@ Read-only probes, each reported as a finding:
 - **DB integrity / zero-node.** `sqlite3 .code-review-graph/graph.db 'PRAGMA integrity_check;'`
   plus a node-count probe (the same `SELECT` used in `.graph-hooks/core/session-context.sh`); flag
   a corrupt DB or a 0-node graph (both read as "no graph" at runtime and hide silently).
-- **Missing embeddings.** A queryable graph with no/partial embeddings means an `update && embed`
-  was interrupted; `semantic_search` silently degrades. Flag and offer re-embed.
+- **Embeddings — three states, only two are defects.** Semantic search is an opt-in tier: with an
+  empty `embeddings` table CRG's `semantic_search` falls back to keyword search over node names,
+  which is a supported configuration. Compare `SELECT count(*) FROM embeddings` against
+  `SELECT count(*) FROM nodes WHERE kind!='File'` (both live in `graph.db`):
+  - **zero** — keyword mode. Report it, do not offer a fix. Point at
+    `setup-graph-hooks/scripts/setup-embeddings.sh` only if the user asks for semantic search.
+  - **partial** (`0 < embeddings < nodes`) — an `embed` was interrupted. Flag and offer re-embed.
+  - **unrefreshable** — vectors exist, but `.graph-hooks/core/embed-provider.sh` prints nothing,
+    so the hooks skip `embed` and the vectors are drifting. Usually `.code-review-graph/embed.env`
+    was deleted while the graph carries `openai:`/`google:`/`minimax:` vectors, which cannot be
+    reconstructed without their env vars. Flag; the fix is to restore `embed.env` (re-run
+    `setup-embeddings.sh`) or re-embed with the `local` provider.
+- **Ollama-backed embeddings, daemon down.** When `embed.env` points `CRG_OPENAI_BASE_URL` at a
+  localhost endpoint that does not answer `/api/tags`, embeddings will never refresh. Flag it —
+  the graph itself is fine, so nothing else surfaces this.
 - **Ignore-file drift.** Diff `.code-review-graphignore` / `.graphifyignore` against the shipped
   template `$GRAPH_SKILL/scripts/graphignore`; flag deleted, truncated, or hand-edited files (a
   broken ignore file makes the graph index `node_modules`/`dist`/`.env*`).
@@ -140,9 +154,21 @@ Per the house rule, do not silently launch a long build. Report the state findin
 one-time fix for the user to approve:
 
 ```bash
-code-review-graph update && code-review-graph embed   # stale or missing embeddings
-code-review-graph build  && code-review-graph embed   # corrupt or zero-node (full rebuild)
+code-review-graph update # stale graph
+code-review-graph build  # corrupt or zero-node (full rebuild)
 ```
+
+Only offer an embed when the repo has already opted in — a partial or unrefreshable embeddings
+table. Pass the provider the graph was embedded with; the bare command defaults to `local` and
+errors out on a repo that uses Ollama or a hosted endpoint:
+
+```bash
+code-review-graph embed --provider "$(bash .graph-hooks/core/embed-provider.sh)"
+```
+
+A full `build` does **not** clear the embeddings table — rows are keyed by `qualified_name` and
+survive a re-parse. It does leave newly-parsed or renamed nodes unembedded, which reads as the
+**partial** state above, so on an opted-in repo follow a rebuild with the embed command.
 
 ### 5. Re-verify
 

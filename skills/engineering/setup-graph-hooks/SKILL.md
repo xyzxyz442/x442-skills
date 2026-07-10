@@ -29,7 +29,7 @@ or graph is absent, so it is safe on any repo, with or without the tools install
 2. **Shared behavior cores (one source of truth).** The four behaviors live once, protocol-free,
    under `.graph-hooks/core/`: `grep-steer.sh` (steer grep/find to the graph), `read-nudge.sh`
    (prefer graph tools over reading source), `session-context.sh` (inject a query cheatsheet),
-   and `graph-refresh.sh` (the heavy `update+embed`, repo-global-locked). A single
+   and `graph-refresh.sh` (the incremental `update`, repo-global-locked). A single
    `.graph-hooks/hook.sh --tool <t> --kind <k>` dispatcher runs them; `core/extract.py` and
    `core/emit.py` hold the entire per-tool stdin/stdout protocol table.
 3. **Per-tool hook config.** For each chosen tool, `config/render.py` emits that tool's native
@@ -72,9 +72,10 @@ verifier, and hooks need:
   f-strings), and `git`. The graph read path uses `sqlite3` with FTS5 when available and falls
   back to `LIKE` otherwise. No `node` or `jq` (husky is only _detected_, never executed).
 - **Optional graph tools — dormant until built, never required to install the hooks:**
-  `pipx install code-review-graph` (MCP + semantic search), and `pipx install graphifyy` (note the
-  double `y`: the PyPI package is `graphifyy`, the installed command is `graphify`). Every hook
-  `command -v`-checks its tool and silently no-ops when absent.
+  `pipx install code-review-graph` (MCP tools + graph search), and `pipx install graphifyy` (note
+  the double `y`: the PyPI package is `graphifyy`, the installed command is `graphify`). Every hook
+  `command -v`-checks its tool and silently no-ops when absent. Vector embeddings are a separate
+  opt-in tier — see step 8; nothing here installs PyTorch.
 - **Platform — macOS and Linux are first-class**, with the cross-platform differences already
   shimmed in the scripts: `md5sum || md5` for key hashing, a `mkdir`-based lock instead of `flock`
   (macOS ships no `flock`), `timeout || gtimeout ||` uncapped for the commit-time cap, and a
@@ -107,7 +108,7 @@ of the choice.
 ### 3. Pick the primary refresh owner
 
 If more than one tool is chosen, ask (`AskUserQuestion`, single-select) which **one** tool owns
-the per-turn graph refresh — the heavy `code-review-graph update+embed`. Pre-select the
+the per-turn graph refresh — `code-review-graph update`. Pre-select the
 most-used / first-detected tool, and include a _"None — refresh only on git commit"_ option.
 Only that tool gets the end-of-turn hook; the rest get the cheap read-side hooks. This is what
 keeps N wired tools from triggering N graph builds. (`graphify` is not part of this choice — it
@@ -127,7 +128,7 @@ tool's native hook config. Re-running with a different `--primary` moves ownersh
 ### 5. Inject the AGENTS.md routing block (idempotent)
 
 ```bash
-if ! grep -q 'graph-hooks:begin' "$REPO/AGENTS.md" 2>/dev/null; then
+if ! grep -q 'graph-hooks:begin' "$REPO/AGENTS.md" 2> /dev/null; then
   printf '\n' >> "$REPO/AGENTS.md"
   cat "$SKILL_DIR/assets/agents-knowledge-graph.md" >> "$REPO/AGENTS.md"
 fi
@@ -150,8 +151,8 @@ diagnoses and fixes wiring/graph-state drift (and smoke-tests that the graph too
 Do not auto-run heavy builds. Offer the one-time commands and run them only if the user agrees:
 
 ```bash
-# CRG (recommended): MCP tools + semantic search
-code-review-graph install && code-review-graph build && code-review-graph embed
+# CRG (recommended): MCP tools + graph search
+code-review-graph install && code-review-graph build
 # graphify (optional): CLI exploration + git-hook freshness
 graphify update . && graphify hook install
 ```
@@ -160,7 +161,43 @@ If neither is installed, tell the user the hooks are wired and dormant, and give
 commands: `pipx install code-review-graph` and `pipx install graphifyy` (note the double `y` —
 the PyPI package is `graphifyy`, but the command it installs is `graphify`).
 
-### 8. Report
+### 8. Offer semantic search (optional, never assumed)
+
+A built graph answers `semantic_search_nodes_tool` in **keyword mode** — CRG's `semantic_search`
+falls back to a name search when the embeddings table is empty. Vector search is a quality
+upgrade, not a requirement, and enabling it costs either a PyTorch install or a resident Ollama
+model. Both are too machine-specific to choose for the user.
+
+Do not run the interactive menu — it expects a TTY. Read the machine's state, then ask:
+
+```bash
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --list
+# ollama=up|down  ollama_models=<embedding-capable only>  sentence_transformers=yes|no  current=<provider>
+```
+
+Offer with `AskUserQuestion`. State the trade honestly rather than steering by install size:
+
+- **Local provider** — the default choice, and the only one that works with no further wiring:
+  CRG's own default provider is `local`, so the MCP server reads the vectors as-is. Costs ~2 GB
+  of PyTorch plus a one-time ~90 MB model fetch. No daemon needed.
+- **Ollama** — offer the detected embedding-capable models by name when the daemon is up. Skips
+  the PyTorch install, but the vectors are only readable if the MCP server gets `CRG_OPENAI_*`
+  in its environment **and** every call pins `provider="openai", model=<name>`. The script wires
+  the first into `.mcp.json` (localhost only) and prints the second. Say this before they choose.
+- **Keyword mode** — always a valid answer, and the default when the user has no preference.
+
+Apply the answer non-interactively, then let the hooks keep it fresh:
+
+```bash
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider ollama --model qwen3-embedding
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider local
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider off # back to keyword mode
+```
+
+The choice is written to `.code-review-graph/embed.env` — repo-local, not shell-local, because a
+commit from a GUI git client inherits no shell rc and would otherwise stop refreshing vectors.
+
+### 9. Report
 
 Summarize: tools wired, primary refresh owner, AGENTS.md updated (yes/no), verifier summary
 line, and the exact next command the user still needs to run. Keep it short.
@@ -180,11 +217,11 @@ global graph), then records it in `AGENTS.md` so agents actually query it instea
 
 ## Notes
 
-- **One refresh owner.** The heavy `update+embed` is duplication-sensitive — if every wired tool
-  ran it, N tools (or two concurrent sessions) would trigger N redundant builds. Only the
-  `--primary` tool's end-of-turn hook runs it, and `graph-refresh.sh` additionally takes a
-  repo-global lock (`mkdir`-based — portable; macOS has no `flock`) so a stray concurrent refresh
-  no-ops instead of racing the embed.
+- **One refresh owner.** The refresh is duplication-sensitive — if every wired tool ran it, N
+  tools (or two concurrent sessions) would trigger N redundant builds. Only the `--primary`
+  tool's end-of-turn hook runs it, and `graph-refresh.sh` additionally takes a repo-global lock
+  (`mkdir`-based — portable; macOS has no `flock`) so a stray concurrent refresh no-ops instead
+  of racing the update.
 - **Shared core, thin adapters.** Behavior lives once in `core/*`; the per-tool protocol table
   lives once in `core/extract.py` (stdin field names) + `core/emit.py` (stdout JSON shape) and
   `config/render.py` (config shape). The `hook.sh` dispatcher and the Copilot wrappers are thin
@@ -197,8 +234,20 @@ global graph), then records it in `AGENTS.md` so agents actually query it instea
   de-dupes identical command strings. The dispatcher command string is byte-stable and resolves
   repo-first then `$HOME`, so a home install and a repo install collapse to a single fire that
   runs the repo copy. Keep the wrapper stable across versions.
-- **Bundled files:** `scripts/setup-graph-hooks.sh` (installer), `scripts/verify-graph-hooks.sh`
-  (verifier), `scripts/post-commit` (git refresh), `scripts/graphignore` (ignore template),
-  `scripts/config/{render,merge}.py` (per-tool config + JSON merge), and `scripts/graph-hooks/`
-  (the `.graph-hooks/` payload: `hook.sh`, `core/`, `copilot/`). `assets/agents-knowledge-graph.md`
-  is the canonical AGENTS.md routing block.
+- **Embeddings are opt-in, and the refresh knows it.** `core/embed-provider.sh` resolves the
+  configured provider — `embed.env`, then a cloud env var, then the provider already recorded in
+  the `embeddings` table — and prints nothing when there is none, so the refresh skips `embed`
+  entirely. Without that gate every turn on a keyword-mode repo spawned a
+  `code-review-graph embed` that fails (`ERROR: the local embedding provider needs
+sentence-transformers`) into `/dev/null`, after paying a torch import to discover it had
+  nothing to do. The probe reads the DB with `sqlite3`, so it never imports torch itself.
+- **Auto-keep-fresh, with one asymmetry.** A repo already embedded with the `local` provider
+  refreshes with no config at all. A cloud or Ollama provider cannot: CRG raises `ValueError`
+  unless `CRG_OPENAI_*` is in the environment, so those need `embed.env`. The verifier warns when
+  vectors exist that nothing can refresh.
+- **Bundled files:** `scripts/setup-graph-hooks.sh` (installer), `scripts/setup-embeddings.sh`
+  (opt-in semantic search), `scripts/verify-graph-hooks.sh` (verifier), `scripts/post-commit`
+  (git refresh), `scripts/graphignore` (ignore template), `scripts/config/{render,merge}.py`
+  (per-tool config + JSON merge), and `scripts/graph-hooks/` (the `.graph-hooks/` payload:
+  `hook.sh`, `core/`, `copilot/`). `assets/agents-knowledge-graph.md` is the canonical AGENTS.md
+  routing block.

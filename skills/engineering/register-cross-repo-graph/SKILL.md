@@ -63,11 +63,12 @@ graphify clone <github-url>            # clones locally, prints the path → use
 
 CRG's `register` only writes the registry; it does **not** build. And `cross_repo_search_tool`
 **silently skips** any registered repo whose `graph.db` is absent — so the foreign graph must exist
-first.
+first. A `build` is enough: embeddings are the foreign repo's own opt-in choice, and cross-repo
+search works without them.
 
 ```bash
 # a) Build-if-needed: only if $FOREIGN/.code-review-graph/graph.db is missing (offer, don't force)
-code-review-graph build --repo "$FOREIGN" && code-review-graph embed --repo "$FOREIGN"
+code-review-graph build --repo "$FOREIGN"
 
 # b) Register (machine-local ~/.code-review-graph/registry.json), then confirm
 code-review-graph register "$FOREIGN" --alias <short-alias>
@@ -79,7 +80,7 @@ Offer to add the foreign repo to the watch daemon so its graph stays current, or
 `update`:
 
 ```bash
-code-review-graph daemon add "$FOREIGN"    # auto-refresh via ~/.code-review-graph/watch.toml
+code-review-graph daemon add "$FOREIGN" # auto-refresh via ~/.code-review-graph/watch.toml
 ```
 
 Query it from either session with `cross_repo_search_tool(query="…")` and `list_repos_tool` — the
