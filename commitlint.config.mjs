@@ -39,6 +39,7 @@ const Configuration = {
         'other', // Other changes
       ],
     ],
+    'body-max-line-length': [0, 'always'],
   },
 };
 
