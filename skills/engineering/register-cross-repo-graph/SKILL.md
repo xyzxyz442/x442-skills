@@ -3,184 +3,215 @@ name: x442-register-cross-repo-graph
 description: >-
   (Experimental) Use when a project needs read-only access to another repo's code graph — e.g. a
   frontend session resolving a backend symbol, or any "reference another project's source" /
-  cross-repo / monorepo-sibling lookup — so agents query the cross-repo graph instead of grepping
-  across folders and burning tokens. Registers the foreign repo (code-review-graph) and/or merges
-  it (graphify), then records it in AGENTS.md so agents actually reach for it. Chains after
-  setup-graph-hooks.
+  cross-repo / monorepo-sibling lookup — so agents query the sibling graph instead of grepping
+  across folders and burning tokens. Declare the sibling repos in a per-project `.graph-repos.json`
+  (a user → repo → subdirectory cascade, like AGENTS.md), then sync: it registers them with
+  code-review-graph, merges a per-project graphify graph, and rewrites the routing block in
+  AGENTS.md. Chains after setup-graph-hooks.
 ---
 
 # register-cross-repo-graph
 
-> **Status: experimental.** This skill writes machine-local, per-user registry state
-> (`~/.code-review-graph/`, `~/.graphify/`) and edits the consuming repo's `AGENTS.md`. Review what
-> it registers before relying on it.
+> **Status: experimental.** This skill writes a committed manifest (`.graph-repos.json`), adds
+> entries to machine-local registry state, and edits `AGENTS.md`. Preview with `--dry-run` first.
 
-Give one project **read-only** access to another project's knowledge graph, and — the part that
-actually saves tokens — tell the agents in context that the foreign graph exists so they query it
-instead of grepping across the folder boundary.
+Give one project **read-only** access to other projects' knowledge graphs, and — the part that
+actually saves tokens — tell the agents in context which siblings are in scope, so they query the
+graph instead of grepping across the folder boundary.
 
 By design each repo owns and refreshes its **own** graph (see
 [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)): code-review-graph (CRG) writes
 `<repo>/.code-review-graph/graph.db`, graphify writes `<repo>/graphify-out/graph.json`. Nothing is
-shared across folders until you register it. This skill wires that link the read-only way: the
-consumer only reads the foreign artifact; the foreign repo stays single-writer via its own hooks.
+shared across folders until you declare it. This skill wires that link the read-only way: the
+consumer only reads the foreign artifacts; each foreign repo stays single-writer via its own hooks.
 
 ## When to use
 
 - A session in repo A needs a symbol, type, or call site that lives in repo B (frontend↔backend,
   shared library, monorepo sibling, a vendored service).
 - You keep grepping/reading across into another checkout and want the graph to answer instead.
-- You want a durable, in-context pointer so _every_ future session in this repo knows the sibling
-  graph is queryable.
+- You want a **committed, team-shared** list of which siblings this project may look at, so every
+  future session — and every teammate — starts with the same scope.
+- A monorepo package needs a _different_ sibling set from the repo root.
 
 ## Preconditions
 
-1. The **consuming** repo has `AGENTS.md` at its root (for the context block) and its own graph
-   wired (run `setup-graph-hooks` first).
-2. At least one of `code-review-graph` / `graphify` is installed.
-3. You can name the **foreign** repo — a local path, or a GitHub URL to clone.
+1. The **consuming** repo has `AGENTS.md` at its root and its own graph wired — run
+   [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md) first.
+2. At least one of `code-review-graph` / `graphify` is installed; plus `git`, `bash`, `python3`.
+3. You can name each **foreign** repo by local path. (`graphify clone <github-url>` will clone a
+   remote one and print its path.) Both repos must be checkouts on the **same machine**.
 
-## Prerequisites & platform support
+## How scope is declared: the manifest cascade
 
-`code-review-graph` and/or `graphify` on `PATH`; `git`; `bash`/`python3`. Registration state is
-**machine-local and per-user** — it lives under `~/`, is global to your account, and is **not**
-committed. macOS/Linux first-class; Windows via WSL. Freshness assumes both repos are checkouts on
-the **same machine** (see caveats).
+Scope lives in `.graph-repos.json` files that load hierarchically, **exactly like `AGENTS.md` /
+`CLAUDE.md`** — lowest precedence first, nearest wins:
+
+| Layer   | File                                    | Committed | Use for                                     |
+| ------- | --------------------------------------- | --------- | ------------------------------------------- |
+| user    | `~/.code-review-graph/graph-repos.json` | no        | personal siblings, visible to every project |
+| project | `<repo-root>/.graph-repos.json`         | **yes**   | the team-shared sibling list — the default  |
+| subdir  | `<subdir>/.graph-repos.json`            | **yes**   | a monorepo package with its own scope       |
+
+```json
+{
+  "version": 1,
+  "repos": [
+    { "alias": "acme-api", "path": "../acme-api", "tools": ["crg", "graphify"], "notes": "auth + billing handlers" },
+    { "alias": "acme-design-system", "path": "~/Work/acme-ds", "tools": ["crg"] },
+    { "alias": "acme-legacy-ui", "remove": true }
+  ]
+}
+```
+
+- **`alias`** — `^[a-z0-9][a-z0-9._-]*$`. It is both the merge key across layers _and_ the token an
+  agent uses to accept or reject a search hit. Namespace it (`acme-api`, not `api`): the CRG
+  registry is shared with your other projects, and a bare `api` will collide.
+- **`path`** — a relative path resolves **against the manifest that declared it**, not the CWD.
+  That is what lets a committed `"../acme-api"` mean the same sibling checkout on every teammate's
+  machine. `~` and `$VARS` expand.
+- **`tools`** — `crg`, `graphify`, or both (default). Intersected with what is installed.
+- **`notes`** — one line, rendered into the AGENTS.md table, so it doubles as routing help
+  ("which repo do I ask for X").
+- **`remove: true`** — a **tombstone**: the only way a nearer layer can un-inherit an entry from a
+  lower one (a package dropping a repo its root declares).
+
+Collisions are resolved and reported, never silent: across layers the nearer layer replaces the
+whole entry; within one file the last wins with a warning.
+
+## Two registries, one scope
+
+The thing to understand before trusting this skill:
+
+- **CRG's registry is machine-global and shared with all your other projects.** Its path is
+  hardcoded (`~/.code-review-graph/registry.json`) — it cannot be scoped per repo. So sync only
+  ever **adds** to it and never unregisters an entry it did not create. `cross_repo_search_tool`
+  therefore **will** return hits from repos belonging to your other projects.
+- **Scope is enforced in context, not in the registry.** The `<!-- cross-repo -->` block in
+  `AGENTS.md` lists the in-scope aliases and tells the agent to ignore everything else. That list is
+  the enforcement surface. This is why the block matters as much as the registration.
+- **graphify sidesteps the problem.** It gets a **per-project** merged graph at
+  `<repo>/graphify-out/merged-graph.json` — genuinely isolated, no shared global state.
 
 ## Procedure
 
-`$CONSUMER` is the repo you are working in; `$FOREIGN` is the absolute path to the other repo.
+`$SKILL` is this skill's directory; `$SCOPE` is where the session is working (the repo root, or a
+package inside a monorepo).
 
-### 1. Resolve the foreign repo
+### 1. Choose the layer and author the manifest
 
-A local absolute path, or clone a remote one:
-
-```bash
-graphify clone <github-url>            # clones locally, prints the path → use as $FOREIGN
-```
-
-### 2. CRG path — register for read-only cross-repo search
-
-CRG's `register` only writes the registry; it does **not** build. And `cross_repo_search_tool`
-**silently skips** any registered repo whose `graph.db` is absent — so the foreign graph must exist
-first. A `build` is enough: embeddings are the foreign repo's own opt-in choice, and cross-repo
-search works without them.
+Ask which layer the repos belong in — **project is the default** (committed, so teammates inherit
+the same scope). Copy the starter if no manifest exists, then write the entries:
 
 ```bash
-# a) Build-if-needed: only if $FOREIGN/.code-review-graph/graph.db is missing (offer, don't force)
-code-review-graph build --repo "$FOREIGN"
-
-# b) Register (machine-local ~/.code-review-graph/registry.json), then confirm
-code-review-graph register "$FOREIGN" --alias <short-alias>
-code-review-graph repos                 # or the list_repos_tool MCP tool
+cp "$SKILL/assets/graph-repos.example.json" "$(git rev-parse --show-toplevel)/.graph-repos.json"
 ```
 
-**Optional freshness.** The registry is not the watch set — registering does not auto-refresh.
-Offer to add the foreign repo to the watch daemon so its graph stays current, or document a manual
-`update`:
+Prefer a path relative to the manifest in a committed layer; an absolute path is machine-specific
+and the verifier warns about it.
+
+### 2. Preview
 
 ```bash
-code-review-graph daemon add "$FOREIGN" # auto-refresh via ~/.code-review-graph/watch.toml
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" "$SCOPE" --dry-run
 ```
 
-Query it from either session with `cross_repo_search_tool(query="…")` and `list_repos_tool` — the
-only two registry-aware MCP tools. (Single-repo tools like `get_impact_radius` do **not** span
-repos.)
+Show the user the effective set, which layer each alias won from, and any repo whose graph is
+missing. Nothing is written.
 
-### 3. graphify path — merge into the global graph
+### 3. Offer builds — never force them
 
-graphify's cross-repo model is a merged graph at `~/.graphify/global-graph.json`. Add the foreign
-repo's **already-built** `graphify-out/graph.json` into it under a tag (AST-only, no LLM cost), then
-query the merged graph — note `global path` just _prints the global-graph file location_, so feed
-it to `--graph`:
+A foreign repo with no graph is reported `PENDING` and is **not** registered and **not** listed in
+`AGENTS.md` (CRG silently skips a registered repo whose `graph.db` is absent, so listing it would
+advertise an alias that can never answer). Building writes into **someone else's checkout**, so ask
+before doing it, then:
 
 ```bash
-# merge the foreign repo's graph into the global graph under a tag
-graphify global add "$FOREIGN/graphify-out/graph.json" --as <tag>
-graphify global list                        # confirm the tag is present
-
-# query across the merged graph
-GLOBAL="$(graphify global path)"            # prints ~/.graphify/global-graph.json
-graphify query "<term>"    --graph "$GLOBAL"
-graphify path  "<A>" "<B>" --graph "$GLOBAL"
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" "$SCOPE" --build missing
 ```
 
-Ad-hoc alternative without merging — point any read command straight at the foreign artifact:
+### 4. Sync
 
 ```bash
-graphify query "<term>" --graph "$FOREIGN/graphify-out/graph.json"
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" "$SCOPE"
 ```
 
-The foreign repo must have a built `graphify-out/graph.json`; if it is missing, run
-`graphify update .` inside that repo (AST-only, no API cost). Do **not** reach for `graphify extract`
-to produce it here unless you intend a full semantic re-extraction — `extract` makes LLM API calls.
-CRG's `graph.db` and graphify's `graph.json` are independent — building one does not satisfy the
-other.
-
-### 4. Define it in context (the token-saving core)
-
-Inject an idempotent managed block into `$CONSUMER/AGENTS.md`, sibling to the existing
-`<!-- graph-hooks -->` block, listing the registered foreign repos and the routing rule. This is
-what makes agents reach for the cross-repo graph instead of grepping. Only write it if the marker
-is absent; update the repo list in place otherwise.
-
-```markdown
-<!-- cross-repo:begin (managed by register-cross-repo-graph — do not edit between markers) -->
-
-## Cross-repo graph access (read-only)
-
-This project can query these sibling repos' graphs instead of grepping across folders:
-
-| Alias   | Path       | Query with                                                                                     |
-| ------- | ---------- | ---------------------------------------------------------------------------------------------- |
-| <alias> | <abs-path> | `cross_repo_search_tool(query=…)` (CRG) · `graphify query … --graph "$(graphify global path)"` |
-
-Before grepping/reading into another repo's tree, use `cross_repo_search_tool(query=…)` /
-`list_repos_tool` (CRG), or the graphify merged global graph —
-`graphify query/path … --graph "$(graphify global path)"` (or `--graph <foreign>/graphify-out/graph.json`
-for an unmerged repo). These read the foreign graph read-only and cost a fraction of a cross-tree
-grep.
-
-<!-- cross-repo:end -->
-```
+Registers each in-scope repo with CRG (additively), rebuilds the per-project graphify merged graph,
+and rewrites the `<!-- cross-repo -->` block in `AGENTS.md` from what it **confirmed** afterwards —
+never from what it intended — so the block can never advertise a repo that will not answer. It is
+idempotent: a second run changes nothing and leaves `git status` clean.
 
 ### 5. Verify
 
-- `code-review-graph repos` lists the entry and `$FOREIGN/.code-review-graph/graph.db` exists.
-- A `cross_repo_search_tool` smoke query returns hits tagged with the foreign repo.
-- `graphify global list` shows the merged tag (if the graphify path was used).
-- The `<!-- cross-repo -->` block is present in `AGENTS.md` and the `<!-- graph-hooks -->` block is
-  untouched.
+```bash
+bash "$SKILL/scripts/verify-cross-repo-graph.sh" "$SCOPE"
+```
+
+Healthy is **0 failed**. It fails on block drift — someone edited a manifest and never re-synced.
 
 ### 6. Report
 
-List the registered repos, the freshness mode (manual vs daemon), and the un-register path:
+Name the in-scope aliases and the layer each came from, whether to commit the manifest (project and
+subdir layers: yes; the user layer is not in the repo), and the removal path.
+
+## Querying it
 
 ```bash
-code-review-graph unregister <path-or-alias>
-graphify global remove <tag>        # by the tag used in `global add`, not a path
+# CRG — spans repos. Keep only hits whose alias is in scope.
+cross_repo_search_tool(query="…")    # MCP;  list_repos_tool() shows the full (superset) registry
+
+# graphify — the per-project merged graph
+graphify query "<term>"    --graph graphify-out/merged-graph.json
+graphify path  "<A>" "<B>" --graph graphify-out/merged-graph.json
 ```
+
+## Removing a repo
+
+Tombstone it (or delete the entry) in the nearest layer, then re-sync — the alias leaves the
+effective set and the `AGENTS.md` block, which is what actually narrows the agent. It stays in
+CRG's global registry until you also pass `--prune`, which unregisters **only** aliases this repo
+registered (tracked in `.code-review-graph/cross-repo-state.json`) and never touches another
+project's.
 
 ## Caveats
 
-- **Machine-local & per-user.** Registration lives under `~/` and is global to your account, not
-  committed — each teammate/machine must run it. The committed `AGENTS.md` block documents _intent_;
-  the actual registry is local.
-- **Freshness is a same-machine assumption.** You read whatever state the foreign `graph.db` /
-  `graph.json` is in. Keep it current (manual `update` or the watch daemon); a foreign repo on a
-  different machine or CI won't be reachable.
+- **The registry is a union; the block is the fence.** `cross_repo_search_tool` returns hits from
+  every repo any project registered on this machine. Nothing stops an agent from reading a path
+  outside the in-scope table except the instruction in the block. That is a soft boundary — fine for
+  read-only lookup, not a security control.
+- **A committed manifest is a scope grant.** A PR that adds an entry adds a repo path to every
+  teammate's agent scope. Read-only and local-path-only, but review it like any other config.
+- **Freshness is yours to keep.** Registering neither builds nor refreshes. You read whatever state
+  the foreign `graph.db` / `graph.json` is in; the verifier warns when a sibling's HEAD is newer
+  than its graph. Each sibling refreshes itself via its own hooks — or add it to CRG's watch daemon
+  (`code-review-graph daemon add <path>`, a _different_ global file, `watch.toml`).
+- **The merged graph is refreshed by nothing.** `graphify-out/graph.json` has a post-commit hook;
+  `merged-graph.json` does not, so it goes stale on this repo's next commit. The verifier warns;
+  `--merge-only` rebuilds it (AST-only, no LLM cost).
 - **Read-only covers search/lookup only.** `cross_repo_search_tool` spans repos; blast-radius tools
-  (`get_impact_radius`, `get_affected_flows`) stay single-repo — tracing a change _into_ another
-  repo needs one merged graph, not two read separately.
-- **Read-mostly, not zero-write.** CRG opens the foreign DB in SQLite WAL mode, which may create
-  `-wal`/`-shm` side files next to it; it never mutates graph content.
+  (`get_impact_radius`, `get_affected_flows`) stay single-repo. Tracing a change _into_ another repo
+  needs one merged graph, not two read separately.
+- **Read-mostly, not zero-write.** CRG opens the foreign `graph.db` in SQLite WAL mode, which may
+  create `-wal`/`-shm` side files next to it — dirtying that repo's `git status` if it does not
+  gitignore `.code-review-graph/`. The verifier warns. A read-only or network-mounted sibling is
+  worse: SQLite cannot open WAL and `cross_repo_search` silently returns nothing.
+- **Concurrency.** Sync takes a lock around the CRG phase because `register` read-modify-writes one
+  global file. Two syncs at once are safe; the second waits, then warns and skips.
+- **Monorepos.** The block is written to the nearest `AGENTS.md` at or above the scope dir, never
+  above the repo root. If a package contributes subdir-layer entries but has no `AGENTS.md` of its
+  own, sync **refuses** rather than leak package scope repo-wide.
 
 ## Notes
 
-- **Two independent CRG configs**, both under `~/.code-review-graph/`: `registry.json` (the
-  query/search set, edited by `register`/`unregister`) and `watch.toml` (the auto-refresh set,
-  edited by `daemon add`/`remove`). Adding to one does not affect the other.
-- **CRG vs graphify are separate systems.** Register for CRG's MCP `cross_repo_search`; merge for
-  graphify's global graph. Use whichever the consuming repo already relies on — or both.
-- Pairs with [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) if a registered repo's graph
-  goes stale or its tool install breaks.
+- **Three files now live in `~/.code-review-graph/`. Do not confuse them.** `registry.json` (CRG's
+  query set, written only via `register`/`unregister`) · `watch.toml` (CRG's auto-refresh set,
+  written by `daemon add`/`remove`) · `graph-repos.json` (**ours** — the user layer of the manifest
+  cascade). Sync never writes CRG's two; the verifier fails loudly if `registry.json` ever grows a
+  manifest's shape.
+- **CRG and graphify are independent systems.** Building one does not satisfy the other. Use
+  whichever the consuming repo already relies on — or both.
+- Bundled files: `scripts/sync-cross-repo-graph.sh`, `scripts/verify-cross-repo-graph.sh`,
+  `scripts/manifest/{resolve,render}.py` (the shared resolver both scripts call, so the installer
+  and the verifier can never disagree), `assets/agents-cross-repo.md`, `assets/graph-repos.example.json`.
+- Pairs with [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) if a sibling's graph goes stale
+  or its tool install breaks.

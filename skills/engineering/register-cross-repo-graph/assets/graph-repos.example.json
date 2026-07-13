@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "alias": "acme-api",
+      "path": "../acme-api",
+      "tools": ["crg", "graphify"],
+      "notes": "REST API — auth, billing, and webhook handlers"
+    },
+    {
+      "alias": "acme-design-system",
+      "path": "~/Work/acme-design-system",
+      "tools": ["crg"],
+      "notes": "shared React components and design tokens"
+    },
+    {
+      "alias": "acme-legacy-ui",
+      "remove": true
+    }
+  ]
+}
