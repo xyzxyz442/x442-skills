@@ -2,6 +2,14 @@
 
 ## [0.2.1](https://github.com/xyzxyz442/x442-skills/compare/v0.2.0...v0.2.1) (2026-07-13)
 
+### 🐞 Bug Fixes
+
+- **config:** ensure body-max-line-length rule is set to always ([b35d29a](https://github.com/xyzxyz442/x442-skills/commit/b35d29a0fb4627004963e16ee7c7592a1d793b57))
+
+### 🧹 Miscellaneous Chores
+
+- update dependencies for commitlint, prettier, and release-it ([1d3a1ac](https://github.com/xyzxyz442/x442-skills/commit/1d3a1acde9c0c16eff6752b52980c1b529615d0d))
+
 ## 0.2.0 (2026-07-13)
 
 ### 🚀 Features
