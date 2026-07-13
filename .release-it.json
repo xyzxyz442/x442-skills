@@ -1,6 +1,8 @@
 {
   "git": {
     "commitMessage": "chore(release): v${version}",
+    "tagName": "v${version}",
+    "tagAnnotation": "Release v${version}",
     "requireCleanWorkingDir": true
   },
   "github": {
@@ -12,7 +14,7 @@
   },
   "plugins": {
     "@release-it/conventional-changelog": {
-      "infile": "CHANGELOG",
+      "infile": "CHANGELOG.md",
       "preset": {
         "name": "conventionalcommits",
         "types": [
