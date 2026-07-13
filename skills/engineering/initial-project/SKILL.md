@@ -69,7 +69,8 @@ Run these in order from the target project root.
    section carrying (or linking) [references/commit-guidelines.md](references/commit-guidelines.md):
    Conventional Commits `type(scope): subject`, with `commitlint.config.mjs` named as the enforced
    source of truth. This is the always-on guidance for _writing_ commits; the actual commitlint +
-   husky + CI enforcement is installed separately by [`setup-project-tooling`](../setup-project-tooling/SKILL.md).
+   husky enforcement (local-only — no CI workflow ships) is installed separately by
+   [`setup-project-tooling`](../setup-project-tooling/SKILL.md).
    **Idempotency guard:** if a `## Commit conventions` section already exists, leave it.
 3. **Detect.** Check each tool's marker(s) from the table. Record which tools are present.
    Detection is best-effort and only drives the pre-selection in the next step.
@@ -88,7 +89,7 @@ Run these in order from the target project root.
      `../AGENTS.md` (the file lives in `.github/`, so the relative link is `../AGENTS.md`), and
      ensure `.vscode/settings.json` lists the project root in `chat.agentFilesLocations`
      (`".": true`) using the merge-safe procedure below.
-6. **Offer project tooling setup.** Commit-message _enforcement_ (commitlint + husky + CI),
+6. **Offer project tooling setup.** Commit-message _enforcement_ (commitlint + husky, local-only),
    staged-file lint/format, editor settings, and release automation are scaffolded by
    [`setup-project-tooling`](../setup-project-tooling/SKILL.md), which detects the project profile
    and wires tooling to match — it installs the `commitlint.config.mjs` behind the commit
