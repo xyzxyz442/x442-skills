@@ -28,7 +28,6 @@
 # Icon must end with two \r
 Icon
 
-
 # Thumbnails
 ._*
 
@@ -218,7 +217,9 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
+# root-anchored: setuptools writes MANIFEST at the project root. Unanchored, and with
+# core.ignorecase=true (macOS), it also swallows any directory named `manifest/`.
+/MANIFEST
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
