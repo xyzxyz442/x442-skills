@@ -1,7 +1,7 @@
 # Force LF on shipped shell/python hook payloads so their `#!/usr/bin/env bash` shebangs
 # survive a Windows/WSL checkout (CRLF would break `bash\r`). See the skills' Prerequisites
 # sections. Extension-less git hooks (e.g. post-commit) are pinned by name.
-*.sh          text eol=lf
-*.py          text eol=lf
-post-commit   text eol=lf
-commit-msg    text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+post-commit text eol=lf
+commit-msg text eol=lf

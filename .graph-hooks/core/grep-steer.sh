@@ -18,12 +18,12 @@
 #        d. later grep + miss -> pass silently
 set -uo pipefail
 
-CMD="$(cat 2>/dev/null || true)"
+CMD="$(cat 2> /dev/null || true)"
 [ -z "$CMD" ] && exit 0
 
 # Tier 1 — only intercept search commands
 case " $CMD " in
-  *grep*|*" rg "*|*ripgrep*|*" find "*|*" fd "*|*" ack "*|*" ag "*) : ;;
+  *grep* | *" rg "* | *ripgrep* | *" find "* | *" fd "* | *" ack "* | *" ag "*) : ;;
   *) exit 0 ;;
 esac
 
@@ -32,14 +32,15 @@ case "$CMD" in *--graph-tried*) exit 0 ;; esac
 
 # Tier 3 — non-code targets (graph can't index these)
 case "$CMD" in
-  *.md*|*.json*|*.yml*|*.yaml*|*.log*|*.jsonl*|*.txt*|*.csv*|*.lock*|\
-  *node_modules*|*/.git/*|*/dist/*|*/build/*|*/.next/*|*/__pycache__/*) exit 0 ;;
+  *.md* | *.json* | *.yml* | *.yaml* | *.log* | *.jsonl* | *.txt* | *.csv* | *.lock* | \
+    *node_modules* | */.git/* | */dist/* | */build/* | */.next/* | */__pycache__/*) exit 0 ;;
 esac
 
 # Tier 4 — detect local graphs
-HAVE_CRG=0; HAVE_GFY=0
+HAVE_CRG=0
+HAVE_GFY=0
 [ -f .code-review-graph/graph.db ] && HAVE_CRG=1
-[ -f graphify-out/graph.json ]    && HAVE_GFY=1
+[ -f graphify-out/graph.json ] && HAVE_GFY=1
 [ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ] && exit 0
 
 # Extract a search term: first non-flag word > 2 chars that is not a path
@@ -51,11 +52,11 @@ i=next((k for k,p in enumerate(parts) if p.rsplit('/',1)[-1] in bases),-1)
 if i<0: sys.exit(0)
 for p in parts[i+1:]:
     if not p.startswith('-') and len(p)>2 and '/' not in p:
-        print(p[:60]); break" 2>/dev/null || true)"
+        print(p[:60]); break" 2> /dev/null || true)"
 [ -z "$PATTERN" ] && exit 0
 
-query_crg() {  # $1=db $2=pattern  (FTS5, falls back to LIKE; read-only)
-  python3 - "$1" "$2" <<'PY' 2>/dev/null
+query_crg() { # $1=db $2=pattern  (FTS5, falls back to LIKE; read-only)
+  python3 - "$1" "$2" << 'PY' 2> /dev/null
 import sqlite3, sys, os
 db, pat = sys.argv[1], sys.argv[2]
 if not os.path.exists(db): sys.exit(0)
@@ -81,8 +82,8 @@ except Exception:
 PY
 }
 
-query_gfy() {  # $1=graph.json $2=pattern
-  python3 - "$1" "$2" <<'PY' 2>/dev/null
+query_gfy() { # $1=graph.json $2=pattern
+  python3 - "$1" "$2" << 'PY' 2> /dev/null
 import json, sys, os
 gfile, pat = sys.argv[1], sys.argv[2].lower()
 if not os.path.exists(gfile): sys.exit(0)
@@ -112,12 +113,13 @@ HINT=""
 [ "$HAVE_GFY" = 1 ] && HINT="${HINT:+$HINT or }graphify query '$PATTERN' --graph graphify-out/graph.json"
 
 # One allowance per repo per hour
-KEY="$(printf '%s' "$PWD" | { md5sum 2>/dev/null || md5 2>/dev/null; } | cut -c1-8)"
-DIR="${HOME}/.cache/graph-steer-hook"; mkdir -p "$DIR" 2>/dev/null || true
+KEY="$(printf '%s' "$PWD" | { md5sum 2> /dev/null || md5 2> /dev/null; } | cut -c1-8)"
+DIR="${HOME}/.cache/graph-steer-hook"
+mkdir -p "$DIR" 2> /dev/null || true
 SLOT="${DIR}/first-${KEY:-x}-$(date +%Y%m%d%H)"
 
-emit_neutral() {  # $1=context|deny  $2=text   (python does the JSON escaping)
-  python3 - "$1" "$2" <<'PY'
+emit_neutral() { # $1=context|deny  $2=text   (python does the JSON escaping)
+  python3 - "$1" "$2" << 'PY'
 import json, sys
 mode, text = sys.argv[1], sys.argv[2]
 if mode == "context":
@@ -128,7 +130,7 @@ PY
 }
 
 if [ ! -f "$SLOT" ]; then
-  touch "$SLOT" 2>/dev/null || true
+  touch "$SLOT" 2> /dev/null || true
   if [ -n "$RESULT" ]; then
     emit_neutral context "Knowledge graph pre-answer for '$PATTERN':
 $RESULT

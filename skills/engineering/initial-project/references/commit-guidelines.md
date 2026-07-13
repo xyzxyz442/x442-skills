@@ -19,23 +19,23 @@ type(scope): subject
 - **subject** — lowercase, imperative mood ("add", not "added"/"adds"), no trailing period.
 
 Keep the subject short (~50 chars). Add a body (blank line, then wrapped prose) when the change
-needs the *why*; add a `BREAKING CHANGE:` footer for incompatible changes.
+needs the _why_; add a `BREAKING CHANGE:` footer for incompatible changes.
 
 ## Allowed types
 
-| Type | Use for |
-| --- | --- |
-| `feat` | A new feature |
-| `fix` | A bug fix |
-| `docs` | Documentation-only changes |
-| `style` | Formatting/whitespace — no change in code meaning |
+| Type       | Use for                                                 |
+| ---------- | ------------------------------------------------------- |
+| `feat`     | A new feature                                           |
+| `fix`      | A bug fix                                               |
+| `docs`     | Documentation-only changes                              |
+| `style`    | Formatting/whitespace — no change in code meaning       |
 | `refactor` | Code change that neither fixes a bug nor adds a feature |
-| `perf` | Performance improvement |
-| `test` | Adding or correcting tests |
-| `build` | Build system or external dependency changes |
-| `ci` | CI configuration and scripts |
-| `chore` | Other changes that don't touch src or tests |
-| `revert` | Reverts a previous commit |
+| `perf`     | Performance improvement                                 |
+| `test`     | Adding or correcting tests                              |
+| `build`    | Build system or external dependency changes             |
+| `ci`       | CI configuration and scripts                            |
+| `chore`    | Other changes that don't touch src or tests             |
+| `revert`   | Reverts a previous commit                               |
 
 ## Allowed scopes
 

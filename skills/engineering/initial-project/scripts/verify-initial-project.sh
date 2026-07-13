@@ -13,15 +13,29 @@
 set -uo pipefail
 
 TARGET="${1:-$PWD}"
-cd "$TARGET" 2>/dev/null || { echo "no such path: $TARGET"; exit 1; }
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="$PWD"
+cd "$TARGET" 2> /dev/null || {
+  echo "no such path: $TARGET"
+  exit 1
+}
+ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || ROOT="$PWD"
 cd "$ROOT"
 
-P=0; F=0; W=0
-ok()   { printf '  [PASS] %s\n' "$1"; P=$((P+1)); }
-bad()  { printf '  [FAIL] %s\n' "$1"; F=$((F+1)); }
-warn() { printf '  [warn] %s\n' "$1"; W=$((W+1)); }
-is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2>/dev/null; }
+P=0
+F=0
+W=0
+ok() {
+  printf '  [PASS] %s\n' "$1"
+  P=$((P + 1))
+}
+bad() {
+  printf '  [FAIL] %s\n' "$1"
+  F=$((F + 1))
+}
+warn() {
+  printf '  [warn] %s\n' "$1"
+  W=$((W + 1))
+}
+is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
 
 # A distinctive line from references/karpathy-guidelines.md. Its presence in a tool entry
 # file means the shared guidance was copied where it must never live.
@@ -49,25 +63,33 @@ WIRED=0
 for f in CLAUDE.md GEMINI.md; do
   [ -f "$f" ] || continue
   n=$(grep -c '@AGENTS\.md' "$f")
-  if [ "$n" -eq 1 ]; then ok "$f imports @AGENTS.md (exactly one line)"; WIRED=$((WIRED+1))
-  elif [ "$n" -eq 0 ]; then bad "$f present but has no @AGENTS.md import line"
+  if [ "$n" -eq 1 ]; then
+    ok "$f imports @AGENTS.md (exactly one line)"
+    WIRED=$((WIRED + 1))
+  elif [ "$n" -eq 0 ]; then
+    bad "$f present but has no @AGENTS.md import line"
   else bad "$f has $n @AGENTS.md lines (duplicated — expected exactly one)"; fi
 done
 # Antigravity: reads AGENTS.md natively (v1.20.3+). ANTIGRAVITY.md is optional, overrides-only.
 if [ -f ANTIGRAVITY.md ]; then
   n=$(grep -c '@AGENTS\.md' ANTIGRAVITY.md)
-  if [ "$n" -le 1 ]; then ok "ANTIGRAVITY.md present (Antigravity reads AGENTS.md natively; no import required)"; WIRED=$((WIRED+1))
+  if [ "$n" -le 1 ]; then
+    ok "ANTIGRAVITY.md present (Antigravity reads AGENTS.md natively; no import required)"
+    WIRED=$((WIRED + 1))
   else bad "ANTIGRAVITY.md has $n @AGENTS.md lines (duplicated)"; fi
 fi
 # GitHub Copilot: prose link must be ../AGENTS.md because the file lives in .github/.
 CP=.github/copilot-instructions.md
 if [ -f "$CP" ]; then
-  if grep -q '\.\./AGENTS\.md' "$CP"; then ok "$CP links ../AGENTS.md"; WIRED=$((WIRED+1))
-  elif grep -q 'AGENTS\.md' "$CP"; then bad "$CP references AGENTS.md but not as ../AGENTS.md (wrong relative path from .github/)"
+  if grep -q '\.\./AGENTS\.md' "$CP"; then
+    ok "$CP links ../AGENTS.md"
+    WIRED=$((WIRED + 1))
+  elif grep -q 'AGENTS\.md' "$CP"; then
+    bad "$CP references AGENTS.md but not as ../AGENTS.md (wrong relative path from .github/)"
   else bad "$CP present but does not reference AGENTS.md"; fi
   if [ -f .vscode/settings.json ]; then
     if is_json .vscode/settings.json; then
-      python3 -c "import json,sys; d=json.load(open('.vscode/settings.json')); loc=d.get('chat.agentFilesLocations',{}); sys.exit(0 if isinstance(loc,dict) and loc.get('.') is True else 1)" 2>/dev/null \
+      python3 -c "import json,sys; d=json.load(open('.vscode/settings.json')); loc=d.get('chat.agentFilesLocations',{}); sys.exit(0 if isinstance(loc,dict) and loc.get('.') is True else 1)" 2> /dev/null \
         && ok ".vscode/settings.json lists the repo root in chat.agentFilesLocations" \
         || bad ".vscode/settings.json missing chat.agentFilesLocations \".\": true"
     else bad ".vscode/settings.json is not valid JSON"; fi
@@ -82,7 +104,8 @@ DUP=0
 for f in CLAUDE.md GEMINI.md ANTIGRAVITY.md .github/copilot-instructions.md; do
   [ -f "$f" ] || continue
   if grep -qF "$KARPATHY_PHRASE" "$f" || grep -qE '^#{1,6}[[:space:]]+Coding guidelines' "$f"; then
-    bad "$f duplicates shared guidance (Karpathy text / Coding-guidelines section belongs only in AGENTS.md)"; DUP=1
+    bad "$f duplicates shared guidance (Karpathy text / Coding-guidelines section belongs only in AGENTS.md)"
+    DUP=1
   fi
 done
 [ "$DUP" -eq 0 ] && ok "no tool file copies the Karpathy guidelines or a Coding-guidelines section"

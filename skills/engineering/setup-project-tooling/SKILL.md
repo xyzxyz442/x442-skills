@@ -43,12 +43,12 @@ and `.lintstagedrc.json` round-trip (parse → mutate → write), never splice w
 Read the repo first. **Detect** the package manager and language from filesystem signals;
 **recommend** the category and let the user pick.
 
-| Dimension | Detect from | Support |
-| --- | --- | --- |
-| Package manager | `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun; no lockfile → default **npm** | — |
-| Language | `tsconfig.json`/`*.ts`→**Node/TypeScript**; `pyproject.toml`/`*.py`→**Python**; `*.sql` alongside Python→**Python-stream** | fully supported |
-| Language | `*.csproj`/`*.sln`→C#; `Chart.yaml`→Helm; `go.mod`→Go; `Cargo.toml`→Rust; anything else | common base only |
-| Framework | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React | Node/TS touches |
+| Dimension       | Detect from                                                                                                                | Support          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Package manager | `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun; no lockfile → default **npm**           | —                |
+| Language        | `tsconfig.json`/`*.ts`→**Node/TypeScript**; `pyproject.toml`/`*.py`→**Python**; `*.sql` alongside Python→**Python-stream** | fully supported  |
+| Language        | `*.csproj`/`*.sln`→C#; `Chart.yaml`→Helm; `go.mod`→Go; `Cargo.toml`→Rust; anything else                                    | common base only |
+| Framework       | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React                                                              | Node/TS touches  |
 
 - **Category → always confirm.** Present the detected category as a recommendation and let the user
   choose. In Claude Code, use `AskUserQuestion` with options **frontend / backend / library / other**,
@@ -61,11 +61,11 @@ Read the repo first. **Detect** the package manager and language from filesystem
 Category is **lightweight**: it only sets the release-it default and framework expectation. The
 **language** drives which lint/format fragments get applied.
 
-| Category | release-it default |
-| --- | --- |
-| Frontend / Backend | optional (ask) |
-| Library | **on** |
-| Other (ETL/data) | off |
+| Category           | release-it default |
+| ------------------ | ------------------ |
+| Frontend / Backend | optional (ask)     |
+| Library            | **on**             |
+| Other (ETL/data)   | off                |
 
 ## Common / base tooling (every repo)
 

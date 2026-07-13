@@ -49,12 +49,12 @@ verifier and the JSON-safe Copilot merge.
 
 ## Supported tools
 
-| Tool | Detect marker(s) | Entry file | Loads AGENTS.md via |
-| --- | --- | --- | --- |
-| Claude Code | `.claude/`, `CLAUDE.md` | `CLAUDE.md` | [`@AGENTS.md` import](https://docs.claude.com/en/docs/claude-code/memory) |
-| Antigravity | `ANTIGRAVITY.md`, `.antigravity/` | `ANTIGRAVITY.md` (overrides only) | [reads `AGENTS.md` natively](https://antigravity.google/docs/home) (v1.20.3+) — no import line |
-| Gemini CLI | `GEMINI.md`, `.gemini/` | `GEMINI.md` | [`@AGENTS.md` import](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/gemini-md.md) |
-| GitHub Copilot | `.github/copilot-instructions.md`, `.github/` | `.github/copilot-instructions.md` | prose link to `../AGENTS.md` + `.vscode/settings.json` → `chat.agentFilesLocations` |
+| Tool           | Detect marker(s)                              | Entry file                        | Loads AGENTS.md via                                                                                |
+| -------------- | --------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Claude Code    | `.claude/`, `CLAUDE.md`                       | `CLAUDE.md`                       | [`@AGENTS.md` import](https://docs.claude.com/en/docs/claude-code/memory)                          |
+| Antigravity    | `ANTIGRAVITY.md`, `.antigravity/`             | `ANTIGRAVITY.md` (overrides only) | [reads `AGENTS.md` natively](https://antigravity.google/docs/home) (v1.20.3+) — no import line     |
+| Gemini CLI     | `GEMINI.md`, `.gemini/`                       | `GEMINI.md`                       | [`@AGENTS.md` import](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/gemini-md.md) |
+| GitHub Copilot | `.github/copilot-instructions.md`, `.github/` | `.github/copilot-instructions.md` | prose link to `../AGENTS.md` + `.vscode/settings.json` → `chat.agentFilesLocations`                |
 
 ## Steps
 
@@ -68,7 +68,7 @@ Run these in order from the target project root.
 2. **Ensure the commit conventions in `AGENTS.md`.** Ensure it contains a `## Commit conventions`
    section carrying (or linking) [references/commit-guidelines.md](references/commit-guidelines.md):
    Conventional Commits `type(scope): subject`, with `commitlint.config.mjs` named as the enforced
-   source of truth. This is the always-on guidance for *writing* commits; the actual commitlint +
+   source of truth. This is the always-on guidance for _writing_ commits; the actual commitlint +
    husky + CI enforcement is installed separately by [`setup-project-tooling`](../setup-project-tooling/SKILL.md).
    **Idempotency guard:** if a `## Commit conventions` section already exists, leave it.
 3. **Detect.** Check each tool's marker(s) from the table. Record which tools are present.
@@ -88,7 +88,7 @@ Run these in order from the target project root.
      `../AGENTS.md` (the file lives in `.github/`, so the relative link is `../AGENTS.md`), and
      ensure `.vscode/settings.json` lists the project root in `chat.agentFilesLocations`
      (`".": true`) using the merge-safe procedure below.
-6. **Offer project tooling setup.** Commit-message *enforcement* (commitlint + husky + CI),
+6. **Offer project tooling setup.** Commit-message _enforcement_ (commitlint + husky + CI),
    staged-file lint/format, editor settings, and release automation are scaffolded by
    [`setup-project-tooling`](../setup-project-tooling/SKILL.md), which detects the project profile
    and wires tooling to match — it installs the `commitlint.config.mjs` behind the commit

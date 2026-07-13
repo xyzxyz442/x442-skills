@@ -14,39 +14,46 @@
 # Every path silently no-ops when a graph or tool is absent, so it is safe on any repo.
 set -uo pipefail
 
-TOOL=""; KIND=""
+TOOL=""
+KIND=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tool) TOOL="${2:-}"; shift 2 ;;
-    --kind) KIND="${2:-}"; shift 2 ;;
+    --tool)
+      TOOL="${2:-}"
+      shift 2
+      ;;
+    --kind)
+      KIND="${2:-}"
+      shift 2
+      ;;
     *) shift ;;
   esac
 done
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 CORE="$DIR/core"
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$(cat 2> /dev/null || true)"
 
 case "$KIND" in
   pretool-shell)
-    CMD="$(printf '%s' "$INPUT" | python3 "$CORE/extract.py" --tool "$TOOL" --field command 2>/dev/null || true)"
+    CMD="$(printf '%s' "$INPUT" | python3 "$CORE/extract.py" --tool "$TOOL" --field command 2> /dev/null || true)"
     [ -z "$CMD" ] && exit 0
     printf '%s' "$CMD" | bash "$CORE/grep-steer.sh" \
-      | python3 "$CORE/emit.py" --tool "$TOOL" --event pretool 2>/dev/null || true
+      | python3 "$CORE/emit.py" --tool "$TOOL" --event pretool 2> /dev/null || true
     ;;
   pretool-read)
-    T="$(printf '%s' "$INPUT" | python3 "$CORE/extract.py" --tool "$TOOL" --field readtarget 2>/dev/null || true)"
+    T="$(printf '%s' "$INPUT" | python3 "$CORE/extract.py" --tool "$TOOL" --field readtarget 2> /dev/null || true)"
     [ -z "$T" ] && exit 0
     printf '%s' "$T" | bash "$CORE/read-nudge.sh" \
-      | python3 "$CORE/emit.py" --tool "$TOOL" --event pretool 2>/dev/null || true
+      | python3 "$CORE/emit.py" --tool "$TOOL" --event pretool 2> /dev/null || true
     ;;
   sessionstart)
     bash "$CORE/session-context.sh" \
-      | python3 "$CORE/emit.py" --tool "$TOOL" --event session 2>/dev/null || true
+      | python3 "$CORE/emit.py" --tool "$TOOL" --event session 2> /dev/null || true
     ;;
   endturn)
     # Heavy refresh — wired for the primary tool only (see setup-graph-hooks.sh --primary).
-    bash "$CORE/graph-refresh.sh" 2>/dev/null || true
+    bash "$CORE/graph-refresh.sh" 2> /dev/null || true
     ;;
   *)
     exit 0

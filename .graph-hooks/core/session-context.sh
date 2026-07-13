@@ -6,7 +6,7 @@
 # graph-cheatsheet.py + session-status.sh + session-setup-nudge.sh into one core.
 set -uo pipefail
 
-python3 - <<'PY'
+python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
 crg = os.path.exists(".code-review-graph/graph.db")

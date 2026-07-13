@@ -11,15 +11,29 @@
 set -uo pipefail
 
 TARGET="${1:-$PWD}"
-cd "$TARGET" 2>/dev/null || { echo "no such path: $TARGET"; exit 1; }
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="$PWD"
+cd "$TARGET" 2> /dev/null || {
+  echo "no such path: $TARGET"
+  exit 1
+}
+ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || ROOT="$PWD"
 cd "$ROOT"
 
-P=0; F=0; W=0
-ok()   { printf '  [PASS] %s\n' "$1"; P=$((P+1)); }
-bad()  { printf '  [FAIL] %s\n' "$1"; F=$((F+1)); }
-warn() { printf '  [warn] %s\n' "$1"; W=$((W+1)); }
-is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2>/dev/null; }
+P=0
+F=0
+W=0
+ok() {
+  printf '  [PASS] %s\n' "$1"
+  P=$((P + 1))
+}
+bad() {
+  printf '  [FAIL] %s\n' "$1"
+  F=$((F + 1))
+}
+warn() {
+  printf '  [warn] %s\n' "$1"
+  W=$((W + 1))
+}
+is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
 
 echo "Repo: $ROOT"
 echo
@@ -28,8 +42,10 @@ echo "----------------------------------"
 if [ -f commitlint.config.mjs ]; then
   ok "commitlint.config.mjs present at repo root"
   # Local commit-msg enforcement: committed .husky/commit-msg OR a prepare script that generates it.
-  if [ -f .husky/commit-msg ]; then ok ".husky/commit-msg present (committed local hook)"
-  elif [ -f package.json ] && grep -qE '\.husky/commit-msg|commitlint --edit' package.json; then ok "commit-msg hook generated at install time (package.json prepare script)"
+  if [ -f .husky/commit-msg ]; then
+    ok ".husky/commit-msg present (committed local hook)"
+  elif [ -f package.json ] && grep -qE '\.husky/commit-msg|commitlint --edit' package.json; then
+    ok "commit-msg hook generated at install time (package.json prepare script)"
   else bad "no local commit-msg enforcement (.husky/commit-msg absent and no prepare script generates it)"; fi
 else
   bad "commitlint.config.mjs missing at repo root"
@@ -40,7 +56,7 @@ echo "2. Declared tooling in package.json"
 echo "-----------------------------------"
 if [ -f package.json ] && is_json package.json; then
   ok "package.json is valid JSON"
-  python3 - <<'PY' 2>/dev/null
+  python3 - << 'PY' 2> /dev/null
 import json,sys
 d=json.load(open("package.json"))
 dev=d.get("devDependencies",{})
@@ -58,11 +74,18 @@ echo "3. Staged-file lint/format (lint-staged)"
 echo "----------------------------------------"
 LS=0
 if [ -f package.json ] && is_json package.json; then
-  python3 -c "import json,sys; sys.exit(0 if 'lint-staged' in json.load(open('package.json')) else 1)" 2>/dev/null && { ok "lint-staged config found (package.json key)"; LS=1; }
+  python3 -c "import json,sys; sys.exit(0 if 'lint-staged' in json.load(open('package.json')) else 1)" 2> /dev/null && {
+    ok "lint-staged config found (package.json key)"
+    LS=1
+  }
 fi
 if [ "$LS" -eq 0 ]; then
   for f in .lintstagedrc .lintstagedrc.json .lintstagedrc.yaml .lintstagedrc.yml .lintstagedrc.js .lintstagedrc.cjs .lintstagedrc.mjs lint-staged.config.js lint-staged.config.mjs lint-staged.config.cjs; do
-    [ -f "$f" ] && { ok "lint-staged config found ($f)"; LS=1; break; }
+    [ -f "$f" ] && {
+      ok "lint-staged config found ($f)"
+      LS=1
+      break
+    }
   done
 fi
 [ "$LS" -eq 0 ] && bad "no lint-staged config (package.json 'lint-staged' key or .lintstagedrc* file)"

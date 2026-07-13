@@ -15,7 +15,7 @@
 #   ./setup-embeddings.sh --yes                 assume yes for install prompts
 set -uo pipefail
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || {
   echo "ERROR: not a git repo" >&2
   exit 1
 }
@@ -80,18 +80,18 @@ ollama_base() {
 
 OLLAMA_BASE="$(ollama_base)"
 
-ollama_up() { curl -sf --max-time 2 "$OLLAMA_BASE/api/tags" >/dev/null 2>&1; }
+ollama_up() { curl -sf --max-time 2 "$OLLAMA_BASE/api/tags" > /dev/null 2>&1; }
 
 # Models whose /api/show capabilities include "embedding". A name-substring filter would both
 # miss models and invent false positives, so ask the daemon.
 ollama_embed_models() {
-  names=$(curl -sf --max-time 2 "$OLLAMA_BASE/api/tags" 2>/dev/null |
-    python3 -c 'import json,sys; [print(m["name"]) for m in json.load(sys.stdin).get("models",[])]' 2>/dev/null)
+  names=$(curl -sf --max-time 2 "$OLLAMA_BASE/api/tags" 2> /dev/null \
+    | python3 -c 'import json,sys; [print(m["name"]) for m in json.load(sys.stdin).get("models",[])]' 2> /dev/null)
   [ -z "$names" ] && return 0
   for n in $names; do
     caps=$(curl -sf --max-time 5 "$OLLAMA_BASE/api/show" \
-      -H 'Content-Type: application/json' -d "{\"model\":\"$n\"}" 2>/dev/null |
-      python3 -c 'import json,sys; print(",".join(json.load(sys.stdin).get("capabilities") or []))' 2>/dev/null)
+      -H 'Content-Type: application/json' -d "{\"model\":\"$n\"}" 2> /dev/null \
+      | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin).get("capabilities") or []))' 2> /dev/null)
     case ",$caps," in *,embedding,*) printf '%s\n' "$n" ;; esac
   done
 }
@@ -99,17 +99,17 @@ ollama_embed_models() {
 # Ask CRG's own interpreter, via its shebang, whether sentence-transformers is importable.
 # find_spec resolves metadata without importing torch — the whole point of this file.
 sentence_transformers_present() {
-  crg=$(command -v code-review-graph 2>/dev/null) || return 1
-  py=$(head -1 "$crg" 2>/dev/null | sed 's/^#!//')
+  crg=$(command -v code-review-graph 2> /dev/null) || return 1
+  py=$(head -1 "$crg" 2> /dev/null | sed 's/^#!//')
   [ -x "$py" ] || return 1
-  "$py" -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("sentence_transformers") else 1)' 2>/dev/null
+  "$py" -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("sentence_transformers") else 1)' 2> /dev/null
 }
 
-current_provider() { bash "$PROBE" 2>/dev/null; }
+current_provider() { bash "$PROBE" 2> /dev/null; }
 
 print_list() {
   if ollama_up; then
-    models=$(ollama_embed_models | paste -sd, - 2>/dev/null)
+    models=$(ollama_embed_models | paste -sd, - 2> /dev/null)
     echo "ollama=up"
     echo "ollama_base=$OLLAMA_BASE"
     echo "ollama_models=${models:-}"
@@ -140,7 +140,7 @@ confirm() {
 
 write_cfg() {
   mkdir -p .code-review-graph
-  printf '%s\n' "$1" >"$CFG"
+  printf '%s\n' "$1" > "$CFG"
   echo "  + $CFG"
   # .code-review-graph/.gitignore already contains '*', so this is untracked by construction.
 }
@@ -170,7 +170,7 @@ sync_mcp_env() {
     echo "      CRG_OPENAI_API_KEY=ollama, CRG_OPENAI_MODEL=$model — otherwise it reads keyword mode."
     return 0
   }
-  python3 - "$base/v1" "$model" <<'PY'
+  python3 - "$base/v1" "$model" << 'PY'
 import json, sys
 base, model = sys.argv[1], sys.argv[2]
 with open(".mcp.json") as f:
@@ -201,7 +201,7 @@ PY
 # picks the vectors up with no extra wiring. Strip any Ollama env we previously injected.
 unsync_mcp_env() {
   [ -f .mcp.json ] || return 0
-  python3 - <<'PY'
+  python3 - << 'PY'
 import json
 with open(".mcp.json") as f:
     cfg = json.load(f)
@@ -235,7 +235,7 @@ first_embed() {
 
 apply_off() {
   if [ -f "$CFG" ]; then
-    if command -v trash >/dev/null 2>&1; then trash "$CFG"; else mv "$CFG" "$CFG.disabled"; fi
+    if command -v trash > /dev/null 2>&1; then trash "$CFG"; else mv "$CFG" "$CFG.disabled"; fi
     echo "  - $CFG removed"
   fi
   unsync_mcp_env

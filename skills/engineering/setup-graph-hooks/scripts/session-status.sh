@@ -4,5 +4,5 @@
 # wrapper that Claude Code can de-dupe across a home install and a repo install.
 set -uo pipefail
 
-command -v code-review-graph >/dev/null 2>&1 && code-review-graph status 2>/dev/null || true
+command -v code-review-graph > /dev/null 2>&1 && code-review-graph status 2> /dev/null || true
 exit 0

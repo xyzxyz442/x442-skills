@@ -35,7 +35,7 @@ load_env() {
 # "openai:qwen3-embedding@http://localhost:11434"), not a bare provider.
 recorded_provider() {
   [ -f "$DB" ] || return 0
-  python3 - "$DB" <<'PY' 2>/dev/null
+  python3 - "$DB" << 'PY' 2> /dev/null
 import sqlite3, sys
 try:
     c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
@@ -62,8 +62,14 @@ resolve() {
     printf 'openai'
     return 0
   fi
-  [ -n "${GOOGLE_API_KEY:-}" ] && { printf 'google'; return 0; }
-  [ -n "${MINIMAX_API_KEY:-}" ] && { printf 'minimax'; return 0; }
+  [ -n "${GOOGLE_API_KEY:-}" ] && {
+    printf 'google'
+    return 0
+  }
+  [ -n "${MINIMAX_API_KEY:-}" ] && {
+    printf 'minimax'
+    return 0
+  }
 
   # Auto-keep-fresh: a repo embedded earlier keeps its vectors current with no config. Only
   # `local` qualifies — the cloud providers raise ValueError when their env vars are absent,
@@ -79,7 +85,7 @@ if [ "${1:-}" != "--run" ]; then
   exit 0
 fi
 
-command -v code-review-graph >/dev/null 2>&1 || exit 0
+command -v code-review-graph > /dev/null 2>&1 || exit 0
 [ -n "$PROV" ] || exit 0
 load_env
 exec code-review-graph embed --provider "$PROV"

@@ -9,12 +9,12 @@
 # opt-in embed gate) for repos whose .claude/settings.json still points here.
 set -uo pipefail
 
-command -v code-review-graph >/dev/null 2>&1 || exit 0
+command -v code-review-graph > /dev/null 2>&1 || exit 0
 [ -d .code-review-graph ] || exit 0
 
-PF="/tmp/crg-claude-$(pwd | { md5sum 2>/dev/null || md5 2>/dev/null; } | cut -c1-8).pid"
-if [ -f "$PF" ] && kill -0 "$(cat "$PF" 2>/dev/null)" 2>/dev/null; then
-  exit 0   # an update for this repo is already running
+PF="/tmp/crg-claude-$(pwd | { md5sum 2> /dev/null || md5 2> /dev/null; } | cut -c1-8).pid"
+if [ -f "$PF" ] && kill -0 "$(cat "$PF" 2> /dev/null)" 2> /dev/null; then
+  exit 0 # an update for this repo is already running
 fi
 
 # Embeddings are opt-in: the gate no-ops unless a provider is configured, so a repo in keyword
@@ -22,6 +22,6 @@ fi
 EMBED='true'
 [ -f .graph-hooks/core/embed-provider.sh ] && EMBED='bash .graph-hooks/core/embed-provider.sh --run'
 
-{ code-review-graph update --skip-flows 2>/dev/null && nohup sh -c "$EMBED" >/dev/null 2>&1 & } &
+{ code-review-graph update --skip-flows 2> /dev/null && nohup sh -c "$EMBED" > /dev/null 2>&1 & } &
 echo $! > "$PF"
 exit 0
