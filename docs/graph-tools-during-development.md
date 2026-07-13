@@ -9,11 +9,11 @@ work — what fires, when, and how to get out of the way when you need to.
 The graph layer is installed and maintained by a small family of skills; this doc is the
 **runtime view** of what they wire up:
 
-| Skill                                                                                                    | Role                                                                                                |
-| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`setup-graph-hooks`](../skills/engineering/setup-graph-hooks/SKILL.md)                                  | Wire the hooks, routing block, and refresh — first-time setup.                                      |
-| [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_               | Diagnose and fix a broken/stale/drifted graph layer after a `verify` `[FAIL]` or misbehaving tools. |
-| [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md) _(experimental)_ | Give one repo read-only access to another repo's graph, and record it in `AGENTS.md`.               |
+| Skill                                                                                                    | Role                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`setup-graph-hooks`](../skills/engineering/setup-graph-hooks/SKILL.md)                                  | Wire the hooks, routing block, and refresh — first-time setup.                                                                                                 |
+| [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_               | Diagnose and fix a broken/stale/drifted graph layer after a `verify` `[FAIL]` or misbehaving tools.                                                            |
+| [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md) _(experimental)_ | Declare sibling repos in a committed `.graph-repos.json` cascade, then sync: read-only access to their graphs, with the in-scope list recorded in `AGENTS.md`. |
 
 ## The two tools
 
@@ -388,29 +388,50 @@ Common cases it fixes:
 ## Cross-repo lookups
 
 Each repo owns and refreshes **its own** graph (single-writer), so nothing is shared across
-folders until you wire it. To let a session in one repo _read_ another repo's graph — instead of
+folders until you declare it. To let a session in one repo _read_ another repo's graph — instead of
 grepping across the folder boundary — use
 [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md)
-_(experimental)_, which sets up the link **and** records it in `AGENTS.md` so agents actually
-reach for it. The two backends work differently:
+_(experimental)_.
+
+You do not register repos by hand. **Scope is declared in a `.graph-repos.json` manifest** that
+cascades exactly like `AGENTS.md` — user (`~/.code-review-graph/graph-repos.json`) → repo root →
+subdirectory, nearest wins. The project layer is committed, so the sibling list is team-shared. A
+relative `path` resolves against _the manifest that declared it_, which is what lets a committed
+`"../acme-api"` mean the same checkout on every teammate's machine.
 
 ```bash
-# CRG — register the foreign repo once per machine (read-only), then query across the set
-code-review-graph register /abs/path/to/other-repo --alias other
-code-review-graph repos # confirm it's in scope
-# → cross_repo_search_tool(query=…) / list_repos_tool span the registered repos
+# 1. declare the scope (committed; a monorepo package may narrow it with its own manifest)
+cp "$SKILL/assets/graph-repos.example.json" .graph-repos.json
 
-# graphify — merge the foreign repo's built graph into the global graph under a tag
-graphify global add /abs/path/to/other-repo/graphify-out/graph.json --as other
-graphify query '<term>' --graph "$(graphify global path)" # query the merged graph
-# (ad-hoc, no merge: graphify query '<term>' --graph /abs/path/to/other-repo/graphify-out/graph.json)
+# 2. preview, then apply — one script does both backends
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" . --dry-run
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" .
+bash "$SKILL/scripts/verify-cross-repo-graph.sh" .   # healthy = 0 failed
+
+# query it
+cross_repo_search_tool(query=…)                            # CRG; spans repos
+graphify query '<term>' --graph graphify-out/merged-graph.json   # per-project merged graph
 ```
 
-Caveats: you read a snapshot the _other_ repo maintains (it must exist and be current — a
-**same-machine** assumption); cross-repo **blast-radius** (`get_impact_radius`,
-`get_affected_flows`) stays single-repo and needs one merged graph; and registration is
-**machine-local, per-user, and not committed** — the `AGENTS.md` block documents intent, but each
-teammate/machine must run the skill. See the skill for the full rules and the un-register path.
+Sync registers each in-scope repo with CRG, rebuilds a **per-project**
+`graphify-out/merged-graph.json` (not graphify's global graph), and rewrites the `<!-- cross-repo -->`
+block in `AGENTS.md` from what it _confirmed_ afterwards — so the block can never advertise a repo
+that will not answer.
+
+**The block is the fence — read this before you trust the scope.** CRG's registry
+(`~/.code-review-graph/registry.json`) is **machine-global and cannot be scoped per repo**. Sync only
+ever _adds_ to it, so `cross_repo_search_tool` **will** return hits from repos belonging to your other
+projects. Scope is enforced **in context, not in the registry**: the in-scope alias table in the
+`AGENTS.md` block is what tells the agent which hits to keep. It is a soft boundary — right for
+read-only lookup, **not a security control**. (graphify sidesteps this entirely; its merged graph is
+per-project.) A committed manifest is therefore a **scope grant** — review a PR that adds an entry
+like any other config change.
+
+Other caveats: you read a snapshot the _other_ repo maintains (it must exist and be current — a
+**same-machine** assumption); the merged graph is refreshed by nothing, so it goes stale on this
+repo's next commit (`--merge-only` rebuilds it, AST-only, no LLM cost); and cross-repo
+**blast-radius** (`get_impact_radius`, `get_affected_flows`) stays single-repo. See the skill for the
+full rules and the removal path (tombstone the alias, then re-sync).
 
 ## Sources
 
