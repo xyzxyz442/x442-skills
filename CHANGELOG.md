@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.2.1](https://github.com/xyzxyz442/x442-skills/compare/v0.2.0...v0.2.1) (2026-07-13)
+
 ## 0.2.0 (2026-07-13)
 
 ### 🚀 Features
