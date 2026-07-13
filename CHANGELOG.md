@@ -1,0 +1,73 @@
+# Changelog
+
+## 0.2.0 (2026-07-13)
+
+### 🚀 Features
+
+- add graph-hooks setup option to initial-project skill ([8771ff1](https://github.com/xyzxyz442/x442-skills/commit/8771ff1ca55ae782b388425d86f590f518aa856a))
+- add graphignore template and enhance setup script for idempotent ignore file management ([8dab649](https://github.com/xyzxyz442/x442-skills/commit/8dab649b09d6145933a8fc9521b75fb79a160819))
+- add Karpathy coding guidelines and setup hooks for automatic application ([2d6c372](https://github.com/xyzxyz442/x442-skills/commit/2d6c372a8f71ff2bf39a4c64b94622a9be7c2c51))
+- add per-tool graph-hook config generator and Copilot wrappers ([8d4ccbe](https://github.com/xyzxyz442/x442-skills/commit/8d4ccbe31e61b35693495eef116acb784eb963e7))
+- add Prettier configuration and ignore files ([8028e07](https://github.com/xyzxyz442/x442-skills/commit/8028e079dff2ab4abcec00fdeb2d20fcbd013108))
+- add release-it configuration for automated releases ([f8ca74a](https://github.com/xyzxyz442/x442-skills/commit/f8ca74a227ac61ca9c64dca578465dd21c9fa6ce))
+- add scripts to link and list skills in the repository ([11dd85a](https://github.com/xyzxyz442/x442-skills/commit/11dd85a6990203e57e54780da3f4aa075c020ccd))
+- add setup-graph-hooks skill ([ce9616d](https://github.com/xyzxyz442/x442-skills/commit/ce9616dcc599f40976afb462703f82176d320436))
+- add tool-neutral graph-hook cores and protocol dispatcher ([8320c1f](https://github.com/xyzxyz442/x442-skills/commit/8320c1f575ea458ed9cde2b40f0ad2b363a48b66))
+- **config:** seed commit conventions into AGENTS.md via initial-project ([8e9bcc1](https://github.com/xyzxyz442/x442-skills/commit/8e9bcc1bc001a0fca73f840c0e5a5cec656c1b86))
+- enhance link-claude-skills.sh with stale link pruning functionality ([4b24328](https://github.com/xyzxyz442/x442-skills/commit/4b24328be71a15d7af5e0159c5f85c3f0f6f8d18))
+- make graph hooks dedup-safe via thin wrappers ([2982036](https://github.com/xyzxyz442/x442-skills/commit/2982036d9c270bf091943ad3471604638eed23ee))
+- make graph-hooks installer and verifier tool-generic with primary-owner wiring ([2d256eb](https://github.com/xyzxyz442/x442-skills/commit/2d256ebf2ce878a35957042c6d6f32b51cccd6b9))
+- restructure skills and guidelines, consolidate Karpathy guidelines and update linking scripts ([7c80ac5](https://github.com/xyzxyz442/x442-skills/commit/7c80ac524b44f9ae03e6d258dc3e2cbcfa4b96fb))
+- **setup:** add commitlint scaffolding to initial-project skill ([658ef1c](https://github.com/xyzxyz442/x442-skills/commit/658ef1c3f0bd340b8517244cc79d42753bde12ea))
+- **setup:** add embed-provider resolver and setup-embeddings installer ([9ebad0c](https://github.com/xyzxyz442/x442-skills/commit/9ebad0c4739eed0b6f24b2f356195ae2757e2601))
+- **setup:** add initial project files including configuration, instructions, and README ([eceaa8e](https://github.com/xyzxyz442/x442-skills/commit/eceaa8eca3d2da4542cb90df55fa0241eb65b414))
+- **setup:** add register-cross-repo-graph support skill ([1c955b0](https://github.com/xyzxyz442/x442-skills/commit/1c955b0061412e76110a0ff59e04a9071815edee))
+- **setup:** add repair-graph-hooks support skill ([dfccd9b](https://github.com/xyzxyz442/x442-skills/commit/dfccd9bc3e81ffa5c17dc596dee6fc65de5d5f29))
+- **setup:** add setup-project-tooling skill for project dev tooling ([499f4d4](https://github.com/xyzxyz442/x442-skills/commit/499f4d4d86f931bf122f4d37ff54498fe2906bd1))
+- **setup:** redesign register-cross-repo-graph around a manifest cascade ([bdd21b0](https://github.com/xyzxyz442/x442-skills/commit/bdd21b0e9938aa7fe25b5b6d57cb8af9388f4ebc))
+- **setup:** report the embedding tier in verify-graph-hooks ([fb3dc83](https://github.com/xyzxyz442/x442-skills/commit/fb3dc8352777536f9c14bbf8a3ccb25e7b0e56f2))
+- **setup:** restructure setup-project-tooling into common base + per-language layers ([b71ef62](https://github.com/xyzxyz442/x442-skills/commit/b71ef62d38e906cbc9fc2c55cd1775e53d609b1e))
+- update AGENTS.md and README.md for Antigravity integration; add ANTIGRAVITY.md with specific instructions ([081ba66](https://github.com/xyzxyz442/x442-skills/commit/081ba66175b4878491ee66e83aec6e8196c8ceb5))
+- update AGENTS.md for clarity and add engineering README for software skills ([ccd09b5](https://github.com/xyzxyz442/x442-skills/commit/ccd09b5e110e985025f60e080e7ae08a10913823))
+- update README for iteration 1 status and initial-project skill details ([6a96da7](https://github.com/xyzxyz442/x442-skills/commit/6a96da77f5b85df7f96ae3df6cbfc85688430d62))
+
+### 🐞 Bug Fixes
+
+- **config:** tag releases as v-prefixed and write CHANGELOG.md ([56a9541](https://github.com/xyzxyz442/x442-skills/commit/56a954136028351b3e8001ca91889540a35416bb))
+- rename script references for clarity in README and link-claude-skills.sh ([12b9ff2](https://github.com/xyzxyz442/x442-skills/commit/12b9ff2ba8fc58a1c7b5b1ee836ef9f0377d210f))
+- **setup:** drop invalid graphify init from graph-hooks build hints ([c4d6a0c](https://github.com/xyzxyz442/x442-skills/commit/c4d6a0ce624050120f40b76d6942811fe69d469a))
+- **setup:** gate embed behind a configured provider in the refresh hooks ([f006727](https://github.com/xyzxyz442/x442-skills/commit/f0067273bf1f1502345400ecf0542addff51d472))
+- **setup:** root-anchor MANIFEST so manifest/ dirs are not ignored ([d8f9878](https://github.com/xyzxyz442/x442-skills/commit/d8f9878f76d3e065717ce2ab9e5b8cb8f03694d9))
+
+### 📚 Documentation
+
+- add references section to README for external sources related to skills ([5668c6d](https://github.com/xyzxyz442/x442-skills/commit/5668c6d288aa05be4e2a05dfe609b9295849b10e))
+- adjust table formatting in engineering README for clarity ([1d17cff](https://github.com/xyzxyz442/x442-skills/commit/1d17cffc315f3a9312be7f854d775c99a349269b))
+- **docs:** add graph-tools runtime guide ([5cc3f46](https://github.com/xyzxyz442/x442-skills/commit/5cc3f461607dd31e2a9ab468393b3dec414b7fe1))
+- **docs:** document embeddings as an opt-in tier across the graph skills ([329e4c7](https://github.com/xyzxyz442/x442-skills/commit/329e4c7268244170a5a4ded020140450c60bbe15))
+- **docs:** refresh README and skill catalog for shipped skills ([4eab6f2](https://github.com/xyzxyz442/x442-skills/commit/4eab6f2bd465c47d81c58df33f342e524b13da42))
+- **docs:** register and cross-link the graph-hooks support skills ([9015047](https://github.com/xyzxyz442/x442-skills/commit/9015047bbad33e16f63d6c6a06f506a6962519bb))
+- **docs:** sync setup-project-tooling description in skill index ([1fec2cb](https://github.com/xyzxyz442/x442-skills/commit/1fec2cb88d5cdd90de08ef0b524c1c2d9db23574))
+- **docs:** sync the skill index and catalog with what ships ([09fb9b4](https://github.com/xyzxyz442/x442-skills/commit/09fb9b4dcdcdf7b7a1d423ecbe7666375d6fb024))
+- enhance README for clarity on skill structure and installation instructions ([cd9a11b](https://github.com/xyzxyz442/x442-skills/commit/cd9a11b8896fdaffa7802c85ab75edd0fd3333a7))
+- rewrite setup-graph-hooks SKILL.md as tool-generic with cited contracts ([469d5f5](https://github.com/xyzxyz442/x442-skills/commit/469d5f557082c174613df6566fe7f5e057e04e2f))
+- **setup:** document cross-platform prerequisites for setup-graph-hooks ([4736aa2](https://github.com/xyzxyz442/x442-skills/commit/4736aa2476b231b99d010378c56c909500f4099c))
+- update README and AGENTS.md for clarity on skill structure and status ([5574249](https://github.com/xyzxyz442/x442-skills/commit/5574249d84dec4b316f28f9ef4e202446d156273))
+
+### 🏗️ Build System
+
+- **config:** add gitattributes LF guard and expand ignore files ([95334ce](https://github.com/xyzxyz442/x442-skills/commit/95334ced68bbb9d7bee6a42884daddb840e10892))
+- **config:** add lint-staged config for staged-file formatting ([21c01c2](https://github.com/xyzxyz442/x442-skills/commit/21c01c2cf32ee73b26911dc82908341aa611b656))
+
+### 🧹 Miscellaneous Chores
+
+- **ci:** remove commitlint workflow ([c51417a](https://github.com/xyzxyz442/x442-skills/commit/c51417a775823e4bcf0632deffaec6d35753967e))
+- **config:** format shell scripts and ignore .venv ([6c8ef8f](https://github.com/xyzxyz442/x442-skills/commit/6c8ef8ff112d0ddc1085032e9951b5c615d5f032))
+- **config:** point the CRG MCP server at local ollama embeddings ([2e6a3e7](https://github.com/xyzxyz442/x442-skills/commit/2e6a3e76e0a0a447a58fbe2adb4e930eafe6d90a))
+- **deps:** add prettier-plugin-sh for shell script formatting ([8fe4010](https://github.com/xyzxyz442/x442-skills/commit/8fe4010e92a4b405943e8663b5edf1022dd53f11))
+- dogfood setup-graph-hooks in this repo ([00d0ba2](https://github.com/xyzxyz442/x442-skills/commit/00d0ba2197ab50a697fcf8cc9d59cb2b97622d9f))
+- dogfood tool-generic graph-hooks in this repo ([1846871](https://github.com/xyzxyz442/x442-skills/commit/18468713ba5c78c679616cef9677f3d39e4f1e18))
+- **setup:** adopt commitlint with husky hook and CI workflow ([740fdc0](https://github.com/xyzxyz442/x442-skills/commit/740fdc07cf947a8abcff30e22c2eb8da2384e97d))
+- **style:** apply prettier across the repo ([3cd980a](https://github.com/xyzxyz442/x442-skills/commit/3cd980a93368b270baed1a0e01fe0dff7e017fae))
+- update .gitignore to include husky directory and remove commit-msg hook ([bc9ed1b](https://github.com/xyzxyz442/x442-skills/commit/bc9ed1bad5672682a8d72ffc2834638e643f2be7))
+- update package.json for version bump and script enhancements ([d672e2a](https://github.com/xyzxyz442/x442-skills/commit/d672e2aa71d3d84361249b1bbc4b9c68d3249933))
