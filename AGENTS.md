@@ -66,13 +66,13 @@ Rules:
 
 ## Skill Index
 
-| Category      | Skill                       | Status         | Purpose                                                                                                                                                                    |
-| ------------- | --------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engineering` | `initial-project`           | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                                                  |
-| `engineering` | `setup-project-tooling`     | `experimental` | Detect language, recommend a category, then scaffold a common base + per-language tooling (commitlint, lint-staged, VS Code, release-it). Chains after `initial-project`.  |
-| `engineering` | `setup-graph-hooks`         | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                                                   |
-| `engineering` | `repair-graph-hooks`        | `experimental` | Smoke-test graph-tool integrity, then re-check, validate, and repair the graph-hooks wiring and graph state. Chains after `setup-graph-hooks`.                             |
-| `engineering` | `register-cross-repo-graph` | `experimental` | Register/merge another repo's graph for read-only cross-repo access and record it in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`. |
+| Category      | Skill                       | Status         | Purpose                                                                                                                                                                                                                                                                           |
+| ------------- | --------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engineering` | `initial-project`           | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                                                                                                                                                         |
+| `engineering` | `setup-project-tooling`     | `experimental` | Detect language, recommend a category, then scaffold a common base + per-language tooling (commitlint, lint-staged, VS Code, release-it). Chains after `initial-project`.                                                                                                         |
+| `engineering` | `setup-graph-hooks`         | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                                                                                                                                                          |
+| `engineering` | `repair-graph-hooks`        | `experimental` | Smoke-test graph-tool integrity, then re-check, validate, and repair the graph-hooks wiring and graph state. Chains after `setup-graph-hooks`.                                                                                                                                    |
+| `engineering` | `register-cross-repo-graph` | `experimental` | Declare sibling repos in a per-project `.graph-repos.json` cascade (user → repo → subdir), then register/merge their graphs for read-only cross-repo access and record the in-scope list in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`. |
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
@@ -100,7 +100,7 @@ To add a new skill:
 
 1. Create `skills/<skill-name>/SKILL.md` with the frontmatter shape above.
 2. Write the body — start with _when to use_, then _how_, then _examples_.
-3. <!-- TODO: lint/validation command once one exists. -->
+3. Give the skill an eval: add a `harness/<skill-name>-workspace/` with fixtures, cases, and a grader that wraps the skill's read-only `verify-*.sh`. See [docs/harness-structure.md](docs/harness-structure.md).
 4. Commit. One skill per commit keeps history reviewable.
 
 To edit an existing skill: change `SKILL.md` in place; don't fork into a `v2/` directory.

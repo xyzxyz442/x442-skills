@@ -212,8 +212,10 @@ layer exists to avoid.
 
 To give one repo **read-only** access to another's graph — keeping every graph single-writer (its
 own hooks) and many-reader — use [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md).
-It registers the foreign repo for CRG's `cross_repo_search_tool` (and/or merges it into graphify's
-global graph), then records it in `AGENTS.md` so agents actually query it instead of grepping.
+You declare the sibling repos in a per-project `.graph-repos.json` (a user → repo → subdirectory
+cascade, like `AGENTS.md` itself); it then registers them for CRG's `cross_repo_search_tool`, builds
+a per-project merged graphify graph, and records the in-scope list in `AGENTS.md` so agents actually
+query it instead of grepping.
 
 ## Notes
 

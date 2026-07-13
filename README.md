@@ -30,7 +30,7 @@ The design these skills share — and what they wire into the repos they touch:
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
 - [x] **Iteration 1** — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md), [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_, and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (both of which `initial-project` offers to run on completion).
-- [ ] **Iteration 2** — skill lint / validation tooling. <!-- TODO -->
+- [ ] **Iteration 2** — skill lint / validation tooling. The eval harness — fixtures, graders, and A/B benchmarks that score what a skill actually produces — is specced in [docs/harness-structure.md](docs/harness-structure.md); the per-skill read-only `verify-*.sh` checkers it builds on already ship.
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
 ## Layout
@@ -58,7 +58,7 @@ The design these skills share — and what they wire into the repos they touch:
         ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (experimental)
         ├── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
         ├── repair-graph-hooks/     # SKILL.md only  (experimental; reuses setup-graph-hooks scripts)
-        └── register-cross-repo-graph/  # SKILL.md only  (experimental)
+        └── register-cross-repo-graph/  # SKILL.md + scripts/ + assets/  (experimental)
 ```
 
 Skills are grouped by category under `skills/`; the [skills catalog](skills/README.md)
@@ -127,8 +127,8 @@ For working on a skill in this repo and having your AI pick it up immediately:
 ```bash
 git clone git@github.com:xyzxyz442/x442-skills.git
 cd x442-skills
-./scripts/link-generic-skills.sh  # generic install: symlinks each skills/**/ into ~/.agents/skills/
-./scripts/link-claude-skills.sh   # Claude Code: symlinks ~/.agents/skills/ entries into ~/.claude/skills/
+./scripts/link-generic-skills.sh # generic install: symlinks each skills/**/ into ~/.agents/skills/
+./scripts/link-claude-skills.sh  # Claude Code: symlinks ~/.agents/skills/ entries into ~/.claude/skills/
 ```
 
 Skills install once into the generic `~/.agents/skills/` location (read by any AGENTS.md-aware CLI);
