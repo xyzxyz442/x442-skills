@@ -225,6 +225,59 @@ print(" ".join(sorted(e["alias"] for e in d["effective"] if e["has_crg_db"] or e
     || warn "no graph-hooks block in $AGENTS_FILE — this skill chains after setup-graph-hooks"
 fi
 
+# ---- steering: do the hooks actually route a cross-repo grep to the graph? ---------------------
+# The regression this exists for: grep-steer used to query only the LOCAL graph, so a grep into a
+# sibling missed, and a miss reads as "the graph cannot help" — the hook waved through the one path
+# this whole skill exists to prevent. Assert it no longer passes silently.
+echo
+echo "Cross-repo steering:"
+STEER="$ROOT/.graph-hooks/core/grep-steer.sh"
+if [ ! -f "$STEER" ]; then
+  warn "no .graph-hooks/core/grep-steer.sh — run setup-graph-hooks.sh to get graph-first steering"
+else
+  if [ -f "$ROOT/.graph-hooks/core/cross-repo-scope.sh" ]; then
+    ok "grep-steer can see the cross-repo scope"
+  else
+    bad "grep-steer predates cross-repo support (no core/cross-repo-scope.sh) — greps into a sibling will NOT be steered; re-run setup-graph-hooks.sh"
+  fi
+
+  # A repo's hooks can be older than its cross-repo scope. That combination silently un-does the
+  # fence, so it is worth naming rather than leaving the user to wonder why greps still run.
+  if grep -q 'cross-repo paths' "$ROOT/.graph-hooks/core/session-context.sh" 2> /dev/null; then
+    warn "the session cheatsheet still tells agents to skip the graph for cross-repo paths — stale hooks; re-run setup-graph-hooks.sh"
+  fi
+
+  # End-to-end: take a real symbol out of an in-scope sibling's graph and try to grep for it.
+  # HOME is redirected so the hook's once-per-hour allowance file is a throwaway — otherwise this
+  # check would burn the user's real slot and its result would depend on whether they had grepped.
+  SIB="$(printf '%s' "$EFF" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+for e in d["effective"]:
+    if e.get("has_crg_db"):
+        print(e["alias"] + "\t" + e["path"]); break' 2> /dev/null)"
+  SIB_ALIAS="${SIB%%	*}"
+  SIB_PATH="${SIB#*	}"
+  if [ -n "$SIB_ALIAS" ] && [ -f "$SIB_PATH/.code-review-graph/graph.db" ]; then
+    SYM="$(sqlite3 "$SIB_PATH/.code-review-graph/graph.db" \
+      "SELECT name FROM nodes WHERE kind!='File' AND length(name)>3 LIMIT 1;" 2> /dev/null)"
+    if [ -n "$SYM" ]; then
+      TH="$(mktemp -d)"
+      OUT="$(cd "$ROOT" && printf '%s' "grep -rn \"$SYM\" $SIB_PATH" \
+        | HOME="$TH" bash "$STEER" 2> /dev/null)"
+      rmdir "$TH" 2> /dev/null || true
+      # Assert on the ALIAS TAG, not the symbol name: grep-steer's "No graph hit for '<sym>'" miss
+      # message also contains the symbol, so matching the name would pass on the very failure this
+      # check exists to catch. Only a real sibling hit is tagged "[<alias>]".
+      case "$OUT" in
+        *"[$SIB_ALIAS]"*) ok "a grep into '$SIB_ALIAS' for '$SYM' is answered from its graph, not left to grep" ;;
+        "") bad "a grep into '$SIB_ALIAS' passes silently — the graph is not steering the cross-repo path" ;;
+        *) bad "grep-steer answered a cross-repo grep without the '$SIB_ALIAS' graph — it searched only the local one" ;;
+      esac
+    fi
+  fi
+fi
+
 # ---- tools ------------------------------------------------------------------------------------
 echo
 echo "Graph tools:"
