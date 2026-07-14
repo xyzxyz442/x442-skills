@@ -5,20 +5,24 @@ read-only `verify-*.sh` checkers each skill already ships.
 
 ## Status
 
-This document is a **port spec**, not a description of what is here.
+This document is the **contract**; [harness/](../harness/README.md) is the implementation.
 
-- The harness described below is **implemented and proven** in a sibling skills repo, where the
-  shared library is self-tested and one skill's evals benchmark at 100% pass across two
-  iterations (a wiring iteration and a behavioral one).
-- This repo already ships the half that matters most — three read-only verifiers
+- Steps 1-4 and 6 of the [porting checklist](#porting-checklist) are **done**: `harness/lib/`
+  (three self-tested modules), the `.gitignore` entries, `initial-project-workspace/`,
+  `setup-graph-hooks-workspace/`, and `harness/README.md`. Every grader has been exercised
+  against its fixtures — wired fixtures score 1.00, the unwired pre-state scores 0.00 — but no
+  iteration has been run, because that is the one step needing an agent.
+- Still open: `setup-project-tooling-workspace/` (step 5) and
+  `register-cross-repo-graph-workspace/` (step 7). Both skills already ship a conforming
+  verifier, so both graders can wrap one directly.
+- All four shipped verifiers
   ([verify-initial-project.sh](../skills/engineering/initial-project/scripts/verify-initial-project.sh),
   [verify-project-tooling.sh](../skills/engineering/setup-project-tooling/scripts/verify-project-tooling.sh),
-  [verify-graph-hooks.sh](../skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh)) —
-  and all three already honor the output contract the harness depends on.
-- What does **not** exist here yet: the `harness/` tree itself. Building it is
-  [Iteration 2](../README.md) in the roadmap. Follow the [porting checklist](#porting-checklist).
+  [verify-graph-hooks.sh](../skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh),
+  [verify-cross-repo-graph.sh](../skills/engineering/register-cross-repo-graph/scripts/verify-cross-repo-graph.sh))
+  honor the output contract the harness depends on.
 
-Every contract in this document was read off the working implementation, not reconstructed from
+Every contract in this document was read off a working implementation, not reconstructed from
 memory. Where the implementation does something non-obvious, that choice is called out.
 
 ## Purpose
@@ -314,12 +318,27 @@ Result runs are bulky and regenerable; the summaries are the durable record. Com
 - `evals/evals.json`, everything under `fixtures/`, `grade.py`, and `harness/lib/`.
 - Per iteration: `benchmark.json`, `benchmark.md`, `analyst_notes.md`.
 
-Ignore the raw per-run artifacts. Add to [.gitignore](../.gitignore):
+Ignore the raw per-run artifacts — but ignoring them is only half the job. This repo's
+[.gitignore](../.gitignore) is generated from a toptal template whose Python/virtualenv rules
+(`lib/`, `[Ll]ib`) match `harness/lib/`, and whose AI rules (`.code-review-graph/`,
+`graphify-out/`) match the prebuilt graph that makes the behavioral fixture behavioral. A third
+pattern, `**/.claude/settings.local.json`, lives in the user's **global** `core.excludesFile`.
+Left alone, all three silently drop harness _source_ — the graders and the fixture payload — from
+every commit. So the ignore block must both exclude the outputs and re-include those:
 
 ```gitignore
 harness/**/iterations/**/outputs/
 harness/**/iterations/**/run-*/transcript.md
+
+!harness/lib/
+!harness/**/fixtures/**/.code-review-graph/
+!harness/**/fixtures/**/graphify-out/
+!harness/**/fixtures/**/.claude/settings.local.json
 ```
+
+Repo rules beat the global excludesFile, so the last negation belongs here rather than in the
+user's global config. Verify with `git check-ignore -v <path>` rather than assuming — the rule
+that catches a path is often not the one you expect.
 
 **Add these entries before the first eval run, not after.** The reference implementation wrote this
 rule down and then committed `outputs/` trees anyway, because the runs happened before the ignore

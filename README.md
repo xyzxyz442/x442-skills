@@ -30,7 +30,7 @@ The design these skills share — and what they wire into the repos they touch:
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
 - [x] **Iteration 1** — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md), [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_, and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (both of which `initial-project` offers to run on completion).
-- [ ] **Iteration 2** — skill lint / validation tooling. The eval harness — fixtures, graders, and A/B benchmarks that score what a skill actually produces — is specced in [docs/harness-structure.md](docs/harness-structure.md); the per-skill read-only `verify-*.sh` checkers it builds on already ship.
+- [ ] **Iteration 2** — the eval harness — fixtures, graders, and A/B benchmarks that score what a skill actually produces — lands in [`harness/`](harness/README.md), specced by [docs/harness-structure.md](docs/harness-structure.md) and built on the per-skill read-only `verify-*.sh` checkers. Shipped so far: the shared `harness/lib/` graders plus workspaces for [`initial-project`](harness/initial-project-workspace) and [`setup-graph-hooks`](harness/setup-graph-hooks-workspace) (including a behavioral fixture that proves the wired hooks actually steer a search). Still open: workspaces for `setup-project-tooling` and `register-cross-repo-graph`, the first benchmarked iterations, and skill lint / validation tooling.
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
 ## Layout
@@ -51,6 +51,9 @@ The design these skills share — and what they wire into the repos they touch:
 │   ├── link-generic-skills.sh      # symlinks skills/**/ into ~/.agents/skills/ (generic default)
 │   ├── link-claude-skills.sh       # symlinks skills/**/ into ~/.claude/skills/ (Claude Code)
 │   └── list-skills.sh              # lists every SKILL.md in the repo
+├── harness/                        # skill eval harness: fixtures, graders, A/B benchmarks
+│   ├── lib/                        # shared graders (grade_common, aggregate, reorg)
+│   └── <skill>-workspace/          # evals/ + fixtures/ + grade.py + iterations/
 └── skills/
     ├── README.md                   # skills catalog: categories, status, per-skill detail
     └── engineering/                # category README + skills
