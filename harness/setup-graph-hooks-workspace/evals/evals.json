@@ -1,0 +1,43 @@
+{
+  "skill_name": "x442-setup-graph-hooks",
+  "skill_path": "skills/engineering/setup-graph-hooks",
+  "verify_script": "skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh",
+  "evals": [
+    {
+      "id": "no-agents-md",
+      "prompt": "Wire up the code knowledge graph hooks for this repo.",
+      "fixture": "fixtures/no-agents-md",
+      "expected_output": "Precondition case: no AGENTS.md present. The skill must STOP and point the user at initial-project first. No `.graph-hooks/` layer wired; AGENTS.md is NOT fabricated."
+    },
+    {
+      "id": "fresh-wired",
+      "prompt": "Set up self-updating graph hooks so agents query the graph instead of grepping.",
+      "fixture": "fixtures/fresh-wired",
+      "expected_output": "AGENTS.md present, no graph hooks yet. Installs the shared `.graph-hooks/` dispatcher + cores, a post-commit refresh, and the `<!-- graph-hooks -->` routing block in AGENTS.md. Exactly one end-of-turn refresh owner."
+    },
+    {
+      "id": "all-wired",
+      "prompt": "Wire the graph hooks for this repo.",
+      "fixture": "fixtures/all-wired",
+      "expected_output": "Idempotency case: hooks already installed (claude, primary=claude). Re-running produces an EMPTY diff."
+    },
+    {
+      "id": "copilot-primary-wired",
+      "prompt": "Wire the code knowledge graph hooks for this repo, using GitHub Copilot as the primary refresh owner.",
+      "fixture": "fixtures/copilot-primary-wired",
+      "expected_output": "Copilot-only case: `.github/hooks/graph.json` is wired with preToolUse/sessionStart/agentStop, valid JSON. No `.claude/` config fabricated. Exactly one end-of-turn refresh owner (copilot). Re-running produces an EMPTY diff."
+    },
+    {
+      "id": "both-wired",
+      "prompt": "Wire graph hooks for both Claude Code and GitHub Copilot in this repo, with Copilot as the primary refresh owner.",
+      "fixture": "fixtures/both-wired",
+      "expected_output": "Multi-tool case: both `.claude/settings.local.json` (PreToolUse/SessionStart only, no `Stop`) and `.github/hooks/graph.json` (preToolUse/sessionStart/agentStop) are wired and valid JSON. Exactly one end-of-turn refresh owner (copilot) even though claude is also wired — proves the single-refresh-owner invariant holds across tools. Re-running produces an EMPTY diff."
+    },
+    {
+      "id": "graph-search-behavior",
+      "prompt": "Understand how `calculateInvoiceTotal` is used before refactoring it, using this repo's wired graph hooks.",
+      "fixture": "fixtures/graph-built",
+      "expected_output": "Behavioral case (not just wiring): hooks installed AND a real, hand-built code-review-graph `graph.db` + graphify `graph.json` exist, describing `calculateInvoiceTotal`/`InvoiceItem` (src/billing.ts) and `greet` (src/index.ts). Firing the dispatcher as Claude Code would must show it actually PREFERS the graph over grep/read during code search: session start emits a cheatsheet naming both backends; reading a source file is nudged toward the graph; a first grep for a real symbol is pre-answered inline from the graph (one-shot allow); repeating that same grep is BLOCKED once the graph already answered it; a first-time miss on a nonexistent symbol still allows the grep (no false block) while pointing at the graph tool for next time; and both the `--graph-tried` bypass and non-code (`.md`) targets are never intercepted."
+    }
+  ]
+}

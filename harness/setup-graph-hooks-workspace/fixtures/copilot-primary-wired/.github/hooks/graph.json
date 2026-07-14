@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": ".graph-hooks/copilot/pretool-shell.sh",
+        "timeoutSec": 6
+      },
+      {
+        "type": "command",
+        "bash": ".graph-hooks/copilot/pretool-read.sh",
+        "timeoutSec": 6
+      }
+    ],
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": ".graph-hooks/copilot/sessionstart.sh",
+        "timeoutSec": 10
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": ".graph-hooks/copilot/endturn.sh",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}

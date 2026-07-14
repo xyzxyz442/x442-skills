@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    {
+      "id": "fn:calculateInvoiceTotal",
+      "label": "calculateInvoiceTotal",
+      "file_type": "function",
+      "source_file": "src/billing.ts",
+      "source_location": "6",
+      "community": "billing"
+    },
+    {
+      "id": "iface:InvoiceItem",
+      "label": "InvoiceItem",
+      "file_type": "interface",
+      "source_file": "src/billing.ts",
+      "source_location": "1",
+      "community": "billing"
+    },
+    {
+      "id": "fn:greet",
+      "label": "greet",
+      "file_type": "function",
+      "source_file": "src/index.ts",
+      "source_location": "1",
+      "community": "core"
+    }
+  ],
+  "edges": [
+    {
+      "source": "fn:calculateInvoiceTotal",
+      "target": "iface:InvoiceItem",
+      "kind": "uses_type"
+    }
+  ]
+}

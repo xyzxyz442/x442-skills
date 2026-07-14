@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PostToolUse": [],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind pretool-shell || true",
+            "timeout": 6
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind pretool-read || true"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; H=\"$R/.graph-hooks/hook.sh\"; [ -f \"$H\" ] || H=\"$HOME/.graph-hooks/hook.sh\"; [ -f \"$H\" ] && bash \"$H\" --tool claude --kind sessionstart || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
