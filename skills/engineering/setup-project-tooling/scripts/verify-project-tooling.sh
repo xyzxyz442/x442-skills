@@ -12,7 +12,7 @@ set -uo pipefail
 
 TARGET="${1:-$PWD}"
 cd "$TARGET" 2> /dev/null || {
-  echo "no such path: $TARGET"
+  echo "no such path: $TARGET" >&2
   exit 1
 }
 ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || ROOT="$PWD"

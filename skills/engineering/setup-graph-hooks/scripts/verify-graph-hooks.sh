@@ -9,11 +9,11 @@ set -uo pipefail
 
 TARGET="${1:-$PWD}"
 cd "$TARGET" 2> /dev/null || {
-  echo "no such path: $TARGET"
+  echo "no such path: $TARGET" >&2
   exit 1
 }
 ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || {
-  echo "ERROR: not a git repo"
+  echo "ERROR: not a git repo" >&2
   exit 1
 }
 cd "$ROOT"
@@ -34,7 +34,11 @@ warn() {
   printf '  [warn] %s\n' "$1"
   W=$((W + 1))
 }
-is_json() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.stdin)" 2> /dev/null; }
+# Two shapes, two names. They used to share the name `is_json` across the verify scripts with
+# different argument meanings (a file path in some, a JSON string in others) — one copy-paste away
+# from a check that silently always passes.
+is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
+is_json_str() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.stdin)" 2> /dev/null; }
 
 # Semantic search is an opt-in tier, so ZERO embeddings is a healthy state, not a defect:
 # CRG's semantic_search() falls back to keyword search over node names. Only a half-finished
@@ -104,7 +108,7 @@ echo "1. Shared layer (.graph-hooks)"
 echo "------------------------------"
 HOOK=".graph-hooks/hook.sh"
 if [ -f "$HOOK" ]; then [ -x "$HOOK" ] && ok "dispatcher present and executable: $HOOK" || warn "$HOOK present but not executable (chmod +x)"; else bad "dispatcher missing: $HOOK"; fi
-for f in core/grep-steer.sh core/read-nudge.sh core/session-context.sh core/graph-refresh.sh core/extract.py core/emit.py; do
+for f in core/grep-steer.sh core/read-nudge.sh core/session-context.sh core/graph-refresh.sh core/cross-repo-scope.sh core/extract.py core/emit.py; do
   if [ -f ".graph-hooks/$f" ]; then [ -x ".graph-hooks/$f" ] && ok "$f present and executable" || warn "$f present but not executable"; else bad "$f missing"; fi
 done
 for f in pretool-shell.sh pretool-read.sh sessionstart.sh endturn.sh; do
@@ -128,21 +132,21 @@ CSET=""
 [ -f .claude/settings.local.json ] && CSET=.claude/settings.local.json
 [ -z "$CSET" ] && [ -f .claude/settings.example.json ] && CSET=.claude/settings.example.json
 if [ -n "$CSET" ] && grep -q '\-\-tool claude' "$CSET" 2> /dev/null; then
-  is_json "$(cat "$CSET")" && {
+  is_json "$CSET" && {
     ok "claude wired + valid JSON: $CSET"
     add_wired claude
   } || bad "claude config invalid JSON: $CSET"
 fi
 # gemini
 if [ -f .gemini/settings.json ] && grep -q '\-\-tool gemini' .gemini/settings.json 2> /dev/null; then
-  is_json "$(cat .gemini/settings.json)" && {
+  is_json .gemini/settings.json && {
     ok "gemini wired + valid JSON: .gemini/settings.json"
     add_wired gemini
   } || bad "gemini config invalid JSON"
 fi
 # copilot
 if [ -f .github/hooks/graph.json ]; then
-  is_json "$(cat .github/hooks/graph.json)" && {
+  is_json .github/hooks/graph.json && {
     ok "copilot wired + valid JSON: .github/hooks/graph.json"
     add_wired copilot
   } || bad "copilot config invalid JSON"
@@ -172,7 +176,7 @@ for t in $WIRED; do
       bad "$t/$k exited $rc"
     elif [ -z "$out" ]; then
       ok "$t/$k ran cleanly (no output — correct with no graph / no match)"
-    elif is_json "$out"; then
+    elif is_json_str "$out"; then
       if printf '%s' "$out" | grep -q '"permissionDecision":"\(deny\|block\)"\|"decision":"deny"'; then
         ok "$t/$k emitted a valid BLOCK decision (graph hit)"
       else ok "$t/$k emitted valid context JSON"; fi
@@ -225,4 +229,5 @@ fi
 
 echo
 echo "Summary: $P passed, $W warnings, $F failed"
-[ "$F" -gt 0 ] && exit 1 || exit 0
+if [ "$F" -gt 0 ]; then exit 1; fi
+exit 0
