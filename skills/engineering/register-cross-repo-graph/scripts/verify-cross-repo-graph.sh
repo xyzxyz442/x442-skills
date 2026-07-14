@@ -11,11 +11,11 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-$PWD}"
 cd "$TARGET" 2> /dev/null || {
-  echo "no such path: $TARGET"
+  echo "no such path: $TARGET" >&2
   exit 1
 }
 ROOT=$(git rev-parse --show-toplevel 2> /dev/null) || {
-  echo "ERROR: not a git repo"
+  echo "ERROR: not a git repo" >&2
   exit 1
 }
 SCOPE="$PWD"
@@ -178,13 +178,20 @@ elif ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$OUT" 2> /dev
   bad "$OUT is not valid JSON — rebuild: sync-cross-repo-graph.sh --merge-only"
 else
   ok "$OUT present and parses ($NGFY repo(s) merged)"
+  # Sibling mtimes come from the resolver, which already stat'ed them — re-stat'ing here is how the
+  # verifier and the installer drift apart. Only the two paths the resolver does not model (this
+  # repo's own graph and the merged output) are stat'ed locally.
   STALE="$(q 'import json,os,sys
 d=json.load(sys.stdin)
 out=os.path.join(d["root"], "graphify-out", "merged-graph.json")
 mt=os.path.getmtime(out)
-srcs=[os.path.join(d["root"], "graphify-out", "graph.json")]
-srcs += [e["gfy_json"] for e in d["effective"] if "graphify" in e["tools"] and e["has_gfy_json"]]
-print(int(any(os.path.exists(s) and os.path.getmtime(s) > mt for s in srcs)))')"
+own=os.path.join(d["root"], "graphify-out", "graph.json")
+newer=os.path.exists(own) and os.path.getmtime(own) > mt
+newer = newer or any(
+    e["gfy_mtime"] and e["gfy_mtime"] > mt
+    for e in d["effective"] if "graphify" in e["tools"] and e["has_gfy_json"]
+)
+print(int(newer))')"
   [ "$STALE" = "1" ] && warn "merged graph is older than one of its sources — rebuild: sync-cross-repo-graph.sh --merge-only"
 fi
 grep -qxF "graphify-out/" "$ROOT/.gitignore" 2> /dev/null || warn "graphify-out/ is not gitignored — the merged graph would be committed"
@@ -286,4 +293,5 @@ command -v graphify > /dev/null 2>&1 && ok "graphify installed" || warn "graphif
 
 echo
 echo "Summary: $P passed, $W warnings, $F failed"
-[ "$F" -gt 0 ] && exit 1 || exit 0
+if [ "$F" -gt 0 ]; then exit 1; fi
+exit 0

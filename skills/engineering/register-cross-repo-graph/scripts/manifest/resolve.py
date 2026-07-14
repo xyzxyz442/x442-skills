@@ -162,25 +162,26 @@ def main() -> int:
                     f"manifest. Prefer a path relative to the manifest, or move it to the user layer."
                 )
             effective[alias] = {
-                "alias": alias, "path": path, "raw_path": e["raw_path"], "tools": e["tools"],
+                "alias": alias, "path": path, "tools": e["tools"],
                 "notes": e["notes"], "layer": name, "manifest": file,
             }
 
     # Hydrate each surviving entry with the on-disk facts the shell scripts need but must not
     # discover themselves (bash never parses JSON, and never stats a graph it might misread).
+    # Emit only what a consumer actually reads: an unread field is a field that drifts, and the
+    # whole point of this resolver is that the installer and the verifier cannot disagree.
     for e in effective.values():
         p = e["path"]
         db = os.path.join(p, ".code-review-graph", "graph.db")
         gj = os.path.join(p, "graphify-out", "graph.json")
+        is_git = os.path.isdir(os.path.join(p, ".git")) or os.path.isfile(os.path.join(p, ".git"))
         e["exists"] = os.path.isdir(p)
-        e["is_git"] = os.path.isdir(os.path.join(p, ".git")) or os.path.isfile(os.path.join(p, ".git"))
         e["has_crg_db"] = os.path.isfile(db)
         e["has_gfy_json"] = os.path.isfile(gj)
-        e["crg_db"] = db
         e["gfy_json"] = gj
         e["db_mtime"] = int(os.path.getmtime(db)) if e["has_crg_db"] else None
         e["gfy_mtime"] = int(os.path.getmtime(gj)) if e["has_gfy_json"] else None
-        e["head_ct"] = head_commit_time(p) if e["exists"] and e["is_git"] else None
+        e["head_ct"] = head_commit_time(p) if e["exists"] and is_git else None
         e["writable"] = os.access(os.path.join(p, ".code-review-graph"), os.W_OK) if e["has_crg_db"] else None
         if not e["exists"]:
             errors.append(
