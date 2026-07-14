@@ -152,7 +152,7 @@ if [ -n "$SCOPE" ]; then
     hits="$(query_crg "$spath/.code-review-graph/graph.db" "$PATTERN" | sed "s|^\[crg\]|[$alias]|")"
     [ -n "$hits" ] && RESULT_SIB="$RESULT_SIB$hits
 "
-  done <<EOF
+  done << EOF
 $SCOPE
 EOF
   RESULT_SIB="$(printf '%s' "$RESULT_SIB" | sed '/^[[:space:]]*$/d')"
