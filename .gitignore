@@ -458,3 +458,22 @@ $RECYCLE.BIN/
 .code-review-graph/
 graphify-out/
 .claude/settings.local.json
+
+# --- eval harness (harness/) ---
+# Raw per-run artifacts are bulky and regenerable; the committed record is evals.json,
+# fixtures/, grade.py, lib/, and each iteration's benchmark.{json,md} + analyst_notes.md.
+# These must land BEFORE the first eval run — .gitignore does not retroactively untrack.
+harness/**/iterations/**/outputs/
+harness/**/iterations/**/run-*/transcript.md
+
+# Re-include what the templates above would otherwise swallow. The Python/virtualenv rules
+# ([Ll]ib, lib/) match harness/lib/ — the shared graders — and the AI rules match the
+# prebuilt graph that makes the behavioral fixture behavioral. All are source, not output.
+!harness/lib/
+!harness/**/fixtures/**/.code-review-graph/
+!harness/**/fixtures/**/graphify-out/
+
+# A wired tool config is the artifact the already-wired fixtures exist to hold, so it has to
+# be committed. This one overrides a *global* ignore (**/.claude/settings.local.json in the
+# user's core.excludesFile) — repo rules win over global, so the negation belongs here.
+!harness/**/fixtures/**/.claude/settings.local.json
