@@ -1,0 +1,8 @@
+{
+  "!(harness/**/fixtures/**)*.{js,jsx,ts,tsx}": [
+    "prettier --write",
+    "eslint --fix",
+    "eslint"
+  ],
+  "!(harness/**/fixtures/**)*.{json,md,yml}": ["prettier --write"]
+}
