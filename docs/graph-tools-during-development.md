@@ -399,6 +399,32 @@ subdirectory, nearest wins. The project layer is committed, so the sibling list 
 relative `path` resolves against _the manifest that declared it_, which is what lets a committed
 `"../acme-api"` mean the same checkout on every teammate's machine.
 
+```mermaid
+flowchart TD
+    subgraph layers["Manifest cascade (nearest wins)"]
+        U["user<br/>~/.code-review-graph/graph-repos.json<br/>(not committed)"]
+        P["project<br/>&lt;repo-root&gt;/.graph-repos.json<br/>(committed — the team's scope)"]
+        S["subdir<br/>&lt;package&gt;/.graph-repos.json<br/>(committed — narrows a monorepo package)"]
+    end
+
+    U --> R{{"resolve.py<br/>overlay by alias<br/>tombstones un-inherit"}}
+    P --> R
+    S --> R
+    R --> E["one effective set<br/>alias → path → tools"]
+
+    E -->|"register (additive)"| REG[("CRG registry<br/>~/.code-review-graph/registry.json<br/>machine-global")]
+    E -->|"merge-graphs"| MG[("merged graphify graph<br/>graphify-out/merged-graph.json<br/>per-project")]
+    E -->|"render from what was CONFIRMED"| BLK["&lt;!-- cross-repo --&gt; block<br/>in AGENTS.md"]
+
+    BLK -.->|"tells the agent which hits to keep"| AG(["Agent in this repo"])
+```
+
+Read the fan-out at the bottom as three writes with three different scopes. The registry is
+machine-global and only ever grows; the merged graph belongs to this project alone; and the block is
+rendered from the aliases sync **confirmed** after the fact — read back out of the registry and
+actually folded into the merged graph — never from what it merely intended to register. That is why
+the block can never advertise a repo that will not answer.
+
 ```bash
 # 1. declare the scope (committed; a monorepo package may narrow it with its own manifest)
 cp "$SKILL/assets/graph-repos.example.json" .graph-repos.json
@@ -427,11 +453,75 @@ read-only lookup, **not a security control**. (graphify sidesteps this entirely;
 per-project.) A committed manifest is therefore a **scope grant** — review a PR that adds an entry
 like any other config change.
 
+Concretely, here is one lookup from a session in `acme-web`, whose block declares exactly one
+in-scope alias (`acme-api`), on a machine where an unrelated project long ago registered `pet-shop`:
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (in acme-web)
+    participant B as AGENTS.md block
+    participant CRG as cross_repo_search_tool
+    participant REG as registry.json (machine-global)
+
+    A->>B: read in-scope aliases
+    B-->>A: acme-api
+    A->>CRG: search "createInvoice"
+    CRG->>REG: query every registered repo
+    REG-->>CRG: acme-api hit + pet-shop hit
+    CRG-->>A: both hits (a superset)
+    Note over A: filter on the in-scope set
+    A->>A: keep acme-api hit
+    A--xREG: discard pet-shop hit (out of scope)
+```
+
+The tool cannot narrow the search — the registry has no per-project view — so the **agent** narrows
+the result. Nothing but the instruction in the block stops it from opening the `pet-shop` path,
+which is exactly why the block matters as much as the registration, and why this is a soft boundary
+rather than a security control.
+
 Other caveats: you read a snapshot the _other_ repo maintains (it must exist and be current — a
 **same-machine** assumption); the merged graph is refreshed by nothing, so it goes stale on this
 repo's next commit (`--merge-only` rebuilds it, AST-only, no LLM cost); and cross-repo
 **blast-radius** (`get_impact_radius`, `get_affected_flows`) stays single-repo. See the skill for the
 full rules and the removal path (tombstone the alias, then re-sync).
+
+### Scenarios: what a cross-repo lookup costs
+
+The single-repo table above measures grep-and-read against a graph query. Crossing a repo boundary
+makes the ungraphed path _worse_, because the assistant no longer knows the other repo's layout: it
+has to orient before it can even search, and every file it opens is one it has never seen. Same
+order-of-magnitude framing as before — the ratio holds, the absolute numbers scale with repo size.
+
+| Scenario                                                                                | Without graph (cd + grep + read)                                           | With graph                                                          | Approx. saving |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------- |
+| **Resolve a backend symbol** — a frontend session hits `createInvoice`                  | `cd ../api`, grep, read the handler + its types + its caller → **15k–30k** | `cross_repo_search_tool(query=createInvoice)` → **~0.5k–1k**        | ~95%           |
+| **Callers of a shared-library export** — who consumes `parseToken` across the two repos | grep both checkouts, read each caller → **20k–40k**                        | `graphify query 'parseToken' --graph …/merged-graph.json` → **~1k** | ~95%           |
+| **Did the sibling's API shape change?**                                                 | diff the sibling's files by hand, read the changed handlers → **10k–25k**  | `cross_repo_search_tool` on the symbol, compare the node → **~1k**  | ~90%           |
+| **Orient in a repo you have never opened**                                              | read its README, walk its dirs, sample files → **30k–80k**                 | query the merged graph for its communities → **~2k–3k**             | ~95%           |
+
+#### Worked example: "where does the invoice total actually get computed?"
+
+The session is in `acme-web`; the answer lives in `acme-api`, a repo the assistant has never read.
+
+```mermaid
+flowchart LR
+    subgraph without["Without a registered graph"]
+        direction TB
+        w1["cd ../acme-api"] --> w2["grep 'invoiceTotal' — 40 hits"]
+        w2 --> w3["read 3 candidate files<br/>to find the real one"]
+        w3 --> w4["read its imports<br/>to resolve the type"]
+        w4 --> w5["~22k tokens in context<br/>(and a folder boundary crossed by hand)"]
+    end
+    subgraph with["With the sibling registered"]
+        direction TB
+        g1["cross_repo_search_tool<br/>(query=invoiceTotal)"] --> g2["hit: acme-api — in scope, keep it<br/>hit: pet-shop — out of scope, drop it"]
+        g2 --> g3["~1k tokens in context"]
+    end
+```
+
+The saving is not only the tokens. The graph answers with `file:line` and the surrounding structure,
+so the assistant never guesses which of the forty grep hits was the real definition — and the
+in-scope filter is what keeps the unrelated `pet-shop` hit from being read at all.
 
 ## Sources
 
