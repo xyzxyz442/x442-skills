@@ -36,6 +36,41 @@ or graph is absent, so it is safe on any repo, with or without the tools install
    hook config and the installer merges it in (replacing only the hooks subtree, never
    clobbering user keys). Only the **primary** tool gets the end-of-turn refresh.
 
+```mermaid
+flowchart TD
+    subgraph l3["3. Per-tool hook config"]
+        CC[".claude/settings.json"]
+        GEM[".gemini/settings.json"]
+        COP[".github/hooks/graph.json"]
+    end
+
+    subgraph l2["2. Shared behavior cores"]
+        D["hook.sh --tool &lt;t&gt; --kind &lt;k&gt;<br/>(the one dispatcher)"]
+        X["extract.py / emit.py<br/>(per-tool stdin/stdout protocol)"]
+        C["core/: grep-steer · read-nudge<br/>session-context · graph-refresh"]
+    end
+
+    subgraph l1["1. Universal (always installed)"]
+        AG["&lt;!-- graph-hooks --&gt; block<br/>in AGENTS.md"]
+        PC(["git post-commit"])
+        IG[".code-review-graphignore<br/>.graphifyignore"]
+    end
+
+    CC --> D
+    GEM --> D
+    COP --> D
+    D --> X
+    X --> C
+    C --> ART[("graph.db<br/>graph.json")]
+    PC --> ART
+    AG -.->|"routes the agent to the graph"| C
+    IG -.->|"scopes what gets indexed"| ART
+```
+
+The point of the middle layer is that a behavior is written **once**. Adding a fourth tool means a
+new row in the protocol table and a new config renderer — never a fourth copy of `grep-steer`. Only
+one tool is named `--primary`, so N wired tools still produce exactly one refresh per turn.
+
 ### Per-tool support
 
 | Tool           | Config file                | Pre-tool event              | Session event  | End-of-turn  | Deny shape                   |
@@ -153,9 +188,14 @@ Do not auto-run heavy builds. Offer the one-time commands and run them only if t
 ```bash
 # CRG (recommended): MCP tools + graph search
 code-review-graph install && code-review-graph build
-# graphify (optional): CLI exploration + git-hook freshness
-graphify update . && graphify hook install
+# graphify (optional): CLI exploration — builds the initial graph
+graphify update .
 ```
+
+Build graphify's graph only; do **not** add `graphify hook install`. The `post-commit` hook this
+skill installs already backgrounds `graphify update .` on every commit, so graphify's own hook would
+be a second, redundant refresh owner — the exact duplicate-rebuild problem the single-owner rule
+exists to prevent.
 
 If neither is installed, tell the user the hooks are wired and dormant, and give the install
 commands: `pipx install code-review-graph` and `pipx install graphifyy` (note the double `y` —

@@ -38,6 +38,24 @@ force-pushes, and clears only empty lock directories (`rmdir`, never `rm -rf`).
 Do **not** use this to do first-time setup — if `.graph-hooks/` is absent entirely, run
 [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md) instead.
 
+```mermaid
+flowchart LR
+    start([Graph misbehaving]) --> s0{"0. do the tools<br/>even run?"}
+    s0 -->|no| stop["stop — fix the install first<br/>(everything below assumes they run)"]
+    s0 -->|yes| s1{"1. is the wiring<br/>intact?"}
+    s1 -->|"verify [FAIL]"| fix1["repair files & config<br/>(exec bits, owner drift,<br/>ignore files, stale locks)"]
+    s1 -->|ok| s2{"2. is the graph<br/>itself healthy?"}
+    fix1 --> s2
+    s2 -->|"stale / zero-node /<br/>corrupt / partial embeds"| offer{"heavy rebuild<br/>needed?"}
+    s2 -->|ok| done(["no-op — already healthy"])
+    offer -.->|"ASK the user — never auto-run"| user(["rebuild on approval"])
+```
+
+Step 0 comes first and fails fast on purpose: every check below it assumes the tools actually
+execute, so a broken `code-review-graph` install would otherwise surface as a dozen confusing
+downstream failures. The last gate is the house rule — a rebuild can be expensive, so this skill
+_offers_ it and never runs it unasked.
+
 ## Preconditions
 
 1. **`AGENTS.md` exists at the repo root** and **`.graph-hooks/` exists.** If either is missing,

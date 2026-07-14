@@ -79,6 +79,24 @@ Scope lives in `.graph-repos.json` files that load hierarchically, **exactly lik
 Collisions are resolved and reported, never silent: across layers the nearer layer replaces the
 whole entry; within one file the last wins with a warning.
 
+```mermaid
+flowchart TD
+    U["user layer<br/>~/.code-review-graph/graph-repos.json"] --> R{{"resolve.py<br/>overlay by alias<br/>tombstones un-inherit"}}
+    P["project layer<br/>&lt;repo-root&gt;/.graph-repos.json"] --> R
+    S["subdir layer<br/>&lt;package&gt;/.graph-repos.json"] --> R
+    R --> E["one effective set"]
+
+    E -->|"register — additive, never clobbers"| REG[("CRG registry<br/>machine-global")]
+    E -->|"merge-graphs"| MG[("merged-graph.json<br/>per-project")]
+    E -->|"rendered from CONFIRMED aliases"| BLK["&lt;!-- cross-repo --&gt; block<br/>in AGENTS.md"]
+    BLK -.->|"the fence the agent obeys"| AG(["Agent"])
+```
+
+Three writes, three different scopes — that asymmetry is the whole design. The registry is global
+and only grows; the merged graph is yours alone; and the block is rendered from the aliases sync
+**confirmed** afterwards, never from what it intended, so it cannot advertise a repo that will not
+answer.
+
 ## Two registries, one scope
 
 The thing to understand before trusting this skill:
@@ -164,6 +182,51 @@ cross_repo_search_tool(query="…")    # MCP;  list_repos_tool() shows the full 
 graphify query "<term>"    --graph graphify-out/merged-graph.json
 graphify path  "<A>" "<B>" --graph graphify-out/merged-graph.json
 ```
+
+## Scenario: a cross-repo lookup, end to end
+
+A frontend repo `acme-web` needs backend symbols from a sibling checkout `acme-api`. Both are
+cloned side by side; `acme-web` already ran `setup-graph-hooks`. On this machine an unrelated
+project once registered a repo called `pet-shop` — that matters at the end.
+
+**1. Declare the scope.** `acme-web/.graph-repos.json`, committed, so every teammate inherits it:
+
+```json
+{
+  "version": 1,
+  "repos": [{ "alias": "acme-api", "path": "../acme-api", "notes": "auth + billing handlers" }]
+}
+```
+
+**2. Sync.** `../acme-api` resolves against the manifest's own directory, not the CWD — which is
+why the committed relative path means the same checkout on every machine:
+
+```bash
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" . --dry-run # preview: shows the effective set
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" .           # register + merge + rewrite the block
+```
+
+**3. What lands in `AGENTS.md`.** The `<!-- cross-repo -->` block now names the one alias sync
+confirmed, and tells every future session in this repo which hits to keep:
+
+```markdown
+**In-scope aliases: `acme-api`.**
+```
+
+**4. The lookup.** A session asks "where does the invoice total get computed?". Instead of
+`cd ../acme-api` and grepping a repo it has never read, the agent queries:
+
+```bash
+cross_repo_search_tool(query="invoiceTotal")
+```
+
+**5. The part that surprises people.** The result comes back with **two** hits — one in `acme-api`,
+one in `pet-shop`. CRG's registry is machine-global and has no per-project view, so the tool cannot
+narrow the search; it returns the union of everything registered on the machine. The agent keeps the
+`acme-api` hit and discards `pet-shop`, because the block says `acme-api` is the only alias in scope.
+
+That is the fence: enforced **in context, not in the registry**. It is the right shape for read-only
+lookup and it is not a security control — see the caveats below.
 
 ## Removing a repo
 
