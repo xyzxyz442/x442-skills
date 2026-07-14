@@ -43,11 +43,16 @@ flowchart TD
         GS["grep-steer.sh<br/>(before grep/find)"]
         RN["read-nudge.sh<br/>(before reading source)"]
         GR["graph-refresh.sh<br/>(end of turn)"]
+        XS["cross-repo-scope.sh<br/>(which siblings may I read?)"]
     end
 
-    subgraph artifacts["Graph artifacts (per repo)"]
+    subgraph artifacts["Graph artifacts (this repo — single writer)"]
         CRG[("CRG<br/>.code-review-graph/graph.db")]
         GFY[("graphify<br/>graphify-out/graph.json")]
+    end
+
+    subgraph sibling["In-scope sibling repo (read-only here)"]
+        SIB[("its own<br/>.code-review-graph/graph.db")]
     end
 
     Q -->|"routing block in AGENTS.md"| GS
@@ -55,6 +60,10 @@ flowchart TD
     SC -.->|injects cheatsheet| Q
     GS -->|read-only query| CRG
     GS -->|read-only query| GFY
+    XS -.->|"in-scope aliases + paths"| GS
+    XS -.->|"in-scope aliases + paths"| RN
+    XS -.->|"in-scope aliases + paths"| SC
+    GS -.->|"read-only query<br/>(never written from here)"| SIB
     RN -.->|nudge: prefer graph| Q
 
     GR -->|update| CRG
@@ -98,7 +107,9 @@ flowchart LR
     crg -->|yes| A["semantic_search /<br/>query_graph /<br/>get_impact_radius"]
     crg -->|miss| gfy{graphify<br/>helps?}
     gfy -->|yes| B["graphify query /<br/>path / explain"]
-    gfy -->|no| grep["grep / find<br/>(non-code text,<br/>or --graph-tried)"]
+    gfy -->|no| xr{"symbol in an<br/>in-scope<br/>sibling repo?"}
+    xr -->|yes| C["cross_repo_search_tool<br/>(keep only in-scope aliases)"]
+    xr -->|no| grep["grep / find<br/>(non-code text,<br/>or --graph-tried)"]
 ```
 
 ## What fires while you work
@@ -121,8 +132,11 @@ four-tier ladder (first match wins):
 2. **Command contains `--graph-tried`** → pass silently. This is the explicit override.
 3. **Target is non-code** (`.md`, `.json`, `.yml`, `.log`, `node_modules`, `dist/`, …) → pass
    silently.
-4. **No local graph built** → pass silently.
-5. **Graph present** — one allowance per repo per hour:
+4. **No graph at all** — none local, and no in-scope sibling → pass silently.
+5. **A graph can answer** — the local one **and every in-scope sibling** are searched (the sibling
+   list comes from `cross-repo-scope.sh`; it is empty unless
+   [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md) has run).
+   One allowance per repo per hour:
    - first grep + graph **hit** → inject the answer, **allow** the grep (a one-shot lesson);
    - first grep + **miss** → allow, and suggest the right tool for next time;
    - later grep + hit → **deny** with the answer inline (this is what kills the grep-retry loop);
@@ -130,6 +144,14 @@ four-tier ladder (first match wins):
 
 So the graph gets a chance to pre-answer a code-symbol search before the grep runs, but it
 never blocks a search it can't answer, and never blocks non-code text.
+
+A sibling's graph is treated exactly like the local one, with one deliberate asymmetry: the **deny**
+applies when the command points **into** the sibling that answered. A broad local grep that merely
+happens to match a sibling symbol gets the hit as advice and is allowed through — the assistant may
+legitimately be after the local call sites, and blocking that would be wrong. Without the sibling
+tier, a grep into another checkout missed the local graph, and a miss reads as "the graph can't
+help" — so the one path `register-cross-repo-graph` exists to prevent was the one path this hook
+waved through.
 
 ```mermaid
 flowchart TD
@@ -139,12 +161,14 @@ flowchart TD
     t2 -->|yes| pass2[pass silently<br/>explicit override]
     t2 -->|no| t3{non-code<br/>target?}
     t3 -->|yes| pass3[pass silently]
-    t3 -->|no| t4{local graph<br/>built?}
+    t3 -->|no| t4{"any graph built?<br/>local OR an<br/>in-scope sibling"}
     t4 -->|no| pass4[pass silently]
-    t4 -->|yes| slot{first grep<br/>this hour?}
+    t4 -->|yes| q["query the local graph<br/>AND every in-scope sibling<br/>(cross-repo-scope.sh)"]
+    q --> slot{first grep<br/>this hour?}
     slot -->|"first + hit"| a1["inject answer,<br/>ALLOW (one-shot)"]
     slot -->|"first + miss"| a2["ALLOW, suggest<br/>the right tool"]
-    slot -->|"later + hit"| a3["DENY with answer<br/>(kills retry loop)"]
+    slot -->|"later + hit, aimed at<br/>the repo that answered"| a3["DENY with answer<br/>(kills retry loop)"]
+    slot -->|"later + sibling hit,<br/>but a local grep"| a5["ALLOW + advise<br/>(agent may want<br/>local call sites)"]
     slot -->|"later + miss"| a4[pass silently]
 ```
 
@@ -459,10 +483,17 @@ in-scope alias (`acme-api`), on a machine where an unrelated project long ago re
 ```mermaid
 sequenceDiagram
     participant A as Agent (in acme-web)
+    participant H as grep-steer hook
     participant B as AGENTS.md block
     participant CRG as cross_repo_search_tool
     participant REG as registry.json (machine-global)
 
+    Note over A,H: Path 1 — the agent reaches for grep anyway
+    A->>H: grep -rn "createInvoice" ../acme-api
+    H->>H: query the in-scope sibling's graph
+    H-->>A: DENY + the answer inline, tagged [acme-api]
+
+    Note over A,B: Path 2 — the agent asks the graph directly
     A->>B: read in-scope aliases
     B-->>A: acme-api
     A->>CRG: search "createInvoice"
@@ -474,10 +505,13 @@ sequenceDiagram
     A--xREG: discard pet-shop hit (out of scope)
 ```
 
-The tool cannot narrow the search — the registry has no per-project view — so the **agent** narrows
-the result. Nothing but the instruction in the block stops it from opening the `pet-shop` path,
-which is exactly why the block matters as much as the registration, and why this is a soft boundary
-rather than a security control.
+Two things are worth separating here. **Reaching the sibling's graph is enforced** — path 1 — because
+`grep-steer.sh` searches every in-scope sibling and denies a repeat grep aimed into one, so the
+assistant cannot quietly fall back to grepping across the folder boundary. **Staying inside the
+scope is not enforced** — path 2. The tool cannot narrow the search (the registry has no per-project
+view), so the **agent** narrows the result, and nothing but the instruction in the block stops it
+from opening the `pet-shop` path. That is why the block matters as much as the registration, and why
+the scope is a soft boundary rather than a security control.
 
 Other caveats: you read a snapshot the _other_ repo maintains (it must exist and be current — a
 **same-machine** assumption); the merged graph is refreshed by nothing, so it goes stale on this

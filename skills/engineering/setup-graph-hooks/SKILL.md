@@ -26,12 +26,14 @@ or graph is absent, so it is safe on any repo, with or without the tools install
    `<!-- graph-hooks -->` routing block appended to `AGENTS.md`. Because every tool's entry
    file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit.
-2. **Shared behavior cores (one source of truth).** The four behaviors live once, protocol-free,
+2. **Shared behavior cores (one source of truth).** The behaviors live once, protocol-free,
    under `.graph-hooks/core/`: `grep-steer.sh` (steer grep/find to the graph), `read-nudge.sh`
    (prefer graph tools over reading source), `session-context.sh` (inject a query cheatsheet),
-   and `graph-refresh.sh` (the incremental `update`, repo-global-locked). A single
-   `.graph-hooks/hook.sh --tool <t> --kind <k>` dispatcher runs them; `core/extract.py` and
-   `core/emit.py` hold the entire per-tool stdin/stdout protocol table.
+   `graph-refresh.sh` (the incremental `update`, repo-global-locked), and `cross-repo-scope.sh`
+   (which sibling repos this repo may read — silent unless
+   [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md) has run, so the other three
+   need no feature flag). A single `.graph-hooks/hook.sh --tool <t> --kind <k>` dispatcher runs
+   them; `core/extract.py` and `core/emit.py` hold the entire per-tool stdin/stdout protocol table.
 3. **Per-tool hook config.** For each chosen tool, `config/render.py` emits that tool's native
    hook config and the installer merges it in (replacing only the hooks subtree, never
    clobbering user keys). Only the **primary** tool gets the end-of-turn refresh.
@@ -47,7 +49,7 @@ flowchart TD
     subgraph l2["2. Shared behavior cores"]
         D["hook.sh --tool &lt;t&gt; --kind &lt;k&gt;<br/>(the one dispatcher)"]
         X["extract.py / emit.py<br/>(per-tool stdin/stdout protocol)"]
-        C["core/: grep-steer · read-nudge<br/>session-context · graph-refresh"]
+        C["core/: grep-steer · read-nudge<br/>session-context · graph-refresh<br/>cross-repo-scope"]
     end
 
     subgraph l1["1. Universal (always installed)"]
