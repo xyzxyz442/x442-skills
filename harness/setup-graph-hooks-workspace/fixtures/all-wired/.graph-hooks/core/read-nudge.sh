@@ -14,9 +14,29 @@ exts=('.py','.js','.ts','.tsx','.jsx','.go','.rs','.java','.rb','.c','.h','.cpp'
 sys.stdout.write('1' if 'graphify-out/' not in s and '.code-review-graph/' not in s and any(e in s for e in exts) else '')" 2> /dev/null || true)"
 [ "$HIT" = 1 ] || exit 0
 
+# Reading INTO an in-scope sibling? Then the single-repo tools below cannot answer — name the one
+# that can. Silence from cross-repo-scope.sh means this repo has no sibling scope.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SCOPE="$(bash "$HERE/cross-repo-scope.sh" 2> /dev/null || true)"
+XREPO=""
+if [ -n "$SCOPE" ]; then
+  XREPO="$(printf '%s' "$TARGET" | SCOPE="$SCOPE" python3 -c "import os,sys
+scope=[l.split(chr(9)) for l in os.environ.get('SCOPE','').splitlines() if chr(9) in l]
+for tok in sys.stdin.read().split():
+    p=os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(tok)))
+    for alias, path in scope:
+        root=os.path.realpath(path)
+        if p==root or p.startswith(root+os.sep):
+            print(alias); sys.exit(0)" 2> /dev/null || true)"
+fi
+
 HINT=""
-[ -f .code-review-graph/graph.db ] && HINT="semantic_search_nodes_tool / query_graph_tool / get_impact_radius_tool"
-[ -f graphify-out/graph.json ] && HINT="${HINT:+$HINT or }graphify query/explain/path --graph graphify-out/graph.json"
+if [ -n "$XREPO" ]; then
+  HINT="cross_repo_search_tool (the '$XREPO' repo's own graph — this repo's tools do not span it)"
+else
+  [ -f .code-review-graph/graph.db ] && HINT="semantic_search_nodes_tool / query_graph_tool / get_impact_radius_tool"
+  [ -f graphify-out/graph.json ] && HINT="${HINT:+$HINT or }graphify query/explain/path --graph graphify-out/graph.json"
+fi
 [ -z "$HINT" ] && exit 0
 
 python3 - "$HINT" << 'PY'

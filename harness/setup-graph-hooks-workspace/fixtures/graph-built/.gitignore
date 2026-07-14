@@ -6,6 +6,9 @@ graphify-out/
 # carry a real, prebuilt graph so the grader can prove the wired hooks actually steer a
 # search — so its graph is source, and must be committed. A nested .gitignore beats the repo
 # root's negation, so the re-include has to live here.
+#
+# Re-add these if you ever regenerate this fixture: the installer rewrites .gitignore and
+# will drop them.
 !.code-review-graph/
 !graphify-out/
 !.claude/settings.local.json

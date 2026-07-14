@@ -6,15 +6,19 @@
 # graph-cheatsheet.py + session-status.sh + session-setup-nudge.sh into one core.
 set -uo pipefail
 
-python3 - << 'PY'
+SCOPE="$(bash "$(cd "$(dirname "$0")" && pwd)/cross-repo-scope.sh" 2> /dev/null || true)"
+
+SCOPE="$SCOPE" python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
 crg = os.path.exists(".code-review-graph/graph.db")
 gfy = os.path.exists("graphify-out/graph.json")
+# In-scope sibling repos this repo may read (empty unless register-cross-repo-graph has run).
+siblings = [ln.split("\t")[0] for ln in os.environ.get("SCOPE", "").splitlines() if "\t" in ln]
 out = {}
 
 stats, lines = [], []
-if crg or gfy:
+if crg or gfy or siblings:
     if crg:
         try:
             c = sqlite3.connect("file:.code-review-graph/graph.db?mode=ro", uri=True)
@@ -43,10 +47,19 @@ if crg or gfy:
             "CRG miss / explore   -> graphify query '<term>' --graph graphify-out/graph.json",
             "path A->B            -> graphify path '<from>' '<to>' --graph graphify-out/graph.json",
         ]
+    if siblings:
+        # These repos are read-only here and their graphs answer for them — so a cross-repo path is
+        # a REASON to use the graph, not to skip it. Saying otherwise (as this cheatsheet once did)
+        # contradicts the <!-- cross-repo --> block and sends the agent back to grep.
+        lines += [
+            "symbol in a sibling  -> cross_repo_search_tool(query=X), then keep only in-scope hits",
+            "in-scope siblings    -> " + ", ".join(siblings),
+        ]
+        stats.append(f"{len(siblings)} in-scope sibling repo(s)")
     out["context"] = (
         "GRAPH QUERY CHEATSHEET (" + "; ".join(stats) + ") - use BEFORE reading/grepping code:\n"
         + "\n".join("  " + line for line in lines)
-        + "\nSkip the graph for: .md .json .yml .log .jsonl configs and cross-repo paths."
+        + "\nSkip the graph for: .md .json .yml .log .jsonl and config text."
         + "\nOverride the grep gate: append --graph-tried to any shell command."
     )
 

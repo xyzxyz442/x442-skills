@@ -10,12 +10,19 @@
 #   1. Not a search command (grep/rg/find/fd/ack/ag)  -> pass silently
 #   2. Command contains --graph-tried                 -> pass silently (explicit override)
 #   3. Target is non-code (.md/.json/.yml/.log/...)   -> pass silently
-#   4. No local graph (CRG db or graphify json)       -> pass silently
-#   5. Local graph present, one allowance per repo per hour:
+#   4. No graph at all (local, or an in-scope sibling) -> pass silently
+#   5. A graph can answer, one allowance per repo per hour:
 #        a. first grep + hit  -> inject answer, ALLOW (one-shot lesson)
 #        b. first grep + miss -> ALLOW, suggest the right tool for next time
 #        c. later grep + hit  -> DENY with the answer inline (kills the retry loop)
 #        d. later grep + miss -> pass silently
+#
+# The graph searched is the local one PLUS every in-scope sibling (cross-repo-scope.sh). Without
+# the siblings, a grep into another checkout missed the local graph, and a miss reads as "the graph
+# cannot help" — so the one path register-cross-repo-graph exists to stop was the one path this
+# hook waved through. A sibling hit denies only when the command actually points INTO that sibling:
+# a broad local grep that merely happens to match a sibling symbol still gets the hits as context,
+# because the agent may legitimately want the local call sites.
 set -uo pipefail
 
 CMD="$(cat 2> /dev/null || true)"
@@ -36,12 +43,14 @@ case "$CMD" in
     *node_modules* | */.git/* | */dist/* | */build/* | */.next/* | */__pycache__/*) exit 0 ;;
 esac
 
-# Tier 4 — detect local graphs
+# Tier 4 — detect graphs: this repo's, plus any in-scope sibling's (silence = no cross-repo scope)
+HERE="$(cd "$(dirname "$0")" && pwd)"
 HAVE_CRG=0
 HAVE_GFY=0
 [ -f .code-review-graph/graph.db ] && HAVE_CRG=1
 [ -f graphify-out/graph.json ] && HAVE_GFY=1
-[ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ] && exit 0
+SCOPE="$(bash "$HERE/cross-repo-scope.sh" 2> /dev/null || true)"
+[ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ] && [ -z "$SCOPE" ] && exit 0
 
 # Extract a search term: first non-flag word > 2 chars that is not a path
 PATTERN="$(printf '%s' "$CMD" | python3 -c "import sys,shlex
@@ -101,16 +110,72 @@ except Exception:
 PY
 }
 
-RESULT=""
-[ "$HAVE_CRG" = 1 ] && RESULT="$RESULT$(query_crg .code-review-graph/graph.db "$PATTERN")
+# Does the command actually point INTO an in-scope sibling? (decides deny vs advise — see header)
+# The command comes in as $2, NOT on stdin: the heredoc below already occupies stdin with the
+# script itself, so a sys.stdin.read() here would silently return "" and match nothing.
+target_alias() { # $1=scope lines  $2=command; stdout: alias of the sibling it targets, or nothing
+  python3 - "$1" "$2" << 'PY' 2> /dev/null || true
+import os, shlex, sys
+
+scope = [ln.split("\t") for ln in sys.argv[1].splitlines() if "\t" in ln]
+try:
+    parts = shlex.split(sys.argv[2])
+except Exception:
+    parts = sys.argv[2].split()
+for tok in parts:
+    if tok.startswith("-"):
+        continue
+    p = os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(tok)))
+    for alias, path in scope:
+        root = os.path.realpath(path)
+        if p == root or p.startswith(root + os.sep):
+            print(alias)
+            sys.exit(0)
+PY
+}
+
+RESULT_LOCAL=""
+[ "$HAVE_CRG" = 1 ] && RESULT_LOCAL="$RESULT_LOCAL$(query_crg .code-review-graph/graph.db "$PATTERN")
 "
-[ "$HAVE_GFY" = 1 ] && RESULT="$RESULT$(query_gfy graphify-out/graph.json "$PATTERN")
+[ "$HAVE_GFY" = 1 ] && RESULT_LOCAL="$RESULT_LOCAL$(query_gfy graphify-out/graph.json "$PATTERN")
 "
-RESULT="$(printf '%s' "$RESULT" | sed '/^[[:space:]]*$/d')"
+RESULT_LOCAL="$(printf '%s' "$RESULT_LOCAL" | sed '/^[[:space:]]*$/d')"
+
+# Siblings: same query_crg, just pointed at their db. Label each hit with the alias so the agent
+# can see which repo answered — and that the alias is one the AGENTS.md fence allows.
+RESULT_SIB=""
+XREPO_ALIAS=""
+if [ -n "$SCOPE" ]; then
+  XREPO_ALIAS="$(target_alias "$SCOPE" "$CMD")"
+  while IFS="$(printf '\t')" read -r alias spath; do
+    [ -n "$alias" ] || continue
+    hits="$(query_crg "$spath/.code-review-graph/graph.db" "$PATTERN" | sed "s|^\[crg\]|[$alias]|")"
+    [ -n "$hits" ] && RESULT_SIB="$RESULT_SIB$hits
+"
+  done << EOF
+$SCOPE
+EOF
+  RESULT_SIB="$(printf '%s' "$RESULT_SIB" | sed '/^[[:space:]]*$/d')"
+fi
+
+RESULT="$(printf '%s\n%s' "$RESULT_LOCAL" "$RESULT_SIB" | sed '/^[[:space:]]*$/d')"
+
+# Deny only on an answer the agent was actually reaching for: a local hit, or a sibling hit when the
+# command points into that sibling. A broad local grep that merely matches a sibling symbol gets the
+# hits as advice — the agent may want the local call sites, and denying that would be wrong.
+DENYABLE="$RESULT_LOCAL"
+[ -n "$XREPO_ALIAS" ] && DENYABLE="$RESULT_SIB"
 
 HINT=""
-[ "$HAVE_CRG" = 1 ] && HINT="semantic_search_nodes_tool(query='$PATTERN')"
-[ "$HAVE_GFY" = 1 ] && HINT="${HINT:+$HINT or }graphify query '$PATTERN' --graph graphify-out/graph.json"
+if [ -n "$XREPO_ALIAS" ] || [ -n "$RESULT_SIB" ]; then
+  HINT="cross_repo_search_tool(query='$PATTERN')"
+  [ -f graphify-out/merged-graph.json ] \
+    && HINT="$HINT or graphify query '$PATTERN' --graph graphify-out/merged-graph.json"
+fi
+if [ -z "$XREPO_ALIAS" ]; then
+  [ "$HAVE_CRG" = 1 ] && HINT="${HINT:+$HINT or }semantic_search_nodes_tool(query='$PATTERN')"
+  [ "$HAVE_GFY" = 1 ] && HINT="${HINT:+$HINT or }graphify query '$PATTERN' --graph graphify-out/graph.json"
+fi
 
 # One allowance per repo per hour
 KEY="$(printf '%s' "$PWD" | { md5sum 2> /dev/null || md5 2> /dev/null; } | cut -c1-8)"
@@ -142,11 +207,21 @@ If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbo
   exit 0
 fi
 
-if [ -n "$RESULT" ]; then
+if [ -n "$DENYABLE" ]; then
   emit_neutral deny "The knowledge graph already has this — no grep/retry needed:
 
-$RESULT
+$DENYABLE
 
 Use: $HINT. Append --graph-tried to override."
+  exit 0
+fi
+
+# A sibling answered, but the command was not aimed at that sibling — advise, never block.
+if [ -n "$RESULT_SIB" ]; then
+  emit_neutral context "An in-scope sibling repo's graph also has '$PATTERN':
+
+$RESULT_SIB
+
+Use: $HINT — no need to grep across the folder boundary."
 fi
 exit 0
