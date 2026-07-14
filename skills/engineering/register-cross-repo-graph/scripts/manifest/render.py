@@ -20,16 +20,25 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 BEGIN = "<!-- cross-repo:begin"
 END = "<!-- cross-repo:end -->"
 
-GRAPHIFY_ROWS = (
+# A standalone block, not extra rows spliced into the table above it. Prettier reformats markdown
+# tables, and it rewrites a placeholder sitting inside a row into a cell of its own — which
+# silently turns the rendered table into a malformed one. Keeping this self-contained, separated by
+# blank lines, means the formatter has nothing to mangle in either branch.
+GRAPHIFY_BLOCK = (
+    "The merged graphify graph covers the in-scope repos too:\n"
+    "\n"
+    "| Need | Use |\n"
+    "| ---- | --- |\n"
     "| find a symbol across the merged graph | "
     "`graphify query '<term>' --graph graphify-out/merged-graph.json` |\n"
-    "| shortest path A→B across repos  | "
-    "`graphify path '<A>' '<B>' --graph graphify-out/merged-graph.json` |\n"
+    "| shortest path A→B across repos | "
+    "`graphify path '<A>' '<B>' --graph graphify-out/merged-graph.json` |"
 )
 
 
@@ -49,8 +58,9 @@ def render(data: dict, template: str, confirmed: set[str], merged: set[str]) -> 
     body = body.replace("{{REPO_TABLE}}", "\n".join(rows))
     body = body.replace("{{IN_SCOPE_ALIASES}}", ", ".join(f"`{e['alias']}`" for e in listed))
     # Never advertise a tool that no in-scope repo actually uses.
-    body = body.replace("{{GRAPHIFY_ROWS}}", GRAPHIFY_ROWS if merged else "")
-    return body
+    body = body.replace("{{GRAPHIFY_BLOCK}}", GRAPHIFY_BLOCK if merged else "")
+    # The empty branch leaves the placeholder's blank lines behind; collapse them.
+    return re.sub(r"\n{3,}", "\n\n", body)
 
 
 def splice(existing: str, block: str) -> str:

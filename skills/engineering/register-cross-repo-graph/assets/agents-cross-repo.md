@@ -15,12 +15,14 @@ in the in-scope set, and never open a file outside the repo paths in that table.
 need a repo that is not listed, say so — the fix is a new entry in `.graph-repos.json`, not a wider
 search.
 
-| Need | Use |
-| ------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| Need                            | Use                                                            |
+| ------------------------------- | -------------------------------------------------------------- |
 | find a symbol in a sibling repo | `cross_repo_search_tool(query=…)` — keep only in-scope aliases |
-| which repos are registered | `list_repos_tool()` — a superset; filter to the in-scope set |
-| {{GRAPHIFY_ROWS}} | blast radius / review context | single-repo only — these tools do **not** span repos |
-| string / config / log text | `grep` (append `--graph-tried` to bypass the graph gate) |
+| which repos are registered      | `list_repos_tool()` — a superset; filter to the in-scope set   |
+| blast radius / review context   | single-repo only — these tools do **not** span repos           |
+| string / config / log text      | `grep` (append `--graph-tried` to bypass the graph gate)       |
+
+{{GRAPHIFY_BLOCK}}
 
 Each repo refreshes its **own** graph via its own hooks; here they are read-only. If a sibling graph
 looks stale, refresh it in that repo — do not rebuild it from this session without asking.
