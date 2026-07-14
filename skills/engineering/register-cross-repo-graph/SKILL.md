@@ -228,6 +228,69 @@ narrow the search; it returns the union of everything registered on the machine.
 That is the fence: enforced **in context, not in the registry**. It is the right shape for read-only
 lookup and it is not a security control — see the caveats below.
 
+## Scenario: a monorepo package narrows the scope
+
+The cascade earns its complexity here. `acme-platform` is a monorepo whose root declares the
+siblings every package may read. One package, `apps/checkout`, needs a repo the root does not
+declare — and must **not** see one the root does.
+
+**1. The root layer** (`acme-platform/.graph-repos.json`) — the default scope for the whole repo:
+
+```json
+{
+  "version": 1,
+  "repos": [
+    { "alias": "acme-api", "path": "../acme-api", "notes": "auth + billing handlers" },
+    { "alias": "acme-legacy-ui", "path": "../acme-legacy-ui", "notes": "being retired" }
+  ]
+}
+```
+
+**2. The subdir layer** (`acme-platform/apps/checkout/.graph-repos.json`) — adds a payments sibling
+and un-inherits the legacy UI, which is noise for this package:
+
+```json
+{
+  "version": 1,
+  "repos": [
+    { "alias": "acme-payments", "path": "../../../acme-payments", "notes": "PSP adapters" },
+    { "alias": "acme-legacy-ui", "remove": true }
+  ]
+}
+```
+
+Two things to notice. The relative `path` resolves against **the manifest that declared it** —
+`apps/checkout/`, hence the three `../` — not against the repo root or your CWD. And `remove: true`
+is a **tombstone**: it is the only way a nearer layer can drop an entry a lower layer declared.
+Deleting the line would do nothing, because the root layer would just re-supply it.
+
+**3. Sync from the package, not the root.** `$SCOPE` is what selects which subdir layers apply:
+
+```bash
+bash "$SKILL/scripts/sync-cross-repo-graph.sh" apps/checkout --dry-run
+```
+
+The effective set for `apps/checkout` is `acme-api` (inherited from the root) and `acme-payments`
+(added here). `acme-legacy-ui` is tombstoned out. Sync from the **root** instead and you get a
+different, wider set — `acme-api` + `acme-legacy-ui` — because no subdir layer is in play. Same
+repo, two scopes, decided by where you sync from.
+
+**4. The refusal you should expect.** The block is written to the nearest `AGENTS.md` at or above
+the scope. If `apps/checkout` contributes subdir-scoped repos but has **no `AGENTS.md` of its own**,
+sync stops rather than fold them into the root file:
+
+```text
+! apps/checkout contributes subdirectory-scoped repos but has no AGENTS.md of its own.
+  Writing them to the root AGENTS.md would leak package scope repo-wide. Either:
+    - create apps/checkout/AGENTS.md, or
+    - move those entries to <root>/.graph-repos.json and sync from the root.
+```
+
+This is deliberate, not a missing feature. Writing `acme-payments` into the root block would grant
+it to every package in the monorepo, and the next sync from a different package would rewrite the
+block back — the scope would thrash. Give the package its own `AGENTS.md` and the block lands
+beside the code it applies to.
+
 ## Removing a repo
 
 Tombstone it (or delete the entry) in the nearest layer, then re-sync — the alias leaves the
