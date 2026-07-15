@@ -1,6 +1,6 @@
 # AGENTS.md
 
-<!-- TODO: one-line description of this skills collection. -->
+A personal collection of reusable, model-agnostic agent skills that wire any repo for AI coding assistants (Claude Code, Antigravity, Gemini CLI, GitHub Copilot).
 
 This repository is the **single source of truth** for AI assistants working in this project. Tool-specific overrides live in:
 
@@ -18,8 +18,6 @@ Read this file first, then your tool-specific file for any overrides.
 The repo contains **no application code**. Everything ships as markdown plus the occasional supporting reference file.
 
 ## Repository structure
-
-<!-- TODO: confirm and document the on-disk layout once skills land. Suggested shape: -->
 
 ```text
 .
