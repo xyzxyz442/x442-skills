@@ -30,6 +30,22 @@ NEST_EXISTING_NOTE = "orders-ingest-v2"
 
 
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
+    """Grade in an isolated copy when `target` is nested in a larger repo.
+
+    verify-initial-project.sh and git_diff_empty resolve the git toplevel; a fixture inside
+    x442-skills would otherwise be graded against x442-skills. isolated_git_target relocates it to
+    its own git root first (no-op when it already is one).
+    """
+    graded, cleanup = gc.isolated_git_target(target)
+    if graded != Path(target).resolve():
+        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+    try:
+        return _grade(graded, eval_id)
+    finally:
+        cleanup()
+
+
+def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     exps = [gc.run_verify_script(VERIFY, target)]
     if eval_id == "nest-new":
         # Fresh app, no AI config: the skill creates AGENTS.md and wires Claude to it.
