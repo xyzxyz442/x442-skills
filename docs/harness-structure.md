@@ -7,15 +7,18 @@ read-only `verify-*.sh` checkers each skill already ships.
 
 This document is the **contract**; [harness/](../harness/README.md) is the implementation.
 
-- Steps 1-4, 6, and 7 of the [porting checklist](#porting-checklist) are **done**: `harness/lib/`
-  (three self-tested modules), the `.gitignore` entries, `initial-project-workspace/`,
+- **All porting-checklist steps are done.** `harness/lib/` (three self-tested modules), the
+  `.gitignore` entries, `harness/README.md`, and a workspace for every one of the five engineering
+  skills: `initial-project-workspace/`, `setup-project-tooling-workspace/`,
   `setup-graph-hooks-workspace/`, `register-cross-repo-graph-workspace/`,
-  `repair-graph-hooks-workspace/`, and `harness/README.md`. Every grader has been exercised
-  against its fixtures — wired/healthy fixtures score 1.00, the unwired pre-state and the drifted
-  repair targets score 0.00 — but no iteration has been run, because that is the one step needing
-  an agent.
-- Still open: `setup-project-tooling-workspace/` (step 5). The skill already ships a conforming
-  verifier, so its grader can wrap one directly.
+  `repair-graph-hooks-workspace/`. Every grader has been exercised against its fixtures —
+  post-state fixtures score 1.00, the unwired pre-states and drifted repair targets score 0.00 —
+  but no iteration has been run, because that is the one step needing an agent.
+- Every grader wraps its target with `isolated_git_target` (a fixture nested inside x442-skills is
+  copied to its own git root first, so the bundled `verify-*.sh` grades the fixture, not the outer
+  repo). Graders may also emit `skipped` expectations — recorded, counted in `summary.skipped`, and
+  excluded from `pass_rate` — so a run that covers less (e.g. an optional graph tool absent) is
+  never silently green.
 - All four shipped verifiers
   ([verify-initial-project.sh](../skills/engineering/initial-project/scripts/verify-initial-project.sh),
   [verify-project-tooling.sh](../skills/engineering/setup-project-tooling/scripts/verify-project-tooling.sh),
@@ -126,16 +129,19 @@ always safe to run by hand or in CI. Each carries a `--selftest`.
 
 A library, not a runner. Every assertion returns the canonical triple
 `{"text": str, "passed": bool, "evidence": str}` — the evidence string explains the verdict so a
-reviewer never has to re-derive it.
+reviewer never has to re-derive it. A `skipped()` expectation adds a fourth `"skipped": true` key
+(the plain triple is unchanged); it counts toward neither `passed` nor `failed`.
 
 | Function                                             | Passes when                                                        |
 | ---------------------------------------------------- | ------------------------------------------------------------------ |
 | `expectation(text, passed, evidence)`                | (constructor for the triple; coerces types)                        |
+| `skipped(text, reason)`                              | (constructor for a did-not-run expectation; neither pass nor fail) |
 | `file_exists(root, rel)`                             | `root/rel` is a file with size > 0                                 |
 | `contains(root, rel, needle, *, label=None)`         | `root/rel` contains the literal substring `needle`                 |
 | `no_fabrication(root, rel)`                          | `root/rel` does **not** exist — asserts the skill invented nothing |
 | `json_roundtrip(root, rel)`                          | `root/rel` parses as JSON                                          |
-| `run_verify_script(script, target)`                  | see below                                                          |
+| `run_verify_script(script, target, *, env=None)`     | see below                                                          |
+| `isolated_git_target(target)`                        | (relocates a nested fixture to its own git root; returns cleanup)  |
 | `write_grading(out_path, expectations, timing=None)` | (writes `grading.json`, returns the dict)                          |
 
 `run_verify_script(script, target)` shells out to `bash <script> <target>`, then scans stdout with:
@@ -155,8 +161,11 @@ reimplementing:
 On success the evidence carries the summary verbatim, e.g.
 `"Summary: 8 passed, 1 warnings, 0 failed (exit 0)"`.
 
-`write_grading()` computes `pass_rate = passed / total` (`0.0` when `total == 0`), creates parent
-directories, and writes JSON with `indent=2` plus a trailing newline.
+`write_grading()` (and `summarize()`) roll the expectations up via one shared `_rollup()` helper:
+`skipped` is the count of `skipped()` expectations, `graded = total - skipped`, `pass_rate = passed
+/ graded` (`0.0` when `graded == 0`), and `failed = graded - passed`. With no skips (`skipped ==
+0`, `graded == total`) this is exactly `passed / total` — every skip-free grading.json is
+unchanged. It creates parent directories and writes JSON with `indent=2` plus a trailing newline.
 
 ### `aggregate.py`
 
@@ -242,7 +251,7 @@ verifier.
     { "text": "AGENTS.md exists and is non-empty", "passed": true, "evidence": "AGENTS.md size: 2266 bytes" },
     { "text": "verify-initial-project.sh passes", "passed": true, "evidence": "Summary: 8 passed, 1 warnings, 0 failed (exit 0)" }
   ],
-  "summary": { "pass_rate": 1.0, "passed": 8, "failed": 0, "total": 8 },
+  "summary": { "pass_rate": 1.0, "passed": 8, "failed": 0, "skipped": 0, "total": 8 },
   "timing": { "total_tokens": 39500, "total_duration_seconds": 82.5 }
 }
 ```
@@ -404,9 +413,13 @@ Each step is independently verifiable; do them in order.
 4. Then **`setup-graph-hooks-workspace/`** — the richest branch set, and the only one that needs a
    behavioral fixture (a repo with a built graph) plus a precondition fixture (a repo with no
    `AGENTS.md`, where the skill must stop and defer to `initial-project`).
-5. Then **`setup-project-tooling-workspace/`** — **still open**. It already ships
-   `verify-project-tooling.sh` and the reference repo never gave it a workspace, so this is the
-   remaining gap to close.
+5. **Done — `setup-project-tooling-workspace/`.** It ships no scaffolder script, so the fixtures are
+   hand-assembled from its `assets/` (the verifier is Node-rooted for every language: a
+   `commitlint.config.mjs` + a `package.json` carrying the six devDeps and a husky `prepare` chain
+   with `commitlint --edit` + a lint-staged config + `.editorconfig`; everything else is warn-only).
+   Cases: `scaffolded` (post-state → 1.00 + idempotent) and `fresh` (a bare Node project — a
+   pre-state input that fails until an agent scaffolds it). Note `.husky/**` is globally gitignored,
+   so the commit-msg check is satisfied via the `prepare` script rather than a committed hook.
 6. Write `harness/README.md` last, pointing back at this document rather than restating it.
 
 7. **Done — `register-cross-repo-graph-workspace/`.** It ships `verify-cross-repo-graph.sh`, so its
@@ -444,27 +457,24 @@ Recorded so they are not inherited by accident:
 - Graders for content-generation skills wrap no verifier and assert on raw content patterns; that
   works, but it puts the pass condition in two places when the skill also ships a checker.
 
-**Which of these this repo inherited:** none but one. The README status lists every on-disk workspace
+**Which of these this repo inherited:** none. The README status lists every on-disk workspace
 (gap 1 avoided); `outputs/`/`iterations/` trees are gitignored and none are tracked (gap 4 avoided);
-all four graders wrap a `verify-*.sh` (gap 5 avoided). The benchmark gap (3) does not apply because
-this repo commits no iterations at all — there is no misleading 100% to inherit. **Still open here:**
-`setup-project-tooling` ships `verify-project-tooling.sh` with no workspace wrapping it (gap 2).
+all five graders wrap a `verify-*.sh` (gap 5 avoided). The benchmark gap (3) does not apply because
+this repo commits no iterations at all — there is no misleading 100% to inherit. Gap 2 (a verifier
+with no workspace) is **now closed** — `setup-project-tooling-workspace/` exists.
 
 ## Open gaps in this repo's harness
 
 Distinct from the inherited list above — these are current to this repo's own harness:
 
-- **`setup-project-tooling-workspace/` is not built.** It is the one skill with a conforming verifier
-  and no eval workspace; its grader can wrap `verify-project-tooling.sh` directly (porting checklist
-  step 5).
 - **No committed iterations.** Every workspace has fixtures, evals, and a grader, but the A/B
   skill-on-vs-off runs (step 1) that produce `iterations/iteration-N/` need an agent and none are
   committed — so there is no benchmark yet, only graders proven against their fixtures.
-- **`register-cross-repo-graph`'s `single-sibling` case has environmental dependencies the grader does
-  not annotate.** It **requires `code-review-graph` installed** — without it, `sync` skips the CRG path,
-  the alias never reaches the `AGENTS.md` block, and the case fails — and the graphify merged-graph
-  assertion is **silently skipped** when `graphify` is absent (the `gfy_ok` gate), so a bare machine
-  quietly covers less rather than reporting reduced coverage. Run it where both tools are installed.
+- **`register-cross-repo-graph`'s `single-sibling` case depends on the graph tools — now made
+  explicit (closed).** It requires `code-review-graph` (the grader fails fast with a legible
+  precondition when it is absent, instead of a confusing verifier cascade), and the graphify
+  merged-graph facet is recorded as a `skipped()` expectation when `graphify` is absent (visible in
+  `summary.skipped`) rather than silently dropped.
 - **The cross-repo grader runs the skill's own installer at grade time.** It is the only grader that
   invokes `sync-cross-repo-graph.sh` during grading rather than grading a pre-produced tree — a
   deliberate deviation, because a synced repo's post-state embeds absolute machine paths and cannot

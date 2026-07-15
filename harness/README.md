@@ -21,6 +21,7 @@ harness/
 │   ├── aggregate.py                # grading.json -> benchmark.json + benchmark.md
 │   └── reorg.py                    # normalize raw run outputs into eval-<id>/<config>/run-N/
 ├── initial-project-workspace/      # one workspace per skill under test
+├── setup-project-tooling-workspace/
 ├── setup-graph-hooks-workspace/
 ├── register-cross-repo-graph-workspace/
 └── repair-graph-hooks-workspace/
@@ -84,6 +85,11 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
 - **`initial-project-workspace/`** — fixtures `nest-new` (fresh), `nest-existing`
   (preserve-existing; the grader asserts the `orders-ingest-v2` consumer-group note survives),
   `ts-library` (already wired → idempotency). Grader wraps `verify-initial-project.sh`.
+- **`setup-project-tooling-workspace/`** — fixtures `scaffolded` (a fully wired Node/TS post-state
+  → 1.00 + idempotent) and `fresh` (a bare Node project — a pre-state input that fails until an
+  agent scaffolds the tooling). The skill ships no scaffolder, so `scaffolded` is hand-assembled
+  from its `assets/`; the verifier is Node-rooted for every language. Grader wraps
+  `verify-project-tooling.sh`.
 - **`setup-graph-hooks-workspace/`** — fixtures `no-agents-md` (precondition: the skill must
   stop and defer to `initial-project`), `fresh-wired`, `all-wired`, `copilot-primary-wired`,
   `both-wired` (single-refresh-owner invariant across two tools), and `graph-built` — a
@@ -97,18 +103,25 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   ship only portable inputs and the grader manufactures the machine-specific state **hermetically**:
   an isolated copy under a throwaway `$HOME` with a seeded registry, then it runs the skill's own
   LLM-free `sync-cross-repo-graph.sh` (building each repo's graphify graph in the sandbox) and
-  verifies. The real `~/.code-review-graph` is never touched. Grader wraps `verify-cross-repo-graph.sh`.
+  verifies. The real `~/.code-review-graph` is never touched. The grader is explicit about its tool
+  dependencies: it **fails fast** with a legible precondition when `code-review-graph` is absent,
+  and records the graphify merged-graph facet as a `skipped()` expectation (visible in
+  `summary.skipped`) when `graphify` is absent, rather than silently covering less. Grader wraps
+  `verify-cross-repo-graph.sh`.
 - **`repair-graph-hooks-workspace/`** — `repair-graph-hooks` ships no verifier of its own; its
   success condition is that `setup-graph-hooks`' `verify-graph-hooks.sh` goes green again, so the
   grader wraps that. Fixtures: `healthy` (repair is a no-op → directly gradeable), `broken-json`
   and `missing-core` (repair TARGETS — drifted inputs that fail the verifier by design until an
   agent runs the skill, then re-graded to 0 failed).
+- **All five engineering skills now have a workspace.** Every grader wraps its target with
+  `isolated_git_target` (a fixture nested in this repo is relocated to its own git root, so the
+  bundled `verify-*.sh` grades the fixture, not x442-skills) and may emit `skipped()` expectations —
+  counted in `summary.skipped` and excluded from `pass_rate` — so a run that covers less (an
+  optional graph tool absent) is never silently green.
 - **No iterations committed yet** — every workspace above has fixtures, evals, and a grader,
-  and each grader has been exercised against its fixtures (wired/healthy fixtures score 1.00; the
-  unwired pre-state and the drifted repair targets score 0.00, so the graders discriminate). What
+  and each grader has been exercised against its fixtures (post-state fixtures score 1.00; the
+  unwired pre-states and the drifted repair targets score 0.00, so the graders discriminate). What
   has **not** run is step 1: the A/B skill executions that produce `iterations/iteration-N/`.
-- **Not yet wired:** `setup-project-tooling` — it ships a read-only `verify-project-tooling.sh`
-  that `run_verify_script()` can wrap directly, so it is the cheapest workspace to add next.
 
 ## Fixtures are inputs, not source
 
