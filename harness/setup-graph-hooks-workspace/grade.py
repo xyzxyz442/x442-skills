@@ -182,6 +182,22 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
 
 
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
+    """Grade in an isolated copy when `target` is nested in a larger repo.
+
+    verify-graph-hooks.sh, git_diff_empty, and the graph hooks all resolve the git toplevel; a
+    fixture inside x442-skills would otherwise be graded against x442-skills. isolated_git_target
+    relocates it to its own git root first (no-op when it already is one).
+    """
+    graded, cleanup = gc.isolated_git_target(target)
+    if graded != Path(target).resolve():
+        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+    try:
+        return _grade(graded, eval_id)
+    finally:
+        cleanup()
+
+
+def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     if eval_id == "no-agents-md":
         # Precondition case: the skill must refuse and fabricate nothing. The verifier is NOT
         # the source of truth here (it grades a wired repo), so assert the negatives directly.
