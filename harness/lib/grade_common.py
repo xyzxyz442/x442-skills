@@ -263,6 +263,41 @@ def isolated_git_target(target: Path) -> tuple[Path, "callable"]:
     return dest, (lambda: shutil.rmtree(tmp, ignore_errors=True))
 
 
+def eval_kind(workspace_here: Path, eval_id: str | None) -> str | None:
+    """The `kind` an eval declares in its workspace's evals/evals.json, or None.
+
+    `kind` is one of "pre-state" (fails raw by design; needs the skill first), "post-state"
+    (gradeable to 1.00 raw), or "precondition" (a refusal/skip case that passes raw). The label is
+    data, kept only in evals.json — this reads it so a grader never has to duplicate the mapping.
+    Missing file / eval / key all return None rather than raising.
+    """
+    if not eval_id:
+        return None
+    try:
+        evals = json.loads((Path(workspace_here) / "evals" / "evals.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for e in evals.get("evals", []):
+        if e.get("id") == eval_id:
+            return e.get("kind")
+    return None
+
+
+def pre_state_hint(workspace_here: Path, eval_id: str | None) -> None:
+    """Print a one-line stderr note when `eval_id` is a pre-state input.
+
+    Pre-state fixtures are *inputs* an agent must run the skill against; graded raw they score ~0 by
+    design. Emitting this hint keeps that expected 0.0 from reading as a broken grader. No-op for
+    post-state / precondition / unlabeled evals.
+    """
+    if eval_kind(workspace_here, eval_id) == "pre-state":
+        print(
+            f"[grade] '{eval_id}' is a pre-state input — graded raw it is expected to fail; "
+            f"an agent must run the skill first, then re-grade the produced dir.",
+            file=sys.stderr,
+        )
+
+
 def run_grader(grade_fn, argv: list[str]) -> int:
     """Shared CLI for every workspace grade.py.
 
@@ -389,6 +424,24 @@ def _selftest() -> int:
             assert graded2 == standalone.resolve(), "own-root target must not be relocated"
         finally:
             cleanup2()
+
+        # eval_kind reads the `kind` label from a workspace's evals/evals.json; missing
+        # file/eval/key all return None rather than raising.
+        ws = root / "ws"
+        (ws / "evals").mkdir(parents=True)
+        (ws / "evals" / "evals.json").write_text(json.dumps({"evals": [
+            {"id": "fresh", "kind": "pre-state"},
+            {"id": "wired", "kind": "post-state"},
+            {"id": "nolabel"},
+        ]}), encoding="utf-8")
+        assert eval_kind(ws, "fresh") == "pre-state"
+        assert eval_kind(ws, "wired") == "post-state"
+        assert eval_kind(ws, "nolabel") is None, "an unlabeled eval has no kind"
+        assert eval_kind(ws, "absent") is None, "an unknown eval id has no kind"
+        assert eval_kind(ws, None) is None
+        assert eval_kind(root / "no-such-ws", "fresh") is None, "missing evals.json must not raise"
+        pre_state_hint(ws, "fresh")  # smoke: prints to stderr, must not raise
+        pre_state_hint(ws, "wired")  # smoke: no-op
 
     print("grade_common selftest OK")
     return 0

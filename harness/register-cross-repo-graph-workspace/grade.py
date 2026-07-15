@@ -195,6 +195,7 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
 
 
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
+    gc.pre_state_hint(HERE, eval_id)
     if eval_id == "not-configured":
         return grade_not_configured(target)
     if eval_id == "single-sibling":

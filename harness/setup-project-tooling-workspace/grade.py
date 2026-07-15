@@ -43,6 +43,7 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     verify-project-tooling.sh and git_diff_empty resolve the git toplevel; a fixture inside
     x442-skills would otherwise be graded against x442-skills.
     """
+    gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
         print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)

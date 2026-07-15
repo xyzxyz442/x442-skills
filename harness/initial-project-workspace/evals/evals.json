@@ -5,18 +5,21 @@
   "evals": [
     {
       "id": "nest-new",
+      "kind": "pre-state",
       "prompt": "Set up this project's AI assistant config around a shared AGENTS.md so Claude Code and Copilot use one source of truth.",
       "fixture": "fixtures/nest-new",
       "expected_output": "Freshly-scaffolded NestJS app with no AI config. AGENTS.md (CREATE) with a `## Coding guidelines` section citing karpathy-guidelines. CLAUDE.md (CREATE) with exactly one `@AGENTS.md` import. No guidelines duplicated into tool files."
     },
     {
       "id": "nest-existing",
+      "kind": "pre-state",
       "prompt": "Init this NestJS service's AI assistant config around a shared AGENTS.md.",
       "fixture": "fixtures/nest-existing",
       "expected_output": "Existing NestJS service with a CLAUDE.md (service notes) and no AGENTS.md. AGENTS.md (CREATE). Existing CLAUDE.md notes preserved (the `orders-ingest-v2` consumer-group note stays) and exactly one `@AGENTS.md` import added. Guidelines not duplicated into CLAUDE.md."
     },
     {
       "id": "ts-library",
+      "kind": "post-state",
       "prompt": "Set up the AI assistant config for this library.",
       "fixture": "fixtures/ts-library",
       "expected_output": "TypeScript library already fully wired (AGENTS.md + CLAUDE.md/@AGENTS.md + GEMINI.md/@AGENTS.md + .vscode/settings.json). Idempotency: re-running produces an EMPTY diff."

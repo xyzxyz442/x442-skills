@@ -2,22 +2,25 @@
   "skill_name": "x442-repair-graph-hooks",
   "skill_path": "skills/engineering/repair-graph-hooks",
   "verify_script": "skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh",
-  "notes": "repair-graph-hooks is a prose skill that ships no verifier of its own — its success condition is that setup-graph-hooks' verify-graph-hooks.sh goes green again. So this grader wraps THAT verifier. The `healthy` case is directly gradeable (repair is a no-op on a healthy repo). The `broken-*` cases are repair TARGETS: their fixtures are drifted INPUTS, so grading the raw fixture fails by design — an agent must run repair-graph-hooks first, then the produced dir is re-graded. Same pre-state/post-state split as setup-graph-hooks' fresh-wired.",
+  "notes": "repair-graph-hooks is a prose skill that ships no verifier of its own \u2014 its success condition is that setup-graph-hooks' verify-graph-hooks.sh goes green again. So this grader wraps THAT verifier. The `healthy` case is directly gradeable (repair is a no-op on a healthy repo). The `broken-*` cases are repair TARGETS: their fixtures are drifted INPUTS, so grading the raw fixture fails by design \u2014 an agent must run repair-graph-hooks first, then the produced dir is re-graded. Same pre-state/post-state split as setup-graph-hooks' fresh-wired.",
   "evals": [
     {
       "id": "healthy",
+      "kind": "post-state",
       "prompt": "Check the graph hooks in this repo and repair anything that has drifted.",
       "fixture": "fixtures/healthy",
       "expected_output": "A fully wired, healthy repo. repair-graph-hooks must find nothing to fix and change nothing: verify-graph-hooks.sh still reports 0 failed, and the working tree stays clean (idempotent no-op). Directly gradeable without an agent."
     },
     {
       "id": "broken-json",
-      "prompt": "The graph hooks stopped working after a bad merge — the Claude settings look corrupted. Repair them.",
+      "kind": "pre-state",
+      "prompt": "The graph hooks stopped working after a bad merge \u2014 the Claude settings look corrupted. Repair them.",
       "fixture": "fixtures/broken-json",
       "expected_output": "Repair TARGET (agent-required): .claude/settings.local.json is invalid JSON, so verify-graph-hooks.sh FAILS its config-validity check. After repair-graph-hooks rewrites a valid, correctly-wired config, verify reports 0 failed and the config parses as JSON. Grading the raw fixture fails by design."
     },
     {
       "id": "missing-core",
+      "kind": "pre-state",
       "prompt": "Something deleted part of my .graph-hooks wiring and greps are no longer steered. Fix it.",
       "fixture": "fixtures/missing-core",
       "expected_output": "Repair TARGET (agent-required): a core behavior script (.graph-hooks/core/grep-steer.sh) is missing, so verify-graph-hooks.sh FAILS its presence check. After repair-graph-hooks reinstalls the shared cores, verify reports 0 failed and grep-steer.sh is present and executable. Grading the raw fixture fails by design."
