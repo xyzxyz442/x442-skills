@@ -1,0 +1,9 @@
+{
+  "name": "demo-service",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "echo \"no tests\""
+  }
+}

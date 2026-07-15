@@ -1,0 +1,9 @@
+.code-review-graph/
+graphify-out/
+.claude/settings.local.json
+
+# This fixture's corrupt .claude/settings.local.json is SOURCE: it is the drift the repair
+# skill must fix, so it must be committed. Re-include it past the exclusion above (a nested
+# .gitignore beats the repo root). It is invalid JSON on purpose — see .prettierignore, which
+# keeps the pre-commit prettier hook from choking on / rewriting it.
+!.claude/settings.local.json
