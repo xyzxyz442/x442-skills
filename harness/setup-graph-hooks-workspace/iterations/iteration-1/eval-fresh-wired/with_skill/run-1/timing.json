@@ -1,0 +1,6 @@
+{
+  "executor": "deterministic (no LLM)",
+  "llm_calls": 0,
+  "wall_clock_seconds": null,
+  "produced_by": "fresh-wired + setup-graph-hooks.sh --tools claude --primary claude + AGENTS.md routing block (SKILL step 5)"
+}

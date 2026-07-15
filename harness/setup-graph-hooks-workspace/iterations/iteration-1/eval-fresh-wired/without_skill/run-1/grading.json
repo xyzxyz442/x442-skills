@@ -1,0 +1,27 @@
+{
+  "expectations": [
+    {
+      "text": "verify-graph-hooks.sh passes",
+      "passed": false,
+      "evidence": "Summary: 3 passed, 10 warnings, 9 failed (exit 1)"
+    },
+    {
+      "text": "AGENTS.md contains 'graph-hooks'",
+      "passed": false,
+      "evidence": "'graph-hooks' present: False"
+    },
+    {
+      "text": ".graph-hooks/hook.sh exists and is non-empty",
+      "passed": false,
+      "evidence": ".graph-hooks/hook.sh missing"
+    }
+  ],
+  "summary": {
+    "pass_rate": 0.0,
+    "passed": 0,
+    "failed": 3,
+    "skipped": 0,
+    "total": 3
+  },
+  "timing": {}
+}

@@ -1,0 +1,49 @@
+{
+  "metadata": {
+    "skill_name": "x442-setup-project-tooling",
+    "skill_path": "skills/engineering/setup-project-tooling",
+    "executor_model": "deterministic (no LLM)",
+    "timestamp": "2026-07-16T01:00:00Z",
+    "evals_run": ["fresh"],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": "fresh",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0
+      }
+    },
+    {
+      "eval_id": "fresh",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0
+      }
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.0,
+        "stddev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    "delta": {
+      "pass_rate": "+1.00"
+    }
+  }
+}

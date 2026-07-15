@@ -1,0 +1,6 @@
+{
+  "executor": "deterministic (no LLM)",
+  "llm_calls": 0,
+  "wall_clock_seconds": null,
+  "produced_by": "fresh + setup-project-tooling assets (commitlint.config.mjs, .editorconfig, .lintstagedrc.json, .prettierrc, .vscode, executable initialize.sh) + package.json merged with the six devDeps and the husky prepare chain"
+}

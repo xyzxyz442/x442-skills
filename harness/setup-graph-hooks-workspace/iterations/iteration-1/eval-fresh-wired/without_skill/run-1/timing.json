@@ -1,0 +1,6 @@
+{
+  "executor": "deterministic (no LLM)",
+  "llm_calls": 0,
+  "wall_clock_seconds": null,
+  "produced_by": "raw fresh-wired fixture, untouched (no skill applied)"
+}

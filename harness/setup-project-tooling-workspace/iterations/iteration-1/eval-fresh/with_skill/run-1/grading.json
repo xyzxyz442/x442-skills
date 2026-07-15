@@ -1,0 +1,22 @@
+{
+  "expectations": [
+    {
+      "text": "verify-project-tooling.sh passes",
+      "passed": true,
+      "evidence": "Summary: 13 passed, 1 warnings, 0 failed (exit 0)"
+    },
+    {
+      "text": "commitlint.config.mjs exists and is non-empty",
+      "passed": true,
+      "evidence": "commitlint.config.mjs size: 1521 bytes"
+    }
+  ],
+  "summary": {
+    "pass_rate": 1.0,
+    "passed": 2,
+    "failed": 0,
+    "skipped": 0,
+    "total": 2
+  },
+  "timing": {}
+}
