@@ -443,3 +443,34 @@ Recorded so they are not inherited by accident:
 - Per-run `outputs/` trees are committed despite the `.gitignore` rule meant to exclude them.
 - Graders for content-generation skills wrap no verifier and assert on raw content patterns; that
   works, but it puts the pass condition in two places when the skill also ships a checker.
+
+**Which of these this repo inherited:** none but one. The README status lists every on-disk workspace
+(gap 1 avoided); `outputs/`/`iterations/` trees are gitignored and none are tracked (gap 4 avoided);
+all four graders wrap a `verify-*.sh` (gap 5 avoided). The benchmark gap (3) does not apply because
+this repo commits no iterations at all — there is no misleading 100% to inherit. **Still open here:**
+`setup-project-tooling` ships `verify-project-tooling.sh` with no workspace wrapping it (gap 2).
+
+## Open gaps in this repo's harness
+
+Distinct from the inherited list above — these are current to this repo's own harness:
+
+- **`setup-project-tooling-workspace/` is not built.** It is the one skill with a conforming verifier
+  and no eval workspace; its grader can wrap `verify-project-tooling.sh` directly (porting checklist
+  step 5).
+- **No committed iterations.** Every workspace has fixtures, evals, and a grader, but the A/B
+  skill-on-vs-off runs (step 1) that produce `iterations/iteration-N/` need an agent and none are
+  committed — so there is no benchmark yet, only graders proven against their fixtures.
+- **`register-cross-repo-graph`'s `single-sibling` case has environmental dependencies the grader does
+  not annotate.** It **requires `code-review-graph` installed** — without it, `sync` skips the CRG path,
+  the alias never reaches the `AGENTS.md` block, and the case fails — and the graphify merged-graph
+  assertion is **silently skipped** when `graphify` is absent (the `gfy_ok` gate), so a bare machine
+  quietly covers less rather than reporting reduced coverage. Run it where both tools are installed.
+- **The cross-repo grader runs the skill's own installer at grade time.** It is the only grader that
+  invokes `sync-cross-repo-graph.sh` during grading rather than grading a pre-produced tree — a
+  deliberate deviation, because a synced repo's post-state embeds absolute machine paths and cannot
+  ship as a static fixture. Grade-time state is built hermetically (throwaway `$HOME`, seeded
+  registry, sandbox-built graphify graphs); the real `~/.code-review-graph` is untouched.
+- **Pre-state and repair-target fixtures score 0.00 when graded directly.** `setup-graph-hooks/fresh-wired`,
+  `repair-graph-hooks/broken-json`, and `repair-graph-hooks/missing-core` are inputs that need an agent
+  to run the skill first; only the post-state fixtures grade to 1.00 without one. Reading `evals.json`'s
+  `expected_output` disambiguates which is which.
