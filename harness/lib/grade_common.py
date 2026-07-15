@@ -31,6 +31,18 @@ def expectation(text: str, passed: bool, evidence: str) -> Expectation:
     return {"text": text, "passed": bool(passed), "evidence": str(evidence)}
 
 
+def skipped(text: str, reason: str) -> Expectation:
+    """An expectation that did NOT run — e.g. an optional tool is absent on this machine.
+
+    A skip counts toward neither `passed` nor `failed`: `pass_rate` is computed over the
+    *graded* checks (total minus skips) and `run_grader` never fails a run for a skip. But it is
+    still recorded in the expectations list and tallied in `summary.skipped`, so a run that covers
+    less than usual is never silent. Carries a fourth `"skipped": True` key; the plain three-key
+    `expectation()` is unaffected.
+    """
+    return {"text": text, "passed": False, "evidence": str(reason), "skipped": True}
+
+
 def file_exists(root: Path, rel: str) -> Expectation:
     """Pass if `root/rel` exists and is a non-empty file."""
     p = Path(root) / rel
@@ -140,18 +152,33 @@ def run_verify_script(script: Path, target: Path, *, env: dict | None = None) ->
     return expectation(f"{name} passes", passed, evidence)
 
 
+def _rollup(expectations: list[Expectation]) -> dict:
+    """Tally a list of expectations into the `summary` block.
+
+    Skips (`e["skipped"]`) count toward neither passed nor failed: `pass_rate` and `failed` are
+    computed over the *graded* checks (total minus skips). A list with no skips yields exactly the
+    old summary (`skipped == 0`, `graded == total`), so existing grading.json and exit codes are
+    unchanged. This is the single source of the summary math — both write_grading() and summarize()
+    call it, so the two can never drift.
+    """
+    passed = sum(1 for e in expectations if e["passed"])
+    skips = sum(1 for e in expectations if e.get("skipped"))
+    total = len(expectations)
+    graded = total - skips
+    return {
+        "pass_rate": (passed / graded) if graded else 0.0,
+        "passed": passed,
+        "failed": graded - passed,
+        "skipped": skips,
+        "total": total,
+    }
+
+
 def write_grading(out_path: Path, expectations: list[Expectation], timing: dict | None = None) -> dict:
     """Roll a list of expectations into a grading.json and write it."""
-    passed = sum(1 for e in expectations if e["passed"])
-    total = len(expectations)
     grading = {
         "expectations": expectations,
-        "summary": {
-            "pass_rate": (passed / total) if total else 0.0,
-            "passed": passed,
-            "failed": total - passed,
-            "total": total,
-        },
+        "summary": _rollup(expectations),
         "timing": timing or {},
     }
     out = Path(out_path)
@@ -165,16 +192,9 @@ def summarize(expectations: list[Expectation]) -> dict:
 
     Lets grade.py print a grading to stdout when no --out is given.
     """
-    passed = sum(1 for e in expectations if e["passed"])
-    total = len(expectations)
     return {
         "expectations": expectations,
-        "summary": {
-            "pass_rate": (passed / total) if total else 0.0,
-            "passed": passed,
-            "failed": total - passed,
-            "total": total,
-        },
+        "summary": _rollup(expectations),
         "timing": {},
     }
 
@@ -275,6 +295,18 @@ def _selftest() -> int:
     assert e == json.loads(json.dumps(e)), "triple must JSON round-trip"
     assert _SUMMARY_RE.search("Summary: 8 passed, 1 warnings, 0 failed").group(3) == "0"
 
+    # A skip is a fourth kind of expectation: recorded, JSON-safe, and counted toward neither
+    # passed nor failed. pass_rate is computed over the graded checks (total minus skips).
+    s = skipped("optional tool absent", "graphify not installed")
+    assert s["skipped"] is True and s["passed"] is False, s
+    assert s == json.loads(json.dumps(s)), "skip must JSON round-trip"
+    roll = _rollup([expectation("a", True, "ok"), skipped("b", "n/a"), expectation("c", False, "no")])
+    assert roll == {"pass_rate": 0.5, "passed": 1, "failed": 1, "skipped": 1, "total": 3}, roll
+    allskip = _rollup([skipped("x", "n/a")])
+    assert allskip == {"pass_rate": 0.0, "passed": 0, "failed": 0, "skipped": 1, "total": 1}, allskip
+    # run_grader-style exit gate: a run of passes + skips (no fails) exits 0.
+    assert summarize([expectation("a", True, "ok"), skipped("b", "n/a")])["summary"]["failed"] == 0
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "AGENTS.md").write_text("# AGENTS\n@guidelines\n", encoding="utf-8")
@@ -322,7 +354,8 @@ def _selftest() -> int:
         grading = write_grading(root / "grading.json", [
             expectation("a", True, "ok"), expectation("b", False, "nope"),
         ])
-        assert grading["summary"] == {"pass_rate": 0.5, "passed": 1, "failed": 1, "total": 2}
+        assert grading["summary"] == {
+            "pass_rate": 0.5, "passed": 1, "failed": 1, "skipped": 0, "total": 2}
         assert (root / "grading.json").is_file()
         assert summarize([])["summary"]["pass_rate"] == 0.0, "empty must not divide by zero"
 
