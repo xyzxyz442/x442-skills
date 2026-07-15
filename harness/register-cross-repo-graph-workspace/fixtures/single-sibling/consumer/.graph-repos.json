@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "alias": "acme-api-sib",
+      "path": "../sibling",
+      "tools": ["crg", "graphify"],
+      "notes": "billing handlers (calculateInvoiceTotal)"
+    }
+  ]
+}

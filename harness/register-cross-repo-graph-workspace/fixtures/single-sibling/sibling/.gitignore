@@ -1,0 +1,9 @@
+.code-review-graph/
+graphify-out/
+node_modules/
+
+# This fixture's graph.db is SOURCE: the grader registers it as a real sibling graph and
+# queries it to prove cross-repo steering works. It must be committed, so re-include it (a
+# nested .gitignore beats the repo root's exclusion). If you regenerate this fixture, keep
+# this negation.
+!.code-review-graph/

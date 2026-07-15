@@ -1,0 +1,20 @@
+{
+  "skill_name": "x442-register-cross-repo-graph",
+  "skill_path": "skills/engineering/register-cross-repo-graph",
+  "verify_script": "skills/engineering/register-cross-repo-graph/scripts/verify-cross-repo-graph.sh",
+  "notes": "Unlike setup-graph-hooks, a synced cross-repo repo cannot ship as a static fixture: its post-state embeds absolute, machine-specific paths (CRG's registry, the AGENTS.md block, the merged graph). So fixtures ship only PORTABLE inputs, and the grader builds the machine-specific state hermetically — an isolated temp copy under a throwaway $HOME with a seeded registry — then runs the skill's own deterministic, LLM-free scripts (sync-cross-repo-graph.sh) and verifies. Nothing touches the real ~/.code-review-graph.",
+  "evals": [
+    {
+      "id": "not-configured",
+      "prompt": "Verify the cross-repo graph scope for this repo.",
+      "fixture": "fixtures/not-configured",
+      "expected_output": "A repo with graph hooks wired but NO .graph-repos.json anywhere in its cascade. Cross-repo access is simply not opted into, which is not a failure: verify-cross-repo-graph.sh reports a [skip] and exits 0 (not a [FAIL]/exit 1). Regression guard for the unconfigured-repo exit code."
+    },
+    {
+      "id": "single-sibling",
+      "prompt": "Give this frontend repo read-only access to the acme-api sibling's graph so I can look up backend symbols instead of grepping across.",
+      "fixture": "fixtures/single-sibling",
+      "expected_output": "A consumer repo declares one sibling (acme-api-sib -> ../sibling, crg + graphify) in a committed .graph-repos.json; the sibling ships a prebuilt code-review-graph graph.db describing calculateInvoiceTotal (src/billing.ts). The grader builds each repo's graphify graph in the sandbox (AST-only, no LLM) before syncing. After sync: the sibling is registered (in the sandboxed registry), the <!-- cross-repo --> block in the consumer's AGENTS.md names exactly acme-api-sib, a cross-repo-state.json ledger records what this repo registered, graphify's per-project merged-graph.json is produced (a disjoint union of the two repos), and — the behavioral proof — grep-steer answers a grep into the sibling from its graph, tagged with the alias, instead of leaving it to grep. verify-cross-repo-graph.sh reports 0 failed. The grader performs the sync itself (portable inputs + hermetic sandbox), so this case needs no agent."
+    }
+  ]
+}
