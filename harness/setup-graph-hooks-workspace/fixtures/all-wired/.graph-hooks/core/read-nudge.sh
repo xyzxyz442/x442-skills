@@ -15,24 +15,30 @@ sys.stdout.write('1' if 'graphify-out/' not in s and '.code-review-graph/' not i
 [ "$HIT" = 1 ] || exit 0
 
 # Reading INTO an in-scope sibling? Then the single-repo tools below cannot answer — name the one
-# that can. Silence from cross-repo-scope.sh means this repo has no sibling scope.
+# that can. Silence from cross-repo-scope.sh means this repo has no sibling scope. Scope lines are
+# alias<TAB>path<TAB>stale; the match prints alias<TAB>stale so we can flag an out-of-date sibling.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SCOPE="$(bash "$HERE/cross-repo-scope.sh" 2> /dev/null || true)"
 XREPO=""
+XREPO_STALE=0
 if [ -n "$SCOPE" ]; then
-  XREPO="$(printf '%s' "$TARGET" | SCOPE="$SCOPE" python3 -c "import os,sys
+  MATCH="$(printf '%s' "$TARGET" | SCOPE="$SCOPE" python3 -c "import os,sys
 scope=[l.split(chr(9)) for l in os.environ.get('SCOPE','').splitlines() if chr(9) in l]
 for tok in sys.stdin.read().split():
     p=os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(tok)))
-    for alias, path in scope:
+    for alias, path, *rest in scope:
         root=os.path.realpath(path)
         if p==root or p.startswith(root+os.sep):
-            print(alias); sys.exit(0)" 2> /dev/null || true)"
+            print(alias + chr(9) + (rest[0] if rest else '0')); sys.exit(0)" 2> /dev/null || true)"
+  XREPO="$(printf '%s' "$MATCH" | cut -f1)"
+  XREPO_STALE="$(printf '%s' "$MATCH" | cut -f2)"
+  [ -z "$XREPO_STALE" ] && XREPO_STALE=0
 fi
 
 HINT=""
 if [ -n "$XREPO" ]; then
   HINT="cross_repo_search_tool (the '$XREPO' repo's own graph — this repo's tools do not span it)"
+  [ "$XREPO_STALE" = 1 ] && HINT="$HINT; NOTE: that graph predates its latest commit — refresh it in that repo (code-review-graph update) before trusting the result"
 else
   [ -f .code-review-graph/graph.db ] && HINT="semantic_search_nodes_tool / query_graph_tool / get_impact_radius_tool"
   [ -f graphify-out/graph.json ] && HINT="${HINT:+$HINT or }graphify query/explain/path --graph graphify-out/graph.json"

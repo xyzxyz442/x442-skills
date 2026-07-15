@@ -83,9 +83,32 @@ try:
         rows = c.execute(
             "SELECT kind,name,file_path,line_start FROM nodes WHERE name LIKE ? LIMIT 5",
             (f"%{pat}%",)).fetchall()
+    # Usage edges: a pre-answer that REPLACES a grep must be as complete as the grep it replaces.
+    # A name match alone lists the definition; a rename also needs the call sites, and the graph
+    # holds them (CALLS / IMPORTS_FROM). Without this a cross-repo deny says "no grep needed" while
+    # silently dropping every caller.
+    # target_qualified is stored path-qualified ("<file>::<symbol>"), NOT the bare name, so an
+    # equality match on the pattern never hits — suffix-anchor on "::<symbol>" (precise: '::total'
+    # will not match 'subtotal'), with a broad substring fallback for nested/qualified names.
+    callers = []
+    try:
+        callers = c.execute(
+            "SELECT kind,source_qualified,file_path,line FROM edges "
+            "WHERE kind IN ('CALLS','IMPORTS_FROM') "
+            "AND (target_qualified = ? OR target_qualified LIKE ?) LIMIT 10",
+            (pat, f"%::{pat}")).fetchall()
+        if not callers:
+            callers = c.execute(
+                "SELECT kind,source_qualified,file_path,line FROM edges "
+                "WHERE kind IN ('CALLS','IMPORTS_FROM') AND target_qualified LIKE ? LIMIT 10",
+                (f"%{pat}%",)).fetchall()
+    except Exception:
+        callers = []
     c.close()
     for kind, name, path, line in rows:
         print(f"[crg] {kind}  {name}  -> {path}:{line}")
+    for kind, src, path, line in callers:
+        print(f"[crg] CALLER  {src} ({kind})  -> {path}:{line}")
 except Exception:
     pass
 PY
@@ -126,7 +149,7 @@ for tok in parts:
     if tok.startswith("-"):
         continue
     p = os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(tok)))
-    for alias, path in scope:
+    for alias, path, *_ in scope:  # scope lines are alias<TAB>path<TAB>stale; stale unused here
         root = os.path.realpath(path)
         if p == root or p.startswith(root + os.sep):
             print(alias)
@@ -145,13 +168,16 @@ RESULT_LOCAL="$(printf '%s' "$RESULT_LOCAL" | sed '/^[[:space:]]*$/d')"
 # can see which repo answered — and that the alias is one the AGENTS.md fence allows.
 RESULT_SIB=""
 XREPO_ALIAS=""
+XREPO_STALE=0
 if [ -n "$SCOPE" ]; then
   XREPO_ALIAS="$(target_alias "$SCOPE" "$CMD")"
-  while IFS="$(printf '\t')" read -r alias spath; do
+  while IFS="$(printf '\t')" read -r alias spath stale; do
     [ -n "$alias" ] || continue
     hits="$(query_crg "$spath/.code-review-graph/graph.db" "$PATTERN" | sed "s|^\[crg\]|[$alias]|")"
     [ -n "$hits" ] && RESULT_SIB="$RESULT_SIB$hits
 "
+    # Freshness of the sibling the command actually points into — decides deny vs advise below.
+    [ "$alias" = "$XREPO_ALIAS" ] && XREPO_STALE="${stale:-0}"
   done << EOF
 $SCOPE
 EOF
@@ -163,8 +189,22 @@ RESULT="$(printf '%s\n%s' "$RESULT_LOCAL" "$RESULT_SIB" | sed '/^[[:space:]]*$/d
 # Deny only on an answer the agent was actually reaching for: a local hit, or a sibling hit when the
 # command points into that sibling. A broad local grep that merely matches a sibling symbol gets the
 # hits as advice — the agent may want the local call sites, and denying that would be wrong.
-DENYABLE="$RESULT_LOCAL"
-[ -n "$XREPO_ALIAS" ] && DENYABLE="$RESULT_SIB"
+# When the command points INTO a sibling, only THAT sibling's answer is denyable — never the local
+# graph's (the local hits are call sites the agent was not grepping for). And a stale sibling
+# (graph.db older than its HEAD) must INFORM, never block: its graph can assert a symbol still exists
+# after a rename deleted it, so a deny there points at a falsehood and hides the grep that would
+# reveal it — leave DENYABLE empty so control falls to the advise branch.
+if [ -n "$XREPO_ALIAS" ]; then
+  if [ "$XREPO_STALE" = 0 ]; then DENYABLE="$RESULT_SIB"; else DENYABLE=""; fi
+else
+  DENYABLE="$RESULT_LOCAL"
+fi
+
+STALE_NOTE=""
+if [ -n "$XREPO_ALIAS" ] && [ "$XREPO_STALE" = 1 ]; then
+  STALE_NOTE="WARNING: the '$XREPO_ALIAS' graph predates its latest commit — it may be missing or misreporting recent changes (e.g. a renamed symbol). Refresh in that repo first: code-review-graph update. Not blocking this grep — a stale graph must inform, never block.
+"
+fi
 
 HINT=""
 if [ -n "$XREPO_ALIAS" ] || [ -n "$RESULT_SIB" ]; then
@@ -197,7 +237,7 @@ PY
 if [ ! -f "$SLOT" ]; then
   touch "$SLOT" 2> /dev/null || true
   if [ -n "$RESULT" ]; then
-    emit_neutral context "Knowledge graph pre-answer for '$PATTERN':
+    emit_neutral context "${STALE_NOTE}Knowledge graph pre-answer for '$PATTERN':
 $RESULT
 
 If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbol greps get denied when the graph can answer. Bypass anytime: append --graph-tried."
@@ -208,20 +248,45 @@ If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbo
 fi
 
 if [ -n "$DENYABLE" ]; then
-  emit_neutral deny "The knowledge graph already has this — no grep/retry needed:
+  # C2 honesty gate — CROSS-REPO answers only: across the boundary the sole exposed tool
+  # (cross_repo_search) is name-based, so a definition-only pre-answer is NOT a usage list and must
+  # not claim the question is settled. Deny only when the answer carries call sites (" CALLER "
+  # lines). Local greps keep denying regardless: the agent has the full local graph (query_graph_tool
+  # callers_of) on hand, so a local definition hit is a legitimate stop.
+  if [ -n "$XREPO_ALIAS" ]; then
+    case "$DENYABLE" in
+      *" CALLER  "*)
+        emit_neutral deny "The '$XREPO_ALIAS' graph already has this — definition and its call sites below, no grep/retry needed:
 
 $DENYABLE
 
 Use: $HINT. Append --graph-tried to override."
+        ;;
+      *)
+        emit_neutral context "The '$XREPO_ALIAS' graph has a definition match for '$PATTERN' but no indexed call sites — this is not a full usage list, so the grep is not redundant:
+
+$DENYABLE
+
+Use: $HINT to widen, or append --graph-tried to grep anyway."
+        ;;
+    esac
+  else
+    emit_neutral deny "The knowledge graph already has this — no grep/retry needed:
+
+$DENYABLE
+
+Use: $HINT. Append --graph-tried to override."
+  fi
   exit 0
 fi
 
-# A sibling answered, but the command was not aimed at that sibling — advise, never block.
+# A sibling answered but was not denyable: either the command was not aimed at it (broad local grep),
+# or it was aimed at a STALE sibling (STALE_NOTE set) — advise, never block.
 if [ -n "$RESULT_SIB" ]; then
-  emit_neutral context "An in-scope sibling repo's graph also has '$PATTERN':
+  emit_neutral context "${STALE_NOTE}An in-scope sibling repo's graph has '$PATTERN':
 
 $RESULT_SIB
 
-Use: $HINT — no need to grep across the folder boundary."
+Use: $HINT."
 fi
 exit 0
