@@ -180,8 +180,14 @@ cross_repo_search_tool(query="…")    # MCP;  list_repos_tool() shows the full 
 
 # graphify — the per-project merged graph
 graphify query "<term>"    --graph graphify-out/merged-graph.json
-graphify path  "<A>" "<B>" --graph graphify-out/merged-graph.json
+graphify path  "<A>" "<B>" --graph graphify-out/merged-graph.json    # within ONE repo's subgraph only
 ```
+
+> **The merged graph is a disjoint union, not a bridge.** `merge-graphs` concatenates each repo's
+> nodes and edges; it adds **no** edges between them. So `graphify path` finds a route only when both
+> endpoints live in the same repo — a path query spanning two repos returns nothing, because there is
+> no edge to cross. Use the merged graph for search/lookup across repos, not for tracing a call chain
+> from one into another. See "Tracing a change into another repo" under Caveats.
 
 ## Scenario: a cross-repo lookup, end to end
 
@@ -314,9 +320,15 @@ project's.
 - **The merged graph is refreshed by nothing.** `graphify-out/graph.json` has a post-commit hook;
   `merged-graph.json` does not, so it goes stale on this repo's next commit. The verifier warns;
   `--merge-only` rebuilds it (AST-only, no LLM cost).
-- **Read-only covers search/lookup only.** `cross_repo_search_tool` spans repos; blast-radius tools
-  (`get_impact_radius`, `get_affected_flows`) stay single-repo. Tracing a change _into_ another repo
-  needs one merged graph, not two read separately.
+- **Read-only covers search/lookup only — there is no cross-repo blast radius.** `cross_repo_search_tool`
+  spans repos; blast-radius tools (`get_impact_radius`, `get_affected_flows`) stay single-repo. The
+  graphify merged graph does **not** close this: it is a disjoint union of the per-repo subgraphs —
+  `merge-graphs` concatenates their nodes and edges but adds **zero** edges between them (measured on a
+  two-repo lab) — so `graphify path` cannot cross the boundary either. **Tracing a change into another
+  repo** is therefore a manual step:
+  find the symbol in the sibling with `cross_repo_search_tool`, then run that sibling's own
+  `get_impact_radius` / `graphify path` _inside_ it. One graph per repo, walked in sequence — not one
+  graph spanning both.
 - **Read-mostly, not zero-write.** CRG opens the foreign `graph.db` in SQLite WAL mode, which may
   create `-wal`/`-shm` side files next to it — dirtying that repo's `git status` if it does not
   gitignore `.code-review-graph/`. The verifier warns. A read-only or network-mounted sibling is
