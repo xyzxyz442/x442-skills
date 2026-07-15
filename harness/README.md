@@ -17,11 +17,13 @@ repeatable.
 harness/
 ├── README.md                       # this file
 ├── lib/                            # shared, skill-agnostic helpers
-│   ├── grade_common.py             # reusable assertions + run_verify_script() wrapper
+│   ├── grade_common.py             # reusable assertions + run_verify_script() + isolation helper
 │   ├── aggregate.py                # grading.json -> benchmark.json + benchmark.md
 │   └── reorg.py                    # normalize raw run outputs into eval-<id>/<config>/run-N/
 ├── initial-project-workspace/      # one workspace per skill under test
-└── setup-graph-hooks-workspace/
+├── setup-graph-hooks-workspace/
+├── register-cross-repo-graph-workspace/
+└── repair-graph-hooks-workspace/
 ```
 
 Each `<skill>-workspace/` holds `evals/evals.json`, `fixtures/`, `grade.py`, and
@@ -56,6 +58,10 @@ so they are always safe to rerun by hand or in CI.
    skill loaded (`with_skill`) or not (`without_skill`). Capture produced files into
    `run-N/outputs/` and metrics into `run-N/timing.json`.
 2. `python3 <skill>-workspace/grade.py <produced-dir> <eval-id> --out <run-N>/grading.json`
+   — the graders self-isolate (`grade_common.isolated_git_target`): if you point one at a
+   fixture nested inside this repo, it copies it to its own temp git root first, so the bundled
+   `verify-*.sh` and the git-clean check grade the fixture, not x442-skills. You can grade a
+   post-state fixture in place without staging it out yourself.
 3. `python3 lib/aggregate.py <iteration-dir>` → `benchmark.json` + `benchmark.md`
 4. Write `analyst_notes.md` — what the deltas mean and what to change in the skill.
 
@@ -84,15 +90,25 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   **behavioral** fixture carrying a real, hand-built `graph.db` + `graphify-out/graph.json`,
   so the grader can fire the wired dispatcher and prove it actually steers grep and reads
   toward the graph rather than merely being installed. Grader wraps `verify-graph-hooks.sh`.
+- **`register-cross-repo-graph-workspace/`** — fixtures `not-configured` (a wired repo with no
+  `.graph-repos.json`: the verifier must `[skip]` and exit 0, not FAIL) and `single-sibling` (a
+  consumer + a sibling carrying a prebuilt `graph.db`). A synced repo cannot ship as a static
+  fixture — its post-state embeds absolute registry/block/merged-graph paths — so the fixtures
+  ship only portable inputs and the grader manufactures the machine-specific state **hermetically**:
+  an isolated copy under a throwaway `$HOME` with a seeded registry, then it runs the skill's own
+  LLM-free `sync-cross-repo-graph.sh` (building each repo's graphify graph in the sandbox) and
+  verifies. The real `~/.code-review-graph` is never touched. Grader wraps `verify-cross-repo-graph.sh`.
+- **`repair-graph-hooks-workspace/`** — `repair-graph-hooks` ships no verifier of its own; its
+  success condition is that `setup-graph-hooks`' `verify-graph-hooks.sh` goes green again, so the
+  grader wraps that. Fixtures: `healthy` (repair is a no-op → directly gradeable), `broken-json`
+  and `missing-core` (repair TARGETS — drifted inputs that fail the verifier by design until an
+  agent runs the skill, then re-graded to 0 failed).
 - **No iterations committed yet** — every workspace above has fixtures, evals, and a grader,
-  and each grader has been exercised against its fixtures (wired fixtures score 1.00; the
-  unwired pre-state scores 0.00, so the graders discriminate). What has **not** run is step 1:
-  the A/B skill executions that produce `iterations/iteration-N/`.
-- **Not yet wired:** `setup-project-tooling` and `register-cross-repo-graph` each ship a
-  read-only `verify-*.sh` that `run_verify_script()` can wrap directly, so they are the
-  cheapest workspaces to add next. `repair-graph-hooks` ships no verifier of its own (it
-  reuses `verify-graph-hooks.sh`), so it needs a grader built on direct assertions — defer it
-  until the others are green.
+  and each grader has been exercised against its fixtures (wired/healthy fixtures score 1.00; the
+  unwired pre-state and the drifted repair targets score 0.00, so the graders discriminate). What
+  has **not** run is step 1: the A/B skill executions that produce `iterations/iteration-N/`.
+- **Not yet wired:** `setup-project-tooling` — it ships a read-only `verify-project-tooling.sh`
+  that `run_verify_script()` can wrap directly, so it is the cheapest workspace to add next.
 
 ## Fixtures are inputs, not source
 

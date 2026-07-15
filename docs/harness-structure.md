@@ -7,14 +7,15 @@ read-only `verify-*.sh` checkers each skill already ships.
 
 This document is the **contract**; [harness/](../harness/README.md) is the implementation.
 
-- Steps 1-4 and 6 of the [porting checklist](#porting-checklist) are **done**: `harness/lib/`
+- Steps 1-4, 6, and 7 of the [porting checklist](#porting-checklist) are **done**: `harness/lib/`
   (three self-tested modules), the `.gitignore` entries, `initial-project-workspace/`,
-  `setup-graph-hooks-workspace/`, and `harness/README.md`. Every grader has been exercised
-  against its fixtures — wired fixtures score 1.00, the unwired pre-state scores 0.00 — but no
-  iteration has been run, because that is the one step needing an agent.
-- Still open: `setup-project-tooling-workspace/` (step 5) and
-  `register-cross-repo-graph-workspace/` (step 7). Both skills already ship a conforming
-  verifier, so both graders can wrap one directly.
+  `setup-graph-hooks-workspace/`, `register-cross-repo-graph-workspace/`,
+  `repair-graph-hooks-workspace/`, and `harness/README.md`. Every grader has been exercised
+  against its fixtures — wired/healthy fixtures score 1.00, the unwired pre-state and the drifted
+  repair targets score 0.00 — but no iteration has been run, because that is the one step needing
+  an agent.
+- Still open: `setup-project-tooling-workspace/` (step 5). The skill already ships a conforming
+  verifier, so its grader can wrap one directly.
 - All four shipped verifiers
   ([verify-initial-project.sh](../skills/engineering/initial-project/scripts/verify-initial-project.sh),
   [verify-project-tooling.sh](../skills/engineering/setup-project-tooling/scripts/verify-project-tooling.sh),
@@ -403,19 +404,31 @@ Each step is independently verifiable; do them in order.
 4. Then **`setup-graph-hooks-workspace/`** — the richest branch set, and the only one that needs a
    behavioral fixture (a repo with a built graph) plus a precondition fixture (a repo with no
    `AGENTS.md`, where the skill must stop and defer to `initial-project`).
-5. Then **`setup-project-tooling-workspace/`**. It already ships `verify-project-tooling.sh` and the
-   reference repo never gave it a workspace — this is the gap this repo can close first.
+5. Then **`setup-project-tooling-workspace/`** — **still open**. It already ships
+   `verify-project-tooling.sh` and the reference repo never gave it a workspace, so this is the
+   remaining gap to close.
 6. Write `harness/README.md` last, pointing back at this document rather than restating it.
 
-7. Then **`register-cross-repo-graph-workspace/`**. It ships `verify-cross-repo-graph.sh`, so its
+7. **Done — `register-cross-repo-graph-workspace/`.** It ships `verify-cross-repo-graph.sh`, so its
    grader wraps a verifier like the others — but it is the only workspace needing a **two-repo**
    fixture (a consumer plus a sibling with a prebuilt graph) and a redirected `HOME`, because the
-   skill hydrates machine-global registry state. Cases worth covering: project-layer-fresh,
-   cascade-override (user layer shadowed by project), tombstone-removal, dead-path (a manifest entry
-   whose repo is gone — must FAIL), and idempotency.
+   skill hydrates machine-global registry state. A synced repo cannot ship as a static fixture (its
+   post-state embeds absolute registry/block/merged-graph paths), so the fixtures ship only portable
+   inputs and the grader manufactures the machine-specific state **hermetically**: an isolated copy
+   under a throwaway `$HOME` with a **seeded registry** (so `sync` takes the already-registered path
+   and never shells out to the real CRG binary), each repo's graphify graph **built in the sandbox**
+   (AST-only, no LLM), then `sync` → `verify`. Shipped cases: `not-configured` (no manifest → the
+   verifier `[skip]`s and exits 0, guarding the unconfigured-exit fix) and `single-sibling`
+   (register + AGENTS.md block + merged graph + end-to-end grep-steer into the sibling). Further
+   cases worth adding: cascade-override (user layer shadowed by project), tombstone-removal, and
+   dead-path (a manifest entry whose repo is gone — must FAIL).
 
-`repair-graph-hooks` ships no verifier of its own (it reuses `verify-graph-hooks.sh`), so it needs a
-grader built on direct assertions instead of a verifier wrap — defer it until the others are green.
+8. **Done — `repair-graph-hooks-workspace/`.** `repair-graph-hooks` ships no verifier of its own; its
+   success condition is that `setup-graph-hooks`' `verify-graph-hooks.sh` goes green again, so the
+   grader wraps that plus one targeted assertion per case. Fixtures: `healthy` (repair is a no-op →
+   directly gradeable to 1.00) and the repair TARGETS `broken-json` (corrupt Claude config) and
+   `missing-core` (a deleted core script) — drifted inputs that fail the verifier by design until an
+   agent runs the skill, then re-graded to 0 failed.
 
 ## Known gaps in the reference implementation
 
