@@ -1,0 +1,22 @@
+{
+  "name": "scaffolded-tooling-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "husky && npm run prepare:commit-msg && npm run prepare:pre-commit",
+    "prepare:commit-msg": "echo 'npx --no -- commitlint --edit \"$1\"' > .husky/commit-msg",
+    "prepare:pre-commit": "echo 'npx --no -- lint-staged' > .husky/pre-commit",
+    "lint-staged": "lint-staged",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@commitlint/types": "^21.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.8.4",
+    "prettier-plugin-sh": "^0.18.1"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "chat.agentFilesLocations": {
+    ".": true
+  },
+  "compareFolders.respectGitIgnore": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.inlineSuggest.enabled": true,
+  "editor.suggestSelection": "first",
+  "editor.tabSize": 2,
+  "files.eol": "\n",
+  "sonarlint.disableTelemetry": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "js/ts.format.semicolons": "insert",
+  "js/ts.updateImportsOnFileMove.enabled": "always",
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+  "js/ts.tsdk.path": "./node_modules/typescript/lib"
+}

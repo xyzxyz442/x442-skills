@@ -1,0 +1,20 @@
+{
+  "skill_name": "x442-setup-project-tooling",
+  "skill_path": "skills/engineering/setup-project-tooling",
+  "verify_script": "skills/engineering/setup-project-tooling/scripts/verify-project-tooling.sh",
+  "notes": "setup-project-tooling ships no scaffolder script, so fixtures are hand-assembled from its assets/. The verifier is Node-rooted for every language (commitlint.config.mjs + a package.json carrying the six devDeps and a husky prepare chain with `commitlint --edit` + a lint-staged config + .editorconfig), with everything else warn-only. Note `.husky/**` is globally gitignored, so the commit-msg check is satisfied via package.json's prepare script rather than a committed hook file. The scaffolded fixture's .lintstagedrc.json is the base (prettier-only) config on purpose: this repo's own pre-commit lint-staged discovers nested configs and would try to run any eslint command in it, but eslint is not a repo dependency (nor a fixture devDep) — keep it prettier-only so committing the fixture never invokes an absent binary.",
+  "evals": [
+    {
+      "id": "scaffolded",
+      "prompt": "Set up commit conventions, staged-file formatting, and a VS Code workspace for this Node/TypeScript project.",
+      "fixture": "fixtures/scaffolded",
+      "expected_output": "Post-state / idempotency case: a fully wired Node/TS project — commitlint.config.mjs, a package.json with the six devDependencies and the husky `prepare` chain (incl. `commitlint --edit`), a .lintstagedrc.json, .editorconfig, .prettierrc/.prettierignore, a .gitignore ignoring .husky, .vscode/{settings,extensions,tasks}.json, and an executable initialize.sh. verify-project-tooling.sh reports 0 failed (the one remaining warning is the optional .release-it.json, which a non-library omits), and re-running the skill produces an EMPTY diff."
+    },
+    {
+      "id": "fresh",
+      "prompt": "Set up project tooling (commitlint, husky, lint-staged, editor config) for this repo.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Pre-state INPUT (agent-required): a bare Node project with no commit/lint tooling — no commitlint.config.mjs, no tooling devDependencies, no .editorconfig. verify-project-tooling.sh FAILS until an agent runs setup-project-tooling to scaffold the tooling; then it reports 0 failed. Grading the raw fixture fails by design."
+    }
+  ]
+}
