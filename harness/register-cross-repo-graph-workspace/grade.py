@@ -107,6 +107,17 @@ def grade_not_configured(fixture: Path) -> list[gc.Expectation]:
 
 def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
     """Consumer declares one sibling; the grader syncs + verifies it in a hermetic sandbox."""
+    # code-review-graph IS the cross-repo mechanism: without it, sync skips the CRG path, the alias
+    # never reaches the AGENTS.md block, and the case fails deep in the verifier with a confusing
+    # "block drift" message. Fail fast and legibly instead — this is a real environment failure, not
+    # an optional-tool skip (graphify, below, is the optional one).
+    if shutil.which("code-review-graph") is None:
+        return [gc.expectation(
+            "code-review-graph installed (required to grade cross-repo)",
+            False,
+            "code-review-graph not on PATH — install it (pipx install code-review-graph) or grade "
+            "on a machine that has it; without it sync cannot register the sibling",
+        )]
     sandbox = Path(tempfile.mkdtemp(prefix="x442-xr-ss-"))
     try:
         work = sandbox / "work"
@@ -161,6 +172,15 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
             # graphify's per-project merged graph: sync must concatenate this repo's graph with the
             # sibling's into a merged-graph.json (a disjoint union — no cross-repo edges, by design).
             exps.append(gc.file_exists(consumer, "graphify-out/merged-graph.json"))
+        else:
+            # graphify is optional to the skill. Record the un-run facet as a skip rather than
+            # dropping it silently, so a graphify-less machine reports reduced coverage instead of a
+            # misleading full-green (summary.skipped: 1).
+            print("[grade] graphify not installed — merged-graph coverage skipped", file=sys.stderr)
+            exps.append(gc.skipped(
+                "graphify merged graph produced",
+                "graphify not installed — merged-graph coverage not exercised on this machine",
+            ))
         # Behavioral proof: the verifier's end-to-end steering check answered a grep into the
         # sibling from its graph, tagged with the alias, instead of leaving it to grep.
         steered = "answered from its graph" in proc.stdout and ALIAS in proc.stdout
