@@ -7,14 +7,14 @@
 
 ## Pass rate (across all runs)
 
-| configuration | mean      | stddev | min  | max  |
-| ------------- | --------- | ------ | ---- | ---- |
-| with_skill    | 1.00      | 0.00   | 1.00 | 1.00 |
-| without_skill | 0.00      | 0.00   | 0.00 | 0.00 |
-| **delta**     | **+1.00** |        |      |      |
+| configuration | mean | stddev | min | max |
+| --- | --- | --- | --- | --- |
+| with_skill | 1.00 | 0.00 | 1.00 | 1.00 |
+| without_skill | 0.00 | 0.00 | 0.00 | 0.00 |
+| **delta** | **+1.00** | | | |
 
 ## Per-eval pass rate (mean)
 
-| eval  | with_skill | without_skill | delta |
-| ----- | ---------- | ------------- | ----- |
-| fresh | 1.00       | 0.00          | +1.00 |
+| eval | with_skill | without_skill | delta |
+| --- | --- | --- | --- |
+| fresh | 1.00 | 0.00 | +1.00 |

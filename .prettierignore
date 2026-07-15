@@ -10,3 +10,9 @@ yarn.lock
 # Byte-critical harness fixture: intentionally invalid JSON that the repair-graph-hooks eval
 # must see verbatim. Keep the pre-commit prettier hook from choking on / rewriting it.
 harness/repair-graph-hooks-workspace/fixtures/broken-json/.claude/settings.local.json
+
+# Generated eval-benchmark artifacts (aggregate.py output). Keep the generator's own formatting so
+# re-running `aggregate.py` reproduces the committed file byte-for-byte instead of churning on
+# prettier vs json.dumps array style.
+harness/**/iterations/**/benchmark.json
+harness/**/iterations/**/benchmark.md

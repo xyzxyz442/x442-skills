@@ -4,7 +4,9 @@
     "skill_path": "skills/engineering/setup-graph-hooks",
     "executor_model": "deterministic (no LLM)",
     "timestamp": "2026-07-16T01:00:00Z",
-    "evals_run": ["fresh-wired"],
+    "evals_run": [
+      "fresh-wired"
+    ],
     "runs_per_configuration": 1
   },
   "runs": [
