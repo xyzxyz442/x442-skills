@@ -12,8 +12,9 @@ This document is the **contract**; [harness/](../harness/README.md) is the imple
   skills: `initial-project-workspace/`, `setup-project-tooling-workspace/`,
   `setup-graph-hooks-workspace/`, `register-cross-repo-graph-workspace/`,
   `repair-graph-hooks-workspace/`. Every grader has been exercised against its fixtures —
-  post-state fixtures score 1.00, the unwired pre-states and drifted repair targets score 0.00 —
-  but no iteration has been run, because that is the one step needing an agent.
+  post-state fixtures score 1.00, the unwired pre-states and drifted repair targets score 0.00.
+  A first **deterministic** benchmark is committed (`setup-graph-hooks` and `setup-project-tooling`
+  iteration-1, `+1.00` delta); a true agent A/B remains the follow-up (see [Iterations](#iterations)).
 - Every grader wraps its target with `isolated_git_target` (a fixture nested inside x442-skills is
   copied to its own git root first, so the bundled `verify-*.sh` grades the fixture, not the outer
   repo). Graders may also emit `skipped` expectations — recorded, counted in `summary.skipped`, and
@@ -467,20 +468,40 @@ with no workspace) is **now closed** — `setup-project-tooling-workspace/` exis
 
 Distinct from the inherited list above — these are current to this repo's own harness:
 
-- **No committed iterations.** Every workspace has fixtures, evals, and a grader, but the A/B
-  skill-on-vs-off runs (step 1) that produce `iterations/iteration-N/` need an agent and none are
-  committed — so there is no benchmark yet, only graders proven against their fixtures.
-- **`register-cross-repo-graph`'s `single-sibling` case depends on the graph tools — now made
-  explicit (closed).** It requires `code-review-graph` (the grader fails fast with a legible
-  precondition when it is absent, instead of a confusing verifier cascade), and the graphify
-  merged-graph facet is recorded as a `skipped()` expectation when `graphify` is absent (visible in
-  `summary.skipped`) rather than silently dropped.
-- **The cross-repo grader runs the skill's own installer at grade time.** It is the only grader that
-  invokes `sync-cross-repo-graph.sh` during grading rather than grading a pre-produced tree — a
-  deliberate deviation, because a synced repo's post-state embeds absolute machine paths and cannot
-  ship as a static fixture. Grade-time state is built hermetically (throwaway `$HOME`, seeded
-  registry, sandbox-built graphify graphs); the real `~/.code-review-graph` is untouched.
-- **Pre-state and repair-target fixtures score 0.00 when graded directly.** `setup-graph-hooks/fresh-wired`,
-  `repair-graph-hooks/broken-json`, and `repair-graph-hooks/missing-core` are inputs that need an agent
-  to run the skill first; only the post-state fixtures grade to 1.00 without one. Reading `evals.json`'s
-  `expected_output` disambiguates which is which.
+- **Committed iterations: a first deterministic benchmark exists; the true agent A/B is the
+  follow-up.** `setup-graph-hooks/iterations/iteration-1` (`fresh-wired`) and
+  `setup-project-tooling/iterations/iteration-1` (`fresh`) are committed: the `with_skill` arm is the
+  skill's own tooling applied to the pre-state fixture, `without_skill` is the untouched fixture, and
+  the benchmark shows a `+1.00` delta. This is **deterministic** (executor `deterministic (no LLM)`),
+  so the delta is _structural_ — it proves the grade → aggregate → benchmark pipeline end-to-end and
+  establishes the template, but does not measure whether the skill helps a _model_. The remaining
+  work is a true **agent A/B** (spawn subagents to perform each eval prompt with vs without the skill
+  in context) for the judgment-heavy skills; it needs LLM runs and the batch-cap confirmation, so it
+  is deferred. See the [Iterations](#iterations) note.
+- **`register-cross-repo-graph`'s `single-sibling` case depends on the graph tools — made explicit
+  (closed).** It requires `code-review-graph` (the grader fails fast with a legible precondition when
+  it is absent, instead of a confusing verifier cascade), and the graphify merged-graph facet is
+  recorded as a `skipped()` expectation when `graphify` is absent (visible in `summary.skipped`)
+  rather than silently dropped.
+- **The cross-repo grader runs the skill's own installer at grade time (by-design).** It is the only
+  grader that invokes `sync-cross-repo-graph.sh` during grading rather than grading a pre-produced
+  tree — which, in the A/B model, simply makes the grader its own `with_skill` produce-step. A synced
+  repo's post-state embeds absolute machine paths and cannot ship as a static fixture, so the state is
+  built hermetically at grade time (throwaway `$HOME`, seeded registry, sandbox-built graphify
+  graphs); the real `~/.code-review-graph` is untouched. Not a defect — the produce-step folded in.
+- **Pre-state fixtures score 0.00 when graded directly — now labeled (by-design).** Each eval in
+  `evals.json` carries a `kind` (`pre-state` | `post-state` | `precondition`); pre-state fixtures
+  (`fresh-wired`, `fresh`, `nest-new`, `nest-existing`, `broken-json`, `missing-core`) are _inputs_
+  an agent must run the skill against, so graded raw they score ~0 by design — they are the
+  `without_skill` baseline. `grade_common.pre_state_hint` prints a one-line note on such a raw grade,
+  so the expected 0.00 never reads as a broken grader.
+
+## Iterations
+
+An iteration is one committed A/B run under `<workspace>/iterations/iteration-N/`. Only the summaries
+travel with the repo — `benchmark.json`, `benchmark.md`, `analyst_notes.md`, and each
+`eval-<id>/{with_skill,without_skill}/run-N/grading.json` + `timing.json`; the produced project trees
+(`run-N/outputs/`) are gitignored. Regenerate a benchmark from the committed grading.json without any
+re-run: `python3 harness/lib/aggregate.py <workspace>/iterations/iteration-1`. `aggregate.py` reads
+only `summary.pass_rate` per run and handles a single run per arm (stddev `0.0`, non-null delta), so
+the deterministic iterations are fully reproducible from what is committed.

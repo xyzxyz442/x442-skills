@@ -117,11 +117,16 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   `isolated_git_target` (a fixture nested in this repo is relocated to its own git root, so the
   bundled `verify-*.sh` grades the fixture, not x442-skills) and may emit `skipped()` expectations —
   counted in `summary.skipped` and excluded from `pass_rate` — so a run that covers less (an
-  optional graph tool absent) is never silently green.
-- **No iterations committed yet** — every workspace above has fixtures, evals, and a grader,
-  and each grader has been exercised against its fixtures (post-state fixtures score 1.00; the
-  unwired pre-states and the drifted repair targets score 0.00, so the graders discriminate). What
-  has **not** run is step 1: the A/B skill executions that produce `iterations/iteration-N/`.
+  optional graph tool absent) is never silently green. Each eval carries a `kind`
+  (`pre-state` | `post-state` | `precondition`); graders print a hint when a pre-state fixture is
+  graded raw, so its expected 0.00 doesn't read as breakage.
+- **First iterations committed (deterministic).** `setup-graph-hooks` and `setup-project-tooling`
+  each have an `iterations/iteration-1/` with a `+1.00` benchmark: `with_skill` is the skill's own
+  tooling applied to the pre-state fixture, `without_skill` is the untouched fixture. Executor is
+  `deterministic (no LLM)`, so the delta is structural — it exercises the grade → aggregate →
+  benchmark pipeline end-to-end and is the template for a true agent A/B (the deferred follow-up that
+  needs LLM runs). Only `benchmark.{json,md}`, `analyst_notes.md`, and per-run
+  `grading.json`/`timing.json` are committed; the produced `outputs/` trees are gitignored.
 
 ## Fixtures are inputs, not source
 
