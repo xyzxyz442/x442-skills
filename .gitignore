@@ -458,6 +458,7 @@ $RECYCLE.BIN/
 .code-review-graph/
 graphify-out/
 .claude/settings.local.json
+.claude/handoff/
 
 # --- eval harness (harness/) ---
 # Raw per-run artifacts are bulky and regenerable; the committed record is evals.json,
