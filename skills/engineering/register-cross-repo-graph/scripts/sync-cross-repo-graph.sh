@@ -220,6 +220,17 @@ print(next((r.get("path","") for r in d["registry"] if r.get("alias")==a), ""))'
         say "code-review-graph register $fpath --alias $alias" "+ $alias registered"
         [ "$DRY" = 0 ] && code-review-graph register "$fpath" --alias "$alias" > /dev/null
       fi
+
+      # A sibling refreshes its own graph.db only if setup-graph-hooks wired a post-commit hook
+      # there. Without it, its graph silently drifts behind its code and our cross-repo reads go
+      # stale — grep-steer now advises-not-denies on a stale sibling, but the block still advertises
+      # an alias that answers from an out-of-date graph. Name the two ways to keep it current now,
+      # rather than let the user discover the drift as a [warn]/[FAIL] in the verifier later.
+      if [ ! -d "$fpath/.graph-hooks" ]; then
+        echo "  [warn] $alias has no .graph-hooks/ — nothing refreshes its graph, so it will drift stale"
+        echo "      keep it fresh: run setup-graph-hooks in $fpath, or add it to CRG's watch daemon:"
+        echo "      code-review-graph daemon add \"$fpath\""
+      fi
       CONFIRMED="${CONFIRMED:+$CONFIRMED,}$alias"
     done <<< "$(q 'import json,sys
 d=json.load(sys.stdin)

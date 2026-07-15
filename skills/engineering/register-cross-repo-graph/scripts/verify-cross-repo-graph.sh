@@ -99,7 +99,17 @@ while IFS=$'\t' read -r alias fpath has_db stale writable ignored; do
   else
     warn "$alias has no graph.db yet — build it: code-review-graph build --repo \"$fpath\""
   fi
-  [ "$stale" = "1" ] && warn "$alias graph may be stale (its HEAD is newer than graph.db) — refresh in that repo: code-review-graph update"
+  if [ "$stale" = "1" ]; then
+    # A stale sibling is a warning in general, but a FAIL when the AGENTS.md block advertises the
+    # alias: agents route to a graph that predates the sibling's HEAD, so a "0 failed" here would
+    # certify hooks that hand out expired cross-repo answers. grep-steer advises-not-denies on a
+    # stale sibling at runtime, but the advertised-yet-stale state is still a real defect to fix.
+    if printf ' %s ' "$BLOCK_ALIASES" | grep -q " $alias "; then
+      bad "$alias is advertised in AGENTS.md but its graph is stale (HEAD newer than graph.db) — agents get expired cross-repo answers; refresh in that repo: code-review-graph update"
+    else
+      warn "$alias graph may be stale (its HEAD is newer than graph.db) — refresh in that repo: code-review-graph update"
+    fi
+  fi
   [ "$writable" = "0" ] && warn "$alias .code-review-graph/ is not writable — SQLite cannot open WAL, so cross_repo_search returns nothing"
   [ "$ignored" = "0" ] && warn "$alias does not gitignore .code-review-graph/ — our reads leave -wal/-shm files in its working tree"
 done <<< "$(q 'import json,sys,os
