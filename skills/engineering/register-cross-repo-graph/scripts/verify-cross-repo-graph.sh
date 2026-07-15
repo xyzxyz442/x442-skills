@@ -52,15 +52,22 @@ if [ -z "$EFF" ]; then
 fi
 NLAYERS="$(q 'import json,sys;print(sum(1 for l in json.load(sys.stdin)["layers"] if l["present"]))')"
 if [ "$NLAYERS" = "0" ]; then
-  bad "no .graph-repos.json in the cascade — run sync-cross-repo-graph.sh for a bootstrap hint"
-else
-  ok "$NLAYERS manifest(s) found and parsed"
-  q 'import json,sys
+  # "Not opted in" is distinct from "broken": a repo with no .graph-repos.json anywhere in its
+  # cascade simply has no cross-repo scope to verify. Reporting that as a [FAIL] (exit 1) made the
+  # verifier unusable as a health probe — absence and breakage were indistinguishable. Report it as
+  # a skip and exit clean; there is nothing to check until a manifest is declared.
+  printf '  [skip] no .graph-repos.json in the cascade — cross-repo access is not configured here\n'
+  printf '         declare siblings in .graph-repos.json, then run sync-cross-repo-graph.sh\n'
+  echo
+  echo "Summary: $P passed, $W warnings, $F failed (not configured — nothing to verify)"
+  exit 0
+fi
+ok "$NLAYERS manifest(s) found and parsed"
+q 'import json,sys
 d=json.load(sys.stdin)
 for l in d["layers"]:
     if l["present"]:
         print("         %-10s %s" % (l["layer"], l["file"]))'
-fi
 while IFS= read -r e; do [ -n "$e" ] && bad "$e"; done <<< "$(q 'import json,sys
 for x in json.load(sys.stdin)["errors"]: print(x)')"
 while IFS= read -r w; do [ -n "$w" ] && warn "$w"; done <<< "$(q 'import json,sys
