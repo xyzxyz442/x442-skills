@@ -9,11 +9,11 @@ work — what fires, when, and how to get out of the way when you need to.
 The graph layer is installed and maintained by a small family of skills; this doc is the
 **runtime view** of what they wire up:
 
-| Skill                                                                                                    | Role                                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`setup-graph-hooks`](../skills/engineering/setup-graph-hooks/SKILL.md)                                  | Wire the hooks, routing block, and refresh — first-time setup.                                                                                                 |
-| [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_               | Diagnose and fix a broken/stale/drifted graph layer after a `verify` `[FAIL]` or misbehaving tools.                                                            |
-| [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md) _(experimental)_ | Declare sibling repos in a committed `.graph-repos.json` cascade, then sync: read-only access to their graphs, with the in-scope list recorded in `AGENTS.md`. |
+| Skill                                                                                   | Role                                                                                                                                                           |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`setup-graph-hooks`](../skills/engineering/setup-graph-hooks/SKILL.md)                 | Wire the hooks, routing block, and refresh — first-time setup.                                                                                                 |
+| [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md)               | Diagnose and fix a broken/stale/drifted graph layer after a `verify` `[FAIL]` or misbehaving tools.                                                            |
+| [`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md) | Declare sibling repos in a committed `.graph-repos.json` cascade, then sync: read-only access to their graphs, with the in-scope list recorded in `AGENTS.md`. |
 
 ## The two tools
 
@@ -394,7 +394,7 @@ hooks keep the vectors fresh with the provider recorded in the graph. Turn it ba
 
 If the graph returns empty/stale results, the MCP tools error, a hook never fires, or
 `verify-graph-hooks.sh` reports a `[FAIL]`/`[warn]`, don't hand-patch it —
-run [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_.
+run [`repair-graph-hooks`](../skills/engineering/repair-graph-hooks/SKILL.md).
 It goes further than the read-only verifier: it **smoke-tests that the tools actually run**
 (a present-but-broken `code-review-graph` binary fails every downstream fix silently), then adds
 graph-state probes the verifier lacks — staleness vs `HEAD`, DB integrity / zero-node, partial or
@@ -414,8 +414,7 @@ Common cases it fixes:
 Each repo owns and refreshes **its own** graph (single-writer), so nothing is shared across
 folders until you declare it. To let a session in one repo _read_ another repo's graph — instead of
 grepping across the folder boundary — use
-[`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md)
-_(experimental)_.
+[`register-cross-repo-graph`](../skills/engineering/register-cross-repo-graph/SKILL.md).
 
 You do not register repos by hand. **Scope is declared in a `.graph-repos.json` manifest** that
 cascades exactly like `AGENTS.md` — user (`~/.code-review-graph/graph-repos.json`) → repo root →

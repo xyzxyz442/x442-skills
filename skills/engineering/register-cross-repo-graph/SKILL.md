@@ -1,7 +1,7 @@
 ---
 name: x442-register-cross-repo-graph
 description: >-
-  (Experimental) Use when a project needs read-only access to another repo's code graph — e.g. a
+  Use when a project needs read-only access to another repo's code graph — e.g. a
   frontend session resolving a backend symbol, or any "reference another project's source" /
   cross-repo / monorepo-sibling lookup — so agents query the sibling graph instead of grepping
   across folders and burning tokens. Declare the sibling repos in a per-project `.graph-repos.json`
@@ -12,7 +12,7 @@ description: >-
 
 # register-cross-repo-graph
 
-> **Status: experimental.** This skill writes a committed manifest (`.graph-repos.json`), adds
+> **Status: stable.** This skill writes a committed manifest (`.graph-repos.json`), adds
 > entries to machine-local registry state, and edits `AGENTS.md`. Preview with `--dry-run` first.
 
 Give one project **read-only** access to other projects' knowledge graphs, and — the part that

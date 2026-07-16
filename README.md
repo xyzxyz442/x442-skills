@@ -9,9 +9,9 @@ for sharing later.
 > [`initial-project`](skills/engineering/initial-project/SKILL.md),
 > [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_,
 > and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md), plus its two support
-> skills [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md) _(experimental)_
-> and [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md)
-> _(experimental)_. See the [skills catalog](skills/README.md) for the full detail.
+> skills [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md)
+> and [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md).
+> See the [skills catalog](skills/README.md) for the full detail.
 
 ## Philosophy
 
@@ -60,8 +60,8 @@ The design these skills share — and what they wire into the repos they touch:
         ├── initial-project/        # SKILL.md + references/ + scripts/
         ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (experimental)
         ├── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
-        ├── repair-graph-hooks/     # SKILL.md only  (experimental; reuses setup-graph-hooks scripts)
-        └── register-cross-repo-graph/  # SKILL.md + scripts/ + assets/  (experimental)
+        ├── repair-graph-hooks/     # SKILL.md only  (reuses setup-graph-hooks scripts)
+        └── register-cross-repo-graph/  # SKILL.md + scripts/ + assets/
 ```
 
 Skills are grouped by category under `skills/`; the [skills catalog](skills/README.md)
@@ -151,8 +151,8 @@ has the full detail (status, prerequisites, verification harness, conventions):
 | [`initial-project`](skills/engineering/initial-project/SKILL.md)                     | `stable`       | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling` and `setup-graph-hooks`.                           |
 | [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md)         | `experimental` | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it. |
 | [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md)                 | `stable`       | Wires a repo for a self-updating code knowledge graph (code-review-graph + graphify) so agents query the graph instead of grepping.                                |
-| [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md)               | `experimental` | Smoke-tests graph-tool integrity, then re-checks, validates, and repairs the graph-hooks wiring and graph state. Support skill for `setup-graph-hooks`.            |
-| [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md) | `experimental` | Registers/merges another repo's graph for read-only cross-repo access and records it in `AGENTS.md` so agents query it instead of grepping. Support skill.         |
+| [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md)               | `stable`       | Smoke-tests graph-tool integrity, then re-checks, validates, and repairs the graph-hooks wiring and graph state. Support skill for `setup-graph-hooks`.            |
+| [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md) | `stable`       | Registers/merges another repo's graph for read-only cross-repo access and records it in `AGENTS.md` so agents query it instead of grepping. Support skill.         |
 
 This repo dogfoods `setup-graph-hooks` on itself — see [`.claude/`](.claude/) and [`.mcp.json`](.mcp.json).
 

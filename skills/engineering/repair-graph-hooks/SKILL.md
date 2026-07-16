@@ -1,7 +1,7 @@
 ---
 name: x442-repair-graph-hooks
 description: >-
-  (Experimental) Use when the code knowledge graph or its hooks misbehave, drift out of sync, or
+  Use when the code knowledge graph or its hooks misbehave, drift out of sync, or
   after verify-graph-hooks reports a [FAIL]/[warn] — anything about graph tools "not working",
   stale/empty graph results, duplicate graph rebuilds, or a broken code-review-graph/graphify
   install. Smoke-tests tool integrity first, then re-checks, validates, and repairs the
@@ -10,9 +10,8 @@ description: >-
 
 # repair-graph-hooks
 
-> **Status: experimental.** This skill runs real repairs (re-invokes the installer, re-syncs
-> ignore files, clears stale locks) and its graph-state detection is new — review what it reports
-> before approving a heavy rebuild.
+> **Status: stable.** This skill runs real repairs (re-invokes the installer, re-syncs
+> ignore files, clears stale locks) — review what it reports before approving a heavy rebuild.
 
 Re-check → validate → repair the knowledge-graph layer that [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)
 installed. It is the recovery counterpart to that skill's read-only `verify-graph-hooks.sh`: the
