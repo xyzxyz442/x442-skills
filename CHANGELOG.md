@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.3.0](https://github.com/xyzxyz442/x442-skills/compare/v0.2.1...v0.3.0) (2026-07-16)
+
+### 🚀 Features
+
+- **setup:** promote repair-graph-hooks and register-cross-repo-graph to stable ([e3788ec](https://github.com/xyzxyz442/x442-skills/commit/e3788ec851272c2c3fdc8b0d114788a87a17ab10))
+- **test:** add the first deterministic A/B eval iterations ([873bcda](https://github.com/xyzxyz442/x442-skills/commit/873bcda061be78fbf7ad9c1c2a3f0faa68605833))
+- **test:** label evals pre-state/post-state and hint on raw pre-state grading ([77fc016](https://github.com/xyzxyz442/x442-skills/commit/77fc016caa9df0dae204e315058ec3c993511ec6))
+- **test:** add the setup-project-tooling eval workspace ([dba5076](https://github.com/xyzxyz442/x442-skills/commit/dba5076b58dd7252deee1eeffc363be29a811340))
+- **test:** add a skipped expectation state to the grading library ([0cbbd62](https://github.com/xyzxyz442/x442-skills/commit/0cbbd62463056ef802cc39f93b398dc4926c6e1d))
+- **test:** add the repair-graph-hooks eval workspace ([dddd647](https://github.com/xyzxyz442/x442-skills/commit/dddd6470504370b5a36673d56c0b1576ea3ba94d))
+- **test:** add the register-cross-repo-graph eval workspace ([57c1a79](https://github.com/xyzxyz442/x442-skills/commit/57c1a792de305d80e55d28f2efc3de4b4b82a99c))
+- **test:** add the setup-graph-hooks eval workspace ([54e63ee](https://github.com/xyzxyz442/x442-skills/commit/54e63ee8f7e62851766cf5f674f70a78e7d03229))
+- **test:** add the initial-project eval workspace ([b3d99d4](https://github.com/xyzxyz442/x442-skills/commit/b3d99d4ba4e6a162a11d8e7ff5f0625fd2707995))
+- **test:** add the shared skill-eval grading library ([ab7c458](https://github.com/xyzxyz442/x442-skills/commit/ab7c4581760e8fb7e7ba62dfff7c5ce0f0119114))
+
+### 🐞 Bug Fixes
+
+- **test:** keep prettier off generated benchmarks for byte-idempotent re-runs ([dcb1556](https://github.com/xyzxyz442/x442-skills/commit/dcb1556487d911d7a2eda41a8ea1096a1fa94948))
+- **test:** isolate the initial-project grader from the outer repo ([6124f6a](https://github.com/xyzxyz442/x442-skills/commit/6124f6aede990f0a905cfc8d9d1153e95d68bde1))
+- **test:** make the cross-repo grader's tool dependencies explicit ([28d4a58](https://github.com/xyzxyz442/x442-skills/commit/28d4a58af28a2f77a0ad037fae9d7afd0d1237ac))
+- **setup:** exit 0 when cross-repo access is not configured ([097075a](https://github.com/xyzxyz442/x442-skills/commit/097075af66375a125727e25db918c8c611953b6c))
+- **test:** grade fixtures in isolation from the outer repo ([2e8f9c0](https://github.com/xyzxyz442/x442-skills/commit/2e8f9c09b383db344568f2984a59d35153bc0a40))
+- **setup:** close the sibling-refresh loop in cross-repo scope ([c76d5e5](https://github.com/xyzxyz442/x442-skills/commit/c76d5e574e9695a8ed6c496846224f91f894dd5e))
+- **test:** regenerate wired graph-hooks fixtures against the current skill ([0960cab](https://github.com/xyzxyz442/x442-skills/commit/0960caba949a0f2c6aa1d70368172fff22ff00e5))
+- **setup:** freshness-gate cross-repo greps and answer with call sites ([82a40d9](https://github.com/xyzxyz442/x442-skills/commit/82a40d98d9476dce9949f8df1e3f5cc24f7f8c70))
+- **test:** regenerate the wired graph-hooks fixtures against the current skill ([b5a1ada](https://github.com/xyzxyz442/x442-skills/commit/b5a1ada0f02f4829484113e1ef2821739bd85050))
+- **setup:** teach the graph hooks about in-scope sibling repos ([073f545](https://github.com/xyzxyz442/x442-skills/commit/073f545dee50d0da73dbfc8c290daffc6a00784c))
+- **setup:** repair the malformed cross-repo routing table template ([26a708d](https://github.com/xyzxyz442/x442-skills/commit/26a708d97e743f4a617a8a3636d8669351942262))
+- **docs:** drop the stale CI claim from commitlint enforcement ([ab0e207](https://github.com/xyzxyz442/x442-skills/commit/ab0e20723e9b436da0316f67dc856c0d82d1fdf3))
+- **setup:** mark the shipped commit-msg hook payload executable ([7468e84](https://github.com/xyzxyz442/x442-skills/commit/7468e84b6b7640b9537a6e4b63c6335f28713467))
+
+### 📚 Documentation
+
+- **docs:** resync roadmap and drop stale AGENTS.md TODOs ([75d1264](https://github.com/xyzxyz442/x442-skills/commit/75d12644c675d03aa4e5be85152e76674ea030e6))
+- **docs:** record the first benchmark; contextualize gaps #1/#4/#5 ([a2d4736](https://github.com/xyzxyz442/x442-skills/commit/a2d4736fe1ea95d69e441d5951eecb670fb650d9))
+- **docs:** record the tooling workspace and skip state; close gaps #1 and #3 ([8684de9](https://github.com/xyzxyz442/x442-skills/commit/8684de9e8a150ab9acbaeae29bc47dc33d3a4e77))
+- **docs:** record this repo's own open harness gaps ([2fdce2f](https://github.com/xyzxyz442/x442-skills/commit/2fdce2f8f14eb3307a9b7f1553d1f10276e2d091))
+- **docs:** record the cross-repo and repair eval workspaces ([fd4058f](https://github.com/xyzxyz442/x442-skills/commit/fd4058f8ee1c1d0fcb5bdb3255d3bc0589465cb1))
+- **docs:** clarify the merged graph is not a cross-repo bridge ([213de14](https://github.com/xyzxyz442/x442-skills/commit/213de14425d3037c53c0275c537afcd27b47cfaf))
+- **docs:** mark the eval harness as built, not specced ([6342bc6](https://github.com/xyzxyz442/x442-skills/commit/6342bc60872bec526ca8d3023ead409a7523b6cc))
+- **test:** document how to run and grade an eval ([ad9fd58](https://github.com/xyzxyz442/x442-skills/commit/ad9fd58e97b2891af1b3c0ffbd8a3ab82e797dc8))
+- **docs:** document the sibling tier in the grep-steer ladder ([83b0595](https://github.com/xyzxyz442/x442-skills/commit/83b059586cdb55cf9fedb399f6e5c1d5b64df7b3))
+- **docs:** add a monorepo scenario for the subdir manifest layer ([fab568f](https://github.com/xyzxyz442/x442-skills/commit/fab568f1f690f7144a6892e0e93d9111befea5f2))
+- **docs:** add an orienting diagram to each graph-tool skill ([fa47424](https://github.com/xyzxyz442/x442-skills/commit/fa47424bfc5f6cb405c9a7706b07d619c8dc8682))
+- **docs:** illustrate cross-repo lookup with diagrams and scenarios ([0e57f64](https://github.com/xyzxyz442/x442-skills/commit/0e57f64beaccb309f9dd1e741906ceabc91463a8))
+- **docs:** rewrite the cross-repo section for the manifest cascade ([ce90139](https://github.com/xyzxyz442/x442-skills/commit/ce901393cc850cf29340614aa567e710c27adbf7))
+- **docs:** restore the missing v0.2.1 changelog entries ([9d6980f](https://github.com/xyzxyz442/x442-skills/commit/9d6980fc3d35d9434b401b3a9b383023e050ddcd))
+
+### 💅 Styles
+
+- **style:** format grep-steer.sh with prettier-plugin-sh ([3f4e016](https://github.com/xyzxyz442/x442-skills/commit/3f4e0164f9c122d25b5452016583a1cc3950e323))
+
+### 🧼 Code Refactoring
+
+- **setup:** unify the verify-script contract across the four skills ([2495036](https://github.com/xyzxyz442/x442-skills/commit/2495036b7deacb02011f6fa411778ff394fb0c8a))
+- **setup:** emit only the resolver fields a consumer reads ([6fe6fb8](https://github.com/xyzxyz442/x442-skills/commit/6fe6fb8ce93601c0e5bb93246109cf500689c40c))
+- **config:** express the fixture exclusion as a glob, not a function ([451f060](https://github.com/xyzxyz442/x442-skills/commit/451f060a23efa0ab6e60c6a49e33d55debe6cd4a))
+
+### 🧪 Tests
+
+- **setup:** assert a cross-repo grep gets steered to the graph ([b710917](https://github.com/xyzxyz442/x442-skills/commit/b710917b1fe6deac134415483cac9c78983e4c25))
+
+### 🧹 Miscellaneous Chores
+
+- **config:** gitignore the .claude/handoff working folder ([1ee8c7c](https://github.com/xyzxyz442/x442-skills/commit/1ee8c7cb2c9adf9e8d6d88ad8d9dd1b08e9dc2c9))
+- **config:** keep prettier off the invalid-JSON repair fixture ([3481390](https://github.com/xyzxyz442/x442-skills/commit/34813905aae33307e6e9ca8ed4d3ac54a4c7006b))
+- **config:** narrow lint-staged to prettier on json/md/yml ([435a84f](https://github.com/xyzxyz442/x442-skills/commit/435a84fefa47f782350221e29954ddf0f633cc66))
+- **config:** exclude harness fixtures from lint-staged ([06b3d37](https://github.com/xyzxyz442/x442-skills/commit/06b3d37dba1cab3e86f4576360f6a18d000e53fb))
+- **config:** keep eval-harness source out of the ignore rules ([c5c53c4](https://github.com/xyzxyz442/x442-skills/commit/c5c53c4d15cc7b2d297ea8af5ff1731ccb7c7d77))
+- **setup:** drop seven dead pre-graph-hooks scripts ([ff40ffc](https://github.com/xyzxyz442/x442-skills/commit/ff40ffc09e8e08c44ddb5dc2faab8d17285c8a8e))
+
 ## [0.2.1](https://github.com/xyzxyz442/x442-skills/compare/v0.2.0...v0.2.1) (2026-07-13)
 
 ### 🐞 Bug Fixes
