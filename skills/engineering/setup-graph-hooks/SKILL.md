@@ -203,12 +203,16 @@ If neither is installed, tell the user the hooks are wired and dormant, and give
 commands: `pipx install code-review-graph` and `pipx install graphifyy` (note the double `y` —
 the PyPI package is `graphifyy`, but the command it installs is `graphify`).
 
-### 8. Offer semantic search (optional, never assumed)
+### 8. Offer semantic search (enabling is optional — surfacing the choice is not)
 
 A built graph answers `semantic_search_nodes_tool` in **keyword mode** — CRG's `semantic_search`
 falls back to a name search when the embeddings table is empty. Vector search is a quality
 upgrade, not a requirement, and enabling it costs either a PyTorch install or a resident Ollama
 model. Both are too machine-specific to choose for the user.
+
+**You MUST surface this choice to the user.** What is optional is _enabling_ embeddings, not
+_asking_: never let this step collapse into an unmentioned optional note. The one time you skip
+the ask is when a provider is already configured (see below).
 
 Do not run the interactive menu — it expects a TTY. Read the machine's state, then ask:
 
@@ -217,7 +221,15 @@ bash "$SKILL_DIR/scripts/setup-embeddings.sh" --list
 # ollama=up|down  ollama_models=<embedding-capable only>  sentence_transformers=yes|no  current=<provider>
 ```
 
-Offer with `AskUserQuestion`. State the trade honestly rather than steering by install size:
+If `--list` reports `current=<a real provider>` (anything other than `off` or empty), embeddings
+are already enabled — report that and skip the offer. This is a correct no-op, not the step
+silently failing to prompt.
+
+Offer with `AskUserQuestion` (Claude Code). Where no interactive-question tool is available
+(another harness, or a non-TTY run), do **not** skip silently — print the `--list` state and the
+three `--provider` commands below and tell the user keyword mode stays in effect until they run
+one, mirroring the installer and `verify-graph-hooks.sh` ("keyword mode … optional;
+./setup-embeddings.sh to enable"). State the trade honestly rather than steering by install size:
 
 - **Local provider** — the default choice, and the only one that works with no further wiring:
   CRG's own default provider is `local`, so the MCP server reads the vectors as-is. Costs ~2 GB
@@ -226,7 +238,7 @@ Offer with `AskUserQuestion`. State the trade honestly rather than steering by i
   the PyTorch install, but the vectors are only readable if the MCP server gets `CRG_OPENAI_*`
   in its environment **and** every call pins `provider="openai", model=<name>`. The script wires
   the first into `.mcp.json` (localhost only) and prints the second. Say this before they choose.
-- **Keyword mode** — always a valid answer, and the default when the user has no preference.
+- **Keyword mode** — always a valid answer; the user can choose to stay in keyword mode.
 
 Apply the answer non-interactively, then let the hooks keep it fresh:
 
