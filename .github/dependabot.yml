@@ -1,0 +1,86 @@
+version: 2
+
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    target-branch: 'main'
+    schedule:
+      interval: 'daily' # Changed from weekly to daily
+      time: '09:00' # Runs at 9:00 AM every day
+      timezone: 'Asia/Bangkok'
+    # Setting this to 0 prevents scheduled version updates,
+    # but allows Dependabot Security Updates (CVEs) to still open PRs.
+    open-pull-requests-limit: 0
+
+    commit-message:
+      prefix: 'fix' # Security patches usually warrant a 'fix' rather than 'chore'
+      include: 'scope'
+
+  - package-ecosystem: 'npm'
+    directory: '/'
+    target-branch: 'develop'
+    schedule:
+      interval: 'daily' # Changed from weekly to daily
+      time: '09:00' # Runs at 9:00 AM every day
+      timezone: 'Asia/Bangkok'
+
+    # force package.json to update, even if the lockfile update satisfies the existing caret range
+    versioning-strategy: increase
+
+    groups:
+      # Bundles all minor and patch updates together into one PR
+      minor-and-patch-updates:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+    # Major updates will still open as individual, isolated PRs
+
+    commit-message:
+      prefix: 'chore'
+      include: 'scope'
+
+  - package-ecosystem: 'pip'
+    directory: '/'
+    target-branch: 'main'
+    # Root pip scanning covers requirements.txt, requirements.dev.txt, and pyproject.toml.
+    schedule:
+      interval: 'daily'
+      time: '09:00'
+      timezone: 'Asia/Bangkok'
+    # Setting this to 0 prevents scheduled version updates,
+    # but allows Dependabot Security Updates (CVEs) to still open PRs.
+    open-pull-requests-limit: 0
+
+    commit-message:
+      prefix: 'fix'
+      include: 'scope'
+
+  - package-ecosystem: 'pip'
+    directory: '/'
+    target-branch: 'develop'
+    # Root pip scanning covers requirements.txt, requirements.dev.txt, and pyproject.toml.
+    schedule:
+      interval: 'daily'
+      time: '09:00'
+      timezone: 'Asia/Bangkok'
+
+    # Force Python manifests to raise their minimum version when a newer release is available.
+    versioning-strategy: increase
+
+    groups:
+      # Bundles all minor and patch updates together into one PR
+      minor-and-patch-updates:
+        patterns:
+          - '*'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+    # Major updates will still open as individual, isolated PRs
+
+    commit-message:
+      prefix: 'chore'
+      include: 'scope'
