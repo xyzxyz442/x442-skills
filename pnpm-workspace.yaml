@@ -1,0 +1,6 @@
+# Pin the conventional-changelog engine used by @release-it/conventional-changelog.
+# The plugin's default v7 engine emits an empty changelog body (and spurious empty
+# version headers) in this repo; v8 (verified working standalone) restores correct
+# grouped output. Remove this override once the plugin ships a fixed v7/v8 default.
+overrides:
+  conventional-changelog: 8.1.0
