@@ -1,0 +1,63 @@
+{
+  "skill_name": "x442-setup-handoff",
+  "skill_path": "skills/engineering/setup-handoff",
+  "verify_script": "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh",
+  "evals": [
+    {
+      "id": "no-agents-md",
+      "kind": "precondition",
+      "prompt": "Set up handoff coordination for this repo.",
+      "fixture": "fixtures/no-agents-md",
+      "expected_output": "Precondition case: no AGENTS.md present. The installer must REFUSE (non-zero) and point the user at initial-project first. No `.agents/handoff/` payload is created; AGENTS.md is NOT fabricated."
+    },
+    {
+      "id": "fresh",
+      "kind": "pre-state",
+      "prompt": "Install the lease-based handoff protocol here, with Claude Code as the enforcement primary.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "AGENTS.md present, nothing wired. Running the installer wires the `.agents/handoff/` payload, the Claude hard-enforcement hooks, the `.locks/` gitignore entry, and the `<!-- handoff -->` AGENTS.md routing block; the verifier passes 0-failed."
+    },
+    {
+      "id": "claude-wired",
+      "kind": "post-state",
+      "prompt": "Wire handoff coordination for this repo (Claude primary).",
+      "fixture": "fixtures/claude-wired",
+      "expected_output": "Idempotency + wiring case: hooks already installed (claude, primary=claude). The verifier passes; a hard-enforcement primary (pretool deny) is wired; re-running the installer produces an EMPTY diff."
+    },
+    {
+      "id": "advisory-wired",
+      "kind": "post-state",
+      "prompt": "Wire handoff coordination but with advisory enforcement only (no primary).",
+      "fixture": "fixtures/advisory-wired",
+      "expected_output": "Advisory case: claude is wired for sessionstart+posttool only (no pretool deny, no Stop). The verifier passes with a warning that there is no hard-enforcement primary; the claude config carries no pretool-edit gate."
+    },
+    {
+      "id": "legacy-install",
+      "kind": "post-state",
+      "prompt": "There is an old .claude/handoff/ here. Upgrade it and migrate it to the generic .agents/handoff/.",
+      "fixture": "fixtures/legacy-install",
+      "expected_output": "Migration case: a legacy `.claude/handoff/` with the two reference defects. Running the installer with --migrate moves the docs and archive/ to `.agents/handoff/` (history preserved), removes the legacy dir, installs the fixed scripts (the new `handoff` writes `session=`), and passes the verifier."
+    },
+    {
+      "id": "detect",
+      "kind": "post-state",
+      "prompt": "Is there already a handoff board here, and where should it live?",
+      "fixture": "fixtures/legacy-install",
+      "expected_output": "Detection case: detect-handoff.sh scans repo-level and parent-level locations, finds the legacy .claude/handoff install, classifies it (legacy-toolpath, version=legacy, 2 docs), and suggests upgrading + migrating it to the current repo-level, a parent-level shared dir, or a specific location."
+    },
+    {
+      "id": "custom-location",
+      "kind": "pre-state",
+      "prompt": "Install the handoff board at .claude/handoff instead of the default location.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Repo-level install at a custom location: running the installer with --handoff-dir .claude/handoff puts the payload there (not at .agents/handoff), gitignores .claude/handoff/.locks/, and the verifier auto-locates the configured dir and passes."
+    },
+    {
+      "id": "script-behavior",
+      "kind": "post-state",
+      "prompt": "Exercise the handoff protocol: claim, enforce, block/unblock, and close a handoff.",
+      "fixture": "fixtures/claude-wired",
+      "expected_output": "Behavioral case (not just wiring): driving the installed `handoff` script + `hooks.sh` proves the protocol improvements — claim writes `session=`; the pretool gate denies a non-holder and allows the holder; `done` is refused without --verified-by and archives with it; `blocked` is refused without --blocked-on and surfaces the dependent as unblocked when its blocker closes; sessionstart auto-reaps an expired lease; posttool auto-touches the holder's lease; and a `verify:` command is not executed without the opt-in."
+    }
+  ]
+}
