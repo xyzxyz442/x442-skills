@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.1](https://github.com/xyzxyz442/x442-skills/compare/v0.3.0...v0.3.1) (2026-07-18)
+
+### 🐞 Bug Fixes
+
+- **setup:** make setup-graph-hooks surface the embeddings choice reliably ([9a9804c](https://github.com/xyzxyz442/x442-skills/commit/9a9804c80c3f1313d70de66f25dda1825547dd9c))
+
+### 🏗️ Build System
+
+- **deps:** pin conventional-changelog to v8 for a correct release changelog ([12653d3](https://github.com/xyzxyz442/x442-skills/commit/12653d3e910a03c4f9a0f6cd713a6160a929d449))
+
 ## [0.3.0](https://github.com/xyzxyz442/x442-skills/compare/v0.2.1...v0.3.0) (2026-07-16)
 
 ### 🚀 Features
