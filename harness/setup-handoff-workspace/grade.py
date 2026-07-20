@@ -186,6 +186,95 @@ def grade_script_behavior(target):
     return e
 
 
+def grade_cross_repo(_target):
+    """Two sibling repos sharing ONE parent board — the shared-board identity regression guard.
+
+    Builds parent/{repo-a,repo-b} + a shared parent/handoff board, installs cross-repo in both, and
+    asserts the shared board never bakes one repo's identity (the spec's install-A-then-B flip).
+    Self-contained (ignores the passed fixture); cleans up its own temp tree.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    e = []
+    parent = Path(tempfile.mkdtemp(prefix="handoff-xrepo-"))
+
+    def sh(args, cwd, env_extra=None):
+        return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
+                              env={**os.environ, **(env_extra or {})})
+
+    try:
+        board = parent / "handoff"
+        repos = {}
+        for name in ("repo-a", "repo-b"):
+            r = parent / name
+            r.mkdir()
+            sh(["git", "init", "-q"], r)
+            sh(["git", "config", "user.email", "t@t.t"], r)
+            sh(["git", "config", "user.name", "t"], r)
+            (r / "AGENTS.md").write_text("# AGENTS.md\n")
+            sh(["git", "add", "-A"], r)
+            sh(["git", "commit", "-qm", "init"], r)
+            repos[name] = r
+
+        def install(r):
+            return sh(["bash", str(SETUP), str(r), "--tools", "claude", "--primary", "claude",
+                       "--topology", "cross-repo", "--handoff-dir", "../handoff"], r)
+
+        for name, r in repos.items():
+            res = install(r)
+            e.append(gc.expectation(f"installer succeeds cross-repo in {name}", res.returncode == 0,
+                                    f"exit {res.returncode}: {res.stderr.strip()[:120]}"))
+
+        cfg = (board / "config").read_text() if (board / "config").is_file() else ""
+        e.append(gc.expectation("shared config omits REPO_NAME (no last-writer clobber)",
+                                "REPO_NAME=" not in cfg and "TOPOLOGY=cross-repo" in cfg, f"config={cfg!r}"))
+
+        for name, r in repos.items():
+            s = (r / ".claude/settings.json").read_text()
+            e.append(gc.expectation(f"{name} hook command carries its own HANDOFF_REPO={name}",
+                                    f"HANDOFF_REPO={name} " in s, f"present: {('HANDOFF_REPO=' + name) in s}"))
+            a = (r / "AGENTS.md").read_text()
+            e.append(gc.expectation(f"{name} AGENTS.md advertises the shared path (../handoff), not .agents/handoff",
+                                    "../handoff/handoff" in a and ".agents/handoff" not in a,
+                                    f"xrepo path: {'../handoff/handoff' in a}; leaked default: {'.agents/handoff' in a}"))
+            gi = (r / ".gitignore").read_text() if (r / ".gitignore").is_file() else ""
+            e.append(gc.expectation(f"{name} .gitignore has no inert .locks/ entry",
+                                    ".locks/" not in gi, f"gitignore={gi!r}"))
+
+        # Re-run A: B's identity and the shared config must NOT flip (the exact spec repro).
+        install(repos["repo-a"])
+        s_b = (repos["repo-b"] / ".claude/settings.json").read_text()
+        cfg2 = (board / "config").read_text()
+        e.append(gc.expectation("re-installing repo-a leaves repo-b's identity intact",
+                                "HANDOFF_REPO=repo-b " in s_b and "REPO_NAME=" not in cfg2,
+                                f"b-intact: {'HANDOFF_REPO=repo-b ' in s_b}; cfg-neutral: {'REPO_NAME=' not in cfg2}"))
+
+        # audience routing: sessionstart in repo-b surfaces only its own docs.
+        ho, hk = board / "handoff", board / "hooks.sh"
+        sh(["bash", str(ho), "new", "task-a", "--audience", "repo-a", "--title", "A task"], board, {"HANDOFF_REPO": "repo-a"})
+        sh(["bash", str(ho), "new", "task-b", "--audience", "repo-b", "--title", "B task"], board, {"HANDOFF_REPO": "repo-b"})
+        # simulate repo-b's baked hook command env (setup wires both HANDOFF_REPO + HANDOFF_HDPATH)
+        ss = subprocess.run(["bash", str(hk), "--kind", "sessionstart", "--tool", "claude"],
+                            cwd=str(repos["repo-b"]), input='{"session_id":"s"}',
+                            capture_output=True, text=True,
+                            env={**os.environ, "HANDOFF_REPO": "repo-b", "HANDOFF_HDPATH": "../handoff"}).stdout
+        e.append(gc.expectation("sessionstart in repo-b surfaces only its own audience (routing works)",
+                                "task-b" in ss and "task-a" not in ss, f"ss={ss[:160]!r}"))
+        e.append(gc.expectation("sessionstart hint uses the shared board path, not .agents/handoff",
+                                "../handoff/handoff claim" in ss and ".agents/handoff" not in ss,
+                                f"xrepo hint: {'../handoff/handoff claim' in ss}"))
+
+        # CLI guard: `new` on a shared board with no identity must refuse rather than default.
+        r_noid = sh(["bash", str(ho), "new", "orphan", "--title", "no identity"], board)
+        e.append(gc.expectation("cross-repo `new` without --audience/HANDOFF_REPO is refused",
+                                r_noid.returncode != 0, f"exit {r_noid.returncode}: {r_noid.stderr.strip()[:100]}"))
+        return e
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
+
+
 def grade(target, eval_id):
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
@@ -270,6 +359,9 @@ def _grade(target, eval_id):
 
     if eval_id == "script-behavior":
         return grade_script_behavior(target)
+
+    if eval_id == "cross-repo":
+        return grade_cross_repo(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 

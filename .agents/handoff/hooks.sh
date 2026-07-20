@@ -38,12 +38,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# config (committed): TOPOLOGY, REPO_NAME — REPO defaults to the configured repo name.
+# config (committed): TOPOLOGY, REPO_NAME. On a SHARED (cross-repo) board the config carries no
+# REPO_NAME — the consuming repo's identity is its own, passed per-repo via $HANDOFF_REPO (baked
+# into the hook command by setup-handoff). So env identity wins over the shared config value.
 TOPOLOGY="single-repo"
 REPO_NAME=""
 # shellcheck disable=SC1091
 [ -f "$DIR/config" ] && . "$DIR/config"
-[ -z "$REPO" ] && REPO="$REPO_NAME"
+[ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$REPO_NAME}"
 
 PAYLOAD="$(cat)"
 
@@ -191,7 +193,10 @@ case "$KIND" in
       out="${out}${line}"$'\n'
     done
     [ -z "$out" ] && [ -z "$refs" ] && exit 0
-    ctx="Handoffs for \`${REPO:-this repo}\` (from .agents/handoff/):"
+    # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
+    # into the hook command; single-repo uses the default in-repo location.
+    hd="${HANDOFF_HDPATH:-.agents/handoff}"
+    ctx="Handoffs for \`${REPO:-this repo}\` (from ${hd}/):"
     [ -n "$out" ] && ctx="${ctx}
 
 Open (claim before working — editing a doc without its lease is blocked):
@@ -201,7 +206,7 @@ ${out}"
 Standalone / reference (no claim needed — edit freely):
 ${refs}"
     ctx="${ctx}
-Claim: \`.agents/handoff/handoff claim <id> \"note\"\`. Release when you stop."
+Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
     emit_context "$ctx"
     ;;
 

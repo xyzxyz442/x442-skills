@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -43,10 +44,18 @@ def dump(path: Path, data: dict) -> None:
 
 
 def command(hdpath: str, tool: str, kind: str) -> str:
+    # Cross-repo SHARED board: bake this consuming repo's identity into the command so hooks.sh
+    # reads $HANDOFF_REPO instead of the shared config's REPO_NAME (which would be whoever installed
+    # last). Empty (single-repo) => no prefix => byte-identical to the pre-existing command.
+    # HANDOFF_REPO is set only for cross-repo. When it is, also pass HANDOFF_HDPATH so the shared
+    # board's sessionstart hint advertises the real relative path (../.../handoff), not the
+    # single-repo .agents/handoff default. Both empty (single-repo) => byte-identical command.
+    repo = os.environ.get("HANDOFF_REPO", "")
+    prefix = f"HANDOFF_REPO={shlex.quote(repo)} HANDOFF_HDPATH={shlex.quote(hdpath)} " if repo else ""
     # Claude expands $CLAUDE_PROJECT_DIR; keep the path anchored so cwd never matters.
     if tool == "claude":
-        return f'bash "$CLAUDE_PROJECT_DIR/{hdpath}/hooks.sh" --kind {kind} --tool claude'
-    return f'bash {hdpath}/hooks.sh --kind {kind} --tool {tool}'
+        return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/hooks.sh" --kind {kind} --tool claude'
+    return f"{prefix}bash {hdpath}/hooks.sh --kind {kind} --tool {tool}"
 
 
 def strip_managed(groups: list) -> list:

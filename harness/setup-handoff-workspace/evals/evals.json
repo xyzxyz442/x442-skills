@@ -58,6 +58,13 @@
       "prompt": "Exercise the handoff protocol: claim, enforce, block/unblock, and close a handoff.",
       "fixture": "fixtures/claude-wired",
       "expected_output": "Behavioral case (not just wiring): driving the installed `handoff` script + `hooks.sh` proves the protocol improvements — claim writes `session=`; the pretool gate denies a non-holder and allows the holder; `done` is refused without --verified-by and archives with it; `blocked` is refused without --blocked-on and surfaces the dependent as unblocked when its blocker closes; sessionstart auto-reaps an expired lease; posttool auto-touches the holder's lease; a `verify:` command is not executed without the opt-in; and handoff types work — a `standalone` doc (created via `new --standalone` or `import`) is gate-exempt (the pretool gate allows a non-holder to edit it), `claim` refuses it, and `release --status done` retires it without --verified-by, while coordination docs keep the lease gate."
+    },
+    {
+      "id": "cross-repo",
+      "kind": "post-state",
+      "prompt": "Two sibling repos share one parent handoff board — verify per-repo identity isolation.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Shared-board identity case (self-contained; ignores the fixture, builds parent/{repo-a,repo-b} + parent/handoff). Installing cross-repo in both proves the identity fix: the shared `config` omits REPO_NAME (no last-writer clobber); each repo's hook command carries its OWN `HANDOFF_REPO=<repo>`; each AGENTS.md block advertises the shared relative path (../handoff), not the .agents/handoff default; the consumer `.gitignore` has no inert `.locks/` entry; re-installing repo-a does NOT flip repo-b's identity; a sessionstart in repo-b surfaces only its own `audience`; and `handoff new` on the shared board without --audience/HANDOFF_REPO is refused rather than defaulting to a stale name."
     }
   ]
 }

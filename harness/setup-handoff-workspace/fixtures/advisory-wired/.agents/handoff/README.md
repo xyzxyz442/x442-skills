@@ -60,15 +60,31 @@ content verbatim.
 
 ## Fields
 
-| Field                     | Meaning                                                                                                                                                                                                    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                          |
-| `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                 |
-| `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. |
-| `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                       |
-| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. When the blocker closes `done`, this handoff is surfaced as newly unblocked at the next session start.                                           |
-| `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                             |
-| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                         |
+| Field                     | Meaning                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                                                                                                                        |
+| `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                               |
+| `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below). |
+| `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                                                                                                                     |
+| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. When the blocker closes `done`, this handoff is surfaced as newly unblocked at the next session start.                                                                                                                                         |
+| `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                           |
+| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                                                                                                                       |
+
+## Shared (cross-repo) board: per-repo identity
+
+A cross-repo board is **shared by N repos**, so no single repo's name may live in the committed
+`config` — the last installer to run would clobber every sibling's identity. Instead:
+
+- The shared `config` carries only board-global facts (`TOPOLOGY`, `HANDOFF_ALLOW_VERIFY_CMD`), **no
+  `REPO_NAME`**.
+- Each consuming repo's identity is **per-consumer**, supplied via `$HANDOFF_REPO` — baked into that
+  repo's hook command at install time (`HANDOFF_REPO=<repo> HANDOFF_HDPATH=<path> bash …/hooks.sh …`).
+  `hooks.sh` and `handoff` prefer `$HANDOFF_REPO` over the config's `REPO_NAME`, so audience routing,
+  the INDEX label, and `doc_is_local` reflect the **calling** repo, not whoever installed last.
+- On a shared board, `handoff new` **requires** `--audience <repo>` (there is no default identity)
+  unless `$HANDOFF_REPO` is set in the environment.
+
+Single-repo boards are unchanged: no `$HANDOFF_REPO`, identity comes from `config` `REPO_NAME`.
 
 ## Two rules that exist because trackers rot
 

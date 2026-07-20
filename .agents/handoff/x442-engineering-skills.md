@@ -63,6 +63,17 @@ Read this first if your collection already carries an earlier port.
    verifier 18/18). To adopt: **re-port `setup-handoff/assets/` (now incl.
    `handoff-standalone-template.md`) + `scripts/payload/` + `scripts/setup-handoff.sh`, and
    `run-handoff/SKILL.md`.**
+   **Cross-repo shared board fixed:** a board genuinely shared by N repos no longer bakes one repo's
+   identity into its committed `config` (the last installer used to clobber every sibling). Identity
+   is now **per-consumer** via `$HANDOFF_REPO` (baked into each repo's own hook command); the shared
+   `config` carries no `REPO_NAME`; the `AGENTS.md` block + session-start hint are **path-substituted**
+   to the real board location (no more hardcoded `.agents/handoff`); the inert consumer `.gitignore`
+   `.locks/` line is skipped for cross-repo (verifier is topology-aware); and `handoff new` on a
+   shared board **requires `--audience`**. Single-repo is byte-identical. A new **`cross-repo`**
+   harness eval (two siblings + a shared parent board) guards the exact regression; sibling
+   [`handoff-cross-repo-eval-report`](./handoff-cross-repo-eval-report.md) records the run (73/73
+   graders, verifier 0-failed on both topologies). Re-port `setup-handoff/scripts/` (incl.
+   `merge-hooks.py`, `verify-setup-handoff.sh`) + `scripts/payload/` + `assets/agents-handoff.md`.
 1. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional

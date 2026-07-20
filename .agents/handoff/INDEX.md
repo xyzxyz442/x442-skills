@@ -2,7 +2,7 @@
 
 # Handoff Index
 
-Coordination board for x442-skills. Generated 2026-07-20 16:46.
+Coordination board for x442-skills. Generated 2026-07-21 02:21.
 Claim before you work: `./handoff claim <id>`. Protocol: [README.md](./README.md).
 
 ## Open
@@ -16,6 +16,7 @@ Claim before you work: `./handoff claim <id>`. Protocol: [README.md](./README.md
 | ------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
 | [Evaluation report — cross-repo graph hooks: freshness gate, caller-edge answers, loop-closing](./cross-repo-refactor-eval-report.md) | `open` | 2026-07-20 |
 | [Handoff — cross-repo graph hooks: freshness gate + caller-edge answers](./cross-repo-refactor-safety.md)                             | `open` | 2026-07-20 |
+| [Evaluation report — cross-repo shared-board identity fix](./handoff-cross-repo-eval-report.md)                                       | `open` | 2026-07-21 |
 | [Evaluation report — handoff types (standalone/isolated)](./handoff-types-eval-report.md)                                             | `open` | 2026-07-20 |
 | [Handoff: x442-skills engineering suite](./x442-engineering-skills.md)                                                                | `open` | 2026-07-20 |
 
