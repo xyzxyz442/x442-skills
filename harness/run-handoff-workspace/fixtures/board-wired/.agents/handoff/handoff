@@ -13,11 +13,15 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCKS="$DIR/.locks"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
 
-# config (committed, written by setup-handoff): TOPOLOGY=single-repo|cross-repo, REPO_NAME=<name>
+# config (committed, written by setup-handoff): TOPOLOGY=single-repo|cross-repo, REPO_NAME=<name>.
+# A SHARED (cross-repo) board's config carries NO REPO_NAME — identity is per-consumer, supplied via
+# $HANDOFF_REPO (env). Prefer it over the shared config so audience/labeling/doc_is_local use the
+# calling repo's identity, not whoever installed last. Empty on a single-repo board (uses config).
 TOPOLOGY="single-repo"
 REPO_NAME=""
 # shellcheck disable=SC1091
 [ -f "$DIR/config" ] && . "$DIR/config"
+REPO_NAME="${HANDOFF_REPO:-$REPO_NAME}"
 
 die() {
   echo "handoff: $*" >&2
@@ -103,6 +107,11 @@ doc_type() {
 }
 is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
 
+# Every handoff doc file is named "<id>-handoff.md" and the id IS the filename stem. norm_id
+# canonicalizes any user-supplied id to that form (idempotent — never doubles the suffix), so
+# `new rbac-gap`, `claim rbac-gap`, and `claim rbac-gap-handoff` all resolve to rbac-gap-handoff.
+norm_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
+
 # The redaction reminder embedded at the top of every generated doc body. A handoff doc is
 # committed to git history, so secrets pasted into it persist. Kept as a function so the coordination
 # and standalone fallback templates stay identical.
@@ -153,6 +162,7 @@ cmd_new() {
     esac
   done
   case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
+  id="$(norm_id "$id")" # files are always <id>-handoff.md; the id is the filename stem
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists"
   [ -n "$title" ] || title="$id"
   local d
@@ -189,7 +199,13 @@ cmd_new() {
     fi
     echo "Created $DIR/$id.md (standalone/reference) — no claim needed; edit it freely."
   else
-    [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ] && audience="${REPO_NAME:-this-repo}"
+    if [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ]; then
+      # Shared board: no single default identity. Use the calling repo's env identity if present,
+      # otherwise require an explicit --audience rather than defaulting to a stale/foreign name.
+      if [ -n "${HANDOFF_REPO:-}" ]; then
+        audience="$HANDOFF_REPO"
+      else die "cross-repo board: pass --audience <repo> (which repo acts next) — a shared board has no default identity"; fi
+    fi
     local tmpl="$DIR/handoff-doc-template.md"
     if [ -f "$tmpl" ]; then
       # PLACEHOLDER_* tokens (not {{...}} or <...>) so a prettier/lint pass on the shipped
@@ -268,6 +284,7 @@ cmd_import() {
   # sanitize id to a safe slug (the filename becomes .agents/handoff/<id>.md)
   id="$(printf '%s' "$id" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
   [ -n "$id" ] || die "could not derive an id from $src — pass --id"
+  id="$(norm_id "$id")" # board files are always <id>-handoff.md
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists on the board"
   # title: --title, else the first markdown H1, else the id
   [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
@@ -312,7 +329,7 @@ cmd_list() {
   printf '%-44s %-9s %-14s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
     "---------" "--------------" "--------" "----"
   local standalone=""
-  for f in "$DIR"/*.md; do
+  for f in "$DIR"/*-handoff.md; do
     [ -f "$f" ] || continue
     local base
     base="$(basename "$f" .md)"
@@ -341,6 +358,7 @@ cmd_list() {
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
+  id="$(norm_id "$id")" # accept the short or full id; the lease is keyed on the canonical stem
   local note="${*:-}"
   local f
   f="$(doc_of "$id")"
@@ -384,6 +402,7 @@ cmd_claim() {
 
 cmd_touch() {
   local id="${1:?usage: handoff touch <id>}"
+  id="$(norm_id "$id")"
   local kind owner exp
   IFS='|' read -r kind owner exp <<< "$(lock_state "$id")"
   [ "$kind" = "free" ] && die "$id is not claimed"
@@ -400,6 +419,7 @@ cmd_touch() {
 cmd_release() {
   local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [note]}"
   shift
+  id="$(norm_id "$id")"
   local status='' note='' verified_by='' blocked_on='' run_verify=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -462,6 +482,8 @@ cmd_release() {
 
   if [ "$status" = "blocked" ]; then
     [ -n "$blocked_on" ] || die "release --status blocked needs --blocked-on <handoff-id|\"external: ...\"> — what is it waiting on?"
+    # a handoff id blocker is canonicalized to its filename stem; "external: ..." is left as-is
+    case "$blocked_on" in external:*) ;; *) blocked_on="$(norm_id "$blocked_on")" ;; esac
     set_field "$f" blocked_on "$blocked_on"
   fi
 
@@ -519,7 +541,7 @@ doc_is_local() { # a doc "belongs to" this repo when repos: is unset or names RE
 
 surface_unblocked() { # closed_id -> print any open docs blocked_on it
   local closed="$1" found=0
-  for g in "$DIR"/*.md; do
+  for g in "$DIR"/*-handoff.md; do
     [ -f "$g" ] || continue
     local gb
     gb="$(basename "$g" .md)"
@@ -562,14 +584,18 @@ cmd_index() {
     echo "<!-- GENERATED by ./handoff index — do not edit by hand. -->"
     echo "# Handoff Index"
     echo
-    echo "Coordination board for ${REPO_NAME:-this repo}. Generated $(date '+%Y-%m-%d %H:%M')."
+    if [ "$TOPOLOGY" = "cross-repo" ]; then
+      echo "Shared coordination board${REPO_NAME:+ (viewed as $REPO_NAME)}. Generated $(date '+%Y-%m-%d %H:%M')."
+    else
+      echo "Coordination board for ${REPO_NAME:-this repo}. Generated $(date '+%Y-%m-%d %H:%M')."
+    fi
     echo "Claim before you work: \`./handoff claim <id>\`. Protocol: [README.md](./README.md)."
     echo
     echo "## Open"
     echo
     echo "| Handoff | Status | Acts next | Severity | Updated | Blocked on | Lease |"
     echo "| --- | --- | --- | --- | --- | --- | --- |"
-    for f in "$DIR"/*.md; do
+    for f in "$DIR"/*-handoff.md; do
       [ -f "$f" ] || continue
       local base
       base="$(basename "$f" .md)"
@@ -589,7 +615,7 @@ cmd_index() {
     # Standalone / reference docs: self-contained, gate-exempt, no lease. Listed apart so they
     # are not mistaken for claimable work.
     local has_standalone=0
-    for f in "$DIR"/*.md; do
+    for f in "$DIR"/*-handoff.md; do
       [ -f "$f" ] || continue
       local base
       base="$(basename "$f" .md)"
@@ -609,7 +635,7 @@ cmd_index() {
     echo
     echo "| Handoff | Status | Verified |"
     echo "| --- | --- | --- |"
-    for f in "$DIR"/archive/*.md; do
+    for f in "$DIR"/archive/*-handoff.md; do
       [ -f "$f" ] || continue
       local base
       base="$(basename "$f" .md)"

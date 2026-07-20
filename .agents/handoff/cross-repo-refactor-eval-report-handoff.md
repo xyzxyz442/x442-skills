@@ -1,5 +1,5 @@
 ---
-id: cross-repo-refactor-eval-report
+id: cross-repo-refactor-eval-report-handoff
 title: Evaluation report — cross-repo graph hooks: freshness gate, caller-edge answers, loop-closing
 type: standalone
 status: open
@@ -14,7 +14,7 @@ note:
 **Branch:** `feature/skill-eval-harness`
 **Scope evaluated:** C1 (freshness gate), C2 (caller-edge answers), C3 (close the sibling-refresh
 loop), F3 (docs: no cross-repo blast radius). Companion to
-[`cross-repo-refactor-safety.md`](cross-repo-refactor-safety.md).
+[`cross-repo-refactor-safety-handoff.md`](cross-repo-refactor-safety-handoff.md).
 
 All results below are measured, not asserted. The lab is the two-repo refactor simulation from the
 handoff §4: `acme-lib` (defines `compute_invoice_total`, called in-library by `billing.py`) and a

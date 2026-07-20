@@ -68,36 +68,36 @@ def _grade(target, eval_id):
         _handoff(target, "new", "work", "--title", "Downstream work")
         _handoff(target, "claim", "work")
         _handoff(target, "release", "work", "--status", "blocked", "--blocked-on", "up")
-        fm = _frontmatter(doc / "work.md")
+        fm = _frontmatter(doc / "work-handoff.md")
         exps.append(gc.expectation("doc status is blocked", fm.get("status") == "blocked", f"status={fm.get('status')}"))
-        exps.append(gc.expectation("doc records blocked_on", fm.get("blocked_on") == "up", f"blocked_on={fm.get('blocked_on')}"))
-        exps.append(gc.expectation("lease released", not (doc / ".locks/work").exists(),
-                                   "lock present: %s" % (doc / ".locks/work").exists()))
+        exps.append(gc.expectation("doc records blocked_on", fm.get("blocked_on") == "up-handoff", f"blocked_on={fm.get('blocked_on')}"))
+        exps.append(gc.expectation("lease released", not (doc / ".locks/work-handoff").exists(),
+                                   "lock present: %s" % (doc / ".locks/work-handoff").exists()))
         exps.append(gc.expectation("doc stays on the open board (not archived)",
-                                   (doc / "work.md").is_file() and not (doc / "archive/work.md").exists(),
-                                   "open: %s" % (doc / "work.md").is_file()))
+                                   (doc / "work-handoff.md").is_file() and not (doc / "archive/work-handoff.md").exists(),
+                                   "open: %s" % (doc / "work-handoff.md").is_file()))
         return exps
 
     # discipline-done (default)
     _handoff(target, "new", "task", "--title", "Ship the task", "--severity", "high")
-    created = _frontmatter(doc / "task.md")
+    created = _frontmatter(doc / "task-handoff.md")
     exps.append(gc.expectation("filed doc has schema-valid frontmatter (id/title/status)",
-                               created.get("id") == "task" and created.get("title") == "Ship the task"
+                               created.get("id") == "task-handoff" and created.get("title") == "Ship the task"
                                and created.get("status") == "open",
                                f"frontmatter: {created}"))
     _handoff(target, "claim", "task")
     r = _handoff(target, "release", "task", "--status", "done", "--verified-by", "e2e green: task.e2e.ts")
     exps.append(gc.expectation("release --status done succeeds with evidence", r.returncode == 0,
                                f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
-    archived = doc / "archive/task.md"
+    archived = doc / "archive/task-handoff.md"
     exps.append(gc.expectation("doc archived on done", archived.is_file(), f"archived: {archived.is_file()}"))
     if archived.is_file():
         fm = _frontmatter(archived)
         exps.append(gc.expectation("archived doc stamped verified_at", bool(fm.get("verified_at")),
                                    f"verified_at={fm.get('verified_at')}"))
-    exps.append(gc.expectation("lease released after done", not (doc / ".locks/task").exists(),
-                               "lock present: %s" % (doc / ".locks/task").exists()))
-    exps.append(gc.contains(target, f"{HD}/INDEX.md", "archive/task.md",
+    exps.append(gc.expectation("lease released after done", not (doc / ".locks/task-handoff").exists(),
+                               "lock present: %s" % (doc / ".locks/task-handoff").exists()))
+    exps.append(gc.contains(target, f"{HD}/INDEX.md", "archive/task-handoff.md",
                             label="INDEX.md regenerated and lists the archived doc"))
     return exps
 

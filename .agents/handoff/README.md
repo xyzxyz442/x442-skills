@@ -5,6 +5,15 @@ directory (`.agents/handoff/`) holds every handoff doc; ownership is settled by 
 file lock, not by editing the doc. Wired by [`setup-handoff`](https://github.com/xyzxyz442/x442-skills)
 and operated per the [`run-handoff`] discipline.
 
+## Naming
+
+Every handoff doc is a file named **`<id>-handoff.md`**, and the **id is the filename stem**
+(e.g. `rbac-gap-handoff.md` → id `rbac-gap-handoff`). The tool auto-appends `-handoff` (idempotent),
+so `handoff new rbac-gap` and `handoff new rbac-gap-handoff` both land `rbac-gap-handoff.md`, and
+`claim rbac-gap` resolves to it. A file is a handoff doc **iff** it matches `*-handoff.md` — that
+whitelist is why `README.md`, `INDEX.md`, `config`, and the `*-template.md` scaffolds are never
+mistaken for handoffs.
+
 ## The rule
 
 **Claim before you work. Release when you stop.**
@@ -60,15 +69,31 @@ content verbatim.
 
 ## Fields
 
-| Field                     | Meaning                                                                                                                                                                                                    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                          |
-| `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                 |
-| `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. |
-| `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                       |
-| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. When the blocker closes `done`, this handoff is surfaced as newly unblocked at the next session start.                                           |
-| `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                             |
-| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                         |
+| Field                     | Meaning                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                                                                                                                        |
+| `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                               |
+| `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below). |
+| `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                                                                                                                     |
+| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. When the blocker closes `done`, this handoff is surfaced as newly unblocked at the next session start.                                                                                                                                         |
+| `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                           |
+| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                                                                                                                       |
+
+## Shared (cross-repo) board: per-repo identity
+
+A cross-repo board is **shared by N repos**, so no single repo's name may live in the committed
+`config` — the last installer to run would clobber every sibling's identity. Instead:
+
+- The shared `config` carries only board-global facts (`TOPOLOGY`, `HANDOFF_ALLOW_VERIFY_CMD`), **no
+  `REPO_NAME`**.
+- Each consuming repo's identity is **per-consumer**, supplied via `$HANDOFF_REPO` — baked into that
+  repo's hook command at install time (`HANDOFF_REPO=<repo> HANDOFF_HDPATH=<path> bash …/hooks.sh …`).
+  `hooks.sh` and `handoff` prefer `$HANDOFF_REPO` over the config's `REPO_NAME`, so audience routing,
+  the INDEX label, and `doc_is_local` reflect the **calling** repo, not whoever installed last.
+- On a shared board, `handoff new` **requires** `--audience <repo>` (there is no default identity)
+  unless `$HANDOFF_REPO` is set in the environment.
+
+Single-repo boards are unchanged: no `$HANDOFF_REPO`, identity comes from `config` `REPO_NAME`.
 
 ## Two rules that exist because trackers rot
 

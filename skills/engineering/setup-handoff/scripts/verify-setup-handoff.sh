@@ -83,7 +83,13 @@ if [ -f "$HD/config" ]; then
   TOPO=$(sed -n 's/^TOPOLOGY=//p' "$HD/config" | head -1)
   case "$TOPO" in single-repo | cross-repo) ok "config topology: $TOPO" ;; *) bad "config missing/invalid TOPOLOGY" ;; esac
 else bad "config missing"; fi
-grep -q '/.locks/' .gitignore 2> /dev/null && ok ".gitignore excludes .locks/" || warn ".gitignore missing a .locks/ entry — leases could get committed"
+if [ "$TOPO" = "cross-repo" ]; then
+  # Shared board lives outside the worktree and owns its own .gitignore; a consumer .locks/ entry
+  # would be inert, so its absence is correct — not a warning.
+  ok ".gitignore .locks/ check skipped (cross-repo: shared board self-ignores its .locks/)"
+else
+  grep -q '/.locks/' .gitignore 2> /dev/null && ok ".gitignore excludes .locks/" || warn ".gitignore missing a .locks/ entry — leases could get committed"
+fi
 if grep -q 'handoff:begin' AGENTS.md 2> /dev/null && grep -q 'handoff:end' AGENTS.md 2> /dev/null; then
   ok "AGENTS.md routing block present (handoff:begin/end)"
 else bad "AGENTS.md routing block missing"; fi

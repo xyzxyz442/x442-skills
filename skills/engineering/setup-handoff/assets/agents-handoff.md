@@ -3,22 +3,22 @@
 ## Handoff Coordination
 
 This repo coordinates cross-session / cross-repo work through a lease-based **handoff board**
-in `.agents/handoff/`. **Claim before you work. Release when you stop.**
+in `PLACEHOLDER_HANDOFF_DIR/`. **Claim before you work. Release when you stop.**
 
 Before starting any tracked work, check the board and claim your unit. `claim` fails if someone
 holds a live lease — pick another handoff or tell the user who holds it. Do **not** edit a handoff
 doc you do not hold the lease for (the hooks block it).
 
 ```text
-.agents/handoff/handoff list
-.agents/handoff/handoff claim HANDOFF_ID "what you're doing"
+PLACEHOLDER_HANDOFF_DIR/handoff list
+PLACEHOLDER_HANDOFF_DIR/handoff claim HANDOFF_ID "what you're doing"
 ```
 
 File a new handoff when your work hands off to another session/repo, or when you find work you
 will not finish here (SEVERITY is low, medium, or high):
 
 ```text
-.agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
+PLACEHOLDER_HANDOFF_DIR/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
 Handoffs have a **type**. The default is `coordination` (the claim/release work item above). A
@@ -27,8 +27,8 @@ compaction brief) — it needs **no claim**, is freely editable, and is listed a
 `--standalone`, or bring an existing file onto the board with `import`:
 
 ```text
-.agents/handoff/handoff new HANDOFF_ID --standalone --title "..."
-.agents/handoff/handoff import ./FILE.md --standalone
+PLACEHOLDER_HANDOFF_DIR/handoff new HANDOFF_ID --standalone --title "..."
+PLACEHOLDER_HANDOFF_DIR/handoff import ./FILE.md --standalone
 ```
 
 Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
@@ -41,11 +41,11 @@ not "the doc says resolved" — it requires `--verified-by`. `blocked` requires 
 (another handoff id, or "external: ..."). `INDEX.md` is generated; never hand-edit it.
 
 ```text
-.agents/handoff/handoff release HANDOFF_ID --status open
-.agents/handoff/handoff release HANDOFF_ID --status blocked --blocked-on OTHER_ID
-.agents/handoff/handoff release HANDOFF_ID --status done --verified-by "how you verified live code"
+PLACEHOLDER_HANDOFF_DIR/handoff release HANDOFF_ID --status open
+PLACEHOLDER_HANDOFF_DIR/handoff release HANDOFF_ID --status blocked --blocked-on OTHER_ID
+PLACEHOLDER_HANDOFF_DIR/handoff release HANDOFF_ID --status done --verified-by "how you verified live code"
 ```
 
-Full protocol: [.agents/handoff/README.md](.agents/handoff/README.md).
+Full protocol: [PLACEHOLDER_HANDOFF_DIR/README.md](PLACEHOLDER_HANDOFF_DIR/README.md).
 
 <!-- handoff:end -->

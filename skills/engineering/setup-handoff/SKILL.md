@@ -171,6 +171,13 @@ In cross-repo topology the shared board lives outside each repo. The installer w
 installer in each sibling so every one is wired. `audience` (which repo acts next) is what keeps a
 backend and a frontend agent apart — the lock only settles the genuine both-repos race.
 
+**Per-repo identity (shared board).** The shared `config` is repo-neutral — it carries no
+`REPO_NAME`, so no sibling's install clobbers another's identity. Each consuming repo's identity is
+baked into its **own** hook command as `HANDOFF_REPO=<repo>` (plus `HANDOFF_HDPATH` so the
+session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer `$HANDOFF_REPO` over
+the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
+shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
+
 ## Notes
 
 - **Fail-safe, not fail-open.** If the deny gate cannot parse a payload (python3 missing/broken),
@@ -185,6 +192,11 @@ backend and a frontend agent apart — the lock only settles the genuine both-re
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
   only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+- **Naming: `<id>-handoff.md`.** Every board doc file ends `-handoff.md` and the id is the filename
+  stem; `handoff new`/`import` auto-append the suffix (idempotent) and `claim`/`release` accept the
+  short or full id. A file is a handoff doc **iff** it matches `*-handoff.md` — a whitelist that
+  replaces the old blacklist and structurally prevents templates/README/INDEX from leaking into the
+  board listing.
 - **Docs are committed — redaction is authored in.** Unlike a throwaway temp-dir handoff, these
   docs land in git history. The template and `handoff new`/`release` output carry a redact-secrets
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`

@@ -53,6 +53,9 @@ When you find work you will not finish here, or that another repo/session must p
 handoff new <id> --title "…" --severity low|medium|high [--audience <repo>]
 ```
 
+The doc file is always **`<id>-handoff.md`** and the id is the filename stem — the tool auto-appends
+`-handoff` (idempotent), and `claim`/`release` accept either the short or the full id.
+
 **Pick a type.** The default is a **coordination** handoff (the claim/release work item this skill
 is about). For a self-contained reference/knowledge doc — a porting guide, an eval report, a
 session-compaction brief — file a **standalone** handoff instead: it needs no claim, is freely

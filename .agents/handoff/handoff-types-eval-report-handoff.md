@@ -1,5 +1,5 @@
 ---
-id: handoff-types-eval-report
+id: handoff-types-eval-report-handoff
 title: Evaluation report — handoff types (standalone/isolated)
 type: standalone
 status: open
