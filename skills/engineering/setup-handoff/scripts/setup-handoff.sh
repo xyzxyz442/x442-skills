@@ -29,12 +29,30 @@ REPO="$1"
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tools) TOOLS="${2:-}"; shift 2 ;;
-    --primary) PRIMARY="${2:-none}"; shift 2 ;;
-    --topology) TOPOLOGY="${2:-single-repo}"; shift 2 ;;
-    --handoff-dir) HANDOFF_DIR="${2:-}"; shift 2 ;;
-    --migrate) MIGRATE="${2:-}"; shift 2 ;;
-    --allow-verify-cmd) ALLOW_VERIFY=1; shift ;;
+    --tools)
+      TOOLS="${2:-}"
+      shift 2
+      ;;
+    --primary)
+      PRIMARY="${2:-none}"
+      shift 2
+      ;;
+    --topology)
+      TOPOLOGY="${2:-single-repo}"
+      shift 2
+      ;;
+    --handoff-dir)
+      HANDOFF_DIR="${2:-}"
+      shift 2
+      ;;
+    --migrate)
+      MIGRATE="${2:-}"
+      shift 2
+      ;;
+    --allow-verify-cmd)
+      ALLOW_VERIFY=1
+      shift
+      ;;
     *) die "unknown arg: $1" ;;
   esac
 done
@@ -142,10 +160,22 @@ fi
 render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   local tool="$1" primary="$2" cfg=""
   case "$tool" in
-    claude) cfg="$REPO/.claude/settings.json"; mkdir -p "$REPO/.claude" ;;
-    gemini) cfg="$REPO/.gemini/settings.json"; mkdir -p "$REPO/.gemini" ;;
-    copilot) cfg="$REPO/.github/hooks/handoff.json"; mkdir -p "$REPO/.github/hooks" ;;
-    *) echo "  (skipping unknown tool: $tool)" >&2; return 0 ;;
+    claude)
+      cfg="$REPO/.claude/settings.json"
+      mkdir -p "$REPO/.claude"
+      ;;
+    gemini)
+      cfg="$REPO/.gemini/settings.json"
+      mkdir -p "$REPO/.gemini"
+      ;;
+    copilot)
+      cfg="$REPO/.github/hooks/handoff.json"
+      mkdir -p "$REPO/.github/hooks"
+      ;;
+    *)
+      echo "  (skipping unknown tool: $tool)" >&2
+      return 0
+      ;;
   esac
   HANDOFF_HDPATH="$HDPATH" HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" \
     python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" \

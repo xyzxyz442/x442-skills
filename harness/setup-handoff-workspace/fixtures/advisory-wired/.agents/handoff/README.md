@@ -26,18 +26,18 @@ hold the lease for (the hooks block it).
 
 Every doc carries a `type:` (absent ⇒ `coordination`, so legacy docs are unaffected):
 
-| type | gate | lifecycle | listed as |
-| --- | --- | --- | --- |
-| `coordination` (default) | **claim before edit** — the lease gate blocks non-holders | `release --status open/blocked/done --verified-by` | Open work |
-| `standalone` | **exempt** — freely editable, no lease needed | retire via `release --status done` (no `--verified-by`) | Standalone / reference |
+| type                     | gate                                                      | lifecycle                                               | listed as              |
+| ------------------------ | --------------------------------------------------------- | ------------------------------------------------------- | ---------------------- |
+| `coordination` (default) | **claim before edit** — the lease gate blocks non-holders | `release --status open/blocked/done --verified-by`      | Open work              |
+| `standalone`             | **exempt** — freely editable, no lease needed             | retire via `release --status done` (no `--verified-by`) | Standalone / reference |
 
 A **standalone** handoff is a self-contained reference/knowledge doc — a porting guide, an eval
 report, a session-compaction brief. It is not claimable work: `claim` refuses it, the `pretool-edit`
 gate allows editing it without a lease, and it is listed apart so it is not mistaken for open work.
 
 ```bash
-./handoff new port-guide --standalone --title "Porting guide"   # create a standalone doc
-./handoff import ./NOTES.md --id notes --standalone              # bring an existing file onto the board
+./handoff new port-guide --standalone --title "Porting guide" # create a standalone doc
+./handoff import ./NOTES.md --id notes --standalone           # bring an existing file onto the board
 ```
 
 `import` copies a file in (never moves it), normalizing its frontmatter (`id/title/type/status/

@@ -96,7 +96,11 @@ is_archived() { [ -f "$DIR/archive/$1.md" ]; }
 # needed to edit) and not surfaced as claimable work. "coordination" (the default, and what an
 # absent `type:` means) = a lease-gated work item. Keep the absence⇒coordination rule so legacy
 # docs and existing boards behave exactly as before.
-doc_type() { local t; t="$(meta "$1" type)"; printf '%s' "${t:-coordination}"; }
+doc_type() {
+  local t
+  t="$(meta "$1" type)"
+  printf '%s' "${t:-coordination}"
+}
 is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
 
 # The redaction reminder embedded at the top of every generated doc body. A handoff doc is
@@ -121,19 +125,38 @@ cmd_new() {
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      --title) title="${2:-}"; shift 2 ;;
-      --audience) audience="${2:-}"; shift 2 ;;
-      --severity) severity="${2:-}"; shift 2 ;;
-      --note) note="${2:-}"; shift 2 ;;
-      --type) type="${2:-}"; shift 2 ;;
-      --standalone) type="standalone"; shift ;;
+      --title)
+        title="${2:-}"
+        shift 2
+        ;;
+      --audience)
+        audience="${2:-}"
+        shift 2
+        ;;
+      --severity)
+        severity="${2:-}"
+        shift 2
+        ;;
+      --note)
+        note="${2:-}"
+        shift 2
+        ;;
+      --type)
+        type="${2:-}"
+        shift 2
+        ;;
+      --standalone)
+        type="standalone"
+        shift
+        ;;
       *) shift ;;
     esac
   done
   case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists"
   [ -n "$title" ] || title="$id"
-  local d; d="$(today)"
+  local d
+  d="$(today)"
 
   if [ "$type" = "standalone" ]; then
     # A standalone/reference doc: gate-exempt, self-contained, no audience/severity/lease.
@@ -144,10 +167,24 @@ cmd_new() {
         -e "s|PLACEHOLDER_NOTE|$note|g" "$tmpl" > "$DIR/$id.md"
     else
       {
-        echo "---"; echo "id: $id"; echo "title: $title"; echo "type: standalone"
-        echo "status: open"; echo "created: $d"; echo "updated: $d"; echo "note: $note"; echo "---"
-        echo; redaction_comment; echo
-        echo "## Summary"; echo; echo "## Context"; echo; echo "## Suggested skills"; echo
+        echo "---"
+        echo "id: $id"
+        echo "title: $title"
+        echo "type: standalone"
+        echo "status: open"
+        echo "created: $d"
+        echo "updated: $d"
+        echo "note: $note"
+        echo "---"
+        echo
+        redaction_comment
+        echo
+        echo "## Summary"
+        echo
+        echo "## Context"
+        echo
+        echo "## Suggested skills"
+        echo
       } > "$DIR/$id.md"
     fi
     echo "Created $DIR/$id.md (standalone/reference) — no claim needed; edit it freely."
@@ -173,8 +210,15 @@ cmd_new() {
         echo "updated: $d"
         echo "note: $note"
         echo "---"
-        echo; redaction_comment; echo
-        echo "## Context"; echo; echo "## Verify"; echo; echo "## Suggested skills"; echo
+        echo
+        redaction_comment
+        echo
+        echo "## Context"
+        echo
+        echo "## Verify"
+        echo
+        echo "## Suggested skills"
+        echo
       } > "$DIR/$id.md"
     fi
     echo "Created $DIR/$id.md — claim it before working: ./handoff claim $id \"...\""
@@ -191,12 +235,30 @@ cmd_import() {
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      --id) id="${2:-}"; shift 2 ;;
-      --title) title="${2:-}"; shift 2 ;;
-      --type) type="${2:-}"; shift 2 ;;
-      --severity) severity="${2:-}"; shift 2 ;;
-      --note) note="${2:-}"; shift 2 ;;
-      --standalone) type="standalone"; shift ;;
+      --id)
+        id="${2:-}"
+        shift 2
+        ;;
+      --title)
+        title="${2:-}"
+        shift 2
+        ;;
+      --type)
+        type="${2:-}"
+        shift 2
+        ;;
+      --severity)
+        severity="${2:-}"
+        shift 2
+        ;;
+      --note)
+        note="${2:-}"
+        shift 2
+        ;;
+      --standalone)
+        type="standalone"
+        shift
+        ;;
       *) shift ;;
     esac
   done
@@ -210,7 +272,8 @@ cmd_import() {
   # title: --title, else the first markdown H1, else the id
   [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
   [ -n "$title" ] || title="$id"
-  local d; d="$(today)" dest="$DIR/$id.md"
+  local d
+  d="$(today)" dest="$DIR/$id.md"
 
   if [ "$(head -1 "$src")" = "---" ]; then
     # Source already has YAML frontmatter — copy it, then upsert the board keys via set_field.
@@ -225,10 +288,17 @@ cmd_import() {
   else
     # No frontmatter — prepend a fresh block above the content, verbatim.
     {
-      echo "---"; echo "id: $id"; echo "title: $title"; echo "type: $type"
+      echo "---"
+      echo "id: $id"
+      echo "title: $title"
+      echo "type: $type"
       echo "status: open"
       [ "$type" = "coordination" ] && echo "severity: ${severity:-medium}"
-      echo "created: $d"; echo "updated: $d"; echo "note: $note"; echo "---"; echo
+      echo "created: $d"
+      echo "updated: $d"
+      echo "note: $note"
+      echo "---"
+      echo
     } > "$dest"
     cat "$src" >> "$dest"
   fi
@@ -333,11 +403,26 @@ cmd_release() {
   local status='' note='' verified_by='' blocked_on='' run_verify=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --status) status="${2:?}"; shift 2 ;;
-      --verified-by) verified_by="${2:?}"; shift 2 ;;
-      --blocked-on) blocked_on="${2:?}"; shift 2 ;;
-      --run-verify) run_verify=1; shift ;;
-      *) note="$note $1"; shift ;;
+      --status)
+        status="${2:?}"
+        shift 2
+        ;;
+      --verified-by)
+        verified_by="${2:?}"
+        shift 2
+        ;;
+      --blocked-on)
+        blocked_on="${2:?}"
+        shift 2
+        ;;
+      --run-verify)
+        run_verify=1
+        shift
+        ;;
+      *)
+        note="$note $1"
+        shift
+        ;;
     esac
   done
   [ -n "$status" ] || die "release needs --status open|blocked|done"
@@ -391,7 +476,7 @@ cmd_release() {
       # and only for a doc whose origin is THIS repo.
       if [ "$run_verify" = 1 ] && [ "${HANDOFF_ALLOW_VERIFY_CMD:-0}" = 1 ] && doc_is_local "$f"; then
         echo "Running verify: $vcmd"
-        if ! ( cd "$(git rev-parse --show-toplevel 2> /dev/null || echo "$DIR")" && eval "$vcmd" ); then
+        if ! (cd "$(git rev-parse --show-toplevel 2> /dev/null || echo "$DIR")" && eval "$vcmd"); then
           die "verify command failed — not closing $id. Fix the code or the command."
         fi
         verified_by="$verified_by [verify: exit 0]"
@@ -536,12 +621,30 @@ cmd_index() {
 
 case "${1:-list}" in
   list) cmd_list ;;
-  new) shift; cmd_new "$@" ;;
-  import) shift; cmd_import "$@" ;;
-  claim) shift; cmd_claim "$@" ;;
-  touch) shift; cmd_touch "$@" ;;
-  release) shift; cmd_release "$@" ;;
-  reap) shift; cmd_reap "$@" ;;
+  new)
+    shift
+    cmd_new "$@"
+    ;;
+  import)
+    shift
+    cmd_import "$@"
+    ;;
+  claim)
+    shift
+    cmd_claim "$@"
+    ;;
+  touch)
+    shift
+    cmd_touch "$@"
+    ;;
+  release)
+    shift
+    cmd_release "$@"
+    ;;
+  reap)
+    shift
+    cmd_reap "$@"
+    ;;
   index) cmd_index ;;
   *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
 esac

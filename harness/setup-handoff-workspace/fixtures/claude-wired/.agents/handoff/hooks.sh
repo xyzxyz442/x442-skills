@@ -22,9 +22,18 @@ REPO=""
 TOOL="claude"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --kind) KIND="${2:-}"; shift 2 ;;
-    --repo) REPO="${2:-}"; shift 2 ;;
-    --tool) TOOL="${2:-}"; shift 2 ;;
+    --kind)
+      KIND="${2:-}"
+      shift 2
+      ;;
+    --repo)
+      REPO="${2:-}"
+      shift 2
+      ;;
+    --tool)
+      TOOL="${2:-}"
+      shift 2
+      ;;
     *) shift ;;
   esac
 done
