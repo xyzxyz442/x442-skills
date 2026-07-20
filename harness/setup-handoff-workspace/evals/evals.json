@@ -57,7 +57,7 @@
       "kind": "post-state",
       "prompt": "Exercise the handoff protocol: claim, enforce, block/unblock, and close a handoff.",
       "fixture": "fixtures/claude-wired",
-      "expected_output": "Behavioral case (not just wiring): driving the installed `handoff` script + `hooks.sh` proves the protocol improvements — claim writes `session=`; the pretool gate denies a non-holder and allows the holder; `done` is refused without --verified-by and archives with it; `blocked` is refused without --blocked-on and surfaces the dependent as unblocked when its blocker closes; sessionstart auto-reaps an expired lease; posttool auto-touches the holder's lease; and a `verify:` command is not executed without the opt-in."
+      "expected_output": "Behavioral case (not just wiring): driving the installed `handoff` script + `hooks.sh` proves the protocol improvements — claim writes `session=`; the pretool gate denies a non-holder and allows the holder; `done` is refused without --verified-by and archives with it; `blocked` is refused without --blocked-on and surfaces the dependent as unblocked when its blocker closes; sessionstart auto-reaps an expired lease; posttool auto-touches the holder's lease; a `verify:` command is not executed without the opt-in; and handoff types work — a `standalone` doc (created via `new --standalone` or `import`) is gate-exempt (the pretool gate allows a non-holder to edit it), `claim` refuses it, and `release --status done` retires it without --verified-by, while coordination docs keep the lease gate."
     }
   ]
 }

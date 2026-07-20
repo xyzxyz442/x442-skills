@@ -22,6 +22,28 @@ cd .agents/handoff
 pick a different handoff, or tell the user who holds it. Never edit a handoff doc you do not
 hold the lease for (the hooks block it).
 
+## Two types of handoff
+
+Every doc carries a `type:` (absent ⇒ `coordination`, so legacy docs are unaffected):
+
+| type                     | gate                                                      | lifecycle                                               | listed as              |
+| ------------------------ | --------------------------------------------------------- | ------------------------------------------------------- | ---------------------- |
+| `coordination` (default) | **claim before edit** — the lease gate blocks non-holders | `release --status open/blocked/done --verified-by`      | Open work              |
+| `standalone`             | **exempt** — freely editable, no lease needed             | retire via `release --status done` (no `--verified-by`) | Standalone / reference |
+
+A **standalone** handoff is a self-contained reference/knowledge doc — a porting guide, an eval
+report, a session-compaction brief. It is not claimable work: `claim` refuses it, the `pretool-edit`
+gate allows editing it without a lease, and it is listed apart so it is not mistaken for open work.
+
+```bash
+./handoff new port-guide --standalone --title "Porting guide" # create a standalone doc
+./handoff import ./NOTES.md --id notes --standalone           # bring an existing file onto the board
+```
+
+`import` copies a file in (never moves it), normalizing its frontmatter (`id/title/type/status/
+created/updated`); if the source has no YAML frontmatter, a fresh block is prepended above the
+content verbatim.
+
 ## How the lock works
 
 - A lease is an atomic `mkdir` of `.locks/<id>/` — two agents racing cannot both win. (This is
@@ -40,6 +62,7 @@ hold the lease for (the hooks block it).
 
 | Field                     | Meaning                                                                                                                                                                                                    |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                          |
 | `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                 |
 | `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. |
 | `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                       |

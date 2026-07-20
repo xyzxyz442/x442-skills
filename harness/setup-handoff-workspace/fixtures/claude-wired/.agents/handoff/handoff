@@ -92,6 +92,22 @@ lock_state() { # id -> "free" | "held|owner|exp" | "expired|owner|exp"
 
 is_archived() { [ -f "$DIR/archive/$1.md" ]; }
 
+# Handoff type. "standalone" = a self-contained reference/knowledge doc: gate-exempt (no lease
+# needed to edit) and not surfaced as claimable work. "coordination" (the default, and what an
+# absent `type:` means) = a lease-gated work item. Keep the absence⇒coordination rule so legacy
+# docs and existing boards behave exactly as before.
+doc_type() { local t; t="$(meta "$1" type)"; printf '%s' "${t:-coordination}"; }
+is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
+
+# The redaction reminder embedded at the top of every generated doc body. A handoff doc is
+# committed to git history, so secrets pasted into it persist. Kept as a function so the coordination
+# and standalone fallback templates stay identical.
+redaction_comment() {
+  echo "<!-- NEVER COMMIT SECRETS. This doc is committed to git history. Redact any keys,"
+  echo "     secrets, passwords, confidential data, or PII. If a credential is truly needed,"
+  echo "     prompt the user and record its NAME (env var / secret-manager ref), never the value. -->"
+}
+
 # Release a lease: remove its files then the now-empty dir. rmdir only removes an empty
 # directory, so this never recursively deletes anything unexpected (no `rm -rf`).
 clear_lock() {
@@ -100,8 +116,8 @@ clear_lock() {
 }
 
 cmd_new() {
-  local id="" title="" audience="" severity="medium" note=""
-  id="${1:?usage: handoff new <id> [--title T] [--audience REPO] [--severity S] [--note N]}"
+  local id="" title="" audience="" severity="medium" note="" type="coordination"
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone] [--standalone] [--audience REPO] [--severity S] [--note N]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -109,40 +125,115 @@ cmd_new() {
       --audience) audience="${2:-}"; shift 2 ;;
       --severity) severity="${2:-}"; shift 2 ;;
       --note) note="${2:-}"; shift 2 ;;
+      --type) type="${2:-}"; shift 2 ;;
+      --standalone) type="standalone"; shift ;;
       *) shift ;;
     esac
   done
+  case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists"
   [ -n "$title" ] || title="$id"
-  [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ] && audience="${REPO_NAME:-this-repo}"
-  local tmpl="$DIR/handoff-doc-template.md"
   local d; d="$(today)"
-  if [ -f "$tmpl" ]; then
-    # PLACEHOLDER_* tokens (not {{...}} or <...>) so a prettier/lint pass on the shipped
-    # template never mangles them before `handoff new` fills them in.
-    sed -e "s|PLACEHOLDER_ID|$id|g" -e "s|PLACEHOLDER_TITLE|$title|g" -e "s|PLACEHOLDER_AUDIENCE|$audience|g" \
-      -e "s|PLACEHOLDER_SEVERITY|$severity|g" -e "s|PLACEHOLDER_CREATED|$d|g" -e "s|PLACEHOLDER_UPDATED|$d|g" \
-      -e "s|PLACEHOLDER_NOTE|$note|g" "$tmpl" > "$DIR/$id.md"
+
+  if [ "$type" = "standalone" ]; then
+    # A standalone/reference doc: gate-exempt, self-contained, no audience/severity/lease.
+    local tmpl="$DIR/handoff-standalone-template.md"
+    if [ -f "$tmpl" ]; then
+      sed -e "s|PLACEHOLDER_ID|$id|g" -e "s|PLACEHOLDER_TITLE|$title|g" \
+        -e "s|PLACEHOLDER_CREATED|$d|g" -e "s|PLACEHOLDER_UPDATED|$d|g" \
+        -e "s|PLACEHOLDER_NOTE|$note|g" "$tmpl" > "$DIR/$id.md"
+    else
+      {
+        echo "---"; echo "id: $id"; echo "title: $title"; echo "type: standalone"
+        echo "status: open"; echo "created: $d"; echo "updated: $d"; echo "note: $note"; echo "---"
+        echo; redaction_comment; echo
+        echo "## Summary"; echo; echo "## Context"; echo; echo "## Suggested skills"; echo
+      } > "$DIR/$id.md"
+    fi
+    echo "Created $DIR/$id.md (standalone/reference) — no claim needed; edit it freely."
   else
-    {
-      echo "---"
-      echo "id: $id"
-      echo "title: $title"
-      echo "status: open"
-      [ -n "$audience" ] && echo "audience: $audience"
-      echo "severity: $severity"
-      echo "created: $d"
-      echo "updated: $d"
-      echo "note: $note"
-      echo "---"
-      echo
-      echo "## Context"
-      echo
-      echo "## Verify"
-      echo
-    } > "$DIR/$id.md"
+    [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ] && audience="${REPO_NAME:-this-repo}"
+    local tmpl="$DIR/handoff-doc-template.md"
+    if [ -f "$tmpl" ]; then
+      # PLACEHOLDER_* tokens (not {{...}} or <...>) so a prettier/lint pass on the shipped
+      # template never mangles them before `handoff new` fills them in.
+      sed -e "s|PLACEHOLDER_ID|$id|g" -e "s|PLACEHOLDER_TITLE|$title|g" -e "s|PLACEHOLDER_AUDIENCE|$audience|g" \
+        -e "s|PLACEHOLDER_SEVERITY|$severity|g" -e "s|PLACEHOLDER_CREATED|$d|g" -e "s|PLACEHOLDER_UPDATED|$d|g" \
+        -e "s|PLACEHOLDER_NOTE|$note|g" "$tmpl" > "$DIR/$id.md"
+    else
+      {
+        echo "---"
+        echo "id: $id"
+        echo "title: $title"
+        echo "type: coordination"
+        echo "status: open"
+        [ -n "$audience" ] && echo "audience: $audience"
+        echo "severity: $severity"
+        echo "created: $d"
+        echo "updated: $d"
+        echo "note: $note"
+        echo "---"
+        echo; redaction_comment; echo
+        echo "## Context"; echo; echo "## Verify"; echo; echo "## Suggested skills"; echo
+      } > "$DIR/$id.md"
+    fi
+    echo "Created $DIR/$id.md — claim it before working: ./handoff claim $id \"...\""
   fi
-  echo "Created $DIR/$id.md — claim it before working: ./handoff claim $id \"...\""
+  echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
+  cmd_index
+}
+
+# Bring an existing file onto the board as a handoff (default type: standalone). Used to migrate
+# reference docs. Never moves the source (the caller trashes it); we copy + normalize frontmatter.
+cmd_import() {
+  local src="" id="" title="" type="standalone" severity="" note=""
+  src="${1:?usage: handoff import <file> [--id ID] [--title T] [--type standalone|coordination] [--severity S] [--note N]}"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id) id="${2:-}"; shift 2 ;;
+      --title) title="${2:-}"; shift 2 ;;
+      --type) type="${2:-}"; shift 2 ;;
+      --severity) severity="${2:-}"; shift 2 ;;
+      --note) note="${2:-}"; shift 2 ;;
+      --standalone) type="standalone"; shift ;;
+      *) shift ;;
+    esac
+  done
+  [ -f "$src" ] || die "no such file: $src"
+  case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
+  [ -n "$id" ] || id="$(basename "$src" .md)"
+  # sanitize id to a safe slug (the filename becomes .agents/handoff/<id>.md)
+  id="$(printf '%s' "$id" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
+  [ -n "$id" ] || die "could not derive an id from $src — pass --id"
+  [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists on the board"
+  # title: --title, else the first markdown H1, else the id
+  [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
+  [ -n "$title" ] || title="$id"
+  local d; d="$(today)" dest="$DIR/$id.md"
+
+  if [ "$(head -1 "$src")" = "---" ]; then
+    # Source already has YAML frontmatter — copy it, then upsert the board keys via set_field.
+    cp "$src" "$dest"
+    set_field "$dest" id "$id"
+    set_field "$dest" title "$title"
+    set_field "$dest" type "$type"
+    [ -n "$(meta "$dest" status)" ] || set_field "$dest" status "open"
+    [ -n "$(meta "$dest" created)" ] || set_field "$dest" created "$d"
+    set_field "$dest" updated "$d"
+    [ "$type" = "coordination" ] && [ -n "$severity" ] && set_field "$dest" severity "$severity"
+  else
+    # No frontmatter — prepend a fresh block above the content, verbatim.
+    {
+      echo "---"; echo "id: $id"; echo "title: $title"; echo "type: $type"
+      echo "status: open"
+      [ "$type" = "coordination" ] && echo "severity: ${severity:-medium}"
+      echo "created: $d"; echo "updated: $d"; echo "note: $note"; echo "---"; echo
+    } > "$dest"
+    cat "$src" >> "$dest"
+  fi
+  echo "Imported $src → $dest (type: $type)."
+  echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
 }
 
@@ -150,11 +241,16 @@ cmd_list() {
   printf '%-44s %-9s %-14s %-8s %s\n' ID STATUS AUDIENCE SEVERITY LOCK
   printf '%-44s %-9s %-14s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
     "---------" "--------------" "--------" "----"
+  local standalone=""
   for f in "$DIR"/*.md; do
     [ -f "$f" ] || continue
     local base
     base="$(basename "$f" .md)"
-    case "$base" in INDEX | README) continue ;; esac
+    case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
+    if is_standalone "$f"; then
+      standalone="${standalone}$(printf '%-44s %-9s %s' "$base" "$(meta "$f" status)" "$(meta "$f" title)")"$'\n'
+      continue
+    fi
     local kind owner exp
     IFS='|' read -r kind owner exp <<< "$(lock_state "$base")"
     local lock='—'
@@ -165,6 +261,11 @@ cmd_list() {
     printf '%-44s %-9s %-14s %-8s %s\n' \
       "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(meta "$f" severity)" "$lock"
   done
+  if [ -n "$standalone" ]; then
+    printf '\nStandalone / reference (no claim needed):\n'
+    printf '%-44s %-9s %s\n' ID STATUS TITLE
+    printf '%s' "$standalone"
+  fi
 }
 
 cmd_claim() {
@@ -173,6 +274,7 @@ cmd_claim() {
   local note="${*:-}"
   local f
   f="$(doc_of "$id")"
+  is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
 
   local kind owner exp
@@ -246,6 +348,33 @@ cmd_release() {
   local me
   me="$(whoami_id)"
 
+  if is_standalone "$f"; then
+    # A standalone/reference doc carries no lease and makes no live-code claim, so `done`
+    # just retires it (archive) with no --verified-by. Only open|done apply.
+    case "$status" in
+      open)
+        set_field "$f" status open
+        set_field "$f" updated "$(today)"
+        log_activity "$f" "updated (standalone) by $me.${note}"
+        echo "Updated standalone $id."
+        ;;
+      done)
+        set_field "$f" status done
+        set_field "$f" updated "$(today)"
+        log_activity "$f" "retired (standalone) by $me.${note}"
+        mkdir -p "$DIR/archive"
+        if [ "$(dirname "$f")" = "$DIR" ]; then
+          git -C "$DIR" mv "$(basename "$f")" "archive/$(basename "$f")" 2> /dev/null \
+            || mv "$f" "$DIR/archive/" 2> /dev/null || true
+        fi
+        echo "✅ Retired standalone $id → archive/."
+        ;;
+      *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
+    esac
+    cmd_index
+    return
+  fi
+
   if [ "$status" = "blocked" ]; then
     [ -n "$blocked_on" ] || die "release --status blocked needs --blocked-on <handoff-id|\"external: ...\"> — what is it waiting on?"
     set_field "$f" blocked_on "$blocked_on"
@@ -285,6 +414,7 @@ cmd_release() {
         || mv "$f" "$DIR/archive/" 2> /dev/null || true
     fi
     echo "✅ $id → done, moved to archive/. verified-by: $verified_by"
+    echo "🔒 This doc is committed to git history — confirm no secrets/keys/passwords/PII remain."
     surface_unblocked "$id"
   else
     log_activity "$f" "$status — released by $me.${note}"
@@ -308,7 +438,7 @@ surface_unblocked() { # closed_id -> print any open docs blocked_on it
     [ -f "$g" ] || continue
     local gb
     gb="$(basename "$g" .md)"
-    case "$gb" in INDEX | README) continue ;; esac
+    case "$gb" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
     [ "$(meta "$g" status)" = "blocked" ] || continue
     case "$(meta "$g" blocked_on)" in *"$closed"*)
       [ "$found" = 0 ] && echo "Now unblocked (their blocker $closed is done):"
@@ -358,7 +488,8 @@ cmd_index() {
       [ -f "$f" ] || continue
       local base
       base="$(basename "$f" .md)"
-      case "$base" in INDEX | README) continue ;; esac
+      case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
+      is_standalone "$f" && continue
       local kind owner exp
       IFS='|' read -r kind owner exp <<< "$(lock_state "$base")"
       local lease="—"
@@ -370,6 +501,25 @@ cmd_index() {
       echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" audience) | $(meta "$f" severity) | $(meta "$f" updated) | ${bo:-—} | $lease |"
     done
     echo
+    # Standalone / reference docs: self-contained, gate-exempt, no lease. Listed apart so they
+    # are not mistaken for claimable work.
+    local has_standalone=0
+    for f in "$DIR"/*.md; do
+      [ -f "$f" ] || continue
+      local base
+      base="$(basename "$f" .md)"
+      case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
+      is_standalone "$f" || continue
+      if [ "$has_standalone" = 0 ]; then
+        has_standalone=1
+        echo "## Standalone / reference (no claim needed)"
+        echo
+        echo "| Handoff | Status | Updated |"
+        echo "| --- | --- | --- |"
+      fi
+      echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" updated) |"
+    done
+    [ "$has_standalone" = 1 ] && echo
     echo "## Archive (done / superseded)"
     echo
     echo "| Handoff | Status | Verified |"
@@ -387,10 +537,11 @@ cmd_index() {
 case "${1:-list}" in
   list) cmd_list ;;
   new) shift; cmd_new "$@" ;;
+  import) shift; cmd_import "$@" ;;
   claim) shift; cmd_claim "$@" ;;
   touch) shift; cmd_touch "$@" ;;
   release) shift; cmd_release "$@" ;;
   reap) shift; cmd_reap "$@" ;;
   index) cmd_index ;;
-  *) die "usage: handoff [list | new <id> [opts] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
+  *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
 esac

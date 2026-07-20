@@ -155,6 +155,34 @@ def grade_script_behavior(target):
     e.append(gc.expectation("verify: command is NOT auto-run without the install opt-in",
                             not marker.exists(),
                             f"marker present: {marker.exists()}; stdout: {r.stdout.strip()[:100]!r}"))
+
+    # --- handoff types: standalone/isolated is gate-exempt --------------------------------
+    _handoff(target, "new", "refdoc", "--standalone", "--title", "Reference")
+    refdoc = doc / "refdoc.md"
+    e.append(gc.expectation("new --standalone writes type: standalone",
+                            refdoc.is_file() and "type: standalone" in refdoc.read_text(),
+                            f"exists: {refdoc.is_file()}"))
+    # the crux: a NON-holder may edit a standalone doc — the pretool gate allows it (empty out)
+    allow = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(refdoc)}}, session="sess-ZZZ")
+    e.append(gc.expectation("pretool gate ALLOWS editing a standalone doc with no lease",
+                            allow == "", f"out: {allow[:120]!r}"))
+    # claim refuses a standalone (it is not claimable work)
+    rc = _handoff(target, "claim", "refdoc", session="sess-ZZZ")
+    e.append(gc.expectation("claim REFUSES a standalone handoff",
+                            rc.returncode != 0, f"exit {rc.returncode}: {rc.stderr.strip()[:80]}"))
+    # standalone retire: done archives WITHOUT --verified-by
+    rr = _handoff(target, "release", "refdoc", "--status", "done")
+    e.append(gc.expectation("standalone release --status done archives without --verified-by",
+                            rr.returncode == 0 and (doc / "archive/refdoc.md").is_file(),
+                            f"exit {rr.returncode}; archived: {(doc / 'archive/refdoc.md').is_file()}"))
+    # import brings an existing file onto the board as standalone
+    src = Path(target) / "IMPORT_ME.md"
+    src.write_text("# Imported\n\nbody\n")
+    _handoff(target, "import", str(src), "--id", "imported", "--standalone")
+    imp = doc / "imported.md"
+    e.append(gc.expectation("import lands a file typed as standalone",
+                            imp.is_file() and "type: standalone" in imp.read_text(),
+                            f"exists: {imp.is_file()}"))
     return e
 
 

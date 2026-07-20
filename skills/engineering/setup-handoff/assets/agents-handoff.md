@@ -21,6 +21,16 @@ will not finish here (SEVERITY is low, medium, or high):
 .agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
+Handoffs have a **type**. The default is `coordination` (the claim/release work item above). A
+`standalone` handoff is a self-contained reference/knowledge doc (porting guide, eval report,
+compaction brief) — it needs **no claim**, is freely editable, and is listed apart. Create one with
+`--standalone`, or bring an existing file onto the board with `import`:
+
+```text
+.agents/handoff/handoff new HANDOFF_ID --standalone --title "..."
+.agents/handoff/handoff import ./FILE.md --standalone
+```
+
 Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
 passwords, or PII into one. Redact them; if the next agent needs a credential, prompt the user and
 supply it via a safe channel (env var, secret-manager reference, or out-of-band), recording only

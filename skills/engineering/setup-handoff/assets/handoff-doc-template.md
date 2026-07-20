@@ -1,6 +1,7 @@
 ---
 id: PLACEHOLDER_ID
 title: PLACEHOLDER_TITLE
+type: coordination
 status: open
 audience: PLACEHOLDER_AUDIENCE
 repos: []

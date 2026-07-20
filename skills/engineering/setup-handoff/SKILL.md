@@ -190,8 +190,16 @@ backend and a frontend agent apart — the lock only settles the genuine both-re
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`
   section, and a link-don't-duplicate note. It is guidance, not a hard gate — redaction can't be
   mechanically verified.
+- **Two handoff types.** Each doc carries a `type:` — `coordination` (default; the lease-gated work
+  item) or `standalone` (a self-contained reference/knowledge doc: porting guide, eval report,
+  compaction brief). A **standalone** doc is **gate-exempt** — the `pretool-edit` hook allows editing
+  it with no lease, `claim` refuses it, and it is listed apart from open work; retire it via `release
+--status done` (no `--verified-by`). Absent `type:` means `coordination`, so legacy docs and
+  existing boards are unaffected. Create with `handoff new --standalone`; bring an existing file onto
+  the board with `handoff import <file>`.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
   (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the
   `.agents/handoff/` payload: `handoff`, `hooks.sh`, `README.md`), `assets/handoff-doc-template.md`
-  (scaffold for `handoff new`), and `assets/agents-handoff.md` (the AGENTS.md routing block).
+  - `assets/handoff-standalone-template.md` (scaffolds for `handoff new` / `new --standalone`), and
+    `assets/agents-handoff.md` (the AGENTS.md routing block).

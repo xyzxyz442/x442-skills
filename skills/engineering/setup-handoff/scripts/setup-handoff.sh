@@ -120,6 +120,7 @@ install_file "$PAYLOAD/handoff" "$HDEST/handoff"
 install_file "$PAYLOAD/hooks.sh" "$HDEST/hooks.sh"
 install_file "$PAYLOAD/README.md" "$HDEST/README.md"
 install_file "$ASSETS/handoff-doc-template.md" "$HDEST/handoff-doc-template.md"
+install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/handoff-standalone-template.md"
 chmod +x "$HDEST/handoff" "$HDEST/hooks.sh"
 
 # config (committed): topology + repo name, read by handoff + hooks.sh

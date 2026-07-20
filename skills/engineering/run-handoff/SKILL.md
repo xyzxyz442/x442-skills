@@ -53,6 +53,16 @@ When you find work you will not finish here, or that another repo/session must p
 handoff new <id> --title "…" --severity low|medium|high [--audience <repo>]
 ```
 
+**Pick a type.** The default is a **coordination** handoff (the claim/release work item this skill
+is about). For a self-contained reference/knowledge doc — a porting guide, an eval report, a
+session-compaction brief — file a **standalone** handoff instead: it needs no claim, is freely
+editable, and is listed apart from open work.
+
+```text
+handoff new <id> --standalone --title "…"        # a new standalone/reference doc
+handoff import <file> --standalone [--id <id>]    # bring an existing file onto the board
+```
+
 Then fill the doc (`.agents/handoff/<id>.md`): **Context** (symptom → root cause), **Where**
 (concrete `file:line` in the target repo — read the code, do not guess), **Verify** (how the next
 agent confirms it against the _live_ code), **Decisions**, **Suggested skills** (which skills the
