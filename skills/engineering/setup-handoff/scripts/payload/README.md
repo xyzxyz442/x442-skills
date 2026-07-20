@@ -55,6 +55,19 @@ hold the lease for (the hooks block it).
 2. **INDEX.md is generated** (`./handoff index`) and must never be hand-edited. A hand-maintained
    tracker is exactly the thing that goes stale; the hooks regenerate it after every doc edit.
 
+## Authoring a doc: redact, suggest, link
+
+- **Redaction (docs are committed).** A handoff doc lives in the repo and its git history — a
+  pasted secret persists there. Remove or redact any keys, API tokens, secrets, confidential data,
+  passwords, or PII before saving. If the next agent genuinely needs a credential, do **not** paste
+  it: leave a named placeholder, prompt the user, and suggest a safe channel (an environment
+  variable, a secret-manager reference, or out-of-band) — record the variable/reference **name**,
+  never the value. `handoff new` and `release --status done` print a reminder.
+- **Suggested skills.** List the skills the next agent should invoke to pick the work up, so
+  continuation starts on the right path.
+- **Link, don't duplicate.** Reference existing artifacts (PRDs, plans, ADRs, issues, commits,
+  diffs) by path or URL instead of pasting their content into the doc.
+
 ## `verify:` is safe by default
 
 A doc may carry a `verify:` command as a machine gate for `done`. Because a cross-repo doc is

@@ -55,7 +55,18 @@ handoff new <id> --title "…" --severity low|medium|high [--audience <repo>]
 
 Then fill the doc (`.agents/handoff/<id>.md`): **Context** (symptom → root cause), **Where**
 (concrete `file:line` in the target repo — read the code, do not guess), **Verify** (how the next
-agent confirms it against the _live_ code), **Decisions**. Claim it if you will start it now.
+agent confirms it against the _live_ code), **Decisions**, **Suggested skills** (which skills the
+next agent should invoke to pick this up). Claim it if you will start it now.
+
+As you write:
+
+- **Redact secrets.** The doc is committed to the repo and its git history. Never paste keys, API
+  tokens, secrets, confidential data, passwords, or PII. If the next agent genuinely needs a
+  credential, do not paste it — leave a named placeholder, prompt the user, and suggest a safe
+  channel (an environment variable, a secret-manager reference, or out-of-band); record the
+  variable/reference _name_, never the value.
+- **Link, don't duplicate.** Reference existing artifacts (PRDs, plans, ADRs, issues, commits,
+  diffs) by path or URL instead of pasting their content into the doc.
 
 ## 4. Work under the lease
 
@@ -93,4 +104,6 @@ pass `--verified-by`. Only re-release with `--run-verify` if the install opted i
 - Closing `done` on trust ("the doc said it was fixed") → the exact failure trackers rot into; the
   tool refuses without `--verified-by`.
 - Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
+- Pasting a secret/key/password/PII into a doc → it lands in git history; redact it and request the
+  value via a safe channel (env var / secret-manager ref) instead.
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.

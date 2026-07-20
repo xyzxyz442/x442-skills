@@ -21,6 +21,11 @@ will not finish here (SEVERITY is low, medium, or high):
 .agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
+Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
+passwords, or PII into one. Redact them; if the next agent needs a credential, prompt the user and
+supply it via a safe channel (env var, secret-manager reference, or out-of-band), recording only
+its name in the doc.
+
 Release when you stop, with an honest status. `done` means **verified against the live code**,
 not "the doc says resolved" — it requires `--verified-by`. `blocked` requires `--blocked-on`
 (another handoff id, or "external: ..."). `INDEX.md` is generated; never hand-edit it.

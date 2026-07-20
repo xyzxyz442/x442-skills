@@ -136,13 +136,20 @@ cmd_new() {
       echo "note: $note"
       echo "---"
       echo
+      echo "<!-- NEVER COMMIT SECRETS. This doc is committed to git history. Redact any keys,"
+      echo "     secrets, passwords, confidential data, or PII. If a credential is truly needed,"
+      echo "     prompt the user and record its NAME (env var / secret-manager ref), never the value. -->"
+      echo
       echo "## Context"
       echo
       echo "## Verify"
       echo
+      echo "## Suggested skills"
+      echo
     } > "$DIR/$id.md"
   fi
   echo "Created $DIR/$id.md — claim it before working: ./handoff claim $id \"...\""
+  echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
 }
 
@@ -285,6 +292,7 @@ cmd_release() {
         || mv "$f" "$DIR/archive/" 2> /dev/null || true
     fi
     echo "✅ $id → done, moved to archive/. verified-by: $verified_by"
+    echo "🔒 This doc is committed to git history — confirm no secrets/keys/passwords/PII remain."
     surface_unblocked "$id"
   else
     log_activity "$f" "$status — released by $me.${note}"

@@ -185,6 +185,11 @@ backend and a frontend agent apart — the lock only settles the genuine both-re
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
   only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+- **Docs are committed — redaction is authored in.** Unlike a throwaway temp-dir handoff, these
+  docs land in git history. The template and `handoff new`/`release` output carry a redact-secrets
+  reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`
+  section, and a link-don't-duplicate note. It is guidance, not a hard gate — redaction can't be
+  mechanically verified.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
   (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the
