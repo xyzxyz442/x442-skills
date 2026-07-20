@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "sessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .agents/handoff/hooks.sh --kind sessionstart --tool copilot"
+          }
+        ]
+      }
+    ],
+    "postToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .agents/handoff/hooks.sh --kind posttool-edit --tool copilot"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
+      }
+    ]
+  }
+}
