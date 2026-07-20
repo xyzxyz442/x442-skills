@@ -147,7 +147,7 @@ doc_id_of() {
   d="$(cd "$(dirname "$p")" 2> /dev/null && pwd)" && p="$d/$(basename "$p")"
   case "$p" in "$DIR"/*.md | "$DIR"/archive/*.md) ;; *) return 1 ;; esac
   base="$(basename "$p" .md)"
-  case "$base" in README) return 1 ;; esac
+  case "$base" in README | handoff-doc-template | handoff-standalone-template) return 1 ;; esac
   printf '%s' "$base"
 }
 
@@ -156,10 +156,16 @@ case "$KIND" in
   sessionstart)
     reap_expired # stale leases self-heal at the start of every session
     out=""
+    refs=""
     for f in "$DIR"/*.md; do
       [ -f "$f" ] || continue
       id="$(basename "$f" .md)"
-      case "$id" in INDEX | README) continue ;; esac
+      case "$id" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
+      # Standalone/reference docs are not claimable work — list them apart, no lease nag.
+      if [ "$(meta "$f" type)" = "standalone" ]; then
+        refs="${refs}- ${id} — $(meta "$f" title)"$'\n'
+        continue
+      fi
       aud="$(meta "$f" audience)"
       # cross-repo: only surface what THIS repo must act on next.
       [ "$TOPOLOGY" = "cross-repo" ] && [ -n "$REPO" ] && [ -n "$aud" ] && [ "$aud" != "$REPO" ] && continue
@@ -175,11 +181,18 @@ case "$KIND" in
       fi
       out="${out}${line}"$'\n'
     done
-    [ -z "$out" ] && exit 0
-    ctx="Open handoffs for \`${REPO:-this repo}\` (from .agents/handoff/):
-${out}
-Claim before working on one: \`.agents/handoff/handoff claim <id> \"note\"\`.
-Editing a handoff doc without holding its lease is blocked. Release when you stop."
+    [ -z "$out" ] && [ -z "$refs" ] && exit 0
+    ctx="Handoffs for \`${REPO:-this repo}\` (from .agents/handoff/):"
+    [ -n "$out" ] && ctx="${ctx}
+
+Open (claim before working — editing a doc without its lease is blocked):
+${out}"
+    [ -n "$refs" ] && ctx="${ctx}
+
+Standalone / reference (no claim needed — edit freely):
+${refs}"
+    ctx="${ctx}
+Claim: \`.agents/handoff/handoff claim <id> \"note\"\`. Release when you stop."
     emit_context "$ctx"
     ;;
 
@@ -198,6 +211,11 @@ Editing a handoff doc without holding its lease is blocked. Release when you sto
     id="$(doc_id_of "$path")" || exit 0
 
     [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: .agents/handoff/handoff index"
+
+    # Standalone/reference docs are gate-exempt: they carry no lease and are freely editable.
+    # An absent type means coordination (gated), so legacy docs behave exactly as before. Only an
+    # existing doc can be standalone — a brand-new (not-yet-written) doc stays gated.
+    [ -f "$DIR/$id.md" ] && [ "$(meta "$DIR/$id.md" type)" = "standalone" ] && exit 0
 
     session="$(field session)"
     if lock_live "$id"; then
