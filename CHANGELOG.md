@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/xyzxyz442/x442-skills/compare/v0.3.1...v0.4.0) (2026-07-20)
+
+### 🚀 Features
+
+- **setup:** add run-handoff discipline skill ([eea16c9](https://github.com/xyzxyz442/x442-skills/commit/eea16c905eb82b3329fc94bcf810ec487477221a))
+- **setup:** add setup-handoff coordination skill ([7b0eaad](https://github.com/xyzxyz442/x442-skills/commit/7b0eaad42fbc2fa0c22abaab790037508a837538))
+- **setup:** add standalone handoff type (isolated, claim-exempt) + import ([344af84](https://github.com/xyzxyz442/x442-skills/commit/344af84548d893b07895571b809223c0dec20ea0))
+
+### 📚 Documentation
+
+- **setup:** add handoff-types eval report and update the sync handoff ([a10529a](https://github.com/xyzxyz442/x442-skills/commit/a10529abd92b0affa84bf33737ff6f944bb1bdd2))
+- **setup:** index and document the handoff skills ([899187b](https://github.com/xyzxyz442/x442-skills/commit/899187b4675c7c81d23a80392ee1f669faeea696))
+- **setup:** redact secrets, suggest skills, link-don't-duplicate in handoff docs ([ea0e8fe](https://github.com/xyzxyz442/x442-skills/commit/ea0e8feee56d0d7aee80a1b9e1dd4124282ba127))
+
+### 💅 Styles
+
+- **setup:** apply prettier-sh formatting to handoff shell scripts ([9d0180c](https://github.com/xyzxyz442/x442-skills/commit/9d0180ca5037b5d8bbd2aeaf99dcc7519b9a16df))
+
+### 🧹 Miscellaneous Chores
+
+- **ci:** configure Dependabot for daily npm and pip updates ([2f4e2ab](https://github.com/xyzxyz442/x442-skills/commit/2f4e2ab4dcd06d52067997aa9bc6279e784bde9d))
+- **setup:** install handoff board and wire enforcement hooks ([a21645b](https://github.com/xyzxyz442/x442-skills/commit/a21645b9c781ab0d1ca5ab3cfc7068eab8cbb160))
+- **setup:** migrate reference docs into the board as standalone handoffs ([d468353](https://github.com/xyzxyz442/x442-skills/commit/d4683531bed49f2370bd4a5614b54a3ad72ffa4c))
+
 ## [0.3.1](https://github.com/xyzxyz442/x442-skills/compare/v0.3.0...v0.3.1) (2026-07-18)
 
 ### 🐞 Bug Fixes
