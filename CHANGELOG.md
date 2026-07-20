@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/xyzxyz442/x442-skills/compare/v0.4.0...v0.5.0) (2026-07-20)
+
+### 🚀 Features
+
+- **setup:** name handoff docs <id>-handoff.md, use filename as id ([86292ba](https://github.com/xyzxyz442/x442-skills/commit/86292ba6ead53c437028cd29ceb2b2ee28317a2b))
+
+### 🐞 Bug Fixes
+
+- **setup:** cross-repo shared board — per-repo identity, path substitution, topology-aware gitignore ([4907c19](https://github.com/xyzxyz442/x442-skills/commit/4907c19616be32fede0c1346e8e37ff609baa80b))
+
 ## [0.4.0](https://github.com/xyzxyz442/x442-skills/compare/v0.3.1...v0.4.0) (2026-07-20)
 
 ### 🚀 Features
