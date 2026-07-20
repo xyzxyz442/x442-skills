@@ -1,5 +1,5 @@
 ---
-id: legacy-open
+id: legacy-open-handoff
 title: Legacy open work
 status: open
 severity: medium

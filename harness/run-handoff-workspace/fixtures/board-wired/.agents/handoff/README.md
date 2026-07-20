@@ -5,6 +5,15 @@ directory (`.agents/handoff/`) holds every handoff doc; ownership is settled by 
 file lock, not by editing the doc. Wired by [`setup-handoff`](https://github.com/xyzxyz442/x442-skills)
 and operated per the [`run-handoff`] discipline.
 
+## Naming
+
+Every handoff doc is a file named **`<id>-handoff.md`**, and the **id is the filename stem**
+(e.g. `rbac-gap-handoff.md` → id `rbac-gap-handoff`). The tool auto-appends `-handoff` (idempotent),
+so `handoff new rbac-gap` and `handoff new rbac-gap-handoff` both land `rbac-gap-handoff.md`, and
+`claim rbac-gap` resolves to it. A file is a handoff doc **iff** it matches `*-handoff.md` — that
+whitelist is why `README.md`, `INDEX.md`, `config`, and the `*-template.md` scaffolds are never
+mistaken for handoffs.
+
 ## The rule
 
 **Claim before you work. Release when you stop.**

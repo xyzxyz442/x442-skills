@@ -1,5 +1,5 @@
 ---
-id: handoff-cross-repo-eval-report
+id: handoff-cross-repo-eval-report-handoff
 title: Evaluation report — cross-repo shared-board identity fix
 type: standalone
 status: open

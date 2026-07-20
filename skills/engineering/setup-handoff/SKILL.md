@@ -192,6 +192,11 @@ shared board `handoff new` requires an explicit `--audience`. Single-repo instal
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
   only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+- **Naming: `<id>-handoff.md`.** Every board doc file ends `-handoff.md` and the id is the filename
+  stem; `handoff new`/`import` auto-append the suffix (idempotent) and `claim`/`release` accept the
+  short or full id. A file is a handoff doc **iff** it matches `*-handoff.md` — a whitelist that
+  replaces the old blacklist and structurally prevents templates/README/INDEX from leaking into the
+  board listing.
 - **Docs are committed — redaction is authored in.** Unlike a throwaway temp-dir handoff, these
   docs land in git history. The template and `handoff new`/`release` output carry a redact-secrets
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`

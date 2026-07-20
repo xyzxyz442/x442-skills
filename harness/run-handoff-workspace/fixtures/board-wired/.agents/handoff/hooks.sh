@@ -156,9 +156,18 @@ doc_id_of() {
   # (which is a realpath) — otherwise a doc referenced via `repo/../.agents/handoff/x.md`
   # would slip past the gate. The file itself may not exist yet (a new doc); its dir does.
   d="$(cd "$(dirname "$p")" 2> /dev/null && pwd)" && p="$d/$(basename "$p")"
-  case "$p" in "$DIR"/*.md | "$DIR"/archive/*.md) ;; *) return 1 ;; esac
+  # Handoff docs are exactly the files named <id>-handoff.md (whitelist — templates, README, and
+  # config never match, so they need no blacklist). INDEX.md is not a handoff doc but is still gated
+  # so the pretool handler can deny hand-edits of the generated index.
+  case "$p" in
+    "$DIR"/INDEX.md)
+      printf 'INDEX'
+      return 0
+      ;;
+    "$DIR"/*-handoff.md | "$DIR"/archive/*-handoff.md) ;;
+    *) return 1 ;;
+  esac
   base="$(basename "$p" .md)"
-  case "$base" in README | handoff-doc-template | handoff-standalone-template) return 1 ;; esac
   printf '%s' "$base"
 }
 
@@ -168,10 +177,9 @@ case "$KIND" in
     reap_expired # stale leases self-heal at the start of every session
     out=""
     refs=""
-    for f in "$DIR"/*.md; do
+    for f in "$DIR"/*-handoff.md; do
       [ -f "$f" ] || continue
       id="$(basename "$f" .md)"
-      case "$id" in INDEX | README | handoff-doc-template | handoff-standalone-template) continue ;; esac
       # Standalone/reference docs are not claimable work — list them apart, no lease nag.
       if [ "$(meta "$f" type)" = "standalone" ]; then
         refs="${refs}- ${id} — $(meta "$f" title)"$'\n'

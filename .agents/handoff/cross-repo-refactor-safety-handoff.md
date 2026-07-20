@@ -1,5 +1,5 @@
 ---
-id: cross-repo-refactor-safety
+id: cross-repo-refactor-safety-handoff
 title: Handoff — cross-repo graph hooks: freshness gate + caller-edge answers
 type: standalone
 status: open

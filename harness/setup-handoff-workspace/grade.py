@@ -78,18 +78,18 @@ def grade_script_behavior(target):
     doc = Path(target) / HD
 
     _handoff(target, "new", "bt", "--title", "Backend task")
-    e.append(gc.expectation("handoff new creates a doc", (doc / "bt.md").is_file(),
-                            f"bt.md exists: {(doc / 'bt.md').is_file()}"))
+    e.append(gc.expectation("handoff new creates a doc", (doc / "bt-handoff.md").is_file(),
+                            f"bt-handoff.md exists: {(doc / 'bt-handoff.md').is_file()}"))
 
     _handoff(target, "claim", "bt", "on it", session="sess-AAA")
-    lease = _lease(target, "bt")
+    lease = _lease(target, "bt-handoff")
     e.append(gc.expectation("claim writes session= into the lease (defect #1 fixed)",
                             "session=sess-AAA" in lease, f"lease: {lease!r}"))
 
-    deny = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(doc / "bt.md")}}, session="sess-BBB")
+    deny = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(doc / "bt-handoff.md")}}, session="sess-BBB")
     e.append(gc.expectation("pretool gate DENIES a non-holder editing the doc",
                             '"permissionDecision": "deny"' in deny, f"out: {deny[:120]!r}"))
-    allow = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(doc / "bt.md")}}, session="sess-AAA")
+    allow = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(doc / "bt-handoff.md")}}, session="sess-AAA")
     e.append(gc.expectation("pretool gate ALLOWS the holder (empty output)",
                             allow == "", f"out: {allow[:120]!r}"))
 
@@ -98,8 +98,8 @@ def grade_script_behavior(target):
                             r.returncode != 0, f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
     r = _handoff(target, "release", "bt", "--status", "done", "--verified-by", "manual: bt.js:1")
     e.append(gc.expectation("done with --verified-by archives the doc",
-                            r.returncode == 0 and (doc / "archive/bt.md").is_file(),
-                            f"exit {r.returncode}; archived: {(doc / 'archive/bt.md').is_file()}"))
+                            r.returncode == 0 and (doc / "archive/bt-handoff.md").is_file(),
+                            f"exit {r.returncode}; archived: {(doc / 'archive/bt-handoff.md').is_file()}"))
 
     _handoff(target, "new", "blk", "--title", "Blocker")
     _handoff(target, "new", "dep", "--title", "Dependent")
@@ -109,7 +109,7 @@ def grade_script_behavior(target):
                             r.returncode != 0, f"exit {r.returncode}"))
     _handoff(target, "claim", "dep")
     _handoff(target, "release", "dep", "--status", "blocked", "--blocked-on", "blk")
-    dep_txt = (doc / "dep.md").read_text()
+    dep_txt = (doc / "dep-handoff.md").read_text()
     e.append(gc.expectation("blocked_on is recorded in the doc",
                             "blocked_on: blk" in dep_txt, "blocked_on present: %s" % ("blocked_on: blk" in dep_txt)))
     _handoff(target, "claim", "blk")
@@ -124,19 +124,19 @@ def grade_script_behavior(target):
     # auto-reap: an expired lease is cleared at sessionstart
     _handoff(target, "new", "aband", "--title", "Abandoned")
     _handoff(target, "claim", "aband")
-    _force_expiry(target, "aband")
+    _force_expiry(target, "aband-handoff")
     _hook(target, "sessionstart", {})
     e.append(gc.expectation("sessionstart auto-reaps an expired lease",
-                            not (doc / ".locks/aband").exists(),
-                            "lock present: %s" % (doc / ".locks/aband").exists()))
+                            not (doc / ".locks/aband-handoff").exists(),
+                            "lock present: %s" % (doc / ".locks/aband-handoff").exists()))
 
     # auto-touch: the holder's lease TTL is renewed on posttool-edit
     _handoff(target, "new", "live", "--title", "Live work")
     _handoff(target, "claim", "live", session="sess-AAA")
-    _force_expiry(target, "live")
+    _force_expiry(target, "live-handoff")
     _hook(target, "posttool-edit", {"tool_response": {"filePath": str(Path(target) / "src/app.js")}}, session="sess-AAA")
     exp = ""
-    for ln in _lease(target, "live").splitlines():
+    for ln in _lease(target, "live-handoff").splitlines():
         if ln.startswith("expires="):
             exp = ln.split("=", 1)[1]
     e.append(gc.expectation("posttool auto-touches the holder's lease (TTL renewed)",
@@ -146,7 +146,7 @@ def grade_script_behavior(target):
     _handoff(target, "new", "vt", "--title", "Verify task")
     # inject a verify: command that leaves a marker FILE only if actually executed
     # (printing the command text must NOT count as running it)
-    vt = doc / "vt.md"
+    vt = doc / "vt-handoff.md"
     marker = Path(target) / "VERIFY_RAN"
     txt = vt.read_text().replace("status: open", f"status: open\nverify: touch {marker}", 1)
     vt.write_text(txt)
@@ -158,7 +158,7 @@ def grade_script_behavior(target):
 
     # --- handoff types: standalone/isolated is gate-exempt --------------------------------
     _handoff(target, "new", "refdoc", "--standalone", "--title", "Reference")
-    refdoc = doc / "refdoc.md"
+    refdoc = doc / "refdoc-handoff.md"
     e.append(gc.expectation("new --standalone writes type: standalone",
                             refdoc.is_file() and "type: standalone" in refdoc.read_text(),
                             f"exists: {refdoc.is_file()}"))
@@ -173,13 +173,13 @@ def grade_script_behavior(target):
     # standalone retire: done archives WITHOUT --verified-by
     rr = _handoff(target, "release", "refdoc", "--status", "done")
     e.append(gc.expectation("standalone release --status done archives without --verified-by",
-                            rr.returncode == 0 and (doc / "archive/refdoc.md").is_file(),
-                            f"exit {rr.returncode}; archived: {(doc / 'archive/refdoc.md').is_file()}"))
+                            rr.returncode == 0 and (doc / "archive/refdoc-handoff.md").is_file(),
+                            f"exit {rr.returncode}; archived: {(doc / 'archive/refdoc-handoff.md').is_file()}"))
     # import brings an existing file onto the board as standalone
     src = Path(target) / "IMPORT_ME.md"
     src.write_text("# Imported\n\nbody\n")
     _handoff(target, "import", str(src), "--id", "imported", "--standalone")
-    imp = doc / "imported.md"
+    imp = doc / "imported-handoff.md"
     e.append(gc.expectation("import lands a file typed as standalone",
                             imp.is_file() and "type: standalone" in imp.read_text(),
                             f"exists: {imp.is_file()}"))
@@ -325,8 +325,8 @@ def _grade(target, eval_id):
         r = _install(target, "--primary", "claude", "--migrate", ".claude/handoff")
         exps = [gc.expectation("migration installer succeeds", r.returncode == 0,
                                f"exit {r.returncode}: {r.stderr.strip()[:120]}")]
-        exps.append(gc.file_exists(target, f"{HD}/legacy-open.md"))
-        exps.append(gc.file_exists(target, f"{HD}/archive/legacy-done.md"))
+        exps.append(gc.file_exists(target, f"{HD}/legacy-open-handoff.md"))
+        exps.append(gc.file_exists(target, f"{HD}/archive/legacy-done-handoff.md"))
         exps.append(gc.no_fabrication(target, ".claude/handoff"))  # legacy dir moved away
         exps.append(gc.contains(target, f"{HD}/handoff", "session=",
                                 label="migrated handoff script writes session= (defect #1 fixed)"))
