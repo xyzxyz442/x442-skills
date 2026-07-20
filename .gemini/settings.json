@@ -31,6 +31,25 @@
             "timeout": 10000
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .agents/handoff/hooks.sh --kind sessionstart --tool gemini"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .agents/handoff/hooks.sh --kind posttool-edit --tool gemini"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
       }
     ]
   }

@@ -478,3 +478,4 @@ harness/**/iterations/**/run-*/transcript.md
 # be committed. This one overrides a *global* ignore (**/.claude/settings.local.json in the
 # user's core.excludesFile) — repo rules win over global, so the negation belongs here.
 !harness/**/fixtures/**/.claude/settings.local.json
+.agents/handoff/.locks/

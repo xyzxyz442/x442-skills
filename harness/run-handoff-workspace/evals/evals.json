@@ -1,0 +1,21 @@
+{
+  "skill_name": "x442-run-handoff",
+  "skill_path": "skills/engineering/run-handoff",
+  "verify_script": "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh",
+  "evals": [
+    {
+      "id": "discipline-done",
+      "kind": "post-state",
+      "prompt": "Pick up a handoff, do the work, and close it as done against the live code.",
+      "fixture": "fixtures/board-wired",
+      "expected_output": "A wired board. Following the run-handoff discipline (new -> claim -> release --status done --verified-by) must leave a schema-valid doc archived with verified_at, the lease released, and INDEX.md regenerated to list it under Archive."
+    },
+    {
+      "id": "discipline-blocked",
+      "kind": "post-state",
+      "prompt": "You are blocked on another handoff; record that and release.",
+      "fixture": "fixtures/board-wired",
+      "expected_output": "Following the discipline (claim -> release --status blocked --blocked-on) must set status blocked and blocked_on in the doc, release the lease, and keep the doc on the open board."
+    }
+  ]
+}

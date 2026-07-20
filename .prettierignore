@@ -16,3 +16,9 @@ harness/repair-graph-hooks-workspace/fixtures/broken-json/.claude/settings.local
 # prettier vs json.dumps array style.
 harness/**/iterations/**/benchmark.json
 harness/**/iterations/**/benchmark.md
+
+# Byte-critical handoff harness fixtures: committed verbatim so the setup-handoff idempotency
+# eval (which re-runs the installer) sees the installer's own output, and so the {{}}-free doc
+# template placeholders survive. Prettier must not rewrite them.
+harness/setup-handoff-workspace/fixtures/**
+harness/run-handoff-workspace/fixtures/**

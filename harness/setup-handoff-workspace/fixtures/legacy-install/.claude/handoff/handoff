@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# LEGACY (defective) handoff script — records owner= but no session=, so the enforcement
+# gate never matches and never denies. Replaced by setup-handoff on migration.
+echo "legacy handoff stub"
