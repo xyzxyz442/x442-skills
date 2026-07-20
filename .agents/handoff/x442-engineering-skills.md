@@ -52,6 +52,17 @@ Read this first if your collection already carries an earlier port.
    a **link-don't-duplicate** note. Guidance, not a hard gate — redaction can't be mechanically
    verified. If you already ported these two skills, **re-port `setup-handoff/assets/` +
    `scripts/payload/` and `run-handoff/SKILL.md`**; leases, enforcement, and mechanics are unchanged.
+   **Now typed:** every handoff carries a `type:` — `coordination` (default, the lease-gated work
+   item) or `standalone` (a self-contained reference/knowledge doc: porting guide, eval report,
+   compaction brief). A **standalone** doc is **gate-exempt** — freely editable with no lease, `claim`
+   refuses it, it is listed apart, and it retires via `release --status done` **without**
+   `--verified-by`. Absent `type:` ⇒ `coordination`, so existing boards are unaffected. New surface:
+   `handoff new --standalone` and `handoff import <file>` (bring an existing file onto the board).
+   This very doc is a migrated standalone handoff; its sibling
+   [`handoff-types-eval-report`](./handoff-types-eval-report.md) records the eval run (60/60 graders,
+   verifier 18/18). To adopt: **re-port `setup-handoff/assets/` (now incl.
+   `handoff-standalone-template.md`) + `scripts/payload/` + `scripts/setup-handoff.sh`, and
+   `run-handoff/SKILL.md`.**
 1. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional
@@ -376,10 +387,16 @@ initial-project ──> (setup-project-tooling) ──> setup-graph-hooks
   **redaction** reminder (never paste keys/secrets/passwords/PII; if the next agent needs a credential,
   prompt the user and record only its _name_ via a safe channel), a **`## Suggested skills`** section,
   and a **link-don't-duplicate** note. It is prose guidance — there is no mechanical redaction gate.
+- **Two handoff types.** Each doc has a `type:` — `coordination` (default; lease-gated work item) or
+  `standalone` (self-contained reference doc, e.g. this handoff). A **standalone** doc is
+  **gate-exempt** (`pretool-edit` allows editing with no lease), `claim` refuses it, it lists apart,
+  and `release --status done` retires it without `--verified-by`. Absent `type:` ⇒ `coordination`, so
+  legacy boards are unaffected. Create with `handoff new --standalone`; import a file with
+  `handoff import <file>`.
 - **Ships:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh` (read-only detector),
   `scripts/merge-hooks.py` (per-tool JSON merge), `scripts/verify-setup-handoff.sh` (verifier),
-  `scripts/payload/` (`handoff`, `hooks.sh`, `README.md`), `assets/handoff-doc-template.md`,
-  `assets/agents-handoff.md` (the `AGENTS.md` routing block).
+  `scripts/payload/` (`handoff`, `hooks.sh`, `README.md`), `assets/handoff-doc-template.md` +
+  `assets/handoff-standalone-template.md`, `assets/agents-handoff.md` (the `AGENTS.md` routing block).
 
 ### `run-handoff` — `experimental` (markdown-only)
 
@@ -394,6 +411,9 @@ initial-project ──> (setup-project-tooling) ──> setup-graph-hooks
 - **Authoring rules (docs are committed):** redact secrets/keys/passwords/PII — if a credential is
   needed, prompt the user and record only its _name_ via a safe channel; fill the **Suggested skills**
   section; and **link, don't duplicate** (reference PRDs/ADRs/commits by path, don't paste them).
+- **Pick a type when filing.** Default `coordination` (the claim/release flow above); use
+  `handoff new --standalone` (or `handoff import <file>`) for a self-contained reference doc — it
+  needs no claim and is listed apart.
 - **Depends on `setup-handoff`.** Do not port it alone; it is the discipline layer over that skill's
   board.
 
