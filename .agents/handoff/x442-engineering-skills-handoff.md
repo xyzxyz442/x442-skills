@@ -59,7 +59,7 @@ Read this first if your collection already carries an earlier port.
    `--verified-by`. Absent `type:` ⇒ `coordination`, so existing boards are unaffected. New surface:
    `handoff new --standalone` and `handoff import <file>` (bring an existing file onto the board).
    This very doc is a migrated standalone handoff; its sibling
-   [`handoff-types-eval-report`](./handoff-types-eval-report-handoff.md) records the eval run (60/60 graders,
+   [`handoff-types-eval-report`](./doc-types-eval-report-handoff.md) records the eval run (60/60 graders,
    verifier 18/18). To adopt: **re-port `setup-handoff/assets/` (now incl.
    `handoff-standalone-template.md`) + `scripts/payload/` + `scripts/setup-handoff.sh`, and
    `run-handoff/SKILL.md`.**
@@ -71,7 +71,7 @@ Read this first if your collection already carries an earlier port.
    `.locks/` line is skipped for cross-repo (verifier is topology-aware); and `handoff new` on a
    shared board **requires `--audience`**. Single-repo is byte-identical. A new **`cross-repo`**
    harness eval (two siblings + a shared parent board) guards the exact regression; sibling
-   [`handoff-cross-repo-eval-report`](./handoff-cross-repo-eval-report-handoff.md) records the run (73/73
+   [`handoff-cross-repo-eval-report`](./cross-repo-eval-report-handoff.md) records the run (73/73
    graders, verifier 0-failed on both topologies). Re-port `setup-handoff/scripts/` (incl.
    `merge-hooks.py`, `verify-setup-handoff.sh`) + `scripts/payload/` + `assets/agents-handoff.md`.
    **File naming — `<id>-handoff.md`:** every board doc is now named `<id>-handoff.md` and the **id is
