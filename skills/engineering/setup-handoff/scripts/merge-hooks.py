@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Merge the handoff hooks into a tool's settings JSON, without clobbering other keys.
 
-Idempotent: every handoff hook command contains the marker ``handoff/hooks.sh``. On each
-run we first drop every existing handoff-managed group, then add the current set — so a
-re-run, or a change of primary tool, converges instead of duplicating.
+Idempotent: every handoff hook command contains ``handoff/scripts/hooks.sh`` (or, on a board
+wired before the layout restructure, ``handoff/hooks.sh``). On each run we first drop every
+existing handoff-managed group — matching either spelling — then add the current set, so a re-run,
+a change of primary tool, or a migration from the flat layout converges instead of duplicating.
 
 Env (set by setup-handoff.sh):
   HANDOFF_HDPATH   path tools use to reach hooks.sh (e.g. ".agents/handoff")
@@ -26,7 +27,14 @@ import shlex
 import sys
 from pathlib import Path
 
-MARKER = "handoff/hooks.sh"
+# Every handoff hook command contains one of these. The current layout puts hooks.sh under
+# <board>/scripts/, but a board wired before the restructure has "<board>/hooks.sh" baked into its
+# settings.json — and "handoff/scripts/hooks.sh" does NOT contain "handoff/hooks.sh", so matching on
+# the current marker alone would leave the stale group in place and append a second one beside it.
+# Both spellings must be recognized as ours so a re-run converges instead of duplicating.
+MARKER = "handoff/scripts/hooks.sh"
+LEGACY_MARKERS = ("handoff/hooks.sh",)
+MARKERS = (MARKER, *LEGACY_MARKERS)
 
 
 def load(path: Path) -> dict:
@@ -54,8 +62,8 @@ def command(hdpath: str, tool: str, kind: str) -> str:
     prefix = f"HANDOFF_REPO={shlex.quote(repo)} HANDOFF_HDPATH={shlex.quote(hdpath)} " if repo else ""
     # Claude expands $CLAUDE_PROJECT_DIR; keep the path anchored so cwd never matters.
     if tool == "claude":
-        return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/hooks.sh" --kind {kind} --tool claude'
-    return f"{prefix}bash {hdpath}/hooks.sh --kind {kind} --tool {tool}"
+        return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" --kind {kind} --tool claude'
+    return f"{prefix}bash {hdpath}/scripts/hooks.sh --kind {kind} --tool {tool}"
 
 
 def strip_managed(groups: list) -> list:
@@ -63,7 +71,7 @@ def strip_managed(groups: list) -> list:
     out = []
     for g in groups or []:
         hooks = g.get("hooks", []) if isinstance(g, dict) else []
-        if any(MARKER in (h.get("command", "")) for h in hooks):
+        if any(m in h.get("command", "") for h in hooks for m in MARKERS):
             continue
         out.append(g)
     return out

@@ -14,6 +14,21 @@ so `handoff new rbac-gap` and `handoff new rbac-gap-handoff` both land `rbac-gap
 whitelist is why `README.md`, `INDEX.md`, `config`, and the `*-template.md` scaffolds are never
 mistaken for handoffs.
 
+Ids are always **lowercase kebab-case**, and the tool enforces it: whatever you pass is lowercased,
+every run of non-alphanumeric characters becomes a single `-`, and leading/trailing dashes are
+trimmed. So `handoff new "RBAC Gap"`, `new RBAC_Gap`, and `new rbac-gap` all land the same
+`rbac-gap-handoff.md`, and `claim RBAC-GAP` resolves to it. An id with nothing alphanumeric in it
+(`"!!!"`) is rejected rather than silently becoming `-handoff.md`.
+
+This matters beyond tidiness: ids are compared as literal strings for lease directory names under
+`.locks/`, for `blocked_on` cross-references, and by the hooks' case-sensitive `*-handoff.md` gate.
+Without folding, `claim RBAC-Gap` and `claim rbac-gap` would take two separate leases on one doc —
+and on a case-insensitive filesystem (macOS default) the edit gate would fail open.
+
+Docs created before this rule keep their filenames — nothing is renamed, because a rename would
+break `blocked_on` references and git history. `claim`/`release`/`touch` fall back to the old
+spelling when only that file exists, so existing boards keep working; only new docs are slugified.
+
 ## The rule
 
 **Claim before you work. Release when you stop.**
@@ -31,7 +46,7 @@ cd .agents/handoff
 pick a different handoff, or tell the user who holds it. Never edit a handoff doc you do not
 hold the lease for (the hooks block it).
 
-## Two types of handoff
+## Three types of handoff
 
 Every doc carries a `type:` (absent ⇒ `coordination`, so legacy docs are unaffected):
 
@@ -39,14 +54,23 @@ Every doc carries a `type:` (absent ⇒ `coordination`, so legacy docs are unaff
 | ------------------------ | --------------------------------------------------------- | ------------------------------------------------------- | ---------------------- |
 | `coordination` (default) | **claim before edit** — the lease gate blocks non-holders | `release --status open/blocked/done --verified-by`      | Open work              |
 | `standalone`             | **exempt** — freely editable, no lease needed             | retire via `release --status done` (no `--verified-by`) | Standalone / reference |
+| `orchestrator`           | **exempt** — freely editable, no lease needed             | `release --status done` only once every child is done   | Orchestrators          |
 
 A **standalone** handoff is a self-contained reference/knowledge doc — a porting guide, an eval
 report, a session-compaction brief. It is not claimable work: `claim` refuses it, the `pretool-edit`
 gate allows editing it without a lease, and it is listed apart so it is not mistaken for open work.
 
+An **orchestrator** indexes a **bundle** of related handoffs via a `children:` list. It holds no work
+of its own — the children do — so it is never claimed. Its progress is **derived** from each child's
+own frontmatter every time `list` runs, never stored: a written-down count is stale the moment a
+child closes, which is the rot an orchestrator exists to prevent. A child naming no file is reported
+`MISSING` rather than counted as done, and `release --status done` refuses while anything is
+outstanding, so a bundle cannot be closed on a doc that says it is finished.
+
 ```bash
 ./handoff new port-guide --standalone --title "Porting guide" # create a standalone doc
 ./handoff import ./NOTES.md --id notes --standalone           # bring an existing file onto the board
+./handoff new auth-suite --orchestrator --children rbac-gap,token-refresh --title "Auth bundle"
 ```
 
 `import` copies a file in (never moves it), normalizing its frontmatter (`id/title/type/status/
@@ -71,11 +95,12 @@ content verbatim.
 
 | Field                     | Meaning                                                                                                                                                                                                                                                                                                  |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                    | `coordination` (default; lease-gated work item) or `standalone` (self-contained reference doc, gate-exempt). Absent ⇒ `coordination`. See "Two types of handoff".                                                                                                                                        |
+| `type`                    | `coordination` (default; lease-gated work item), `standalone` (self-contained reference doc, gate-exempt), or `orchestrator` (an index over a bundle of children, gate-exempt). Absent ⇒ `coordination`. See "Three types of handoff".                                                                   |
+| `children`                | Orchestrators only: the handoff ids in the bundle. Progress is derived from them at read time and never stored here.                                                                                                                                                                                     |
 | `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                               |
 | `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below). |
 | `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                                                                                                                     |
-| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. When the blocker closes `done`, this handoff is surfaced as newly unblocked at the next session start.                                                                                                                                         |
+| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start.                                                                                                                                         |
 | `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                           |
 | `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                                                                                                                       |
 
@@ -126,12 +151,26 @@ requires BOTH `--run-verify` on the command line AND the install-time opt-in
 
 ## Layout
 
-```
+Machinery lives in subfolders; the board root holds only the entry point and the content.
+
+```text
 .agents/handoff/
 ├── handoff                 # the lease script — the entry point, stays at the root
 ├── README.md               # this file
 ├── INDEX.md                # GENERATED — never hand-edit
-├── *.md                    # open + blocked handoffs
-├── archive/*.md            # done / superseded
+├── config                  # TOPOLOGY + REPO_NAME (committed)
+├── scripts/
+│   └── hooks.sh            # the enforcement hooks
+├── templates/
+│   ├── handoff-doc-template.md          # scaffold for `handoff new`
+│   ├── handoff-standalone-template.md   # scaffold for `handoff new --standalone`
+│   └── handoff-orchestrator-template.md # scaffold for `handoff new --orchestrator`
+├── *-handoff.md            # open + blocked handoffs
+├── archive/*-handoff.md    # done / superseded
 └── .locks/                 # live leases (gitignored)
 ```
+
+A board installed before this layout keeps `hooks.sh` and the templates at the root. Re-running
+`setup-handoff` migrates it (`git mv`, so history follows) and rewrites each tool's hook command to
+the `scripts/hooks.sh` path. Until then nothing breaks: `hooks.sh` locates the board root by probing
+for the sibling `handoff` CLI, and the CLI falls back to root-level templates.

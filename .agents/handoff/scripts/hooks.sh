@@ -14,7 +14,17 @@
 # this path is only reached if the toolchain breaks after install.
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# hooks.sh lives at <board>/scripts/hooks.sh, so the board root is its PARENT — everything below
+# (docs, .locks/, config) is resolved from there. The flat fallback covers a board installed before
+# the restructure whose settings.json still points at <board>/hooks.sh: there is no sibling
+# `handoff` CLI one level up, so DIR stays put and the old layout keeps working until the installer
+# is re-run. Probe for the CLI rather than the directory name — a board may be installed anywhere.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SELF_DIR/../handoff" ]; then
+  DIR="$(cd "$SELF_DIR/.." && pwd)"
+else
+  DIR="$SELF_DIR"
+fi
 LOCKS="$DIR/.locks"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
 KIND=""
@@ -180,11 +190,14 @@ case "$KIND" in
     for f in "$DIR"/*-handoff.md; do
       [ -f "$f" ] || continue
       id="$(basename "$f" .md)"
-      # Standalone/reference docs are not claimable work — list them apart, no lease nag.
-      if [ "$(meta "$f" type)" = "standalone" ]; then
-        refs="${refs}- ${id} — $(meta "$f" title)"$'\n'
-        continue
-      fi
+      # Standalone/reference docs and orchestrators are not claimable work — list them apart,
+      # no lease nag. An orchestrator holds no work of its own; its children are the work.
+      case "$(meta "$f" type)" in
+        standalone | orchestrator)
+          refs="${refs}- ${id} — $(meta "$f" title)"$'\n'
+          continue
+          ;;
+      esac
       aud="$(meta "$f" audience)"
       # cross-repo: only surface what THIS repo must act on next.
       [ "$TOPOLOGY" = "cross-repo" ] && [ -n "$REPO" ] && [ -n "$aud" ] && [ "$aud" != "$REPO" ] && continue
@@ -236,8 +249,11 @@ Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
 
     # Standalone/reference docs are gate-exempt: they carry no lease and are freely editable.
     # An absent type means coordination (gated), so legacy docs behave exactly as before. Only an
-    # existing doc can be standalone — a brand-new (not-yet-written) doc stays gated.
-    [ -f "$DIR/$id.md" ] && [ "$(meta "$DIR/$id.md" type)" = "standalone" ] && exit 0
+    # existing doc can be standalone — a brand-new (not-yet-written) doc stays gated. Orchestrators
+    # are exempt for the same reason: they carry no lease, only an index of the children that do.
+    if [ -f "$DIR/$id.md" ]; then
+      case "$(meta "$DIR/$id.md" type)" in standalone | orchestrator) exit 0 ;; esac
+    fi
 
     session="$(field session)"
     if lock_live "$id"; then
