@@ -128,10 +128,7 @@ requires BOTH `--run-verify` on the command line AND the install-time opt-in
 
 ```
 .agents/handoff/
-├── handoff                 # the lease script
-├── hooks.sh                # the enforcement hooks
-├── config                  # TOPOLOGY + REPO_NAME (committed)
-├── handoff-doc-template.md # scaffold for `handoff new`
+├── handoff                 # the lease script — the entry point, stays at the root
 ├── README.md               # this file
 ├── INDEX.md                # GENERATED — never hand-edit
 ├── *.md                    # open + blocked handoffs

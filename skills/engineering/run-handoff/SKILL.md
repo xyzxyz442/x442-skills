@@ -56,6 +56,13 @@ handoff new <id> --title "…" --severity low|medium|high [--audience <repo>]
 The doc file is always **`<id>-handoff.md`** and the id is the filename stem — the tool auto-appends
 `-handoff` (idempotent), and `claim`/`release` accept either the short or the full id.
 
+**Ids are always lowercase kebab-case** and the tool enforces it: whatever you pass is lowercased,
+every run of non-alphanumeric characters collapses to a single `-`, and dashes are trimmed off the
+ends. `new "RBAC Gap"`, `new RBAC_Gap`, and `new rbac-gap` all land the same `rbac-gap-handoff.md`;
+`claim RBAC-GAP` resolves to it; an id with nothing alphanumeric in it is rejected. Pick the slug
+you want rather than relying on the fold — and don't repeat `handoff` in the id, since the suffix
+is already there (`new deploy-gap` → `deploy-gap-handoff.md`, not `handoff-deploy-gap`).
+
 **Pick a type.** The default is a **coordination** handoff (the claim/release work item this skill
 is about). For a self-contained reference/knowledge doc — a porting guide, an eval report, a
 session-compaction brief — file a **standalone** handoff instead: it needs no claim, is freely

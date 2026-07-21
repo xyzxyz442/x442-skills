@@ -78,7 +78,9 @@ set_field() {
 
 log_activity() { # path message -> append to the doc's Activity log
   local f="$1" msg="$2"
-  grep -q '^## Activity' "$f" || printf '\n## Activity\n' >> "$f"
+  # the blank line after the heading is required — without it markdownlint flags every doc
+  # (MD022 blanks-around-headings / MD032 blanks-around-lists) the moment the first entry lands
+  grep -q '^## Activity' "$f" || printf '\n## Activity\n\n' >> "$f"
   printf -- '- %s — %s\n' "$(today)" "$msg" >> "$f"
 }
 
@@ -110,7 +112,43 @@ is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
 # Every handoff doc file is named "<id>-handoff.md" and the id IS the filename stem. norm_id
 # canonicalizes any user-supplied id to that form (idempotent — never doubles the suffix), so
 # `new rbac-gap`, `claim rbac-gap`, and `claim rbac-gap-handoff` all resolve to rbac-gap-handoff.
-norm_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
+#
+# Ids are compared as literal strings everywhere — lease directory names under .locks/, blocked_on
+# cross-references, INDEX.md rows, and the hooks' case-sensitive *-handoff.md gate. So the id must
+# also be slugified to lowercase kebab-case, or "RBAC Gap" and "rbac-gap" become two leases over
+# one doc (and on a case-insensitive filesystem the edit gate silently fails open). Lowercasing
+# happens BEFORE the suffix test, so "RBAC-Handoff" yields rbac-handoff, not rbac-handoff-handoff.
+# Returns non-zero on an id that slugifies to nothing ("!!!"), so callers can die with usage.
+norm_id() {
+  local s
+  s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+  [ -n "$s" ] || return 1
+  case "$s" in *-handoff) printf '%s' "$s" ;; *) printf '%s-handoff' "$s" ;; esac
+}
+
+# The pre-slug spelling of an id: suffix-only canonicalization, no case/separator folding. This is
+# what norm_id did before ids were slugified, and it is the only thing legacy_id is for.
+legacy_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
+
+# Resolve a user-supplied id to the id an EXISTING doc actually uses. Prefers the canonical slug,
+# but falls back to the pre-slug spelling when only that file exists — otherwise slugifying would
+# orphan docs on boards installed before this rule (their filenames are not being migrated: a
+# rename breaks blocked_on cross-references and git history for a cosmetic gain). Creation never
+# calls this — `new`/`import` always slugify, so no new non-conforming file is ever created.
+resolve_id() {
+  local want raw
+  want="$(norm_id "$1")" || return 1
+  if [ -f "$DIR/$want.md" ] || [ -f "$DIR/archive/$want.md" ]; then
+    printf '%s' "$want"
+    return
+  fi
+  raw="$(legacy_id "$1")"
+  if [ -f "$DIR/$raw.md" ] || [ -f "$DIR/archive/$raw.md" ]; then
+    printf '%s' "$raw"
+    return
+  fi
+  printf '%s' "$want" # neither exists — return canonical so doc_of reports it by its proper name
+}
 
 # The redaction reminder embedded at the top of every generated doc body. A handoff doc is
 # committed to git history, so secrets pasted into it persist. Kept as a function so the coordination
@@ -162,7 +200,9 @@ cmd_new() {
     esac
   done
   case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
-  id="$(norm_id "$id")" # files are always <id>-handoff.md; the id is the filename stem
+  # files are always <id>-handoff.md and the id is a lowercase-kebab slug of what the caller passed
+  local raw_id="$id"
+  id="$(norm_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists"
   [ -n "$title" ] || title="$id"
   local d
@@ -281,10 +321,9 @@ cmd_import() {
   [ -f "$src" ] || die "no such file: $src"
   case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
   [ -n "$id" ] || id="$(basename "$src" .md)"
-  # sanitize id to a safe slug (the filename becomes .agents/handoff/<id>.md)
-  id="$(printf '%s' "$id" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
-  [ -n "$id" ] || die "could not derive an id from $src — pass --id"
-  id="$(norm_id "$id")" # board files are always <id>-handoff.md
+  # norm_id is the only sanitizer: it slugifies to lowercase kebab-case and appends the suffix, so
+  # board files are always <id>-handoff.md. It rejects an id with nothing alphanumeric in it.
+  id="$(norm_id "$id")" || die "could not derive a usable id from $src — pass --id"
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists on the board"
   # title: --title, else the first markdown H1, else the id
   [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
@@ -358,7 +397,9 @@ cmd_list() {
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
-  id="$(norm_id "$id")" # accept the short or full id; the lease is keyed on the canonical stem
+  # accept the short or full id, in any casing; the lease is keyed on the resolved stem
+  local raw_id="$id"
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   local note="${*:-}"
   local f
   f="$(doc_of "$id")"
@@ -402,7 +443,7 @@ cmd_claim() {
 
 cmd_touch() {
   local id="${1:?usage: handoff touch <id>}"
-  id="$(norm_id "$id")"
+  id="$(resolve_id "$id")" || die "unusable id: '$1' (needs at least one letter or digit)"
   local kind owner exp
   IFS='|' read -r kind owner exp <<< "$(lock_state "$id")"
   [ "$kind" = "free" ] && die "$id is not claimed"
@@ -419,7 +460,8 @@ cmd_touch() {
 cmd_release() {
   local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [note]}"
   shift
-  id="$(norm_id "$id")"
+  local raw_id="$id"
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   local status='' note='' verified_by='' blocked_on='' run_verify=0
   while [ $# -gt 0 ]; do
     case "$1" in

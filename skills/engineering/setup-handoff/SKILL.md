@@ -212,6 +212,7 @@ shared board `handoff new` requires an explicit `--audience`. Single-repo instal
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
   (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the
-  `.agents/handoff/` payload: `handoff`, `hooks.sh`, `README.md`), `assets/handoff-doc-template.md`
+  `.agents/handoff/` payload: `handoff` → board root, `hooks.sh` → board `scripts/`, `README.md`),
+  `assets/handoff-doc-template.md`
   - `assets/handoff-standalone-template.md` (scaffolds for `handoff new` / `new --standalone`), and
     `assets/agents-handoff.md` (the AGENTS.md routing block).

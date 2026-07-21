@@ -183,6 +183,47 @@ def grade_script_behavior(target):
     e.append(gc.expectation("import lands a file typed as standalone",
                             imp.is_file() and "type: standalone" in imp.read_text(),
                             f"exists: {imp.is_file()}"))
+
+    # --- id casing: every id is folded to a lowercase-kebab slug --------------------------
+    _handoff(target, "new", "RBAC Gap", "--title", "Caps and a space")
+    slug = doc / "rbac-gap-handoff.md"
+    e.append(gc.expectation("new slugifies a spaced, capitalized id",
+                            slug.is_file(), f"rbac-gap-handoff.md exists: {slug.is_file()}"))
+    e.append(gc.expectation("no non-conforming filename is created",
+                            not list(doc.glob("RBAC*")),
+                            f"stray: {[p.name for p in doc.glob('RBAC*')]}"))
+    r = _handoff(target, "new", "RBAC_Gap", "--title", "Underscore spelling")
+    e.append(gc.expectation("a differently-spelled id collides instead of forking the doc",
+                            r.returncode != 0 and "already exists" in (r.stdout + r.stderr),
+                            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[:100]}"))
+    r = _handoff(target, "claim", "RBAC-GAP", "case-insensitive lookup")
+    e.append(gc.expectation("claim resolves an id given in the wrong case",
+                            r.returncode == 0 and (doc / ".locks/rbac-gap-handoff").exists(),
+                            f"exit {r.returncode}; lock: {(doc / '.locks/rbac-gap-handoff').exists()}"))
+    _handoff(target, "release", "rbac-gap", "--status", "open")
+    e.append(gc.expectation("the generated Activity block is markdownlint-clean (blank line after the heading)",
+                            "## Activity\n\n- " in slug.read_text(),
+                            f"tail: {slug.read_text()[-120:]!r}"))
+    r = _handoff(target, "new", "!!!")
+    e.append(gc.expectation("an id with nothing alphanumeric is REJECTED",
+                            r.returncode != 0 and not (doc / "-handoff.md").exists(),
+                            f"exit {r.returncode}; '-handoff.md' created: {(doc / '-handoff.md').exists()}"))
+
+    # legacy fallback: a doc named by a PRE-slug install must stay reachable, not be re-created
+    legacy = doc / "Legacy_Doc-handoff.md"
+    legacy.write_text("---\nid: Legacy_Doc-handoff\ntitle: Pre-slug doc\ntype: coordination\n"
+                      "status: open\nseverity: low\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n## Context\n")
+    r = _handoff(target, "claim", "Legacy_Doc", "picking up legacy work")
+    e.append(gc.expectation("claim falls back to a pre-slug filename instead of inventing a slug",
+                            r.returncode == 0 and (doc / ".locks/Legacy_Doc-handoff").exists()
+                            and not (doc / "legacy-doc-handoff.md").exists(),
+                            f"exit {r.returncode}; lock: {(doc / '.locks/Legacy_Doc-handoff').exists()}; "
+                            f"invented: {(doc / 'legacy-doc-handoff.md').exists()}"))
+    r = _handoff(target, "release", "Legacy_Doc", "--status", "done", "--verified-by", "grader")
+    e.append(gc.expectation("a pre-slug doc still archives on done",
+                            r.returncode == 0 and (doc / "archive/Legacy_Doc-handoff.md").is_file(),
+                            f"exit {r.returncode}; archived: {(doc / 'archive/Legacy_Doc-handoff.md').is_file()}"))
+
     return e
 
 
