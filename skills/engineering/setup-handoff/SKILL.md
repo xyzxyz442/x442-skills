@@ -23,10 +23,13 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
 ## Architecture: three layers
 
 1. **Universal payload (tool-agnostic, always installed)** under `.agents/handoff/`: the
-   `handoff` lease script, `hooks.sh`, the generated `INDEX.md`, per-topic docs, a doc template,
-   `.locks/` (gitignored), a committed `config` (topology + repo name), and the `<!-- handoff -->`
-   routing block appended to `AGENTS.md`. Because every tool's entry file `@AGENTS.md`-imports
-   (set up by `initial-project`), the routing block reaches all tools with no per-tool edit.
+   `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
+   `templates/` (the doc scaffolds), `.locks/` (gitignored), a committed `config` (topology + repo
+   name), and the `<!-- handoff -->` routing block appended to `AGENTS.md`. Because every tool's
+   entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
+   tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds
+   only the `handoff` entry point and the docs themselves; a flat board from before this layout is
+   migrated on the next install (`git mv`, hook commands rewritten), and keeps working until then.
 2. **One enforcement core (`hooks.sh`).** A single dispatcher runs every hook kind
    (`sessionstart` / `pretool-edit` / `posttool-edit` / `stop`). It parses each tool's payload
    with **python3** (this repo standardises on python3, not `jq`) and emits that tool's native
@@ -192,23 +195,34 @@ shared board `handoff new` requires an explicit `--audience`. Single-repo instal
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
   only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
-- **Naming: `<id>-handoff.md`.** Every board doc file ends `-handoff.md` and the id is the filename
-  stem; `handoff new`/`import` auto-append the suffix (idempotent) and `claim`/`release` accept the
-  short or full id. A file is a handoff doc **iff** it matches `*-handoff.md` — a whitelist that
-  replaces the old blacklist and structurally prevents templates/README/INDEX from leaking into the
-  board listing.
+- **Naming: `<id>-handoff.md`, id always lowercase kebab-case.** Every board doc file ends
+  `-handoff.md` and the id is the filename stem; `handoff new`/`import` auto-append the suffix
+  (idempotent) and `claim`/`release` accept the short or full id. `norm_id` is the single
+  canonicalizer: it lowercases, folds every non-alphanumeric run to one `-`, trims, then appends the
+  suffix — so `new "RBAC Gap"`, `new RBAC_Gap`, and `new rbac-gap` all land `rbac-gap-handoff.md`,
+  and an id with nothing alphanumeric is rejected. Enforced because ids are literal-compared as
+  `.locks/` directory names, as `blocked_on` references, and by the hooks' case-sensitive glob;
+  unfolded casing would mean two leases on one doc. Pre-existing docs are **not** renamed —
+  resolution falls back to the old spelling when only that file exists. A file is a handoff doc
+  **iff** it matches `*-handoff.md` — a whitelist that replaces the old blacklist and structurally
+  prevents templates/README/INDEX from leaking into the board listing.
 - **Docs are committed — redaction is authored in.** Unlike a throwaway temp-dir handoff, these
   docs land in git history. The template and `handoff new`/`release` output carry a redact-secrets
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`
   section, and a link-don't-duplicate note. It is guidance, not a hard gate — redaction can't be
   mechanically verified.
-- **Two handoff types.** Each doc carries a `type:` — `coordination` (default; the lease-gated work
+- **Three handoff types.** Each doc carries a `type:` — `coordination` (default; the lease-gated work
   item) or `standalone` (a self-contained reference/knowledge doc: porting guide, eval report,
   compaction brief). A **standalone** doc is **gate-exempt** — the `pretool-edit` hook allows editing
   it with no lease, `claim` refuses it, and it is listed apart from open work; retire it via `release
 --status done` (no `--verified-by`). Absent `type:` means `coordination`, so legacy docs and
   existing boards are unaffected. Create with `handoff new --standalone`; bring an existing file onto
-  the board with `handoff import <file>`.
+  the board with `handoff import <file>`. An **orchestrator** (`handoff new --orchestrator
+--children a,b,c`) is the third type: an index over a bundle of related handoffs, also gate-exempt
+  and never claimed. Its progress is **derived** from the children's own frontmatter at read time
+  and never stored — a written count is stale the moment a child closes — a child naming no doc
+  reads as `MISSING` rather than done, and `release --status done` refuses while any child is
+  outstanding.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
   (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the
