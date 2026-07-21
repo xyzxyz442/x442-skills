@@ -52,7 +52,14 @@ def _handoff(target, *args, session="sess-AAA", allow_verify=False):
 
 
 def _hook(target, kind, payload, session="sess-AAA"):
-    hk = Path(target) / HD / "hooks.sh"
+    # hooks.sh lives under scripts/; fall back to the flat path for a pre-restructure board. Raise
+    # rather than returning "" when neither exists: empty output means ALLOW, so a missing hooks.sh
+    # would make every gate assertion pass vacuously.
+    hk = Path(target) / HD / "scripts/hooks.sh"
+    if not hk.is_file():
+        hk = Path(target) / HD / "hooks.sh"
+    if not hk.is_file():
+        raise FileNotFoundError(f"hooks.sh not found under {Path(target) / HD}")
     p = subprocess.run(
         ["bash", str(hk), "--kind", kind, "--tool", "claude"],
         cwd=str(target), input=json.dumps({"session_id": session, **payload}),
@@ -224,6 +231,168 @@ def grade_script_behavior(target):
                             r.returncode == 0 and (doc / "archive/Legacy_Doc-handoff.md").is_file(),
                             f"exit {r.returncode}; archived: {(doc / 'archive/Legacy_Doc-handoff.md').is_file()}"))
 
+    # --- template rendering must survive arbitrary --title/--note text ---------------------
+    # These were rendered with `sed "s|PLACEHOLDER_NOTE|$note|"`, so a `|` in the value closed the
+    # expression early. The redirect had already truncated the file, so the doc landed ZERO BYTES
+    # while the command still reported success. `&` is the other trap: sed expands it to the match.
+    _handoff(target, "new", "meta1", "--title", "Fix A & B", "--note", "a|b broke the render")
+    m1 = doc / "meta1-handoff.md"
+    e.append(gc.expectation("a '|' in --note does not produce an empty doc",
+                            m1.is_file() and m1.stat().st_size > 0,
+                            f"size: {m1.stat().st_size if m1.is_file() else 'absent'}"))
+    e.append(gc.expectation("'|' and '&' survive verbatim into the frontmatter",
+                            "note: a|b broke the render" in m1.read_text()
+                            and "title: Fix A & B" in m1.read_text(),
+                            f"frontmatter: {m1.read_text()[:160]!r}"))
+    _handoff(target, "new", "meta2", "--standalone", "--title", "Ref | doc")
+    _handoff(target, "new", "meta3", "--orchestrator", "--children", "meta1", "--title", "Bundle | x")
+    e.append(gc.expectation("standalone and orchestrator templates render the same way",
+                            (doc / "meta2-handoff.md").stat().st_size > 0
+                            and "title: Ref | doc" in (doc / "meta2-handoff.md").read_text()
+                            and (doc / "meta3-handoff.md").stat().st_size > 0
+                            and "title: Bundle | x" in (doc / "meta3-handoff.md").read_text(),
+                            f"standalone: {(doc / 'meta2-handoff.md').stat().st_size}; "
+                            f"orchestrator: {(doc / 'meta3-handoff.md').stat().st_size}"))
+
+    # --- --blocked-on is validated: an unclosable blocker deadlocks silently ---------------
+    _handoff(target, "new", "bo1", "--title", "Blocked one")
+    _handoff(target, "new", "bo2", "--title", "Blocked two")
+    _handoff(target, "new", "boref", "--standalone", "--title", "Reference blocker")
+    _handoff(target, "claim", "bo1")
+    r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "no-such-thing")
+    e.append(gc.expectation("blocked on a NONEXISTENT handoff is REFUSED (nothing would close it)",
+                            r.returncode != 0 and "blocked_on:" not in (doc / "bo1-handoff.md").read_text(),
+                            f"exit {r.returncode}: {r.stderr.strip()[:110]}"))
+    r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "bo1")
+    e.append(gc.expectation("blocked on ITSELF is REFUSED", r.returncode != 0,
+                            f"exit {r.returncode}: {r.stderr.strip()[:110]}"))
+    r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "external: vendor ticket")
+    e.append(gc.expectation("an external: blocker is still accepted unvalidated",
+                            r.returncode == 0 and "external: vendor ticket" in (doc / "bo1-handoff.md").read_text(),
+                            f"exit {r.returncode}"))
+    # a standalone doc IS a legal blocker, and retiring it must announce the dependent — the retire
+    # path is newer than the unblock feature and originally skipped surface_unblocked entirely
+    _handoff(target, "claim", "bo2")
+    _handoff(target, "release", "bo2", "--status", "blocked", "--blocked-on", "boref")
+    r = _handoff(target, "release", "boref", "--status", "done")
+    e.append(gc.expectation("retiring a standalone SURFACES the handoff blocked on it",
+                            r.returncode == 0 and "bo2-handoff" in r.stdout,
+                            f"exit {r.returncode}; stdout: {r.stdout.strip()[:160]!r}"))
+
+    # --- orchestrator: a bundle index whose progress is DERIVED, never stored -------------
+    _handoff(target, "new", "kid-a", "--title", "Child A")
+    _handoff(target, "new", "kid-b", "--title", "Child B")
+    # third child is deliberately NOT filed — a bundle is often planned before every unit exists
+    _handoff(target, "new", "bundle", "--orchestrator", "--children", "kid-a,kid-b,kid-c",
+             "--title", "The bundle")
+    orch = doc / "bundle-handoff.md"
+    e.append(gc.expectation("new --orchestrator writes type + canonicalized children",
+                            orch.is_file() and "type: orchestrator" in orch.read_text()
+                            and "kid-a-handoff" in orch.read_text(),
+                            f"exists: {orch.is_file()}"))
+    r = _handoff(target, "claim", "bundle")
+    e.append(gc.expectation("claim REFUSES an orchestrator (its children are the work)",
+                            r.returncode != 0, f"exit {r.returncode}: {r.stderr.strip()[:80]}"))
+    allow = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(orch)}}, session="sess-ZZZ")
+    e.append(gc.expectation("pretool gate ALLOWS editing an orchestrator with no lease",
+                            allow == "", f"out: {allow[:120]!r}"))
+    lst = _handoff(target, "list").stdout
+    e.append(gc.expectation("list counts an unfiled child (MISSING), never as progress",
+                            "0/3 done" in lst and "kid-c-handoff (MISSING)" in lst,
+                            f"list: {lst[lst.find('Orchestrator'):][:220]!r}"))
+    # INDEX.md is the generated board humans and AGENTS.md point at; it must agree with `list`.
+    # An orchestrator leaking into the Open table reads as an unclaimed task with no lease.
+    _handoff(target, "index")
+    idx = (doc / "INDEX.md").read_text()
+    open_table = idx.split("## Orchestrators")[0]
+    e.append(gc.expectation("INDEX.md keeps orchestrators OUT of the Open work table",
+                            "bundle-handoff.md" not in open_table,
+                            f"open section: {open_table[open_table.find('## Open'):][:220]!r}"))
+    e.append(gc.expectation("INDEX.md renders bundle progress derived from the children",
+                            "## Orchestrators" in idx and "0/3 done" in idx
+                            and "kid-c-handoff (MISSING)" in idx,
+                            f"orch section: {idx[idx.find('## Orchestrators'):][:220]!r}"))
+    r = _handoff(target, "release", "bundle", "--status", "done")
+    e.append(gc.expectation("bundle done is REFUSED while children are outstanding",
+                            r.returncode != 0 and not (doc / "archive/bundle-handoff.md").exists(),
+                            f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
+    for kid in ("kid-a", "kid-b"):
+        _handoff(target, "claim", kid)
+        _handoff(target, "release", kid, "--status", "done", "--verified-by", "grader")
+    _handoff(target, "new", "kid-c", "--title", "Child C")
+    _handoff(target, "claim", "kid-c")
+    _handoff(target, "release", "kid-c", "--status", "done", "--verified-by", "grader")
+    lst = _handoff(target, "list").stdout
+    e.append(gc.expectation("progress tracks children with no edit to the orchestrator doc",
+                            "3/3 done" in lst, f"list: {lst[lst.find('Orchestrator'):][:200]!r}"))
+    r = _handoff(target, "release", "bundle", "--status", "done")
+    e.append(gc.expectation("bundle closes once every child is done",
+                            r.returncode == 0 and (doc / "archive/bundle-handoff.md").is_file(),
+                            f"exit {r.returncode}; archived: {(doc / 'archive/bundle-handoff.md').is_file()}"))
+    return e
+
+
+def grade_layout_migration(target):
+    """A board installed FLAT (machinery beside the docs) must migrate to scripts/ + templates/.
+
+    Installs, flattens the result back to the pre-restructure layout (including the old hook command
+    path in settings.json), then re-installs and asserts the migration converged: machinery moved,
+    nothing left at the root, hook commands rewritten, and — the real regression risk — no duplicated
+    hook groups, since "handoff/scripts/hooks.sh" does not contain the old "handoff/hooks.sh" marker.
+    """
+    e = []
+    hd = Path(target) / HD
+    settings = Path(target) / CLAUDE_CFG
+
+    _install(target, "--primary", "claude")
+
+    # flatten it back to the old layout
+    (hd / "scripts/hooks.sh").rename(hd / "hooks.sh")
+    for tmpl in sorted((hd / "templates").glob("*.md")):  # every template, not a hardcoded pair
+        tmpl.rename(hd / tmpl.name)
+    (hd / "scripts").rmdir()
+    (hd / "templates").rmdir()
+    settings.write_text(settings.read_text().replace("handoff/scripts/hooks.sh", "handoff/hooks.sh"))
+    e.append(gc.expectation("test setup: board is flat again before the migration run",
+                            (hd / "hooks.sh").is_file() and not (hd / "scripts").exists(),
+                            f"flat hooks.sh: {(hd / 'hooks.sh').is_file()}"))
+
+    # re-install: this is the migration
+    r = _install(target, "--primary", "claude")
+    e.append(gc.expectation("installer succeeds on a flat board", r.returncode == 0,
+                            f"exit {r.returncode}: {r.stderr.strip()[:120]}"))
+    e.append(gc.expectation("hooks.sh moved into scripts/",
+                            (hd / "scripts/hooks.sh").is_file() and not (hd / "hooks.sh").exists(),
+                            f"scripts/hooks.sh: {(hd / 'scripts/hooks.sh').is_file()}; "
+                            f"stale root copy: {(hd / 'hooks.sh').exists()}"))
+    e.append(gc.expectation("templates moved into templates/",
+                            (hd / "templates/handoff-doc-template.md").is_file()
+                            and not (hd / "handoff-doc-template.md").exists(),
+                            f"templates/: {(hd / 'templates/handoff-doc-template.md').is_file()}; "
+                            f"stale root copy: {(hd / 'handoff-doc-template.md').exists()}"))
+    e.append(gc.expectation("the handoff CLI stays at the board root", (hd / "handoff").is_file(),
+                            f"handoff at root: {(hd / 'handoff').is_file()}"))
+
+    cfg = json.loads(settings.read_text())
+    cmds = [h.get("command", "") for groups in cfg.get("hooks", {}).values()
+            for g in groups for h in g.get("hooks", [])]
+    e.append(gc.expectation("every hook command points at the new scripts/hooks.sh path",
+                            cmds and all("handoff/scripts/hooks.sh" in c for c in cmds),
+                            f"commands: {cmds}"))
+    e.append(gc.expectation("no duplicated hook groups (old marker was recognized as ours)",
+                            len(cmds) == 4, f"{len(cmds)} hook entries: {cmds}"))
+
+    # the migrated board must still WORK, not merely look right
+    _handoff(target, "new", "post-migration", "--title", "After the move")
+    doc = hd / "post-migration-handoff.md"
+    e.append(gc.expectation("handoff new still scaffolds from the moved template",
+                            doc.is_file() and "## Context" in doc.read_text(),
+                            f"doc: {doc.is_file()}"))
+    deny = _hook(target, "pretool-edit", {"tool_input": {"file_path": str(hd / "INDEX.md")}},
+                 session="sess-ZZZ")
+    e.append(gc.expectation("hooks.sh resolves the board root from scripts/ (gate still fires)",
+                            '"permissionDecision": "deny"' in deny, f"out: {deny[:120]!r}"))
+    e.append(gc.run_verify_script(VERIFY, target))
     return e
 
 
@@ -293,7 +462,7 @@ def grade_cross_repo(_target):
                                 f"b-intact: {'HANDOFF_REPO=repo-b ' in s_b}; cfg-neutral: {'REPO_NAME=' not in cfg2}"))
 
         # audience routing: sessionstart in repo-b surfaces only its own docs.
-        ho, hk = board / "handoff", board / "hooks.sh"
+        ho, hk = board / "handoff", board / "scripts/hooks.sh"
         sh(["bash", str(ho), "new", "task-a", "--audience", "repo-a", "--title", "A task"], board, {"HANDOFF_REPO": "repo-a"})
         sh(["bash", str(ho), "new", "task-b", "--audience", "repo-b", "--title", "B task"], board, {"HANDOFF_REPO": "repo-b"})
         # simulate repo-b's baked hook command env (setup wires both HANDOFF_REPO + HANDOFF_HDPATH)
@@ -344,7 +513,7 @@ def _grade(target, eval_id):
         exps.append(gc.run_verify_script(VERIFY, target))
         exps.append(gc.contains(target, "AGENTS.md", "handoff:begin"))
         exps.append(gc.file_exists(target, f"{HD}/handoff"))
-        exps.append(gc.file_exists(target, f"{HD}/hooks.sh"))
+        exps.append(gc.file_exists(target, f"{HD}/scripts/hooks.sh"))
         return exps
 
     if eval_id == "claude-wired":
@@ -400,6 +569,9 @@ def _grade(target, eval_id):
 
     if eval_id == "script-behavior":
         return grade_script_behavior(target)
+
+    if eval_id == "layout-migration":
+        return grade_layout_migration(target)
 
     if eval_id == "cross-repo":
         return grade_cross_repo(target)
