@@ -41,12 +41,20 @@ echo "1. Commit conventions (commitlint)"
 echo "----------------------------------"
 if [ -f commitlint.config.mjs ]; then
   ok "commitlint.config.mjs present at repo root"
-  # Local commit-msg enforcement: committed .husky/commit-msg OR a prepare script that generates it.
+  # Local commit-msg enforcement, in order: a committed .husky/commit-msg; the scripts/husky.sh
+  # dispatcher installed by a package.json command; or the legacy echo-fragment chain, which is
+  # still accepted so a repo that has not re-run the skill does not fail CI.
   if [ -f .husky/commit-msg ]; then
     ok ".husky/commit-msg present (committed local hook)"
+  elif [ -f scripts/husky.sh ] && grep -q 'commitlint --edit' scripts/husky.sh && [ -f package.json ] && grep -q 'husky\.sh install' package.json; then
+    ok "commit-msg hook generated at install time (scripts/husky.sh install)"
+    if [ -x scripts/husky.sh ]; then
+      ok "scripts/husky.sh is executable"
+    else bad "scripts/husky.sh is not executable (the generated hooks invoke it directly)"; fi
   elif [ -f package.json ] && grep -qE '\.husky/commit-msg|commitlint --edit' package.json; then
-    ok "commit-msg hook generated at install time (package.json prepare script)"
-  else bad "no local commit-msg enforcement (.husky/commit-msg absent and no prepare script generates it)"; fi
+    ok "commit-msg hook generated at install time (legacy package.json hook chain)"
+    warn "legacy hook chain detected; re-run setup-project-tooling to migrate to scripts/husky.sh"
+  else bad "no local commit-msg enforcement (.husky/commit-msg absent and no command generates it)"; fi
 else
   bad "commitlint.config.mjs missing at repo root"
 fi
@@ -61,10 +69,12 @@ import json,sys
 d=json.load(open("package.json"))
 dev=d.get("devDependencies",{})
 need={"@commitlint/cli","@commitlint/config-conventional","husky","lint-staged","prettier","prettier-plugin-sh"}
-prep=d.get("scripts",{}).get("prepare","")
-sys.exit(0 if need.issubset(dev) and "husky" in prep else 1)
+# The hook-install command defaults to `prepare` but may carry any name (install:dev, setup, ...),
+# so look for the command that invokes husky rather than for a fixed script name.
+installs_hooks=any("husky" in v for v in d.get("scripts",{}).values())
+sys.exit(0 if need.issubset(dev) and installs_hooks else 1)
 PY
-  if [ $? -eq 0 ]; then ok "package.json has commitlint/husky/lint-staged/prettier(+sh) devDeps + a husky-invoking prepare script"; else bad "package.json missing commitlint/husky/lint-staged/prettier(+sh) devDeps or a husky-invoking prepare script"; fi
+  if [ $? -eq 0 ]; then ok "package.json has commitlint/husky/lint-staged/prettier(+sh) devDeps + a husky-invoking hook-install command"; else bad "package.json missing commitlint/husky/lint-staged/prettier(+sh) devDeps or a husky-invoking hook-install command"; fi
 else
   bad "package.json missing or invalid JSON (needed for the Node-rooted tooling)"
 fi

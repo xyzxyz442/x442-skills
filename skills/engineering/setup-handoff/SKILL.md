@@ -195,6 +195,10 @@ shared board `handoff new` requires an explicit `--audience`. Single-repo instal
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
   only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+  If the repo formats markdown (prettier, dprint, a markdown linter), exclude
+  `.agents/handoff/INDEX.md` from it — the generated tables are unaligned, a formatter rewrites them,
+  and the next `claim`/`release` regenerates them unaligned again, so the file churns on every
+  command. Treat it as generator-owned output, not source.
 - **Naming: `<id>-handoff.md`, id always lowercase kebab-case.** Every board doc file ends
   `-handoff.md` and the id is the filename stem; `handoff new`/`import` auto-append the suffix
   (idempotent) and `claim`/`release` accept the short or full id. `norm_id` is the single

@@ -71,28 +71,79 @@ Category is **lightweight**: it only sets the release-it default and framework e
 
 Apply these to every repo regardless of language.
 
-### package.json + the `prepare` hook chain
+### package.json + the hook-install command
 
 If `package.json` is absent, create a minimal one (`name`, `version`, `"private": true` unless this
-is a public library). Then merge in the scripts that generate the git hooks at install time — the
-canonical pattern (matches the `.husky/`-gitignored convention). Adapt `pnpm`/`npm`/`yarn`/`bun` to
-the detected manager in `lint-staged`'s invocation:
+is a public library). Copy [`assets/husky.sh`](assets/husky.sh) to `scripts/husky.sh` and mark it
+executable (`chmod +x scripts/husky.sh`). Then merge in a **single** command that installs the
+hooks, plus the scripts the hooks and CI call:
 
 ```json
 {
   "scripts": {
-    "prepare": "husky && npm run prepare:commit-msg && npm run prepare:pre-commit",
-    "prepare:commit-msg": "echo 'npx --no -- commitlint --edit \"$1\"' > .husky/commit-msg",
-    "prepare:pre-commit": "echo 'npx --no -- lint-staged' > .husky/pre-commit",
+    "install:dev": "pnpm install && scripts/husky.sh install",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write --list-different .",
     "lint-staged": "lint-staged"
   }
 }
 ```
 
+Adapt `pnpm`/`npm`/`yarn`/`bun` to the detected manager.
+
+`scripts/husky.sh` is a sub-command dispatcher, the same shape as `initialize.sh`:
+
+| Sub-command  | Role                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `install`    | Runs husky, then writes `.husky/commit-msg` + `.husky/pre-commit` and marks them executable. |
+| `commit-msg` | Hook body — `commitlint --edit "$1"`.                                                        |
+| `pre-commit` | Hook body — the staged-file checks (`lint-staged`).                                          |
+
+Each generated hook is one command that hands git's own arguments to the dispatcher:
+
+```sh
+#!/bin/sh
+
+scripts/husky.sh pre-commit "$@"
+```
+
 This keeps `.husky/` out of version control (the base `.gitignore` below ignores `.husky`) and
-regenerates the hooks on every `install`. Teams that prefer **committed** hooks can instead copy
-[`assets/commit-msg`](assets/commit-msg) to `.husky/commit-msg`, `chmod +x` it, and set
-`"prepare": "husky"` — documented as a fallback, not the default.
+regenerates the hooks on every install, while the logic that runs on every commit stays in one
+committed, reviewable, prettier-formatted script instead of JSON-escaped shell fragments. Binaries
+are resolved through the detected package manager's exec form (`pnpm exec` / `yarn exec` / `bunx` /
+`npx --no --`), because `npx` cannot see local binaries under Yarn PnP or a strict pnpm store.
+
+Add a step by adding a `run_step` line to the relevant hook function. `run_step` skips a script the
+repo does not define, so a Python or base-only repo with no `lint` is never blocked from committing.
+
+**The command is named `install:dev`, never `prepare`.** `prepare` is an npm **lifecycle** script: it
+runs automatically on any plain install, including CI jobs and Docker image builds. Two things follow.
+Hook installation fires where it has no business firing, and — more importantly — `prepare` is
+frequently already owned by a project's DevOps pipeline, so writing to it collides with theirs. Leave
+that lifecycle free and use a name nothing runs implicitly.
+
+The cost is explicit and worth stating to the user: **a plain `install` no longer installs the
+hooks.** The command therefore installs dependencies itself, so it works from a bare clone, and it
+has to be run once by hand. `initialize.sh` runs it on folder-open, so anyone who opens the workspace
+is covered.
+
+If the repo already owns a differently named install-time script (`setup`, `bootstrap`), adopt that
+one rather than adding a competitor — report the choice, do not prompt. `initialize.sh` resolves the
+name at runtime (`install:dev` → `prepare` → whichever script invokes husky), so any of these is
+repaired on folder-open.
+
+**Migrating a repo wired by an earlier version.** The previous shape fanned hook bodies out across
+`<cmd>:commit-msg`, `<cmd>:pre-commit`, and `<cmd>:pre-commit:*` scripts that echoed shell fragments
+into `.husky/`. Remove those scripts, replace them with the single command above, and add
+`scripts/husky.sh`. A repo whose hook-install command is `prepare` moves to `install:dev` and the
+`prepare` entry is deleted. The bundled verifier accepts either shape and any command name, so a repo
+that has not been re-run does not fail CI in the meantime.
+
+Teams that prefer **committed** hooks commit `.husky/commit-msg` and `.husky/pre-commit` as those
+same one-line wrappers, drop `.husky` from `.gitignore`, and set the command to plain `husky`.
+`scripts/husky.sh` is committed either way — the two modes differ only in whether `.husky/` is
+tracked. [`assets/commit-msg`](assets/commit-msg) is the standalone hook body for a repo that wants
+neither the dispatcher nor install-time generation.
 
 ### Base .gitignore
 
@@ -124,8 +175,9 @@ header ≤100 chars. Scope is optional but, when present, must be in the config 
 
 1. **Config** → copy [`assets/commitlint.config.mjs`](assets/commitlint.config.mjs) to the repo root
    as `commitlint.config.mjs`.
-2. **Local hook** → generated by the `prepare:commit-msg` script above (or the committed-hook
-   fallback). Enforcement is **local-only**; this skill does not wire a CI workflow.
+2. **Local hook** → written by `scripts/husky.sh install` and executed by its `commit-msg`
+   sub-command (or the committed-hook fallback). Enforcement is **local-only**; this skill does not
+   wire a CI workflow.
 
 ### Base staged-file formatting (lint-staged)
 
@@ -142,7 +194,23 @@ Merge each fragment as a shallow JSON key-merge into `.lintstagedrc.json`.
 Copy [`assets/prettierrc`](assets/prettierrc) to `.prettierrc` and
 [`assets/prettierignore`](assets/prettierignore) to `.prettierignore` (skip if the repo already has a
 Prettier config; do not overwrite unless the user asks). These back the base `prettier --write`
-glob; the `*.sh` override lets `prettier-plugin-sh` format shell scripts.
+glob; the `*.sh` override lets `prettier-plugin-sh` format shell scripts, including
+`scripts/husky.sh` and `initialize.sh`.
+
+`format` and `format:fix` run prettier over the whole tree in **every** repo, language-independent.
+Scope is `.prettierignore`'s job, not the script's — no globs in `package.json` to drift out of sync
+with the directory layout.
+
+Prettier 3 defaults `--ignore-path` to `[.gitignore, .prettierignore]`, so everything git ignores
+(`node_modules`, `dist`, `coverage`, `.venv`, `.husky`, and the graph output directories) is already
+skipped. `.prettierignore` then only has to name **committed** files that must not be reformatted —
+lockfiles, and `CHANGELOG.md`, which release-it regenerates and prettier would otherwise fight on
+every release. The asset keeps the dependency and build entries anyway, as a safety net for repos
+whose `.gitignore` is thinner than this skill's base.
+
+Both are manual and CI entry points, **not** hook steps: `lint-staged` already formats staged files,
+so running them again on commit would add no coverage while silently rewriting files you never
+staged.
 
 ### Editor + workspace
 
@@ -166,10 +234,14 @@ to commit:
 
 - **Package-manager aware** — detects npm/pnpm/yarn/bun from the lockfile and runs `<pm> install`
   (provisioning yarn/pnpm via corepack when needed).
-- **Hook repair = re-run `prepare`** — regenerates the gitignored `.husky/commit-msg` +
-  `.husky/pre-commit`, matching this skill's hook convention.
-- **Python** — for a Python project, bootstraps `.venv` (uv-first, pip fallback) and installs black
-  (plus sqlfluff when `*.sql` is present) when missing.
+- **Hook repair = re-run the hook-install command** — resolves the command name
+  (`install:dev` → `prepare` → whichever script invokes husky), restores the executable bit on
+  `scripts/husky.sh`, and
+  regenerates the gitignored `.husky/commit-msg` + `.husky/pre-commit`. A dispatcher that is present
+  but not executable counts as broken, since the hooks are one-line wrappers around it.
+- **Python** — makes the toolchain runnable through `scripts/py-tool.sh`. With uv or pipx present it
+  pre-fetches the pinned tools so the first commit does not pay a download inside a git hook; with
+  neither, it creates the `.venv` fallback and installs the versions `py-tool.sh` pins.
 
 The `.vscode/tasks.json` task **Bootstrap Workspace** runs `bash ./initialize.sh folder-open --force`
 on `folderOpen`, so opening the workspace repairs only what is missing. `full` mode
@@ -206,10 +278,16 @@ add their own (see each module).
 
 ### Install and activate
 
-Tell the user to run the install once with the detected manager (do **not** run it automatically):
-`pnpm install` / `npm install` / `yarn install` / `bun install`. The `prepare` script then runs
-husky and writes `.husky/commit-msg` + `.husky/pre-commit`. After that, a bad message is rejected
-and staged files are linted on commit.
+Tell the user to run the hook-install command once with the detected manager (do **not** run it
+automatically): `pnpm run install:dev` / `npm run install:dev` / `yarn install:dev` /
+`bun run install:dev`. It installs dependencies and then calls `scripts/husky.sh install`, which runs
+husky and writes `.husky/commit-msg` + `.husky/pre-commit`. After that, a bad message is rejected and
+staged files are linted on commit.
+
+Because the command is deliberately **not** the `prepare` lifecycle script, a plain
+`pnpm install` will _not_ wire the hooks — this run is required, and so is one per fresh clone.
+Opening the workspace covers it: the folderOpen task runs `initialize.sh`, which resolves the command
+name and runs it.
 
 **Ordering with `setup-graph-hooks`:** husky points git at `.husky/`, so the graph `post-commit`
 refresh installs to `.husky/post-commit`. `setup-graph-hooks` already detects husky and handles this
@@ -222,6 +300,28 @@ refresh installs to `.husky/post-commit`. `setup-graph-hooks` already detects hu
 - **lint-staged** → merge [`assets/lintstaged/nodejs.json`](assets/lintstaged/nodejs.json):
   `"*.{js,jsx,ts,tsx}": ["prettier --write", "eslint --fix", "eslint"]` (format, autofix, then a
   final lint that fails on anything unfixable).
+- **lint scripts** → add a check-only `lint` and a mutating `lint:fix`, scoped to the code
+  directories that actually exist among `src`, `apps`, `libs`, `test`, `tests`, `__tests__`:
+
+  ```json
+  {
+    "scripts": {
+      "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --no-error-on-unmatched-pattern",
+      "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix --no-error-on-unmatched-pattern"
+    }
+  }
+  ```
+
+  With one directory the brace glob collapses to `eslint "src/**/*.ts"`. Keep `--fix` out of `lint`:
+  a CI job running a self-fixing lint repairs the violation in the runner and reports a pass, so the
+  error never reaches anyone. Both are manual and CI entry points, not hook steps — lint-staged
+  already runs `eslint --fix` then `eslint` on staged files, so a whole-repo pass on commit would
+  only fail you for pre-existing errors in files you did not touch.
+
+  Unlike prettier, eslint keeps an explicit glob: `.prettierignore` has no eslint equivalent that
+  this skill owns, and the skill reuses whatever eslint config the repo already has rather than
+  imposing one.
+
 - **editorconfig** → append [`assets/editorconfig/nodejs`](assets/editorconfig/nodejs).
 - **vscode** → merge [`assets/vscode/nodejs.json`](assets/vscode/nodejs.json) (workspace TS SDK,
   semicolons, eslint fix-on-save).
@@ -237,36 +337,68 @@ refresh installs to `.husky/post-commit`. `setup-graph-hooks` already detects hu
 
 ### Python
 
+- **Toolchain** → copy [`assets/py-tool.sh`](assets/py-tool.sh) to `scripts/py-tool.sh` and mark it
+  executable. ruff and black (and, for stream, sqlfluff) are **not** npm packages, and how they are
+  installed varies per machine, so every Python command goes through this one resolver:
+
+  | Order | Runner             | Notes                                           |
+  | ----- | ------------------ | ----------------------------------------------- |
+  | 1     | `uvx`              | ephemeral, cached, exact pin                    |
+  | 2     | `uv tool run`      | when only the `uv` binary is on `PATH`          |
+  | 3     | `pipx run --spec`  | same pin, slower                                |
+  | 4     | `.venv/bin/<tool>` | traditional virtualenv; whatever the venv holds |
+
+  Falling through all four fails with an install hint rather than a confusing "command not found"
+  inside a git hook. **Versions are pinned in `py-tool.sh` and nowhere else** — `package.json` and
+  `.lintstagedrc.json` name the tool only, so bumping a formatter is a one-line edit instead of a
+  hunt across config files that can silently disagree. `scripts/py-tool.sh --spec ruff` prints the
+  pip requirement specifier, which is how `initialize.sh` installs matching versions when it has to
+  build the `.venv` fallback.
+
+- **lint + format scripts** → ruff lints, black formats, and prettier still owns everything that is
+  not Python:
+
+  ```json
+  {
+    "scripts": {
+      "lint": "scripts/py-tool.sh ruff check .",
+      "lint:fix": "scripts/py-tool.sh ruff check --fix .",
+      "format": "prettier --check . && scripts/py-tool.sh black --check .",
+      "format:fix": "prettier --write --list-different . && scripts/py-tool.sh black ."
+    }
+  }
+  ```
+
 - **lint-staged** → merge [`assets/lintstaged/python.json`](assets/lintstaged/python.json):
-  `"*.{py,ipynb}": ["./.venv/bin/black --check --diff", "./.venv/bin/black ."]`. black is the
-  formatter; tools are invoked from a repo-root `.venv` (adjust the path if the venv lives elsewhere).
+  `"*.{py,ipynb}": ["scripts/py-tool.sh ruff check --fix", "scripts/py-tool.sh black"]`. lint-staged
+  appends the staged paths to each command and re-stages what they rewrite, so neither command names
+  a path of its own — a whole-repo `black .` here would reformat files you never staged.
 - **editorconfig** → append [`assets/editorconfig/python`](assets/editorconfig/python) (`*.py`,
   `*.ipynb` → 4-space).
 - **vscode** → merge [`assets/vscode/python.json`](assets/vscode/python.json) (Pylance analysis,
-  `python-envs` venv search paths, `[python]` → black-formatter).
+  `[python]` → black-formatter). It deliberately sets **no** tool paths: with uvx or pipx there is no
+  stable executable path to point at, so the extensions resolve from the interpreter the user selects.
 - **extensions** → `ms-python.python`, `ms-python.black-formatter`.
-- **Toolchain:** black (and, for stream, sqlfluff) are **not** npm packages — install them into
-  `.venv` with the Python toolchain, **preferring `uv`, falling back to `pip`**. Detect uv via a `uv`
-  on `PATH` or a `uv.lock`; otherwise use pip:
-  - uv: `uv venv && uv pip install black sqlfluff`
-  - pip: `python -m venv .venv && ./.venv/bin/pip install black sqlfluff`
-
-  The lint-staged hook invokes `./.venv/bin/...` directly, so either installer lands the tools in the
-  same place.
 
 ### Python (stream)
 
-Python plus a Flink-SQL add-on. Apply **in addition to** the Python module when `*.sql` files are
-present.
+Python plus a Flink-SQL add-on. It is an **add-on, not a flavour of Python**: apply it in addition to
+the Python module only when `*.sql` files are present. A Flink project with no SQL files is plain
+Python and gets nothing from this section.
 
 - **lint-staged** → merge
   [`assets/lintstaged/python-stream.json`](assets/lintstaged/python-stream.json): `sqlfluff fix` then
-  `sqlfluff lint` on `*.sql`, dialect `flink`, via `.venv`.
-- **config** → copy [`assets/sqlfluff`](assets/sqlfluff) to `.sqlfluff` (dialect `flink`). Change the
-  `--dialect` / `.sqlfluff` dialect per your engine (flink / ansi / bigquery / …) if not Flink.
+  `sqlfluff lint` on `*.sql`, through `scripts/py-tool.sh`.
+- **format scripts** → append the SQL pass to the Python module's scripts:
+  `format` gains `&& scripts/py-tool.sh sqlfluff lint . --config .sqlfluff`, `format:fix` gains
+  `&& scripts/py-tool.sh sqlfluff fix . --config .sqlfluff`. Both take an explicit `.` — `sqlfluff
+lint` with no path has nothing to lint.
+- **config** → copy [`assets/sqlfluff`](assets/sqlfluff) to `.sqlfluff` (dialect `flink`). `.sqlfluff`
+  is the **single source** of the dialect and no command passes `--dialect`, so switching engine
+  (flink / ansi / bigquery / …) is a one-file edit that cannot drift out of sync with the scripts.
 - **vscode** → merge
-  [`assets/vscode/python-stream.json`](assets/vscode/python-stream.json) (sqlfluff executable +
-  config paths under `.venv`).
+  [`assets/vscode/python-stream.json`](assets/vscode/python-stream.json) (config path only; the
+  executable path is omitted for the same reason as the Python module).
 - **extensions** → `sqlfluff.sqlfluff`.
 
 ### Everything else → common base only
@@ -298,17 +430,27 @@ scripts/verify-project-tooling.sh [repo-root]` (read-only; no network/LLM; exits
 failure). Then spot-check:
 
 1. **Commitlint:** `commitlint.config.mjs` exists and local enforcement is present (committed
-   `.husky/commit-msg` **or** a `prepare` script that generates it). After install,
-   `git commit -m "bad message"` fails and `git commit -m "chore: ok"` passes; confirm with
-   `npx commitlint --from HEAD~1 --to HEAD`.
-2. **lint-staged:** `.lintstagedrc.json` resolves with the base `*.{json,yml,yaml,md}` glob plus the
+   `.husky/commit-msg` **or** a hook-install command plus a `scripts/husky.sh` carrying
+   `commitlint --edit`). After install, `git commit -m "bad message"` fails and
+   `git commit -m "chore: ok"` passes; confirm with `npx commitlint --from HEAD~1 --to HEAD`.
+2. **Hooks:** `scripts/husky.sh` is present and executable; `.husky/commit-msg` and
+   `.husky/pre-commit` are one-line wrappers calling it and are executable. `scripts/husky.sh -h`
+   prints usage. Re-running the hook-install command rewrites both hooks identically.
+3. **lint-staged:** `.lintstagedrc.json` resolves with the base `*.{json,yml,yaml,md}` glob plus the
    detected language's globs.
-3. **Editor:** `.editorconfig`, `.prettierrc`, `.prettierignore`, and `.vscode/settings.json`
+4. **Format and lint:** `<pm> run format` is the unscoped prettier pair, and `prettier --check .`
+   skips build output and lockfiles through `.gitignore` + `.prettierignore`. For Node/TS, `lint`
+   names only directories that exist and carries no `--fix`. For Python, `scripts/py-tool.sh` is
+   executable, `--spec ruff` prints a pinned requirement, and each tool runs — including with `uv`
+   and `pipx` removed from `PATH`, which must fall through to `.venv` or fail with the install hint.
+5. **Editor:** `.editorconfig`, `.prettierrc`, `.prettierignore`, and `.vscode/settings.json`
    present; `.vscode/extensions.json` lists the stack's extensions; `.vscode/tasks.json` has the
    **Bootstrap Workspace** task and `initialize.sh` is present and executable; `.gitignore` ignores
-   `.husky` (plus the base AI paths).
-4. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
+   `.husky` (plus the base AI paths) and does **not** ignore `scripts/`.
+6. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
    `npm run release:dry-run` produces a changelog preview.
-5. **Common-only repos:** an unsupported-language repo still passes the base checks (commitlint,
-   `.editorconfig`, a `.lintstagedrc.json` with the base glob).
-6. **Idempotency:** re-running the skill is a no-op for every piece already present.
+7. **Common-only repos:** an unsupported-language repo still passes the base checks (commitlint,
+   `.editorconfig`, a `.lintstagedrc.json` with the base glob), and its `pre-commit` skips any step
+   it does not define rather than failing the commit.
+8. **Idempotency:** re-running the skill is a no-op for every piece already present, including on a
+   repo migrated from the older `<cmd>:commit-msg` / `<cmd>:pre-commit` chain.

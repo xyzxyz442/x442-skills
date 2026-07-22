@@ -1,3 +1,6 @@
 {
-  "*.{py,ipynb}": ["./.venv/bin/black --check --diff", "./.venv/bin/black ."]
+  "*.{py,ipynb}": [
+    "scripts/py-tool.sh ruff check --fix",
+    "scripts/py-tool.sh black"
+  ]
 }

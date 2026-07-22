@@ -1,5 +1,4 @@
 {
-  "python-envs.workspaceSearchPaths": [".venv", "*/.venv"],
   "python.analysis.autoImportCompletions": true,
   "python.analysis.typeCheckingMode": "standard",
   "python.analysis.fixAll": ["source.unusedImports"],
