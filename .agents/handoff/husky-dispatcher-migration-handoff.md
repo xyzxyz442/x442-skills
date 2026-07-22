@@ -8,7 +8,7 @@ repos: []
 severity: low
 created: 2026-07-22
 updated: 2026-07-23
-note: setup-project-tooling now installs scripts/husky.sh; older installs still carry the echo-fragment chain
+note: registry of 16 repos still on the echo-fragment chain; migrate each when next working in it (/ais/ excluded)
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -34,10 +34,19 @@ git's arguments to the dispatcher.
 
 This repo has been migrated (commit `15c39af`).
 
-**A workspace-wide audit on 2026-07-23 found the original premise was largely wrong.** Scanning every
-`package.json` under `~/Work/Projects` (depth 3, excluding `node_modules`) for `prepare:commit-msg` /
-`prepare:pre-commit` returned five hits, of which only one is a genuine migration target — and it is
-deferred by decision, not by oversight. Do not re-run the sweep; the results are in **Where** below.
+**A full-depth workspace audit on 2026-07-23 produced the registry in "Where" below: 16 repos still
+carry the old chain.**
+
+Two corrections to earlier readings of this handoff, both worth knowing before you trust any number
+in it:
+
+1. **An initial scan used `-maxdepth 3` and found only 5 carriers. That was wrong** — it could not
+   see anything nested at `<repo>/src/<project>/`, which is where most of them live. The full-depth
+   sweep found 21 before exclusions. Use the command in **Verify**, not a shallower one.
+2. **These repos were mostly not "wired by this skill."** Several predate it by up to two years. The
+   echo-fragment chain is a personal convention the skill later codified, so this is a **convention
+   rollout across a portfolio**, not repair of the skill's own output. That reframes the urgency: no
+   repo here is broken, they are just on the older shape.
 
 ## Where
 
@@ -54,35 +63,56 @@ deferred by decision, not by oversight. Do not re-run the sweep; the results are
   and emits `[warn] legacy hook chain detected`, so nothing goes red before a repo is re-run. That
   warning is how you find the repos still needing migration.
 
-### Audit results (2026-07-23) — the sweep is done, do not repeat it
+### Registry — 16 repos to migrate (audited 2026-07-23, full depth)
 
-| Repo (under `~/Work/Projects`)    | Carries old chain | Verdict                                                                                                                                                                   |
-| --------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `teebat`                          | yes               | **The only real target.** Deferred — see below.                                                                                                                           |
-| `self/zeals-data-engr-tech-asgmt` | yes               | Out of scope: dormant 1yr5mo, never wired by this skill (no `AGENTS.md`, no `commitlint.config.mjs`), hand-rolled `source .venv/bin/activate` + `requirements.txt` idiom. |
-| `self/zeals-…-asgmt-develop`      | yes               | Out of scope: **not a git repository** — a loose snapshot copy.                                                                                                           |
-| `x442-skills copy`                | yes               | Out of scope: a backup copy of this repo.                                                                                                                                 |
-| `x442-skills`                     | —                 | Migrated in `15c39af`.                                                                                                                                                    |
+**Nothing here has been modified.** By decision, each repo is migrated when someone next works in it,
+not in a sweep. `dirty` is the uncommitted-file count at audit time; treat a dirty tree as a reason to
+migrate on a clean baseline instead, not as a blocker to route around.
 
-**Why `teebat` is deferred, and what it needs.** Its entire working tree is **untracked** —
-`package.json`, `src/`, `next.config.ts`, `wrangler.jsonc`, all of it. The last commit (3 months ago,
-"Update index.html") predates the current Next.js/Cloudflare app. Rewriting an uncommitted
-`package.json` means editing WIP with no baseline to diff or revert against, so the migration waits
-until that tree is committed by its owner. When it is, the steps are:
+| Repo (under `~/Work/Projects`)               | Dirty | Last commit | Branch                           |
+| -------------------------------------------- | ----- | ----------- | -------------------------------- |
+| `impexagentsu-com/src/main-web`              | 0     | 10w         | main                             |
+| `wmboacs-com/src/backoffice-web`             | 2     | 23h         | develop                          |
+| `wmboacs-com/src/main-api`                   | 11    | 24h         | develop                          |
+| `yupp-labs/src/badmintime-main-api`          | 22    | 3w          | main                             |
+| `x442-skills copy`                           | 8     | 6w          | main                             |
+| `teebat`                                     | 24    | 3mo         | develop — see the caveat below   |
+| `x-carpe-noctem/src/nextjs-project-template` | 7     | 6mo         | main                             |
+| `x-carpe-noctem/src/library-node-common`     | 0     | 11mo        | main                             |
+| `x-carpe-noctem/src/library-node-data`       | 1     | 11mo        | main                             |
+| `givery/src/recipe-api`                      | 0     | 1y          | main                             |
+| `merchant-payment-e2p/src/main-api`          | 0     | 1y5mo       | feature/migrate-library-core-api |
+| `self/zeals-data-engr-tech-asgmt`            | 2     | 1y5mo       | develop — Python, see note       |
+| `wmboacs-com/src/main-web`                   | 0     | 1y8mo       | release/0.x.y                    |
+| `verk/src/zoom-web`                          | 0     | 1y10mo      | release/2.x.y                    |
+| `verk/src/zoom-web-refactor`                 | 18    | 1y11mo      | feature/revamp-migrate-to-nextjs |
+| `2c2p/src/soft-arch-tech-asgmt`              | 0     | 2y          | main                             |
 
-1. Copy `assets/husky.sh` to `teebat/scripts/husky.sh` and `chmod +x`.
-2. Replace `prepare`, `prepare:commit-msg`, `prepare:pre-commit` and the three
-   `prepare:pre-commit:*` scripts with
-   `"install:dev": "pnpm install && scripts/husky.sh install"`.
-3. **Do not lose `prepare:prepare-commit-msg`.** teebat wires a third hook to
-   `scripts/prepare-commit-msg.sh` (a commitizen wrapper that runs `cz` when you commit with an empty
-   `-m`). The dispatcher has no such sub-command by decision, and deleting `prepare` would otherwise
-   orphan that script — so chain it explicitly:
-   `"install:dev": "pnpm install && scripts/husky.sh install && pnpm run install:dev:prepare-commit-msg"`.
-4. Split its `lint` (currently `eslint --fix`, which mutates and takes no path) into a check-only
-   `lint` plus a `lint:fix`. Verify what `eslint` with no path resolves to under its flat config
-   before choosing the replacement glob rather than assuming.
-5. `format` / `format:fix` already match the new shape exactly — leave them alone.
+**Permanently excluded — do not re-add:**
+
+- **Anything under a path containing `/ais/`.** That is 227 `package.json` files under `./ais` plus
+  `./work/ais/**`; deliberately out of scope for this handoff.
+- `wmboacs-com/src/_legacy/{backoffice-web copy, backoffice-web-legacy, backoffice-web-new}` — parked
+  under `_legacy`, one carrying 193 uncommitted files.
+- `self/zeals-data-engr-tech-asgmt-develop` — not a git repository, a loose directory snapshot with
+  nothing to revert to.
+
+**Per-repo caveats.**
+
+- **`teebat`** — its entire tree is **untracked** (`package.json`, `src/`, `next.config.ts`,
+  `wrangler.jsonc`); the last commit predates the current Next.js/Cloudflare app. Commit that tree
+  before migrating, so there is a baseline to diff against. It also wires a third hook to
+  `scripts/prepare-commit-msg.sh` (a commitizen wrapper firing `cz` on an empty `-m`) — deleting
+  `prepare` orphans it, so chain it explicitly:
+  `"install:dev": "pnpm install && scripts/husky.sh install && pnpm run install:dev:prepare-commit-msg"`.
+  Its `format`/`format:fix` already match the new shape; leave them. Its `lint` is `eslint --fix`
+  with no path — check what that resolves to under its flat config before splitting it.
+- **`self/zeals-data-engr-tech-asgmt`** — Python, and on an older idiom than this skill ever emitted
+  (`source .venv/bin/activate && …` plus a `prepare:setup` doing `pip install -r requirements.txt`).
+  Migrating means adopting `scripts/py-tool.sh` and rethinking that bootstrap, not a mechanical
+  find-and-replace.
+- **Any repo whose `lint` carries `--fix`** (several do) — split into check-only `lint` plus
+  `lint:fix` as part of the migration.
 
 ## Verify
 
@@ -91,17 +121,22 @@ and `commit-msg hook generated at install time (scripts/husky.sh install)` with 
 legacy warning; `.husky/commit-msg` and `.husky/pre-commit` are one-line wrappers and executable; a
 non-conventional commit message is rejected and a conventional one passes.
 
-**This handoff closes `done` when `teebat` clears that check** — it is the only outstanding carrier.
-Re-running the audit is not required and not wanted; if you want to confirm nothing new appeared,
-the one-liner is:
+**This handoff closes `done` when every repo in the registry has cleared that check.** Tick them off
+in the table as you go — a migration happens when someone next works in that repo, so this stays
+`open` for a while by design.
+
+To re-audit (full depth; the earlier `-maxdepth 3` version missed most carriers):
 
 ```text
-find ~/Work/Projects -maxdepth 3 -name package.json -not -path '*/node_modules/*' \
-  -print0 | xargs -0 grep -l 'prepare:commit-msg\|prepare:pre-commit'
+cd ~/Work/Projects
+find . \( -type d \( -name node_modules -o -name .git -o -name .venv -o -name dist -o -name .next \) -prune \) \
+  -o -type f -name package.json -print \
+  | grep -v '/ais/' \
+  | tr '\n' '\0' | xargs -0 grep -l 'prepare:commit-msg\|prepare:pre-commit'
 ```
 
-Note it also matches the three out-of-scope entries in the table above; check a hit against that
-table before treating it as new work.
+Cross-check every hit against the registry and the permanent-exclusion list before treating it as new
+work — the exclusions still match this grep.
 
 ## Decisions
 
@@ -130,9 +165,11 @@ Settled during the redesign — do not relitigate:
   usage. `teebat` genuinely uses that hook (a commitizen wrapper), which is evidence _for_ the hook
   but not for the skill owning it: a repo wanting a third hook keeps its own npm script beside the
   dispatcher. The skill wires `commit-msg` and `pre-commit` only.
-- **Foreign repos are not migrated unilaterally.** The audit deliberately stopped at reporting.
-  `teebat` waits on its owner committing its tree; the dormant assignment, the non-repo snapshot and
-  the backup copy are permanently out of scope.
+- **Foreign repos are not migrated unilaterally, and not in a sweep.** The audit deliberately stopped
+  at reporting. Each repo in the registry is migrated when someone next works in it, on a clean
+  baseline — rewriting 16 separate repos in one pass would be 16 unreviewed changes across
+  independent histories, and a repo dormant for two years gains nothing from it.
+- **`/ais/` is out of scope by instruction**, both `./ais` (227 `package.json`) and `./work/ais/**`.
 - Python tooling runs through `scripts/py-tool.sh`, which resolves
   **uvx → `uv tool run` → `pipx run` → `.venv/bin`** and pins ruff/black/sqlfluff versions in that one
   file. The `.venv` path is a real supported fallback, not a legacy leftover: a machine with neither
@@ -149,3 +186,4 @@ Settled during the redesign — do not relitigate:
 - 2026-07-22 — open — released by Gunn Bhatrakarn (1806ddb8). decisions corrected for install:dev + py-tool.sh resolver
 - 2026-07-22 — open — released by Gunn Bhatrakarn (1806ddb8). doc consistent with the shipped shape
 - 2026-07-23 — open — released by Gunn Bhatrakarn (1806ddb8). audit complete: teebat is the only carrier, deferred until its tree is committed; other three permanently out of scope
+- 2026-07-23 — open — released by Gunn Bhatrakarn (1806ddb8). full-depth re-audit: registry of 16 carriers recorded; /ais/ and _legacy copies excluded; nothing migrated by decision
