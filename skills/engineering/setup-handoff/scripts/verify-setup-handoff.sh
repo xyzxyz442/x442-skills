@@ -42,11 +42,14 @@ HD="$ROOT/.agents/handoff"
 if [ ! -d "$HD" ]; then
   for CF in .claude/settings.json .claude/settings.local.json .gemini/settings.json .github/hooks/handoff.json; do
     [ -f "$ROOT/$CF" ] || continue
-    DERIVED=$(grep -o '[^"]*handoff/hooks\.sh' "$ROOT/$CF" 2> /dev/null | head -1)
+    # hooks.sh lives at <board>/scripts/hooks.sh; a board wired before the layout restructure has
+    # it at <board>/hooks.sh. Match either, then strip the right number of path segments — one
+    # dirname too few would point the verifier at the scripts/ subdir instead of the board.
+    DERIVED=$(grep -o '[^"]*handoff/\(scripts/\)\?hooks\.sh' "$ROOT/$CF" 2> /dev/null | head -1)
     [ -n "$DERIVED" ] || continue
     D="${DERIVED##*CLAUDE_PROJECT_DIR/}"
     D="${D#bash }"
-    D="$(dirname "$D")"
+    case "$D" in */scripts/hooks.sh) D="$(dirname "$(dirname "$D")")" ;; *) D="$(dirname "$D")" ;; esac
     case "$D" in /*) HD="$D" ;; *) HD="$ROOT/$D" ;; esac
     break
   done
@@ -65,14 +68,24 @@ if [ ! -d "$HD" ]; then
   echo "Summary: $P passed, $W warnings, $F failed"
   exit 1
 fi
-for f in handoff hooks.sh; do
+# hooks.sh lives under scripts/ and the templates under templates/; a board installed before the
+# layout restructure still has them flat, which is a warning (re-run the installer to migrate),
+# not a failure — the CLI and hooks both fall back to the flat locations.
+for f in handoff scripts/hooks.sh; do
   if [ -f "$HD/$f" ]; then
     [ -x "$HD/$f" ] && ok "$f present and executable" || warn "$f present but not executable (chmod +x)"
+  elif [ -f "$HD/$(basename "$f")" ]; then
+    warn "$(basename "$f") is at the board root (flat layout) — re-run setup-handoff to migrate to $f"
   else bad "$f missing"; fi
 done
-for f in README.md config handoff-doc-template.md; do
+for f in README.md config; do
   [ -f "$HD/$f" ] && ok "$f present" || warn "$f missing"
 done
+if [ -f "$HD/templates/handoff-doc-template.md" ]; then
+  ok "templates/handoff-doc-template.md present"
+elif [ -f "$HD/handoff-doc-template.md" ]; then
+  warn "handoff-doc-template.md is at the board root (flat layout) — re-run setup-handoff to migrate"
+else warn "handoff-doc-template.md missing"; fi
 [ -d "$HD/archive" ] && ok "archive/ present" || warn "archive/ missing (created on first done)"
 
 echo
@@ -102,7 +115,7 @@ HARD=""
 check_tool() { # name file marker_event
   local name="$1" file="$2"
   [ -f "$file" ] || return 0
-  if grep -q 'handoff/hooks.sh' "$file" 2> /dev/null; then
+  if grep -qE 'handoff/(scripts/)?hooks\.sh' "$file" 2> /dev/null; then
     if is_json "$file"; then
       ok "$name wired + valid JSON: ${file#$ROOT/}"
       WIRED="${WIRED:+$WIRED }$name"
@@ -135,7 +148,8 @@ fi
 echo
 echo "5. Hooks fire (read-only paths)"
 echo "-------------------------------"
-HK="$HD/hooks.sh"
+HK="$HD/scripts/hooks.sh"
+[ -f "$HK" ] || HK="$HD/hooks.sh" # flat (pre-restructure) board
 if [ -f "$HK" ]; then
   # sessionstart: valid JSON context, or empty when no open handoffs — both fine.
   out=$(printf '{"session_id":"verify"}' | bash "$HK" --kind sessionstart --tool claude 2> /dev/null)

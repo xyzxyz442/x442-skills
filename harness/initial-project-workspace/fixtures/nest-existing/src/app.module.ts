@@ -3,10 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ConsumerModule } from './consumer/consumer.module';
 
 @Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
-    ConsumerModule,
-  ],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), ConsumerModule],
   controllers: [],
   providers: [],
 })

@@ -12,7 +12,9 @@ for sharing later.
 > skills [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md)
 > and [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md), and
 > [`setup-handoff`](skills/engineering/setup-handoff/SKILL.md) _(experimental)_ with its run
-> skill [`run-handoff`](skills/engineering/run-handoff/SKILL.md) _(experimental)_.
+> skill [`run-handoff`](skills/engineering/run-handoff/SKILL.md) _(experimental)_. A second
+> category opens under `skills/productivity/` with
+> [`release-announcement`](skills/productivity/release-announcement/SKILL.md) _(experimental)_.
 > See the [skills catalog](skills/README.md) for the full detail.
 
 ## Philosophy
@@ -58,6 +60,8 @@ The design these skills share — and what they wire into the repos they touch:
 │   └── <skill>-workspace/          # evals/ + fixtures/ + grade.py + iterations/
 └── skills/
     ├── README.md                   # skills catalog: categories, status, per-skill detail
+    ├── productivity/               # category README + skills
+    │   └── release-announcement/   # SKILL.md only  (experimental)
     └── engineering/                # category README + skills
         ├── initial-project/        # SKILL.md + references/ + scripts/
         ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (experimental)

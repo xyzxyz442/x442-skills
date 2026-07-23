@@ -64,6 +64,21 @@ for p in parts[i+1:]:
         print(p[:60]); break" 2> /dev/null || true)"
 [ -z "$PATTERN" ] && exit 0
 
+# Search-tier marker. This hook answers by NAME match (FTS5/LIKE over the nodes table), so every
+# pre-answer it emits is keyword-tier by construction — labelled honestly below. When the graph
+# also carries vectors, point the agent at the richer tier instead of pretending this name match
+# is the ceiling. embed-provider.sh --tier prints: "keyword" | "local <model>" | "custom <label>".
+TIER="$(bash "$HERE/embed-provider.sh" --tier 2> /dev/null | head -1)"
+TIER_KIND="${TIER%% *}"
+case "$TIER" in *" "*) TIER_LABEL="${TIER#* }" ;; *) TIER_LABEL="" ;; esac
+TIER_NUDGE=""
+case "$TIER_KIND" in
+  custom) TIER_NUDGE="Vector tier available: custom (${TIER_LABEL:-external}). For meaning-based lookup, semantic_search_nodes_tool(query='$PATTERN', provider=\"openai\", model=\"...\") beats this name match.
+" ;;
+  local) TIER_NUDGE="Vector tier available: local (${TIER_LABEL:-built-in}). For meaning-based lookup, semantic_search_nodes_tool(query='$PATTERN') beats this name match.
+" ;;
+esac
+
 query_crg() { # $1=db $2=pattern  (FTS5, falls back to LIKE; read-only)
   python3 - "$1" "$2" << 'PY' 2> /dev/null
 import sqlite3, sys, os
@@ -237,12 +252,12 @@ PY
 if [ ! -f "$SLOT" ]; then
   touch "$SLOT" 2> /dev/null || true
   if [ -n "$RESULT" ]; then
-    emit_neutral context "${STALE_NOTE}Knowledge graph pre-answer for '$PATTERN':
+    emit_neutral context "${STALE_NOTE}Knowledge graph pre-answer for '$PATTERN' [search tier: keyword]:
 $RESULT
 
-If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbol greps get denied when the graph can answer. Bypass anytime: append --graph-tried."
+${TIER_NUDGE}If that's enough, skip the grep. Allowing this one (one-shot). Repeat code-symbol greps get denied when the graph can answer. Bypass anytime: append --graph-tried."
   else
-    emit_neutral context "No graph hit for '$PATTERN' — grep proceeding (one-shot). Next time try: $HINT. Append --graph-tried to bypass permanently."
+    emit_neutral context "No graph hit for '$PATTERN' [search tier: keyword] — grep proceeding (one-shot). ${TIER_NUDGE:+$TIER_NUDGE}Next time try: $HINT. Append --graph-tried to bypass permanently."
   fi
   exit 0
 fi
@@ -256,14 +271,14 @@ if [ -n "$DENYABLE" ]; then
   if [ -n "$XREPO_ALIAS" ]; then
     case "$DENYABLE" in
       *" CALLER  "*)
-        emit_neutral deny "The '$XREPO_ALIAS' graph already has this — definition and its call sites below, no grep/retry needed:
+        emit_neutral deny "The '$XREPO_ALIAS' graph already has this [search tier: keyword] — definition and its call sites below, no grep/retry needed:
 
 $DENYABLE
 
 Use: $HINT. Append --graph-tried to override."
         ;;
       *)
-        emit_neutral context "The '$XREPO_ALIAS' graph has a definition match for '$PATTERN' but no indexed call sites — this is not a full usage list, so the grep is not redundant:
+        emit_neutral context "The '$XREPO_ALIAS' graph has a definition match for '$PATTERN' [search tier: keyword] but no indexed call sites — this is not a full usage list, so the grep is not redundant:
 
 $DENYABLE
 
@@ -271,11 +286,11 @@ Use: $HINT to widen, or append --graph-tried to grep anyway."
         ;;
     esac
   else
-    emit_neutral deny "The knowledge graph already has this — no grep/retry needed:
+    emit_neutral deny "The knowledge graph already has this [search tier: keyword] — no grep/retry needed:
 
 $DENYABLE
 
-Use: $HINT. Append --graph-tried to override."
+${TIER_NUDGE}Use: $HINT. Append --graph-tried to override."
   fi
   exit 0
 fi
@@ -283,7 +298,7 @@ fi
 # A sibling answered but was not denyable: either the command was not aimed at it (broad local grep),
 # or it was aimed at a STALE sibling (STALE_NOTE set) — advise, never block.
 if [ -n "$RESULT_SIB" ]; then
-  emit_neutral context "${STALE_NOTE}An in-scope sibling repo's graph has '$PATTERN':
+  emit_neutral context "${STALE_NOTE}An in-scope sibling repo's graph has '$PATTERN' [search tier: keyword]:
 
 $RESULT_SIB
 

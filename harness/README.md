@@ -24,7 +24,8 @@ harness/
 ├── setup-project-tooling-workspace/
 ├── setup-graph-hooks-workspace/
 ├── register-cross-repo-graph-workspace/
-└── repair-graph-hooks-workspace/
+├── repair-graph-hooks-workspace/
+└── release-announcement-workspace/
 ```
 
 Each `<skill>-workspace/` holds `evals/evals.json`, `fixtures/`, `grade.py`, and
@@ -113,6 +114,17 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   grader wraps that. Fixtures: `healthy` (repair is a no-op → directly gradeable), `broken-json`
   and `missing-core` (repair TARGETS — drifted inputs that fail the verifier by design until an
   agent runs the skill, then re-graded to 0 failed).
+- **`release-announcement-workspace/`** — the harness's first **text-output** grader: the skill
+  ships no scripts and produces prose, so there is no `verify-*.sh` to wrap (`evals.json` omits
+  `verify_script`; nothing in `lib/` reads it) and the produced `ANNOUNCEMENT.md` is graded
+  directly against the skill's own `## Rules`/`## Verification` sections — structure, attribution
+  (the non-public upstream is never named), no marketing language, no invented numbers (every
+  digit run must trace to the input files), status promotions stated, no destructive commands.
+  Emoji are never graded — announcements may carry them by house style. Fixtures: `release-input`
+  (a pre-state input project with a changelog engineered to exercise every rule), and two
+  deterministic controls proving the grader can both pass and fail: `announcement-good`
+  (post-state, grades 1.00) and `violations` (breaks each rule, grades well below 1.00 with
+  failing expectations naming the rule broken).
 - **All five engineering skills now have a workspace.** Every grader wraps its target with
   `isolated_git_target` (a fixture nested in this repo is relocated to its own git root, so the
   bundled `verify-*.sh` grades the fixture, not x442-skills) and may emit `skipped()` expectations —

@@ -64,15 +64,16 @@ Rules:
 
 ## Skill Index
 
-| Category      | Skill                       | Status         | Purpose                                                                                                                                                                                                                                                                                   |
-| ------------- | --------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engineering` | `initial-project`           | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                                                                                                                                                                 |
-| `engineering` | `setup-project-tooling`     | `experimental` | Detect language, recommend a category, then scaffold a common base + per-language tooling (commitlint, lint-staged, VS Code, release-it). Chains after `initial-project`.                                                                                                                 |
-| `engineering` | `setup-graph-hooks`         | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                                                                                                                                                                  |
-| `engineering` | `repair-graph-hooks`        | `stable`       | Smoke-test graph-tool integrity, then re-check, validate, and repair the graph-hooks wiring and graph state. Chains after `setup-graph-hooks`.                                                                                                                                            |
-| `engineering` | `register-cross-repo-graph` | `stable`       | Declare sibling repos in a per-project `.graph-repos.json` cascade (user → repo → subdir), then register/merge their graphs for read-only cross-repo access and record the in-scope list in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`.         |
-| `engineering` | `setup-handoff`             | `experimental` | Install a lease-based handoff coordination protocol (`.agents/handoff/`) so multiple agents/sessions/repos work the same code without clobbering — claim/release leases, per-tool enforcement hooks (user picks a primary), and legacy-install migration. Chains after `initial-project`. |
-| `engineering` | `run-handoff`               | `experimental` | The claim → work → release discipline over an installed handoff board: check the board, claim before editing, and release with an honest status (`done` requires evidence). Chains after `setup-handoff`.                                                                                 |
+| Category       | Skill                       | Status         | Purpose                                                                                                                                                                                                                                                                                   |
+| -------------- | --------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engineering`  | `initial-project`           | `stable`       | Set up a project's AI-assistant config around a shared `AGENTS.md`, detecting and wiring each tool to it.                                                                                                                                                                                 |
+| `engineering`  | `setup-project-tooling`     | `experimental` | Detect language, recommend a category, then scaffold a common base + per-language tooling (commitlint, lint-staged, VS Code, release-it). Chains after `initial-project`.                                                                                                                 |
+| `engineering`  | `setup-graph-hooks`         | `stable`       | Wire a self-updating code knowledge graph so agents query the graph instead of grepping. Chains after `initial-project`.                                                                                                                                                                  |
+| `engineering`  | `repair-graph-hooks`        | `stable`       | Smoke-test graph-tool integrity, then re-check, validate, and repair the graph-hooks wiring and graph state. Chains after `setup-graph-hooks`.                                                                                                                                            |
+| `engineering`  | `register-cross-repo-graph` | `stable`       | Declare sibling repos in a per-project `.graph-repos.json` cascade (user → repo → subdir), then register/merge their graphs for read-only cross-repo access and record the in-scope list in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`.         |
+| `engineering`  | `setup-handoff`             | `experimental` | Install a lease-based handoff coordination protocol (`.agents/handoff/`) so multiple agents/sessions/repos work the same code without clobbering — claim/release leases, per-tool enforcement hooks (user picks a primary), and legacy-install migration. Chains after `initial-project`. |
+| `engineering`  | `run-handoff`               | `experimental` | The claim → work → release discipline over an installed handoff board: check the board, claim before editing, and release with an honest status (`done` requires evidence). Chains after `setup-handoff`.                                                                                 |
+| `productivity` | `release-announcement`      | `experimental` | Turn a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email), leading with user impact rather than the file diff. Can emit a second language.                                                                            |
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
@@ -136,12 +137,26 @@ Routing (CRG first, graphify on miss, grep last):
 | shortest path A→B               | `graphify path '<A>' '<B>' --graph graphify-out/graph.json`        |
 | string / config / log text      | `grep` (append `--graph-tried` to bypass the graph gate)           |
 
-`semantic_search_nodes_tool` works whether or not this repo enabled vector embeddings — without
-them it falls back to keyword search over symbol names. Weaker phrasing-tolerance, same tool, not
-a failure. Do not reach for grep because a result looked shallow.
+### Search tiers — prefer vector, keyword is the floor
 
-This repo embeds via Ollama, and the tool's `provider` argument defaults to `local`. To get
-vector results rather than the keyword fallback, pin it:
+`semantic_search_nodes_tool` answers in one of three tiers. Prefer the richest one available, and
+**state which tier a search used** when it backs an answer. Preference order is
+**custom → local → keyword** (`./setup-embeddings.sh` sets it up in that order):
+
+1. **custom** — vectors from an external / OpenAI-compatible provider (e.g. Ollama). Richest.
+   These are read ONLY when pinned, or the tool silently drops to keyword:
+   `semantic_search_nodes_tool(query=X, provider="openai", model="<model>")`.
+2. **local** — vectors from CRG's built-in model. Read by default, no pin: `semantic_search_nodes_tool(query=X)`.
+3. **keyword** — no vectors: name match over symbols. Still the right tool, not a failure; a
+   shallow result is not a reason to grep.
+
+Which tier is live is announced at session start (`search tier: …` in the cheatsheet) and marked
+on every grep pre-answer (`[search tier: keyword]`, since the grep gate always name-matches). A
+keyword-mode result is a quality difference, not an availability one — do not reach for grep
+because a result looked shallow.
+
+**This repo** embeds via Ollama, so its live tier is **custom** — pin the concrete model or the
+tool silently drops to keyword:
 `semantic_search_nodes_tool(query=…, provider="openai", model="qwen3-embedding")`.
 
 If no graph exists yet, ask to run: `code-review-graph build`.
@@ -172,6 +187,9 @@ will not finish here (SEVERITY is low, medium, or high):
 ```text
 .agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
+
+Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
+an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway.
 
 Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
 passwords, or PII into one. Redact them; if the next agent needs a credential, prompt the user and

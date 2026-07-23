@@ -22,3 +22,8 @@ harness/**/iterations/**/benchmark.md
 # template placeholders survive. Prettier must not rewrite them.
 harness/setup-handoff-workspace/fixtures/**
 harness/run-handoff-workspace/fixtures/**
+
+# Generated handoff board index (`handoff` CLI output). Its markdown tables are unaligned, which
+# prettier rewrites; every subsequent handoff command regenerates them unaligned again, so the file
+# would churn on every claim/release. Keep the generator's own formatting, same as benchmark.* above.
+.agents/handoff/INDEX.md

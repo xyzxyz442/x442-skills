@@ -1,0 +1,9 @@
+{
+  "name": "acme-relay",
+  "version": "1.3.0",
+  "description": "Webhook relay with per-route dispatch and signed deliveries",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  }
+}

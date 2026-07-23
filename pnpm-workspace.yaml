@@ -1,3 +1,6 @@
+minimumReleaseAgeExclude:
+  - prettier@3.9.6
+  - lint-staged@17.1.1
 # Pin the conventional-changelog engine used by @release-it/conventional-changelog.
 # The plugin's default v7 engine emits an empty changelog body (and spurious empty
 # version headers) in this repo; v8 (verified working standalone) restores correct

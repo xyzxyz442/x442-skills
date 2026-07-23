@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "husky && npm run prepare:commit-msg && npm run prepare:pre-commit",
-    "prepare:commit-msg": "echo 'npx --no -- commitlint --edit \"$1\"' > .husky/commit-msg",
-    "prepare:pre-commit": "echo 'npx --no -- lint-staged' > .husky/pre-commit",
+    "install:dev": "npm install && scripts/husky.sh install",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write --list-different .",
     "lint-staged": "lint-staged",
     "build": "tsc -p tsconfig.json"
   },

@@ -1,14 +1,14 @@
 ---
 id: cross-repo-refactor-safety-handoff
-title: Handoff — cross-repo graph hooks: freshness gate + caller-edge answers
+title: Handoff — cross-repo graph hooks — freshness gate + caller-edge answers
 type: standalone
 status: open
 created: 2026-07-20
 updated: 2026-07-20
-note: 
+note:
 ---
 
-# Handoff — cross-repo graph hooks: freshness gate + caller-edge answers
+# Handoff — cross-repo graph hooks — freshness gate + caller-edge answers
 
 **Status:** evaluated, not implemented. Two changes are designed and justified below; neither is
 written yet. Everything referenced here is already committed and green.

@@ -1,6 +1,6 @@
 {
   "*.sql": [
-    "./.venv/bin/sqlfluff fix --dialect flink --config .sqlfluff",
-    "./.venv/bin/sqlfluff lint --dialect flink --config .sqlfluff"
+    "scripts/py-tool.sh sqlfluff fix --config .sqlfluff",
+    "scripts/py-tool.sh sqlfluff lint --config .sqlfluff"
   ]
 }

@@ -128,18 +128,39 @@ if [ -n "$MIGRATE" ]; then
   [ -d "$LEGACY" ] && mv "$LEGACY" "${TMPDIR:-/tmp}/handoff-migrated-$$-$(basename "$LEGACY")" 2> /dev/null || true
 fi
 
+# --- migrate a FLAT board to the scripts/ + templates/ layout --------------------------
+# Boards installed before the restructure keep machinery next to the docs. Move it into place
+# before installing, so the payload copy below lands in one location instead of two. Docs, README,
+# INDEX, config, archive/ and .locks/ all stay at the board root — only machinery moves. Uses git mv
+# when the file is tracked so history follows the rename; the hook commands in each tool's settings
+# are rewritten by merge-hooks.py further down (it recognizes both the old and new marker).
+migrate_file() { # src dest
+  [ -f "$1" ] || return 0
+  [ -f "$2" ] && return 0 # already migrated; the payload install below refreshes it
+  git -C "$REPO" mv -f "$1" "$2" > /dev/null 2>&1 || mv -f "$1" "$2"
+}
+if [ -f "$HDEST/hooks.sh" ] || [ -f "$HDEST/handoff-doc-template.md" ]; then
+  echo "Migrating flat handoff layout -> scripts/ + templates/ in $HDEST"
+  mkdir -p "$HDEST/scripts" "$HDEST/templates"
+  migrate_file "$HDEST/hooks.sh" "$HDEST/scripts/hooks.sh"
+  migrate_file "$HDEST/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
+  migrate_file "$HDEST/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
+  migrate_file "$HDEST/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+fi
+
 # --- install the payload --------------------------------------------------------------
-mkdir -p "$HDEST/archive"
+mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates"
 install_file() { # src dest — copy only if changed, keep exec bit
   local s="$1" d="$2"
   if [ ! -f "$d" ] || ! cmp -s "$s" "$d"; then cp "$s" "$d"; fi
 }
 install_file "$PAYLOAD/handoff" "$HDEST/handoff"
-install_file "$PAYLOAD/hooks.sh" "$HDEST/hooks.sh"
+install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
 install_file "$PAYLOAD/README.md" "$HDEST/README.md"
-install_file "$ASSETS/handoff-doc-template.md" "$HDEST/handoff-doc-template.md"
-install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/handoff-standalone-template.md"
-chmod +x "$HDEST/handoff" "$HDEST/hooks.sh"
+install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
+install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
+install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
 
 # config (committed): board-global facts only. TOPOLOGY (+ HANDOFF_ALLOW_VERIFY_CMD, appended
 # below) are shared. REPO_NAME is a PER-CONSUMER fact — write it ONLY for a single-repo (in-repo)

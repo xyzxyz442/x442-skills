@@ -1,14 +1,14 @@
 ---
 id: cross-repo-refactor-eval-report-handoff
-title: Evaluation report — cross-repo graph hooks: freshness gate, caller-edge answers, loop-closing
+title: Evaluation report — cross-repo graph hooks — freshness gate, caller-edge answers, loop-closing
 type: standalone
 status: open
 created: 2026-07-20
 updated: 2026-07-20
-note: 
+note:
 ---
 
-# Evaluation report — cross-repo graph hooks: freshness gate, caller-edge answers, loop-closing
+# Evaluation report — cross-repo graph hooks — freshness gate, caller-edge answers, loop-closing
 
 **Date:** 2026-07-15
 **Branch:** `feature/skill-eval-harness`

@@ -3,12 +3,15 @@
 # Installs missing dependencies and repairs Husky hooks so a freshly cloned or freshly
 # opened workspace is ready to commit. Idempotent: it only acts on what is missing or broken.
 #
-# Package-manager aware (npm/pnpm/yarn/bun, detected from the lockfile) and, for Python
-# projects, bootstraps a .venv preferring uv and falling back to pip. Hooks are repaired by
-# re-running the package.json `prepare` script, which regenerates the gitignored .husky/ hooks.
+# Package-manager aware (npm/pnpm/yarn/bun, detected from the lockfile). Python tooling is
+# resolved by scripts/py-tool.sh (uvx -> uv -> pipx -> .venv): with uv or pipx present this
+# just pre-fetches the pinned tools, and without either it creates the .venv fallback and
+# installs the versions py-tool.sh pins. Hooks are repaired by re-running the package.json
+# hook-install command (`install:dev` by default), which delegates to scripts/husky.sh and
+# regenerates the gitignored .husky/ hooks.
 #
 # Usage: ./initialize.sh [full|folder-open] [-f|--force]
-#   full         Full bootstrap (default): deps + hooks (+ Python venv when applicable)
+#   full         Full bootstrap (default): deps + hooks (+ Python tool cache when applicable)
 #   folder-open  Repair only what is missing/broken (used by the VS Code folderOpen task)
 #   -f, --force  Proceed without prompting
 #   -h, --help   Show usage information
@@ -21,10 +24,12 @@ FORCE_MODE=false # reserved: proceed without prompting
 
 NODE_MODULES_DIR="node_modules"
 VENV_DIR=".venv"
+HUSKY_SCRIPT="scripts/husky.sh"
+PY_TOOL="scripts/py-tool.sh"
 
 print_usage() {
   echo "Usage: $0 [full|folder-open] [-f|--force]"
-  echo "  full         Full bootstrap (default): deps + hooks (+ Python venv when applicable)"
+  echo "  full         Full bootstrap (default): deps + hooks (+ Python tool cache when applicable)"
   echo "  folder-open  Repair only what is missing/broken (VS Code folderOpen task)"
   echo "  -f, --force  Proceed without prompting"
   echo "  -h, --help   Show usage information"
@@ -107,15 +112,46 @@ pm_install() {
   "$1" install
 }
 
+detect_hook_install_cmd() {
+  # The skill installs hooks under `install:dev`, deliberately not `prepare` — that npm
+  # lifecycle script fires on every plain install (CI and Docker builds included) and is
+  # frequently owned by a DevOps pipeline. Prefer install:dev, fall back to prepare for repos
+  # wired by an earlier version, then to whichever script invokes husky.
+  if command_exists node && [ -f package.json ]; then
+    node -e '
+      const s = require("./package.json").scripts || {};
+      for (const name of ["install:dev", "prepare"]) {
+        if (s[name]) { console.log(name); process.exit(0); }
+      }
+      const found = Object.keys(s).find((k) => /husky/.test(s[k]));
+      if (!found) process.exit(1);
+      console.log(found);
+    ' 2> /dev/null && return 0
+  fi
+  echo "install:dev"
+}
+
 pm_prepare() {
-  # The skill gitignores .husky/ and regenerates hooks from the package.json `prepare`
-  # script, so repairing hooks == re-running prepare.
-  echo "Regenerating Husky hooks ($1 run prepare)..."
-  "$1" run prepare
+  # The skill gitignores .husky/ and regenerates hooks from a single package.json command
+  # that delegates to scripts/husky.sh, so repairing hooks == re-running that command.
+  local cmd
+  cmd="$(detect_hook_install_cmd)"
+  # The command invokes the dispatcher directly, so it has to be executable first.
+  if [ -f "$HUSKY_SCRIPT" ] && [ ! -x "$HUSKY_SCRIPT" ]; then
+    echo "Restoring the executable bit on $HUSKY_SCRIPT"
+    chmod +x "$HUSKY_SCRIPT"
+  fi
+  echo "Regenerating Husky hooks ($1 run $cmd)..."
+  "$1" run "$cmd"
 }
 
 has_broken_dev_hooks() {
   local hook_path
+  # The generated hooks are one-line wrappers around the dispatcher, so a dispatcher that is
+  # present but not executable is just as broken as a missing hook.
+  if [ -f "$HUSKY_SCRIPT" ] && [ ! -x "$HUSKY_SCRIPT" ]; then
+    return 0
+  fi
   for hook_path in .husky/commit-msg .husky/pre-commit; do
     if [ ! -f "$hook_path" ] || [ ! -x "$hook_path" ]; then
       return 0
@@ -124,50 +160,75 @@ has_broken_dev_hooks() {
   return 1
 }
 
-# section: python (uv-first, pip fallback)
+# section: python (uvx — no project .venv)
+# The .venv excludes below are literal: this script no longer creates one, but a repo may keep
+# its own for application dependencies and neither scan should descend into it.
 is_python_project() {
   [ -f pyproject.toml ] && return 0
-  find . -name '*.py' -not -path './node_modules/*' -not -path "./$VENV_DIR/*" -print -quit 2> /dev/null | grep -q .
+  find . -name '*.py' -not -path './node_modules/*' -not -path './.venv/*' -print -quit 2> /dev/null | grep -q .
 }
 
 has_sql() {
-  find . -name '*.sql' -not -path './node_modules/*' -not -path "./$VENV_DIR/*" -print -quit 2> /dev/null | grep -q .
+  find . -name '*.sql' -not -path './node_modules/*' -not -path './.venv/*' -print -quit 2> /dev/null | grep -q .
 }
 
 python_tools() {
-  # black is always needed; sqlfluff only when the repo has SQL (python-stream flavor).
-  local tools="black"
+  # ruff + black are always needed; sqlfluff only when the repo has SQL (python-stream flavor).
+  local tools="ruff black"
   if has_sql; then
     tools="$tools sqlfluff"
   fi
   echo "$tools"
 }
 
-venv_missing_tools() {
-  local t
-  for t in $(python_tools); do
-    [ -x "$VENV_DIR/bin/$t" ] || return 0
+has_py_runner() {
+  # scripts/py-tool.sh resolves uvx -> uv -> pipx -> .venv. The first three need nothing here.
+  command_exists uvx || command_exists uv || command_exists pipx
+}
+
+py_tools_ready() {
+  # With uv or pipx present the tools resolve on demand; only the venv fallback needs files
+  # on disk before a commit can succeed.
+  has_py_runner && return 0
+  local tool
+  for tool in $(python_tools); do
+    [ -x "$VENV_DIR/bin/$tool" ] || return 1
   done
-  return 1
+  return 0
 }
 
 bootstrap_python() {
-  local tools
-  tools="$(python_tools)"
-  if command_exists uv; then
-    echo "Bootstrapping Python venv with uv..."
-    uv venv
-    # shellcheck disable=SC2086
-    uv pip install $tools
-  elif command_exists python3; then
-    echo "uv not found; bootstrapping Python venv with python3 -m venv + pip..."
-    python3 -m venv "$VENV_DIR"
-    "$VENV_DIR/bin/pip" install --upgrade pip
-    # shellcheck disable=SC2086
-    "$VENV_DIR/bin/pip" install $tools
-  else
-    fail "Python is required for this repo but neither uv nor python3 was found."
+  local tool specs=""
+
+  [ -f "$PY_TOOL" ] || fail "$PY_TOOL is missing; re-run setup-project-tooling to install it."
+  # The lint-staged commands invoke it directly, so it has to be executable.
+  if [ ! -x "$PY_TOOL" ]; then
+    echo "Restoring the executable bit on $PY_TOOL"
+    chmod +x "$PY_TOOL"
   fi
+
+  if has_py_runner; then
+    # Pre-fetch through the same resolver the hooks use, so the first commit does not pay a
+    # download inside a git hook. Pins come from py-tool.sh, never from this file.
+    echo "Pre-fetching Python tools via $PY_TOOL..."
+    for tool in $(python_tools); do
+      echo "  $tool"
+      "$PY_TOOL" "$tool" --version > /dev/null
+    done
+    return 0
+  fi
+
+  # No uv and no pipx: fall back to a traditional virtualenv, installing the versions
+  # py-tool.sh pins so the fallback matches what the other runners would have used.
+  command_exists python3 || fail "this repo's Python tooling needs uv, pipx or python3; none was found on PATH."
+  for tool in $(python_tools); do
+    specs="$specs $("$PY_TOOL" --spec "$tool")"
+  done
+  echo "uv and pipx not found; bootstrapping $VENV_DIR with python3 -m venv + pip..."
+  [ -d "$VENV_DIR" ] || python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/pip" install --upgrade pip
+  # shellcheck disable=SC2086
+  "$VENV_DIR/bin/pip" install $specs
 }
 
 # section: execution
@@ -207,8 +268,10 @@ run_folder_open_bootstrap() {
       ensure_pm_launcher "$pm"
     fi
     if [ "$need_install" = true ]; then
-      pm_install "$pm" # runs prepare -> regenerates hooks
-      need_hooks=false
+      # `install:dev` is deliberately not an npm lifecycle script, so a plain install does
+      # NOT regenerate the hooks — they still have to be installed explicitly below.
+      pm_install "$pm"
+      need_hooks=true
       acted=true
     fi
     if [ "$need_hooks" = true ]; then
@@ -217,8 +280,8 @@ run_folder_open_bootstrap() {
     fi
   fi
 
-  if is_python_project && { [ ! -d "$VENV_DIR" ] || venv_missing_tools; }; then
-    echo "Python venv missing or incomplete; bootstrapping"
+  if is_python_project && ! py_tools_ready; then
+    echo "Python tooling is not runnable yet; bootstrapping"
     bootstrap_python
     acted=true
   fi

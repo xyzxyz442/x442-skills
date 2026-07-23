@@ -6,9 +6,13 @@
 # graph-cheatsheet.py + session-status.sh + session-setup-nudge.sh into one core.
 set -uo pipefail
 
-SCOPE="$(bash "$(cd "$(dirname "$0")" && pwd)/cross-repo-scope.sh" 2> /dev/null || true)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+SCOPE="$(bash "$HERE/cross-repo-scope.sh" 2> /dev/null || true)"
+# Active read-path search tier (keyword | local <model> | custom <label>) so the session banner
+# tells the agent which tier its semantic searches will land in, and whether to pin a provider.
+TIER="$(bash "$HERE/embed-provider.sh" --tier 2> /dev/null | head -1)"
 
-SCOPE="$SCOPE" python3 - << 'PY'
+SCOPE="$SCOPE" TIER="$TIER" python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
 crg = os.path.exists(".code-review-graph/graph.db")
@@ -35,6 +39,25 @@ if crg or gfy or siblings:
             "community / cluster  -> list_communities_tool()",
             "code review context  -> get_review_context_tool(changed_files=[...])",
         ]
+        # Search-tier banner: prefer vector (custom > local); keyword is the floor. State which
+        # tier a search used, and pin the provider when custom vectors exist or the tool silently
+        # drops to keyword. embed-provider.sh --tier: "keyword" | "local <model>" | "custom <label>".
+        tkind, _, tlabel = os.environ.get("TIER", "keyword").strip().partition(" ")
+        if tkind == "custom":
+            stats.append(f"search tier: vector/custom ({tlabel or 'external'})")
+            lines.append(
+                "semantic search     -> PIN vectors: semantic_search_nodes_tool(query=X, "
+                'provider="openai", model="...")  [tier custom, else drops to keyword]'
+            )
+        elif tkind == "local":
+            stats.append("search tier: vector/local")
+            lines.append("semantic search     -> semantic_search_nodes_tool(query=X)  [tier local, read by default]")
+        else:
+            stats.append("search tier: keyword")
+            lines.append(
+                "semantic search     -> semantic_search_nodes_tool(query=X)  [tier KEYWORD/name match; "
+                "./setup-embeddings.sh enables vectors]"
+            )
     if gfy:
         try:
             g = json.load(open("graphify-out/graph.json"))
