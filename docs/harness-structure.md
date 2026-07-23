@@ -11,7 +11,8 @@ This document is the **contract**; [harness/](../harness/README.md) is the imple
   `.gitignore` entries, `harness/README.md`, and a workspace for every one of the five engineering
   skills: `initial-project-workspace/`, `setup-project-tooling-workspace/`,
   `setup-graph-hooks-workspace/`, `register-cross-repo-graph-workspace/`,
-  `repair-graph-hooks-workspace/`. Every grader has been exercised against its fixtures —
+  `repair-graph-hooks-workspace/` — plus `release-announcement-workspace/`, the first
+  workspace for a productivity skill and the first text-output grader (step 9 below). Every grader has been exercised against its fixtures —
   post-state fixtures score 1.00, the unwired pre-states and drifted repair targets score 0.00.
   A first **deterministic** benchmark is committed (`setup-graph-hooks` and `setup-project-tooling`
   iteration-1, `+1.00` delta); a true agent A/B remains the follow-up (see [Iterations](#iterations)).
@@ -443,6 +444,17 @@ Each step is independently verifiable; do them in order.
    directly gradeable to 1.00) and the repair TARGETS `broken-json` (corrupt Claude config) and
    `missing-core` (a deleted core script) — drifted inputs that fail the verifier by design until an
    agent runs the skill, then re-graded to 0 failed.
+
+9. **Done — `release-announcement-workspace/`.** The first **text-output** workspace: the skill
+   ships no scripts by design, so its `evals.json` **omits `verify_script`** (nothing in `lib/`
+   reads that key — graders hardcode their verifier path, and this grader wraps none) and grades
+   the produced `ANNOUNCEMENT.md` directly against the skill's own `## Rules`/`## Verification`
+   sections. Fixtures: `release-input` (pre-state input; its changelog is engineered to exercise
+   every rule — a status promotion, an advisory-only capability, a non-public upstream) plus two
+   deterministic controls: `announcement-good` (post-state, grades 1.00) and `violations`
+   (pre-state, breaks each rule and must grade below 1.00 with failing expectations naming the
+   rule broken — a text grader that only ever passes proves nothing). No git isolation: the
+   grader runs no verifier and mutates nothing.
 
 ## Known gaps in the reference implementation
 

@@ -1,0 +1,27 @@
+{
+  "skill_name": "x442-release-announcement",
+  "skill_path": "skills/productivity/release-announcement",
+  "evals": [
+    {
+      "id": "github-release",
+      "kind": "pre-state",
+      "prompt": "Announce acme-relay v1.3.0 as a GitHub release body, working from the changelog section for the v1.2.0...v1.3.0 range. Write the announcement to ANNOUNCEMENT.md.",
+      "fixture": "fixtures/release-input",
+      "expected_output": "An ANNOUNCEMENT.md next to the inputs: a title naming the version, a lede, a highlights section, and a Get-it block with the copy-pasteable upgrade command and the compare/changelog link. It must state the relay-doctor promotion to stable and keep the advisory rate limiting advisory; it must not name the non-public upstream, use marketing language, invent numbers absent from the inputs, or demonstrate a destructive command."
+    },
+    {
+      "id": "announcement-good",
+      "kind": "post-state",
+      "prompt": "Deterministic positive control: grade the committed rule-following announcement as-is.",
+      "fixture": "fixtures/announcement-good",
+      "expected_output": "The committed ANNOUNCEMENT.md follows every rule in the skill's Rules and Verification sections; the grader must return pass_rate 1.00."
+    },
+    {
+      "id": "violations",
+      "kind": "pre-state",
+      "prompt": "Deterministic negative control: grade the committed rule-breaking announcement as-is.",
+      "fixture": "fixtures/violations",
+      "expected_output": "The committed ANNOUNCEMENT.md deliberately breaks the rules: marketing language, the non-public upstream named, invented numbers, an unstated status promotion, a hard-enforcement claim about the advisory rate limits, no compare/changelog link, and rm -rf in the upgrade block. The grader must score it below 1.00 with failing expectations naming each broken rule."
+    }
+  ]
+}
