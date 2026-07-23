@@ -25,7 +25,11 @@ not cut yet, cut it first, then come back with the resulting range.
 
 1. **Gather the inputs.** You need version, previous version, the changelog or commit
    range, audience, channel, and language. Ask for anything missing or ambiguous — do not
-   guess a channel or an audience, because both change the shape of the output.
+   guess a channel or an audience, because both change the shape of the output. **Channel
+   and language each accept more than one value** — a release often ships to several
+   channels or languages at once, so present those as multi-select prompts and produce one
+   shaped output per selection (see the channel-shaping and multi-language sections below).
+   Audience is a single choice.
 2. **Read the actual changes.** Use the changelog section for the range, and read the
    commits or diff when a subject line is too thin to explain user impact. Every claim in
    the announcement must trace back to something you read.
