@@ -48,6 +48,47 @@ except Exception:
 PY
 }
 
+# Search tier the READ path (semantic_search_nodes_tool) will actually get, judged from the vectors
+# ALREADY in the graph — independent of the write-side resolve() above. Prints one space-separated
+# line consumers (grep-steer, session-context) render as a per-search marker:
+#   keyword           no vectors — semantic_search falls back to name matching (the floor)
+#   local  <model>    vectors from CRG's built-in sentence-transformers provider (read by default)
+#   custom <label>    vectors from an external / OpenAI-compatible provider (ollama, hosted)
+# The custom label is "ollama" for a :11434 endpoint, else the endpoint host, else the model — a
+# hint for the agent, not something it must parse. Preference order at setup is custom > local >
+# keyword (resolve() above already writes custom-first); this only reports what is live now.
+recorded_tier() {
+  [ -f "$DB" ] || {
+    printf 'keyword\n'
+    return 0
+  }
+  python3 - "$DB" << 'PY' 2> /dev/null || printf 'keyword\n'
+import sqlite3, sys
+from urllib.parse import urlparse
+try:
+    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
+    row = c.execute(
+        "SELECT provider, count(*) FROM embeddings GROUP BY provider "
+        "ORDER BY count(*) DESC LIMIT 1"
+    ).fetchone()
+except Exception:
+    row = None
+if not row or not row[0] or not row[1]:
+    print("keyword"); raise SystemExit
+bare, _, detail = row[0].partition(":")   # "openai:qwen3-embedding@http://localhost:11434"
+if bare == "local":
+    print("local " + (detail or "-")); raise SystemExit
+model, _, endpoint = detail.partition("@")
+if endpoint and ":11434" in endpoint:
+    label = "ollama"
+elif endpoint:
+    label = urlparse(endpoint).hostname or endpoint
+else:
+    label = model or bare
+print("custom " + label)
+PY
+}
+
 resolve() {
   load_env
 
@@ -77,6 +118,12 @@ resolve() {
   [ "$(recorded_provider)" = "local" ] && printf 'local'
   return 0
 }
+
+# Read-path tier report needs no write-side resolve — it only inspects recorded vectors.
+if [ "${1:-}" = "--tier" ]; then
+  recorded_tier
+  exit 0
+fi
 
 PROV="$(resolve)"
 

@@ -228,6 +228,28 @@ else
 fi
 
 echo
+echo "6. Search-tier marker (vector-first: custom > local > keyword)"
+echo "-------------------------------------------------------------"
+TIERBIN=".graph-hooks/core/embed-provider.sh"
+if [ -f "$TIERBIN" ]; then
+  TIER="$(bash "$TIERBIN" --tier 2> /dev/null | head -1)"
+  case "${TIER%% *}" in
+    keyword) ok "search tier resolves: keyword (name match — vectors off; ./setup-embeddings.sh to enable)" ;;
+    local) ok "search tier resolves: vector/local (${TIER#* } — read by default)" ;;
+    custom) ok "search tier resolves: vector/custom (${TIER#* } — pin provider=\"openai\" to read it)" ;;
+    *) bad "embed-provider.sh --tier returned unexpected '$TIER' (want keyword|local|custom)" ;;
+  esac
+else
+  bad "$TIERBIN missing — session banner + grep pre-answers cannot mark the search tier"
+fi
+# The AGENTS.md routing block must carry the tier ladder so the agent knows to pin custom vectors.
+if [ -f AGENTS.md ] && grep -q 'graph-hooks:begin' AGENTS.md 2> /dev/null; then
+  grep -qi 'search tier' AGENTS.md 2> /dev/null \
+    && ok "AGENTS.md routing block documents the search-tier ladder" \
+    || warn "AGENTS.md graph-hooks block predates the search-tier ladder — re-run setup-graph-hooks to refresh it"
+fi
+
+echo
 echo "Summary: $P passed, $W warnings, $F failed"
 if [ "$F" -gt 0 ]; then exit 1; fi
 exit 0
