@@ -173,6 +173,9 @@ will not finish here (SEVERITY is low, medium, or high):
 .agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
+Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
+an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway.
+
 Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
 passwords, or PII into one. Redact them; if the next agent needs a credential, prompt the user and
 supply it via a safe channel (env var, secret-manager reference, or out-of-band), recording only

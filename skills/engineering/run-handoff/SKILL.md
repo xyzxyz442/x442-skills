@@ -63,6 +63,11 @@ ends. `new "RBAC Gap"`, `new RBAC_Gap`, and `new rbac-gap` all land the same `rb
 you want rather than relying on the fold — and don't repeat `handoff` in the id, since the suffix
 is already there (`new deploy-gap` → `deploy-gap-handoff.md`, not `handoff-deploy-gap`).
 
+**Titles never contain `:`.** The doc writes `title:` as unquoted YAML, so a colon inside the value
+(`title: Handoff: auth`) breaks the frontmatter for every parser that reads it — markdown preview
+included. Use an em dash instead (`--title "Handoff — auth suite"`). The tool enforces this: any
+`:` in a `--title`, or in the H1 that `import` derives a title from, is folded to `—`.
+
 **Every bug you find becomes a handoff — including one you fix on the spot.** Wrong behavior, a
 silent failure, a gap that will bite the next agent: file it, with the reproduction you actually
 ran. If you are not fixing it, the handoff is how it survives the session. If you _are_ fixing it,

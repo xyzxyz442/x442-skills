@@ -1,14 +1,14 @@
 ---
 id: x442-engineering-skills-handoff
-title: Handoff: x442-skills engineering suite
+title: Handoff — x442-skills engineering suite
 type: standalone
 status: open
 created: 2026-07-20
 updated: 2026-07-20
-note: 
+note:
 ---
 
-# Handoff: x442-skills engineering suite
+# Handoff — x442-skills engineering suite
 
 A porting guide and capability overview for adopting the `x442-skills` **engineering** skills into
 an internal team skills collection. Five skills, two groups:

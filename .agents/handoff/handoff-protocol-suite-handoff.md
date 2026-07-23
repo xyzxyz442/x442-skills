@@ -1,6 +1,6 @@
 ---
 id: handoff-protocol-suite-handoff
-title: Handoff protocol: outstanding work bundle
+title: Handoff protocol — outstanding work bundle
 type: orchestrator
 status: open
 children: [blocked-on-validation-handoff, index-orchestrator-section-handoff, children-last-child-drop-handoff, retire-paths-skip-unblock-handoff, template-render-sed-injection-handoff, release-announcement-harness-handoff, x442-engineering-skills-handoff]

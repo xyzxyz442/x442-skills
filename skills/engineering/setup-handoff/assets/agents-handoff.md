@@ -21,6 +21,9 @@ will not finish here (SEVERITY is low, medium, or high):
 PLACEHOLDER_HANDOFF_DIR/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
+Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
+an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway.
+
 Handoffs have a **type**. The default is `coordination` (the claim/release work item above). A
 `standalone` handoff is a self-contained reference/knowledge doc (porting guide, eval report,
 compaction brief) — it needs **no claim**, is freely editable, and is listed apart. Create one with

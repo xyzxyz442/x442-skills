@@ -29,6 +29,12 @@ Docs created before this rule keep their filenames — nothing is renamed, becau
 break `blocked_on` references and git history. `claim`/`release`/`touch` fall back to the old
 spelling when only that file exists, so existing boards keep working; only new docs are slugified.
 
+Titles are **colon-free**. The doc writes `title:` as unquoted YAML, so a `:` inside the value
+(`title: Handoff: auth`) turns the line into a nested mapping and breaks every frontmatter parser
+that reads it — markdown preview included. `new` and `import` therefore fold any `:` in a title to
+an em dash (`Handoff: auth` → `Handoff — auth`); a title `import` derives from a source H1 gets the
+same fold. Write the em dash yourself rather than relying on it.
+
 ## The rule
 
 **Claim before you work. Release when you stop.**

@@ -254,6 +254,20 @@ def grade_script_behavior(target):
                             f"standalone: {(doc / 'meta2-handoff.md').stat().st_size}; "
                             f"orchestrator: {(doc / 'meta3-handoff.md').stat().st_size}"))
 
+    # --- titles are colon-free: `title:` is unquoted YAML, so a ':' in the value breaks -----
+    # every frontmatter parser that reads the doc (markdown preview included)
+    _handoff(target, "new", "ct", "--title", "Handoff: colon title")
+    ct = (doc / "ct-handoff.md").read_text()
+    e.append(gc.expectation("a ':' in --title is folded to an em dash (YAML-safe frontmatter)",
+                            "title: Handoff — colon title" in ct and "title: Handoff:" not in ct,
+                            f"frontmatter: {ct[:120]!r}"))
+    src_colon = Path(target) / "IMPORT_COLON.md"
+    src_colon.write_text("# Guide: ports\n\nbody\n")
+    _handoff(target, "import", str(src_colon), "--id", "colon-import", "--standalone")
+    ci = (doc / "colon-import-handoff.md").read_text()
+    e.append(gc.expectation("import folds a ':' in the H1-derived title too",
+                            "title: Guide — ports" in ci, f"frontmatter: {ci[:120]!r}"))
+
     # --- --blocked-on is validated: an unclosable blocker deadlocks silently ---------------
     _handoff(target, "new", "bo1", "--title", "Blocked one")
     _handoff(target, "new", "bo2", "--title", "Blocked two")

@@ -174,6 +174,20 @@ norm_id() {
 # what norm_id did before ids were slugified, and it is the only thing legacy_id is for.
 legacy_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
 
+# Titles land in the doc as unquoted YAML (`title: <value>`), so a ":" inside the value turns the
+# line into a nested mapping and breaks every frontmatter parser that reads the doc (markdown
+# preview, external tooling). Quoting the value instead would leak literal quotes through meta()'s
+# plain-sed readers (list, INDEX, hooks), so the colon is folded to the board's em-dash convention:
+# "Handoff: auth suite" → "Handoff — auth suite". Applied wherever a title enters a doc — --title
+# on new/import and import's H1-derived fallback.
+norm_title() {
+  printf '%s' "$1" | sed \
+    -e 's/[[:space:]]*:[[:space:]]*/ — /g' \
+    -e 's/[[:space:]]\{1,\}/ /g' \
+    -e 's/^ //' -e 's/ $//' \
+    -e 's/ —$//' -e 's/^— //'
+}
+
 # Resolve a user-supplied id to the id an EXISTING doc actually uses. Prefers the canonical slug,
 # but falls back to the pre-slug spelling when only that file exists — otherwise slugifying would
 # orphan docs on boards installed before this rule (their filenames are not being migrated: a
@@ -289,6 +303,8 @@ cmd_new() {
   local raw_id="$id"
   id="$(norm_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists"
+  [ -n "$title" ] || title="$id"
+  title="$(norm_title "$title")"
   [ -n "$title" ] || title="$id"
   local d
   d="$(today)"
@@ -457,6 +473,8 @@ cmd_import() {
   [ -f "$DIR/$id.md" ] || [ -f "$DIR/archive/$id.md" ] && die "$id already exists on the board"
   # title: --title, else the first markdown H1, else the id
   [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
+  [ -n "$title" ] || title="$id"
+  title="$(norm_title "$title")"
   [ -n "$title" ] || title="$id"
   local d
   d="$(today)" dest="$DIR/$id.md"
