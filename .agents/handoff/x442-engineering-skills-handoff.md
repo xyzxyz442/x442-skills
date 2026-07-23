@@ -4,17 +4,18 @@ title: Handoff — x442-skills engineering suite
 type: standalone
 status: open
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-07-23
 note:
 ---
 
 # Handoff — x442-skills engineering suite
 
 A porting guide and capability overview for adopting the `x442-skills` **engineering** skills into
-an internal team skills collection. Five skills, two groups:
+an internal team skills collection. Seven skills, three groups:
 
 - **Onboarding (setup):** `initial-project` → (`setup-project-tooling`) → `setup-graph-hooks`
 - **Operate / extend the graph layer:** `repair-graph-hooks`, `register-cross-repo-graph`
+- **Coordinate work (handoff):** `setup-handoff` → `run-handoff`
 
 | Skill                       | Status         | Ships                | One-line purpose                                                                                                                                           |
 | --------------------------- | -------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -23,6 +24,8 @@ an internal team skills collection. Five skills, two groups:
 | `setup-graph-hooks`         | `stable`       | scripts + assets     | Wire a self-updating code knowledge graph so agents query the graph instead of grepping.                                                                   |
 | `repair-graph-hooks`        | `experimental` | markdown only        | Re-check → validate → repair a broken/stale/drifted graph layer. Reuses `setup-graph-hooks`' scripts.                                                      |
 | `register-cross-repo-graph` | `experimental` | scripts + assets     | Declare sibling repos in a per-project `.graph-repos.json` cascade, then sync: register them, merge a graphify graph, rewrite the `AGENTS.md` scope block. |
+| `setup-handoff`             | `experimental` | scripts + assets     | Install the lease-based handoff board (`.agents/handoff/`) with per-tool enforcement hooks, topology choice, and legacy migration.                         |
+| `run-handoff`               | `experimental` | markdown only        | The claim → work → release discipline over the installed board; `done` requires live-code evidence.                                                        |
 
 Source repo: `x442-skills` — `skills/engineering/`. The catalog is [`skills/README.md`](skills/README.md);
 each skill's `SKILL.md` is the authoritative detail. This handoff is the executive summary over them.
@@ -33,7 +36,50 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
 
 Read this first if your collection already carries an earlier port.
 
-0. **Latest — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
+0. **Latest — suite v0.6.0 (2026-07-23).** Four themes; full range:
+   [v0.5.0...v0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0). Re-verified
+   on this repo's live board immediately before the release was cut: `setup-handoff` 97/97 grader
+   assertions across 10 evals, `run-handoff` 12/12, the new `release-announcement` grader 12/12 on
+   its compliant fixture (with both deliberately non-compliant fixtures correctly rejected), and
+   the live-board verifier 18 passed / 0 failed.
+   **Board layout + a third handoff type (`orchestrator`).** The board payload is restructured —
+   `hooks.sh` lives in `scripts/`, the doc templates in `templates/` — and the installer migrates
+   an existing flat board in place; old hook groups are recognized as ours and rewritten (a new
+   `layout-migration` eval guards the exact path). The new **`orchestrator`** type indexes a
+   bundle: `handoff new <id> --orchestrator --children a,b,c`. It holds no work of its own and is
+   never claimed; `list` derives live progress (`2/3 done`) from each child's own status, and
+   `release --status done` refuses while any child is outstanding. Ids are now **enforced
+   lowercase kebab-case** (any input folds to it), and a `:` in a `--title` (or in the H1 that
+   `import` derives a title from) folds to `—`, so the unquoted YAML `title:` can never break
+   frontmatter parsing again. Re-port `setup-handoff/scripts/` + `scripts/payload/` + `assets/`
+   (now incl. `handoff-orchestrator-template.md`) and `run-handoff/SKILL.md`.
+   **Graph hooks — search tiers are explicit and vector-first.** The routing block now defines
+   three `semantic_search` tiers — **custom → local → keyword** — tells agents to prefer the
+   richest available and to _state which tier backed an answer_; the live tier is announced at
+   session start and every grep pre-answer is marked `[search tier: …]`. Keyword mode remains the
+   supported floor (the §4.4 caveat stands unchanged). Re-port `setup-graph-hooks/scripts/` (the
+   `graph-hooks/core/` payload incl. `embed-provider.sh`, `grep-steer.sh`, `session-context.sh`)
+   - `assets/agents-knowledge-graph.md`.
+     **`setup-project-tooling` — husky wiring is one committed dispatcher, not an echo chain.** The
+     old fan-out of `package.json` scripts echoing shell fragments into `.husky/` is replaced by a
+     single committed `scripts/husky.sh` sub-command dispatcher, installed by an **`install:dev`**
+     script — deliberately **never `prepare`**, which is an npm lifecycle script that fires on plain
+     installs and inside CI/DevOps pipelines where hook installation has no business running.
+     Re-running the skill migrates old `prepare` wiring and deletes the entry; the verifier accepts
+     either shape. Python repos now run their toolchain through a `scripts/py-tool.sh` resolver (uv
+     or pipx when present, `.venv` fallback with pinned versions). Re-port
+     `setup-project-tooling/SKILL.md` + `assets/` (new `husky.sh` and `py-tool.sh`, updated
+     `initialize.sh` and `prettierignore`).
+     **New `productivity` category — `release-announcement` (`experimental`).** The first skill
+     outside the engineering suite: it turns an already-cut release (tag + changelog) into a
+     channel-shaped announcement grouped by user-visible theme, with hard rules on attribution
+     (never name a non-public upstream), explicit status changes, no overstated guarantees, and no
+     invented numbers. Its harness workspace is the harness's first **text-output** grader (the
+     skill ships no scripts, so there is no `verify-*.sh` to wrap — the produced `ANNOUNCEMENT.md`
+     is graded against the skill's own Rules; see §7). Out of this doc's engineering scope — catalog
+     entry in [`skills/README.md`](skills/README.md).
+
+1. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
    gains a lease-based **handoff board** for multi-agent / cross-session / cross-repo work: _claim
    before you edit, release when you stop, `done` only when verified against live code._
    `setup-handoff` installs the tool-generic `.agents/handoff/` payload, wires per-tool enforcement
@@ -82,7 +128,7 @@ Read this first if your collection already carries an earlier port.
    legacy fixture) were migrated to the suffix; `blocked_on` references are canonicalized too. All 11
    evals stay green (setup-handoff 61/61 incl. cross-repo 13/13, run-handoff 12/12). Re-port
    `scripts/payload/{handoff,hooks.sh}` and rename any existing board docs to `*-handoff.md`.
-1. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
+2. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional
    step" — observed with GitHub Copilot as the resource owner. Fixed: surfacing the choice is now
@@ -93,30 +139,30 @@ Read this first if your collection already carries an earlier port.
    are byte-identical — so this is a **wording-only re-port**: re-copy `setup-graph-hooks/SKILL.md`
    §8. See §2 (`setup-graph-hooks`) and §4.4 embeddings caveat, both otherwise unchanged.
 
-2. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
+3. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
    from markdown-only (ad-hoc `code-review-graph register` calls) to a **declared, committed
    `.graph-repos.json` manifest cascade** (user → repo → subdir, nearest wins, like `AGENTS.md`)
    applied by `sync-cross-repo-graph.sh`, with a real verifier and a shared Python resolver. It also
    now gets a **per-project** graphify merged graph instead of writing graphify's global one. **Delete
    the old version rather than merging into it.** See §2 and §4.1.
-3. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
+4. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
    stock Python template) matches the new `scripts/manifest/` **directory** on any case-insensitive
    filesystem, so `git add -A` ships the skill without its resolver. Fixed here in both our
    `.gitignore` and the template `setup-project-tooling` **ships to every scaffolded project**
    (`assets/gitignore` → `/MANIFEST`). **Check your own collection's `.gitignore` before porting** —
    the full check is in §4.1.
-4. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
+5. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
    unchanged from the last handoff, but still the most common source of "the graph looks broken" false
    alarms. See the embeddings caveat in §4.4.
-5. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
+6. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
    self-tested shared library plus a workspace for every skill — the five graph/onboarding skills
    plus the new `setup-handoff` and `run-handoff` — each with fixtures, `evals/evals.json`, and a
    `grade.py` that wraps the skill's own `verify-*.sh` (or, for `run-handoff`, drives the installed
    board). Graders are read-only and LLM-free. The `verify-*.sh` checkers remain the correctness
    source of truth; the harness adds repeatable, gradeable evals on top. See §7.
-6. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
+7. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
    a `[skip]`, not a `[FAIL]`). "Not configured" and "broken" are no longer conflated — see §4.3.
-7. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
+8. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
    `setup-project-tooling` and `repair-graph-hooks` are unchanged in behavior.
 
 ---
@@ -723,7 +769,7 @@ read-only and LLM-free:
   a developer new to the layer.
 - **[`docs/harness-structure.md`](docs/harness-structure.md)** — the **contract** for the skill
   eval/test harness (fixtures, graders, A/B on-vs-off). It is now **implemented** under `harness/`
-  (all five skills wired; see §7), not a proposal. Read it for the file formats, the `lib/` API,
+  (a workspace per skill, including the first text-output grader; see §7), not a proposal. Read it for the file formats, the `lib/` API,
   and the porting checklist.
 - **[`skills/README.md`](skills/README.md)** (catalog) and each **`SKILL.md`** — the authoritative
   per-skill detail (full procedures, verification harness, status meanings). This handoff is the
@@ -752,17 +798,18 @@ calls); only the optional A/B skill _executions_ need an agent.
   against that outer repo. `grade_common.isolated_git_target()` copies a non-root target to its own
   temp git root first, so a post-state fixture grades correctly **in place**. Fixtures are committed
   as portable inputs; anything machine-specific is built at grade time.
-- **Workspaces (all 5 skills):**
+- **Workspaces (one per skill, incl. the productivity skill):**
 
-  | Workspace                             | Wraps                                  | Representative cases                                                                                                                                                                                                                                                                                                                          |
-  | ------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `initial-project-workspace`           | `verify-initial-project.sh`            | fresh / preserve-existing / idempotent                                                                                                                                                                                                                                                                                                        |
-  | `setup-project-tooling-workspace`     | `verify-project-tooling.sh`            | `scaffolded` (fully wired Node/TS → 1.00 + idempotent) and `fresh` (bare project — a pre-state input)                                                                                                                                                                                                                                         |
-  | `setup-graph-hooks-workspace`         | `verify-graph-hooks.sh`                | precondition (no `AGENTS.md`), wired variants, single-refresh-owner across tools, and a **behavioral** fixture with a real `graph.db` proving the hooks steer grep/read                                                                                                                                                                       |
-  | `register-cross-repo-graph-workspace` | `verify-cross-repo-graph.sh`           | `not-configured` (verifier skips, exit 0) and `single-sibling` (register + `AGENTS.md` block + merged graph + end-to-end grep-steer into the sibling)                                                                                                                                                                                         |
-  | `repair-graph-hooks-workspace`        | `verify-graph-hooks.sh`                | `healthy` (no-op) plus repair TARGETS `broken-json` and `missing-core` — drifted inputs that fail the verifier until repaired                                                                                                                                                                                                                 |
-  | `setup-handoff-workspace`             | `verify-setup-handoff.sh`              | precondition (no `AGENTS.md`), fresh/wired/advisory variants, `detect` (existing-install scan), `custom-location`, `legacy-install` (upgrade + migrate), and a **behavioral** `script-behavior` case that drives the lease script + hooks (session gate, fail-safe deny, auto-reap/touch, evidence-gated `done`, `blocked_on`, verify-safety) |
-  | `run-handoff-workspace`               | `verify-setup-handoff.sh` (env sanity) | `discipline-done` and `discipline-blocked` — drives the installed board per the discipline and asserts the produced artifacts (archived doc + `verified_at`, released lease, regenerated `INDEX.md`, blocked/`blocked_on` state)                                                                                                              |
+  | Workspace                             | Wraps                                                  | Representative cases                                                                                                                                                                                                                                                                                                                          |
+  | ------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `initial-project-workspace`           | `verify-initial-project.sh`                            | fresh / preserve-existing / idempotent                                                                                                                                                                                                                                                                                                        |
+  | `setup-project-tooling-workspace`     | `verify-project-tooling.sh`                            | `scaffolded` (fully wired Node/TS → 1.00 + idempotent) and `fresh` (bare project — a pre-state input)                                                                                                                                                                                                                                         |
+  | `setup-graph-hooks-workspace`         | `verify-graph-hooks.sh`                                | precondition (no `AGENTS.md`), wired variants, single-refresh-owner across tools, and a **behavioral** fixture with a real `graph.db` proving the hooks steer grep/read                                                                                                                                                                       |
+  | `register-cross-repo-graph-workspace` | `verify-cross-repo-graph.sh`                           | `not-configured` (verifier skips, exit 0) and `single-sibling` (register + `AGENTS.md` block + merged graph + end-to-end grep-steer into the sibling)                                                                                                                                                                                         |
+  | `repair-graph-hooks-workspace`        | `verify-graph-hooks.sh`                                | `healthy` (no-op) plus repair TARGETS `broken-json` and `missing-core` — drifted inputs that fail the verifier until repaired                                                                                                                                                                                                                 |
+  | `setup-handoff-workspace`             | `verify-setup-handoff.sh`                              | precondition (no `AGENTS.md`), fresh/wired/advisory variants, `detect` (existing-install scan), `custom-location`, `legacy-install` (upgrade + migrate), and a **behavioral** `script-behavior` case that drives the lease script + hooks (session gate, fail-safe deny, auto-reap/touch, evidence-gated `done`, `blocked_on`, verify-safety) |
+  | `run-handoff-workspace`               | `verify-setup-handoff.sh` (env sanity)                 | `discipline-done` and `discipline-blocked` — drives the installed board per the discipline and asserts the produced artifacts (archived doc + `verified_at`, released lease, regenerated `INDEX.md`, blocked/`blocked_on` state)                                                                                                              |
+  | `release-announcement-workspace`      | the skill's own Rules (text-output — no `verify-*.sh`) | `release-input` (pre-state), `announcement-good` (compliant reference → 1.00), `violations` (deliberately rule-breaking reference the grader must reject, naming each broken rule)                                                                                                                                                            |
 
   Every grader isolates a nested fixture to its own git root before grading, and may emit `skipped()`
   expectations (counted in `summary.skipped`, excluded from `pass_rate`) so an optional-tool-absent
