@@ -89,17 +89,25 @@ Run these in order from the target project root.
      `../AGENTS.md` (the file lives in `.github/`, so the relative link is `../AGENTS.md`), and
      ensure `.vscode/settings.json` lists the project root in `chat.agentFilesLocations`
      (`".": true`) using the merge-safe procedure below.
-6. **Offer project tooling setup.** Commit-message _enforcement_ (commitlint + husky, local-only),
-   staged-file lint/format, editor settings, and release automation are scaffolded by
-   [`setup-project-tooling`](../setup-project-tooling/SKILL.md), which detects the project profile
-   and wires tooling to match — it installs the `commitlint.config.mjs` behind the commit
-   conventions seeded in step 2. Offer to run it now (in Claude Code, `AskUserQuestion`, yes/no).
-   On yes, invoke it; on no, name it as a recommended next step.
-7. **Offer graph-hooks setup.** Once wiring and verification pass, `AGENTS.md` exists — the
-   precondition for [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md), which wires a
-   self-updating code knowledge graph so agents query the graph instead of grepping. Ask the user
-   whether to run it now (in Claude Code, use `AskUserQuestion` with `multiSelect: false`, yes/no).
-   On yes, invoke `setup-graph-hooks`. On no, name it as the recommended next step in your report.
+6. **Recheck and run the setup chain.** `AGENTS.md` now exists — the shared precondition for the
+   three setup skills that chain after this one. Walk them **in the order below**, treating this
+   run like a fresh project: for each, recheck its "already-wired" marker _now_ (do not assume a
+   prior run's state). If the marker is present, report it and move on — no prompt. If it is
+   absent, offer to run it (in Claude Code, `AskUserQuestion`, `multiSelect: false`, yes/no,
+   default **yes**); on yes, invoke the skill and let its own verifier run; on no, name it as a
+   recommended next step. Each chained skill is itself idempotent, so this is safe to repeat.
+
+   | Order | Skill                                                        | Already-wired marker (recheck → skip if present)                    | What running it wires                                    |
+   | ----- | ------------------------------------------------------------ | ------------------------------------------------------------------- | -------------------------------------------------------- |
+   | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `commitlint.config.mjs` or `.husky/` present                        | commit enforcement, staged lint/format, editor + release |
+   | 2     | [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)         | `<!-- graph-hooks:begin -->` in `AGENTS.md` **and** `.graph-hooks/` | self-updating code knowledge graph + routing             |
+   | 3     | [`setup-handoff`](../setup-handoff/SKILL.md)                 | `<!-- handoff` block in `AGENTS.md` **and** `.agents/handoff/`      | lease-based cross-session/-repo handoff board            |
+
+   Skill 1 installs the `commitlint.config.mjs` behind the commit conventions seeded in step 2.
+   Skills chained _downstream_ of these are named as next steps, not walked here:
+   [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md) and
+   [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) after graph-hooks;
+   [`run-handoff`](../run-handoff/SKILL.md) after handoff.
 
 ## Merge-safe `.vscode/settings.json` (Copilot)
 
@@ -139,5 +147,7 @@ User: "init this project."
    `../AGENTS.md` and `.vscode/settings.json` lists the root in `chat.agentFilesLocations`.
 5. Report what changed and run the verification steps. To undo, remove the added lines and
    `trash` any file you created — never `rm -rf`.
-6. Ask whether to scaffold project tooling now; on yes, hand off to `setup-project-tooling`.
-7. Ask whether to set up graph hooks now; on yes, hand off to `setup-graph-hooks`.
+6. Recheck the chain in order. `commitlint.config.mjs` is absent → ask, on yes hand off to
+   `setup-project-tooling`. No `<!-- graph-hooks:begin -->` in `AGENTS.md` → ask, hand off to
+   `setup-graph-hooks`. No `.agents/handoff/` → ask, hand off to `setup-handoff`. Any skill whose
+   marker is already present is reported and skipped, not re-prompted.
