@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0) (2026-07-23)
+
+### 🚀 Features
+
+- **feature:** add the release-announcement skill and its text-output eval harness ([be61dcb](https://github.com/xyzxyz442/x442-skills/commit/be61dcba822e9a7f73052f4fac1f2e349c6c8e6d))
+- **feature:** prefer vector search with per-search tier markers in graph hooks ([aa9d449](https://github.com/xyzxyz442/x442-skills/commit/aa9d449e6c964c972a40f6c5678aca16cf2f5596))
+- **feature:** recheck and run the full setup chain from initial-project ([65ef9aa](https://github.com/xyzxyz442/x442-skills/commit/65ef9aa1977f0693a90d7d88425910c931f4c85f))
+- **feature:** replace the husky echo-fragment chain with script dispatchers ([15c39af](https://github.com/xyzxyz442/x442-skills/commit/15c39afe80a4307fc57c1cdaac66bb92dd26afe0))
+- **feature:** restructure the board and add the orchestrator handoff type ([f0eae70](https://github.com/xyzxyz442/x442-skills/commit/f0eae7099569d60a587e6ad5e7bcc97a355eba0f))
+
+### 🐞 Bug Fixes
+
+- **bug:** enforce lowercase kebab-case handoff ids ([ad65169](https://github.com/xyzxyz442/x442-skills/commit/ad6516954912ed1a08f1b0fb115781658dc3e151))
+- **bug:** fold colons out of handoff titles to keep frontmatter parseable ([a6f75c9](https://github.com/xyzxyz442/x442-skills/commit/a6f75c9f537075447c2da0fd26ab40fffcce5675))
+- **bug:** re-sync the board README copies with the payload ([28cf45b](https://github.com/xyzxyz442/x442-skills/commit/28cf45b8e0315c140dd5e68f82f5ffee0b85d866))
+
+### 📚 Documentation
+
+- **docs:** close the release-announcement harness handoff as done ([4c80f14](https://github.com/xyzxyz442/x442-skills/commit/4c80f14592e9e5a918b1693b8f4fe084b2b4ece2))
+- **docs:** document the new layout, orchestrators, and the bug-filing rule ([b8ed4a0](https://github.com/xyzxyz442/x442-skills/commit/b8ed4a05ac93da728d14e4119b5909bd8b262c1e))
+- **docs:** re-audit the husky migration at full depth, 16 carriers ([ea54212](https://github.com/xyzxyz442/x442-skills/commit/ea54212a9992ab6f35b28cda58fdb6823d347b4c))
+- **docs:** record re-verification in the cross-repo eval report ([0da55cd](https://github.com/xyzxyz442/x442-skills/commit/0da55cd0a3e8e4eda63660e8414b3abc486bda59))
+- **docs:** record the husky-migration audit results on the handoff ([816b3ba](https://github.com/xyzxyz442/x442-skills/commit/816b3ba9f72b8456aea0b4709a34b62949eba628))
+- **docs:** sync graph-search-tier docs — initial-project chain note + repo AGENTS.md tier ladder ([81745ce](https://github.com/xyzxyz442/x442-skills/commit/81745ce07501587c135f04388ca1a573f6fabecc))
+
+### 🧪 Tests
+
+- **test:** cover ids, layout migration, orchestrators and release validation ([e39b1dc](https://github.com/xyzxyz442/x442-skills/commit/e39b1dcb25470af5d15cae5b392eb76ad9f9c54e))
+
+### 🧹 Miscellaneous Chores
+
+- **other:** bump prettier and lint-staged ([4e3ba44](https://github.com/xyzxyz442/x442-skills/commit/4e3ba44d831e2464ffb992079d3ece511c51a2db))
+- **other:** update the handoff board ([9030671](https://github.com/xyzxyz442/x442-skills/commit/903067184c3617e3aa130f421f309461388390a5))
+
 ## [0.5.0](https://github.com/xyzxyz442/x442-skills/compare/v0.4.0...v0.5.0) (2026-07-20)
 
 ### 🚀 Features
