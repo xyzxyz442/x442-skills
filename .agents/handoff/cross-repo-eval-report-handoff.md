@@ -4,7 +4,7 @@ title: Evaluation report — cross-repo shared-board identity fix
 type: standalone
 status: open
 created: 2026-07-21
-updated: 2026-07-21
+updated: 2026-07-23
 note:
 ---
 
@@ -62,6 +62,23 @@ neither consumer `.gitignore` gained an inert `.locks/` line; **re-installing re
 repo-b's identity** (the spec's exact repro); a session-start in repo-b surfaces **only its own
 `audience`** and uses the shared path in its hint; and `handoff new` on the shared board **without
 `--audience`/`HANDOFF_REPO` is refused** instead of defaulting to a stale name.
+
+### Re-verification — 2026-07-23 (branch `feature/graph-search-tiers`)
+
+All claims still hold on the live code after the post-report changes (husky dispatcher rework,
+handoff-protocol hardening, tooling bumps). The suite has since **grown**; current totals
+supersede the table above only in count, not in outcome:
+
+| Suite                                             | Evals | Result              |
+| ------------------------------------------------- | ----- | ------------------- |
+| setup-handoff (incl. `cross-repo` 13/13)          | 10    | **97/97**           |
+| run-handoff (discipline-done, discipline-blocked) | 2     | **12/12**           |
+| verifier · this repo's live board                 | —     | 18 passed, 0 failed |
+
+Growth since the table above: a new `layout-migration` eval (10/10) and `script-behavior`
+expanded to 44 assertions.
+
+Reproduce: same command as above, per eval id in each workspace's `evals/evals.json`.
 
 ## Suggested skills
 
