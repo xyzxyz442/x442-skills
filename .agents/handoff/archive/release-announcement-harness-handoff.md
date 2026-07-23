@@ -2,13 +2,14 @@
 id: release-announcement-harness-handoff
 title: Add an eval harness workspace for the release-announcement skill
 type: coordination
-status: open
+status: done
 audience:
 repos: []
 severity: low
 created: 2026-07-21
-updated: 2026-07-21
+updated: 2026-07-23
 note:
+verified_at: 2026-07-23
 ---
 
 ## Context
@@ -107,6 +108,25 @@ Settled — do not relitigate:
   reads "Default to none", which understates the house style above. Reword it to lead with
   mirroring the project's changelog convention.
 
+## Resolution (2026-07-23)
+
+Built as `harness/release-announcement-workspace/` (`evals/evals.json`, three fixtures,
+`grade.py`). Deviations from the sketch above, each forced by the spec itself:
+
+- **`verify_script` is omitted**, not null — `docs/harness-structure.md` already sanctions
+  omission for script-free skills, and nothing in `harness/lib/` reads the key (graders
+  hardcode their verifier path; this grader wraps none).
+- **Three fixtures, not two.** Verify step 1 requires a good post-state fixture that grades
+  1.00 deterministically, which the two-fixture sketch could not deliver without an LLM run.
+  `announcement-good/` (post-state control, 1.00) joins `release-input/` (pre-state input)
+  and `violations/` (negative control, grades 0.42 with 7 failing expectations naming the
+  broken rules).
+- **The invented-numbers rule uses digit-run tracing**, not `gc.no_fabrication()` (which
+  asserts file absence, not content): every digit run in the announcement must appear in the
+  input files' text.
+- The known follow-up (SKILL.md's emoji rule leading with "Default to none") is fixed in the
+  same change.
+
 ## Suggested skills
 
 - `x442-run-handoff` — claim this handoff before starting, release with an honest status.
@@ -116,3 +136,4 @@ Settled — do not relitigate:
 ## Activity
 
 - 2026-07-21 — open — released by Gunn Bhatrakarn (6c0310c6).
+- 2026-07-23 — done — verified against live code by Gunn Bhatrakarn (dfa4d021): grade.py: announcement-good fixture pass_rate 1.00 exit 0; violations fixture 0.42 exit 1 with 7 failing expectations naming the broken rules; release-input raw 0.00 with pre-state hint; grade_common --selftest OK; skills/README.md Harness column updated; prettier clean on all touched files.
