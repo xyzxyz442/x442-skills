@@ -52,9 +52,11 @@ fail() {
   FAIL=$((FAIL + 1))
 }
 
-# "not configured" short-circuit: no manifest anywhere in the cascade.
+# "not configured" short-circuit: no manifest anywhere in the cascade. Still print a Summary line so
+# the harness (which parses exactly that line) sees a clean, gradeable result rather than no output.
 if [ ! -f "$SCOPE/.handoff-repos.json" ] && [ ! -f "$HOME/.agents/handoff-repos.json" ]; then
   echo "verify: no .handoff-repos.json in scope or user layer — nothing to verify (not configured)."
+  echo "Summary: 0 passed, 0 warnings, 0 failed"
   exit 0
 fi
 

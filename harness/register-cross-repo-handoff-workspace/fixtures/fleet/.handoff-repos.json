@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "board": "./.agents/handoff",
+  "layout": "subfolder",
+  "groups": {
+    "auth-suite": {
+      "repos": [
+        {
+          "alias": "api",
+          "path": "./api",
+          "audience": "api",
+          "notes": "REST + auth"
+        },
+        { "alias": "web", "path": "./web" }
+      ]
+    },
+    "infra": {
+      "repos": [
+        {
+          "alias": "k8s",
+          "path": "./kubernetes",
+          "notes": "clusters + manifests"
+        }
+      ]
+    },
+    "legacy": {
+      "board": "./.agents/handoff-legacy",
+      "repos": [{ "alias": "mono", "path": "./monolith" }]
+    }
+  }
+}
