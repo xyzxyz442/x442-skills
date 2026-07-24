@@ -27,17 +27,25 @@ import shlex
 import sys
 from pathlib import Path
 
-# Every current handoff hook command invokes `<board>/scripts/hooks.sh` — so match on the
-# board-name-agnostic `/scripts/hooks.sh`, NOT on "handoff/scripts/hooks.sh". A shared cross-repo
-# board can be named anything (handoff-auth, handoff-legacy, a custom --handoff-dir), and a
-# name-specific marker would fail to recognize the group on re-run, leaving the stale entry in place
-# and appending a duplicate beside it. This substring is present whether the path is quoted (claude:
-# `…/scripts/hooks.sh" --kind`) or bare (gemini/copilot: `…/scripts/hooks.sh --kind`). handoff is the
-# only skill here using scripts/hooks.sh. The legacy flat spelling (<board>/hooks.sh, always named
-# "handoff") stays in the set so a board wired before the restructure is still recognized.
-MARKER = "/scripts/hooks.sh"
+# Recognizing OUR hook group must be board-name-agnostic (a shared cross-repo board can be named
+# handoff-auth, handoff-legacy, or a custom --handoff-dir) yet specific enough that strip_managed
+# never deletes an UNRELATED group. So a current command is ours iff it invokes `/scripts/hooks.sh`
+# AND carries handoff's own `--kind ` flag — both are present whether the path is quoted (claude:
+# `…/scripts/hooks.sh" --kind`) or bare (gemini/copilot: `…/scripts/hooks.sh --kind`). Requiring BOTH
+# is the guard: another tool merely living under some `scripts/hooks.sh` (without our `--kind …
+# --tool …` protocol) is not touched. Neither the old name-specific "handoff/scripts/hooks.sh" (misses
+# a differently-named board) nor a bare "/scripts/hooks.sh" (too broad) is safe alone.
+CURRENT_PATH = "/scripts/hooks.sh"
+KIND_FLAG = "--kind "
+# Pre-restructure flat boards baked "<board>/hooks.sh" (no scripts/) and were always named "handoff".
 LEGACY_MARKERS = ("handoff/hooks.sh",)
-MARKERS = (MARKER, *LEGACY_MARKERS)
+
+
+def is_managed(command: str) -> bool:
+    """True iff `command` is one of OUR handoff hook invocations (any board name), never another tool's."""
+    if CURRENT_PATH in command and KIND_FLAG in command:
+        return True
+    return any(m in command for m in LEGACY_MARKERS)
 
 
 def load(path: Path) -> dict:
@@ -79,7 +87,7 @@ def strip_managed(groups: list) -> list:
     out = []
     for g in groups or []:
         hooks = g.get("hooks", []) if isinstance(g, dict) else []
-        if any(m in h.get("command", "") for h in hooks for m in MARKERS):
+        if any(is_managed(h.get("command", "")) for h in hooks):
             continue
         out.append(g)
     return out
