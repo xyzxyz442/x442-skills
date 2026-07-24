@@ -58,8 +58,13 @@ def command(hdpath: str, tool: str, kind: str) -> str:
     # HANDOFF_REPO is set only for cross-repo. When it is, also pass HANDOFF_HDPATH so the shared
     # board's sessionstart hint advertises the real relative path (../.../handoff), not the
     # single-repo .agents/handoff default. Both empty (single-repo) => byte-identical command.
+    # On a grouped board, HANDOFF_GROUP additionally scopes this repo's hooks to its own section
+    # (its sub-index, its lease namespace). Empty (ungrouped) => not added => command unchanged.
     repo = os.environ.get("HANDOFF_REPO", "")
+    grp = os.environ.get("HANDOFF_GROUP", "")
     prefix = f"HANDOFF_REPO={shlex.quote(repo)} HANDOFF_HDPATH={shlex.quote(hdpath)} " if repo else ""
+    if repo and grp:
+        prefix += f"HANDOFF_GROUP={shlex.quote(grp)} "
     # Claude expands $CLAUDE_PROJECT_DIR; keep the path anchored so cwd never matters.
     if tool == "claude":
         return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" --kind {kind} --tool claude'
