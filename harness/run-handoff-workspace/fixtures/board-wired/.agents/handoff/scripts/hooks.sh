@@ -57,6 +57,45 @@ REPO_NAME=""
 [ -f "$DIR/config" ] && . "$DIR/config"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$REPO_NAME}"
 
+# group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
+# this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
+# the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
+LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
+slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
+GROUP="${HANDOFF_GROUP:-}"
+[ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
+sec_dir() { if [ "$LAYOUT" = "subfolder" ] && [ -n "$GROUP" ]; then printf '%s' "$DIR/$GROUP"; else printf '%s' "$DIR"; fi; }
+arch_file() { # id -> archived doc path in this section
+  case "$LAYOUT" in
+    subfolder) [ -n "$GROUP" ] && {
+      printf '%s' "$DIR/$GROUP/archive/$1.md"
+      return
+    } ;;
+    prefix) [ -n "$GROUP" ] && {
+      printf '%s' "$DIR/archive/$GROUP--$1.md"
+      return
+    } ;;
+  esac
+  printf '%s' "$DIR/archive/$1.md"
+}
+each_doc() { # this section's active docs, one per line (space-safe)
+  local f
+  case "$LAYOUT" in
+    subfolder) if [ -n "$GROUP" ]; then
+      for f in "$DIR/$GROUP"/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+    prefix) if [ -n "$GROUP" ]; then
+      for f in "$DIR/$GROUP"--*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+  esac
+  for f in "$DIR"/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+}
+# Locks live in the section dir, keyed on the doc's file stem (the id doc_id_of returns) — so a repo
+# only reaps/touches/nags its own section's leases, and the key matches what the CLI wrote.
+LOCKS="$(sec_dir)/.locks"
+
 PAYLOAD="$(cat)"
 
 meta() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
@@ -64,7 +103,7 @@ lock_session() { sed -n 's/^session=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_owner() { sed -n 's/^owner=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_expires() { sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null || echo 0; }
 lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]; }
-is_archived() { [ -f "$DIR/archive/$1.md" ]; }
+is_archived() { [ -f "$(arch_file "$1")" ]; }
 
 # --- payload field extraction: python3 first (repo standard), sed fallback ------------
 py_field() { # $1 = session|path
@@ -167,14 +206,17 @@ doc_id_of() {
   # would slip past the gate. The file itself may not exist yet (a new doc); its dir does.
   d="$(cd "$(dirname "$p")" 2> /dev/null && pwd)" && p="$d/$(basename "$p")"
   # Handoff docs are exactly the files named <id>-handoff.md (whitelist — templates, README, and
-  # config never match, so they need no blacklist). INDEX.md is not a handoff doc but is still gated
-  # so the pretool handler can deny hand-edits of the generated index.
+  # config never match, so they need no blacklist). A grouped board adds a subfolder level
+  # ($DIR/<group>/<id>-handoff.md) or a prefixed flat name ($DIR/<group>--<id>-handoff.md, already
+  # covered by the flat pattern). The generated indexes — board roll-up ($DIR/INDEX.md), prefix
+  # sub-index ($DIR/INDEX-<group>.md), subfolder sub-index ($DIR/<group>/INDEX.md) — are gated so the
+  # pretool handler can deny hand-edits of any generated index.
   case "$p" in
-    "$DIR"/INDEX.md)
+    "$DIR"/INDEX.md | "$DIR"/INDEX-*.md | "$DIR"/*/INDEX.md)
       printf 'INDEX'
       return 0
       ;;
-    "$DIR"/*-handoff.md | "$DIR"/archive/*-handoff.md) ;;
+    "$DIR"/*-handoff.md | "$DIR"/archive/*-handoff.md | "$DIR"/*/*-handoff.md | "$DIR"/*/archive/*-handoff.md) ;;
     *) return 1 ;;
   esac
   base="$(basename "$p" .md)"
@@ -187,8 +229,8 @@ case "$KIND" in
     reap_expired # stale leases self-heal at the start of every session
     out=""
     refs=""
-    for f in "$DIR"/*-handoff.md; do
-      [ -f "$f" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
       id="$(basename "$f" .md)"
       # Standalone/reference docs and orchestrators are not claimable work — list them apart,
       # no lease nag. An orchestrator holds no work of its own; its children are the work.
@@ -212,7 +254,7 @@ case "$KIND" in
         [ -n "$bo" ] && is_archived "${bo%% *}" && line="$line [✅ UNBLOCKED — ${bo%% *} is done]"
       fi
       out="${out}${line}"$'\n'
-    done
+    done < <(each_doc)
     [ -z "$out" ] && [ -z "$refs" ] && exit 0
     # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
     # into the hook command; single-repo uses the default in-repo location.
@@ -247,12 +289,15 @@ Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
 
     [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: .agents/handoff/handoff index"
 
+    # Read the doc by its canonical path (the id alone can't be turned back into a path on a grouped
+    # board — the stem may carry a group prefix, or the file may sit in a group subdir).
+    cpath="$(cd "$(dirname "$path")" 2> /dev/null && pwd)/$(basename "$path")"
     # Standalone/reference docs are gate-exempt: they carry no lease and are freely editable.
     # An absent type means coordination (gated), so legacy docs behave exactly as before. Only an
     # existing doc can be standalone — a brand-new (not-yet-written) doc stays gated. Orchestrators
     # are exempt for the same reason: they carry no lease, only an index of the children that do.
-    if [ -f "$DIR/$id.md" ]; then
-      case "$(meta "$DIR/$id.md" type)" in standalone | orchestrator) exit 0 ;; esac
+    if [ -f "$cpath" ]; then
+      case "$(meta "$cpath" type)" in standalone | orchestrator) exit 0 ;; esac
     fi
 
     session="$(field session)"

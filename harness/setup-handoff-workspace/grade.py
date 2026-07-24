@@ -499,6 +499,85 @@ def grade_cross_repo(_target):
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def grade_grouped_board(_target):
+    """A multi-group board: two groups co-located as sub-indexed sections + id collisions across
+    groups, exercised under BOTH subfolder and prefix layouts. Self-contained (ignores the passed
+    fixture); scaffolds boards with `setup-handoff.sh --board-only` and drives the `handoff` CLI +
+    hooks.sh directly. Proves the section layer: doc placement, sub-index + roll-up generation,
+    section-scoped `list`, collision-free leases, and the section-scoped edit gate."""
+    import os
+    import shutil
+    import tempfile
+
+    e = []
+    base = Path(tempfile.mkdtemp(prefix="handoff-grouped-"))
+
+    def sh(args, cwd, env_extra=None):
+        return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
+                              env={**os.environ, **(env_extra or {})})
+
+    try:
+        for layout in ("subfolder", "prefix"):
+            tag = f"[{layout}]"
+            board = base / layout
+            r = sh(["bash", str(SETUP), "--board-only", str(board),
+                    "--groups", "auth,infra", "--layout", layout], base)
+            e.append(gc.expectation(f"{tag} --board-only scaffolds a standalone board", r.returncode == 0,
+                                    f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
+            cfg = (board / "config").read_text() if (board / "config").is_file() else ""
+            e.append(gc.expectation(f"{tag} board config records groups + layout",
+                                    "HANDOFF_GROUPS=auth,infra" in cfg and f"HANDOFF_GROUP_LAYOUT={layout}" in cfg,
+                                    f"config={cfg!r}"))
+            ho = board / "handoff"
+
+            def newdoc(group, hid, title):
+                return sh(["bash", str(ho), "new", hid, "--title", title],
+                          board, {"HANDOFF_REPO": group, "HANDOFF_GROUP": group})
+
+            newdoc("auth", "login-fix", "Login fix")
+            newdoc("infra", "node-drain", "Node drain")
+            newdoc("infra", "login-fix", "Infra login fix")  # same id, different group — must not clash
+
+            if layout == "subfolder":
+                auth_doc = board / "auth" / "login-fix-handoff.md"
+                infra_doc = board / "infra" / "login-fix-handoff.md"
+                auth_idx = board / "auth" / "INDEX.md"
+            else:
+                auth_doc = board / "auth--login-fix-handoff.md"
+                infra_doc = board / "infra--login-fix-handoff.md"
+                auth_idx = board / "INDEX-auth.md"
+            e.append(gc.expectation(f"{tag} same id in two groups yields two distinct docs (no clash)",
+                                    auth_doc.is_file() and infra_doc.is_file(),
+                                    f"auth: {auth_doc.is_file()}, infra: {infra_doc.is_file()}"))
+            e.append(gc.expectation(f"{tag} each group gets its own sub-index", auth_idx.is_file(),
+                                    f"auth sub-index: {auth_idx.is_file()}"))
+            rollup = (board / "INDEX.md").read_text() if (board / "INDEX.md").is_file() else ""
+            e.append(gc.expectation(f"{tag} board roll-up lists both group sections",
+                                    "## auth" in rollup and "## infra" in rollup,
+                                    f"headings: {[l for l in rollup.splitlines() if l.startswith('## ')]}"))
+
+            # section-scoped list: auth sees only its own section
+            auth_list = sh(["bash", str(ho), "list"], board, {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}).stdout
+            e.append(gc.expectation(f"{tag} list from auth shows only the auth section",
+                                    "login-fix" in auth_list and "node-drain" not in auth_list,
+                                    f"list: {auth_list[:200]!r}"))
+
+            # section-scoped edit gate: claim in auth, then a stranger session is denied editing auth's doc
+            sh(["bash", str(ho), "claim", "login-fix", "mine"], board,
+               {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth", "HANDOFF_SESSION_ID": "owner"})
+            hk = board / "scripts/hooks.sh"
+            deny = subprocess.run(["bash", str(hk), "--kind", "pretool-edit", "--tool", "claude"],
+                                  cwd=str(board), input=json.dumps({"session_id": "stranger",
+                                  "tool_input": {"file_path": str(auth_doc)}}),
+                                  capture_output=True, text=True,
+                                  env={**os.environ, "HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}).stdout
+            e.append(gc.expectation(f"{tag} the edit gate denies a stranger editing a claimed section doc",
+                                    '"permissionDecision": "deny"' in deny, f"out: {deny[:120]!r}"))
+        return e
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def grade(target, eval_id):
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
@@ -589,6 +668,9 @@ def _grade(target, eval_id):
 
     if eval_id == "cross-repo":
         return grade_cross_repo(target)
+
+    if eval_id == "grouped-board":
+        return grade_grouped_board(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 

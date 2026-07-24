@@ -72,6 +72,13 @@
       "prompt": "Install handoff coordination here (Claude primary).",
       "fixture": "fixtures/fresh",
       "expected_output": "Layout-migration case: a board installed FLAT (hooks.sh and the templates beside the docs) must converge on the scripts/ + templates/ layout when the installer is re-run. hooks.sh moves to scripts/, the scaffolds to templates/, nothing stale is left at the board root, the `handoff` CLI stays at the root, and every tool's hook command is rewritten to the scripts/hooks.sh path with NO duplicated groups. The migrated board keeps working: `handoff new` scaffolds from the moved template and the pretool deny gate still fires, proving hooks.sh resolves the board root from its new subdirectory."
+    },
+    {
+      "id": "grouped-board",
+      "kind": "post-state",
+      "prompt": "Scaffold a shared board that hosts multiple groups as sub-indexed sections.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Multi-group payload case (self-contained; ignores the fixture). Scaffolds a board with `setup-handoff.sh --board-only --groups auth,infra --layout <l>` under BOTH subfolder and prefix layouts and drives the `handoff` CLI + hooks.sh directly to prove the section layer: the board config records HANDOFF_GROUPS + HANDOFF_GROUP_LAYOUT; a `new` in each group lands its doc in the group's section (a `<group>/` subfolder or `<group>--` prefixed file); the same id used in two groups yields two distinct docs with no lease clash; each group gets its own sub-index and the board root INDEX.md is a roll-up listing every section; `list` from one group shows only that section; and the pretool edit gate, scoped to the section, denies a stranger editing a claimed section doc. Regression for flat boards is covered by the script-behavior case, which drives an ungrouped board unchanged."
     }
   ]
 }
