@@ -1,0 +1,22 @@
+{
+  "skill_name": "x442-register-cross-repo-handoff",
+  "skill_path": "skills/engineering/register-cross-repo-handoff",
+  "verify_script": "skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-handoff.sh",
+  "notes": "Like register-cross-repo-graph, a synced fleet cannot ship as a static fixture: its post-state embeds absolute, machine-specific paths (board paths, the AGENTS.md block, the wired hook commands). So fixtures ship only PORTABLE inputs (a workspace with a relative-path .handoff-repos.json + stub member repos, each with an AGENTS.md). The grader git-inits the members in a throwaway sandbox under a redirected $HOME (so no user-layer manifest leaks in), runs the skill's own deterministic, LLM-free sync-cross-repo-handoff.sh, then verifies. The fleet case is exercised under BOTH layouts (subfolder + prefix).",
+  "evals": [
+    {
+      "id": "not-configured",
+      "kind": "precondition",
+      "prompt": "Verify the cross-repo handoff scope for this workspace.",
+      "fixture": "fixtures/not-configured",
+      "expected_output": "A workspace with a member repo but NO .handoff-repos.json anywhere in its cascade. Cross-repo handoff coordination is not opted into, which is not a failure: verify-cross-repo-handoff.sh reports 'not configured' and exits 0 (never a FAIL / exit 1). Regression guard for the unconfigured exit code."
+    },
+    {
+      "id": "fleet",
+      "kind": "post-state",
+      "prompt": "Set up a shared handoff board for these projects: an auth-suite group (api, web) and an infra group (k8s) sharing one board, plus a legacy monolith on its own board.",
+      "fixture": "fixtures/fleet",
+      "expected_output": "A workspace .handoff-repos.json declares three groups: auth-suite (api, web) and infra (k8s) sharing the default board ./.agents/handoff as sub-indexed sections, and legacy (mono) on its own ./.agents/handoff-legacy board. The grader git-inits the four member repos in a hermetic sandbox and runs sync-cross-repo-handoff.sh under BOTH layouts (subfolder and prefix). After sync, for each layout: each board is scaffolded with payload + a config carrying the right HANDOFF_GROUPS and HANDOFF_GROUP_LAYOUT; each member's AGENTS.md carries a cross-repo-handoff block naming its own section; each member's .claude/settings.json wires a handoff hook with HANDOFF_GROUP; a state ledger is written; and a re-sync leaves every member repo's git status clean (idempotent). verify-cross-repo-handoff.sh reports 0 failed. The grader performs the sync itself (portable inputs + hermetic sandbox), so this case needs no agent."
+    }
+  ]
+}

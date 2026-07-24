@@ -27,14 +27,25 @@ import shlex
 import sys
 from pathlib import Path
 
-# Every handoff hook command contains one of these. The current layout puts hooks.sh under
-# <board>/scripts/, but a board wired before the restructure has "<board>/hooks.sh" baked into its
-# settings.json — and "handoff/scripts/hooks.sh" does NOT contain "handoff/hooks.sh", so matching on
-# the current marker alone would leave the stale group in place and append a second one beside it.
-# Both spellings must be recognized as ours so a re-run converges instead of duplicating.
-MARKER = "handoff/scripts/hooks.sh"
+# Recognizing OUR hook group must be board-name-agnostic (a shared cross-repo board can be named
+# handoff-auth, handoff-legacy, or a custom --handoff-dir) yet specific enough that strip_managed
+# never deletes an UNRELATED group. So a current command is ours iff it invokes `/scripts/hooks.sh`
+# AND carries handoff's own `--kind ` flag — both are present whether the path is quoted (claude:
+# `…/scripts/hooks.sh" --kind`) or bare (gemini/copilot: `…/scripts/hooks.sh --kind`). Requiring BOTH
+# is the guard: another tool merely living under some `scripts/hooks.sh` (without our `--kind …
+# --tool …` protocol) is not touched. Neither the old name-specific "handoff/scripts/hooks.sh" (misses
+# a differently-named board) nor a bare "/scripts/hooks.sh" (too broad) is safe alone.
+CURRENT_PATH = "/scripts/hooks.sh"
+KIND_FLAG = "--kind "
+# Pre-restructure flat boards baked "<board>/hooks.sh" (no scripts/) and were always named "handoff".
 LEGACY_MARKERS = ("handoff/hooks.sh",)
-MARKERS = (MARKER, *LEGACY_MARKERS)
+
+
+def is_managed(command: str) -> bool:
+    """True iff `command` is one of OUR handoff hook invocations (any board name), never another tool's."""
+    if CURRENT_PATH in command and KIND_FLAG in command:
+        return True
+    return any(m in command for m in LEGACY_MARKERS)
 
 
 def load(path: Path) -> dict:
@@ -58,8 +69,13 @@ def command(hdpath: str, tool: str, kind: str) -> str:
     # HANDOFF_REPO is set only for cross-repo. When it is, also pass HANDOFF_HDPATH so the shared
     # board's sessionstart hint advertises the real relative path (../.../handoff), not the
     # single-repo .agents/handoff default. Both empty (single-repo) => byte-identical command.
+    # On a grouped board, HANDOFF_GROUP additionally scopes this repo's hooks to its own section
+    # (its sub-index, its lease namespace). Empty (ungrouped) => not added => command unchanged.
     repo = os.environ.get("HANDOFF_REPO", "")
+    grp = os.environ.get("HANDOFF_GROUP", "")
     prefix = f"HANDOFF_REPO={shlex.quote(repo)} HANDOFF_HDPATH={shlex.quote(hdpath)} " if repo else ""
+    if repo and grp:
+        prefix += f"HANDOFF_GROUP={shlex.quote(grp)} "
     # Claude expands $CLAUDE_PROJECT_DIR; keep the path anchored so cwd never matters.
     if tool == "claude":
         return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" --kind {kind} --tool claude'
@@ -71,7 +87,7 @@ def strip_managed(groups: list) -> list:
     out = []
     for g in groups or []:
         hooks = g.get("hooks", []) if isinstance(g, dict) else []
-        if any(m in h.get("command", "") for h in hooks for m in MARKERS):
+        if any(is_managed(h.get("command", "")) for h in hooks):
             continue
         out.append(g)
     return out
