@@ -27,12 +27,15 @@ import shlex
 import sys
 from pathlib import Path
 
-# Every handoff hook command contains one of these. The current layout puts hooks.sh under
-# <board>/scripts/, but a board wired before the restructure has "<board>/hooks.sh" baked into its
-# settings.json — and "handoff/scripts/hooks.sh" does NOT contain "handoff/hooks.sh", so matching on
-# the current marker alone would leave the stale group in place and append a second one beside it.
-# Both spellings must be recognized as ours so a re-run converges instead of duplicating.
-MARKER = "handoff/scripts/hooks.sh"
+# Every current handoff hook command invokes `<board>/scripts/hooks.sh` — so match on the
+# board-name-agnostic `/scripts/hooks.sh`, NOT on "handoff/scripts/hooks.sh". A shared cross-repo
+# board can be named anything (handoff-auth, handoff-legacy, a custom --handoff-dir), and a
+# name-specific marker would fail to recognize the group on re-run, leaving the stale entry in place
+# and appending a duplicate beside it. This substring is present whether the path is quoted (claude:
+# `…/scripts/hooks.sh" --kind`) or bare (gemini/copilot: `…/scripts/hooks.sh --kind`). handoff is the
+# only skill here using scripts/hooks.sh. The legacy flat spelling (<board>/hooks.sh, always named
+# "handoff") stays in the set so a board wired before the restructure is still recognized.
+MARKER = "/scripts/hooks.sh"
 LEGACY_MARKERS = ("handoff/hooks.sh",)
 MARKERS = (MARKER, *LEGACY_MARKERS)
 
