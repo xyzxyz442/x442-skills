@@ -231,6 +231,33 @@ def grade_script_behavior(target):
                             r.returncode == 0 and (doc / "archive/Legacy_Doc-handoff.md").is_file(),
                             f"exit {r.returncode}; archived: {(doc / 'archive/Legacy_Doc-handoff.md').is_file()}"))
 
+    # --- an unresolvable id must HARD-fail, never half-succeed ------------------------------
+    # claim/release resolve the doc inside $( ), where `die` exits only the SUBSHELL; with no
+    # `set -e` the command used to sail on with an empty path — minting a lease for a doc that does
+    # not exist and spraying `sed: : No such file or directory`, while still exiting 0. The `-handoff`
+    # suffix fold makes this easy to hit: `rbac` -> phantom `rbac-handoff`, real doc `rbac-gap-handoff`.
+    locks = doc / ".locks"
+    before = sorted(p.name for p in locks.glob("*")) if locks.is_dir() else []
+    r = _handoff(target, "claim", "rbac", "short id that folds to a phantom")
+    out = r.stdout + r.stderr
+    after = sorted(p.name for p in locks.glob("*")) if locks.is_dir() else []
+    e.append(gc.expectation("claim on an unresolvable id exits NONZERO",
+                            r.returncode != 0, f"exit {r.returncode}: {out.strip()[:120]}"))
+    e.append(gc.expectation("claim on an unresolvable id mints NO lease",
+                            after == before, f"locks before={before} after={after}"))
+    e.append(gc.expectation("claim on an unresolvable id emits no sed/grep error spew",
+                            "No such file or directory" not in out, f"out: {out.strip()[:160]}"))
+    e.append(gc.expectation("an unresolvable id names its near miss on the board",
+                            "rbac-gap-handoff" in out, f"out: {out.strip()[:160]}"))
+    doc_before = slug.read_text()
+    r = _handoff(target, "release", "rbac", "--status", "done", "--verified-by", "grader")
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("release on an unresolvable id exits NONZERO and mutates nothing",
+                            r.returncode != 0 and slug.read_text() == doc_before
+                            and "No such file or directory" not in out,
+                            f"exit {r.returncode}; real doc changed: {slug.read_text() != doc_before}; "
+                            f"out: {out.strip()[:120]}"))
+
     # --- template rendering must survive arbitrary --title/--note text ---------------------
     # These were rendered with `sed "s|PLACEHOLDER_NOTE|$note|"`, so a `|` in the value closed the
     # expression early. The redirect had already truncated the file, so the doc landed ZERO BYTES
