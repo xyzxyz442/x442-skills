@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Bootstrap Workspace",
+      "type": "shell",
+      "command": "bash",
+      "args": ["./initialize.sh", "folder-open", "--force"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "detail": "Auto-install missing dependencies and repair Husky hooks when the workspace opens.",
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}
