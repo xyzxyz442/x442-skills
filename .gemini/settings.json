@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .agents/handoff/hooks.sh --kind sessionstart --tool gemini"
+            "command": "bash .agents/handoff/scripts/hooks.sh --kind sessionstart --tool gemini"
           }
         ]
       }
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .agents/handoff/hooks.sh --kind posttool-edit --tool gemini"
+            "command": "bash .agents/handoff/scripts/hooks.sh --kind posttool-edit --tool gemini"
           }
         ],
         "matcher": "Edit|Write|MultiEdit"

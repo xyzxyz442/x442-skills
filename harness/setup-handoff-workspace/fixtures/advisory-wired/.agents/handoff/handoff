@@ -160,15 +160,42 @@ whoami_id() {
   echo "${user} (${session:0:8})"
 }
 
+# Board ids that CONTAIN the one asked for. The automatic `-handoff` suffix means a "short" id can
+# fold to a phantom (`foo` -> `foo-handoff`) while the real doc is `foo-backend-handoff`, so naming
+# the near misses turns a dead end into an obvious fix. Comma-separated; empty when nothing is near.
+near_ids() { # id -> "a-handoff, b-handoff"
+  local needle="${1%-handoff}" p stem out=""
+  [ -n "$needle" ] || return 0
+  while read -r p; do
+    stem="$(basename "$p" .md)"
+    case "$stem" in *"$needle"*) out="${out:+$out, }$stem" ;; esac
+  done < <(
+    each_doc
+    each_archive
+  )
+  printf '%s' "$out"
+}
+
 doc_of() { # id -> path, searching the caller's section (active then archive)
-  local id="$1"
+  # Reports failure through the EXIT STATUS, never `die`. Every caller runs this inside $( ), where
+  # `die`'s exit would leave only the subshell; with no `set -e` (see the top of this file) the
+  # caller then sails on with an empty path. That is exactly how `claim <phantom-id>` used to mint a
+  # real lock for a doc that does not exist and spray `sed: : No such file or directory`.
+  # Callers MUST `|| no_such "$id"`.
+  local id="$1" p
   for p in "$(doc_file "$id")" "$(arch_file "$id")"; do
     [ -f "$p" ] && {
       echo "$p"
-      return
+      return 0
     }
   done
-  die "no such handoff: $id (try: handoff list)"
+  return 1
+}
+
+no_such() { # id -> never returns; the shared unresolvable-id error for claim/release
+  local near
+  near="$(near_ids "$1")"
+  die "no such handoff: $1 (try: handoff list)${near:+ — did you mean: $near}"
 }
 
 meta() { # path key -> value from YAML frontmatter
@@ -714,11 +741,13 @@ cmd_claim() {
   # accept the short or full id, in any casing; the lease is keyed on the resolved stem
   local raw_id="$id"
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  local note="${*:-}"
+  # Resolve the doc BEFORE deriving the lock key. The key is a pure function of the id, so an
+  # unresolvable id would otherwise mint a lease for a doc that does not exist.
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
   local key
   key="$(lock_key "$id")" # the lock is keyed on the doc's stem, unique board-wide across sections
-  local note="${*:-}"
-  local f
-  f="$(doc_of "$id")"
   is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
@@ -810,7 +839,7 @@ cmd_release() {
   case "$status" in open | blocked | done) ;; *) die "bad status: $status" ;; esac
 
   local f
-  f="$(doc_of "$id")"
+  f="$(doc_of "$id")" || no_such "$id"
   local me
   me="$(whoami_id)"
 
