@@ -1,0 +1,57 @@
+# Baseline .gitattributes — line-ending normalization plus diff/merge hints.
+# Reference: https://git-scm.com/docs/gitattributes
+#
+# `text=auto eol=lf` stores every text file with LF in the index and checks LF out on every
+# platform, Windows included. That is what keeps a shipped `#!/usr/bin/env bash` payload runnable
+# after a Windows/WSL clone: a CRLF checkout turns the shebang into `bash\r`, and the script fails
+# with a confusing "no such file or directory".
+#
+# Applying this to a repo that already holds CRLF content rewrites those files on the next
+# checkout. Renormalize deliberately, in a commit of its own: `git add --renormalize .`
+* text=auto eol=lf
+
+# Executables and git hooks. Redundant under the default above, but stated explicitly so the
+# guarantee survives someone relaxing that default. Extension-less hooks are pinned by name.
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+*.py text eol=lf
+commit-msg text eol=lf
+pre-commit text eol=lf
+post-commit text eol=lf
+
+# Windows shells need CRLF: cmd.exe mis-parses a batch file stored with LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never line-ending-converted, never diffed as text. `text=auto` above already detects
+# most of these, but a committed database or asset is worth pinning rather than inferring.
+*.db binary
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.7z binary
+
+# Generated files. `linguist-generated=true` is GitHub's marker — it collapses the file in pull
+# request diffs and drops it from the repo's language stats; `-diff` is git's own, so a local
+# `git diff` skips the body too. Both keep a lockfile churn out of review.
+package-lock.json linguist-generated=true -diff
+pnpm-lock.yaml linguist-generated=true -diff
+yarn.lock linguist-generated=true -diff
+uv.lock linguist-generated=true -diff
+poetry.lock linguist-generated=true -diff
+bun.lockb binary linguist-generated=true

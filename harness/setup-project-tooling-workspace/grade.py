@@ -35,6 +35,7 @@ VERIFY = REPO / "skills/engineering/setup-project-tooling/scripts/verify-project
 
 COMMITLINT_CONFIG = "commitlint.config.mjs"
 EDITORCONFIG = ".editorconfig"
+GITATTRIBUTES = ".gitattributes"
 
 
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
@@ -60,6 +61,9 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         exps.append(gc.git_diff_empty(target))
         exps.append(gc.file_exists(target, COMMITLINT_CONFIG))
         exps.append(gc.file_exists(target, EDITORCONFIG))
+        # Git hygiene is warn-only in the verifier (an unmigrated repo must not fail CI), so the
+        # post-state asserts the file itself here.
+        exps.append(gc.file_exists(target, GITATTRIBUTES))
     elif eval_id == "fresh":
         # Pre-state: the post-scaffold markers must appear. Both fail on the raw fixture by design.
         exps.append(gc.file_exists(target, COMMITLINT_CONFIG))

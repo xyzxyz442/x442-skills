@@ -145,7 +145,12 @@ same one-line wrappers, drop `.husky` from `.gitignore`, and set the command to 
 tracked. [`assets/commit-msg`](assets/commit-msg) is the standalone hook body for a repo that wants
 neither the dispatcher nor install-time generation.
 
-### Base .gitignore
+### Base .gitignore and .gitattributes
+
+Both are repo-hygiene files this skill owns end to end: what git must not track, and how git must
+store what it does.
+
+#### .gitignore
 
 [`assets/gitignore`](assets/gitignore) is the common ignore set — a
 [toptal-generated](https://www.toptal.com/developers/gitignore) baseline for
@@ -166,6 +171,48 @@ graphify-out/
 Greenfield (no `.gitignore`): copy the asset wholesale. Existing `.gitignore`: append any missing
 entries — at minimum the user-specific + AI tail — line-merged; never duplicate a line, never drop
 existing entries.
+
+Sibling skills append their own paths rather than routing through this asset, because those paths
+depend on where they installed: `setup-graph-hooks` adds the graph output directories, and
+`setup-handoff` adds its board's `.locks/` directory. Running them after this skill is a no-op on
+the entries already here.
+
+#### .gitattributes
+
+[`assets/gitattributes`](assets/gitattributes) is the line-ending and diff baseline. It matters
+most for the **shell payloads this repo's skills ship** — `scripts/husky.sh`, `initialize.sh`,
+`scripts/py-tool.sh`, and the generated `.husky/` hooks. A CRLF checkout turns `#!/usr/bin/env bash`
+into `bash\r`, and every one of them dies inside a git hook with a "no such file or directory" that
+names a file that plainly exists. `setup-graph-hooks` and `setup-handoff` both assume this file is
+in place for exactly that reason.
+
+```gitattributes
+# LF in the index, LF on checkout, every platform
+* text=auto eol=lf
+# Explicit, so relaxing the default above cannot break a hook
+*.sh text eol=lf
+# cmd.exe mis-parses a batch file stored with LF
+*.bat text eol=crlf
+# Never converted, never diffed as text
+*.png binary
+# Collapsed in GitHub PR diffs and skipped by `git diff`
+package-lock.json linguist-generated=true -diff
+```
+
+A `#` only starts a comment at the **start of a line** here — git reads a trailing `# ...` as more
+attribute names, so keep comments on their own lines.
+
+Greenfield (no `.gitattributes`): copy the asset wholesale. Existing `.gitattributes`: append only
+the missing patterns, and **never rewrite a pattern the repo already declares** — an existing
+`* text=auto` without `eol=lf`, or a per-extension `eol=crlf`, is a deliberate choice on a team that
+has Windows developers editing those files.
+
+One consequence to state to the user rather than absorb silently: on a repo that already holds CRLF
+content, adding `eol=lf` rewrites those files at the next checkout. Size it first with
+`git ls-files --eol | grep -v 'i/lf'` (index-side CRLF entries; binaries read as `i/-text` and are
+left alone). If that comes back empty the new attributes change nothing today. If it does not, do
+not fold the rewrite into the tooling commit — recommend `git add --renormalize .` as a separate,
+reviewable commit and let the user decide when to run it.
 
 ### Commit conventions (commitlint)
 
@@ -445,12 +492,18 @@ failure). Then spot-check:
    and `pipx` removed from `PATH`, which must fall through to `.venv` or fail with the install hint.
 5. **Editor:** `.editorconfig`, `.prettierrc`, `.prettierignore`, and `.vscode/settings.json`
    present; `.vscode/extensions.json` lists the stack's extensions; `.vscode/tasks.json` has the
-   **Bootstrap Workspace** task and `initialize.sh` is present and executable; `.gitignore` ignores
-   `.husky` (plus the base AI paths) and does **not** ignore `scripts/`.
-6. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
+   **Bootstrap Workspace** task and `initialize.sh` is present and executable.
+6. **Git hygiene:** `.gitignore` ignores `.husky` (plus the base AI paths) and does **not** ignore
+   `scripts/`. `.gitattributes` is present and forces LF on `*.sh`, so the shipped hook payloads
+   survive a Windows checkout; `git check-attr text eol -- scripts/husky.sh` reports
+   `text: set` / `eol: lf`, and `git ls-files --eol scripts/husky.sh` shows `i/lf`. To size a
+   renormalize before committing one, list the index-side CRLF files with
+   `git ls-files --eol | grep -v 'i/lf'` — **not** `git add --renormalize --dry-run`, which prints
+   every tracked path it would re-add whether or not the content changes.
+7. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
    `npm run release:dry-run` produces a changelog preview.
-7. **Common-only repos:** an unsupported-language repo still passes the base checks (commitlint,
+8. **Common-only repos:** an unsupported-language repo still passes the base checks (commitlint,
    `.editorconfig`, a `.lintstagedrc.json` with the base glob), and its `pre-commit` skips any step
    it does not define rather than failing the commit.
-8. **Idempotency:** re-running the skill is a no-op for every piece already present, including on a
+9. **Idempotency:** re-running the skill is a no-op for every piece already present, including on a
    repo migrated from the older `<cmd>:commit-msg` / `<cmd>:pre-commit` chain.
