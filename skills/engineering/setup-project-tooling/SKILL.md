@@ -288,7 +288,10 @@ to commit:
   but not executable counts as broken, since the hooks are one-line wrappers around it.
 - **Python** — makes the toolchain runnable through `scripts/py-tool.sh`. With uv or pipx present it
   pre-fetches the pinned tools so the first commit does not pay a download inside a git hook; with
-  neither, it creates the `.venv` fallback and installs the versions `py-tool.sh` pins.
+  neither, it creates the `.venv` fallback and installs the versions `py-tool.sh` pins. The trigger
+  is `scripts/py-tool.sh` existing, **not** the presence of `*.py` files: a base-only repo can hold
+  Python (test graders, a one-off script) without ever wiring the Python module, and bootstrapping
+  it there would fail on the missing resolver and take the whole folder-open task down with it.
 
 The `.vscode/tasks.json` task **Bootstrap Workspace** runs `bash ./initialize.sh folder-open --force`
 on `folderOpen`, so opening the workspace repairs only what is missing. `full` mode
