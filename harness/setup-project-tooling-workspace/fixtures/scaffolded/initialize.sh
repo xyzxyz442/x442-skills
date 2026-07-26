@@ -172,6 +172,15 @@ has_sql() {
   find . -name '*.sql' -not -path './node_modules/*' -not -path './.venv/*' -print -quit 2> /dev/null | grep -q .
 }
 
+python_module_wired() {
+  # Python FILES are not the same as Python TOOLING. A base-only repo (test graders, a one-off
+  # script) has .py content and no toolchain, and must not be dragged through a bootstrap it never
+  # wired — without uv or pipx that path would otherwise hard-fail on a missing py-tool.sh and take
+  # the whole folder-open task down with it. scripts/py-tool.sh is the marker that the Python
+  # module was actually applied.
+  [ -f "$PY_TOOL" ]
+}
+
 python_tools() {
   # ruff + black are always needed; sqlfluff only when the repo has SQL (python-stream flavor).
   local tools="ruff black"
@@ -221,6 +230,13 @@ bootstrap_python() {
   # No uv and no pipx: fall back to a traditional virtualenv, installing the versions
   # py-tool.sh pins so the fallback matches what the other runners would have used.
   command_exists python3 || fail "this repo's Python tooling needs uv, pipx or python3; none was found on PATH."
+  # uv and pipx fetch their own interpreter; a hand-built venv is stuck with this one, and the
+  # pinned tools need 3.10+. Say so plainly instead of leaving pip to emit a resolver wall.
+  if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2> /dev/null; then
+    fail "the pinned Python tools need Python 3.10+, but python3 on PATH is $(python3 -V 2>&1 | awk '{print $2}').
+  Install uv (it fetches a suitable interpreter):  curl -LsSf https://astral.sh/uv/install.sh | sh
+  or put a newer python3 on PATH before re-running."
+  fi
   for tool in $(python_tools); do
     specs="$specs $("$PY_TOOL" --spec "$tool")"
   done
@@ -242,7 +258,11 @@ run_full_bootstrap() {
   fi
 
   if is_python_project; then
-    bootstrap_python
+    if python_module_wired; then
+      bootstrap_python
+    else
+      echo "Python files present but $PY_TOOL is absent; this repo has the common base only. Skipping Python bootstrap."
+    fi
   fi
 
   echo "Project bootstrap completed successfully."
@@ -280,7 +300,7 @@ run_folder_open_bootstrap() {
     fi
   fi
 
-  if is_python_project && ! py_tools_ready; then
+  if is_python_project && python_module_wired && ! py_tools_ready; then
     echo "Python tooling is not runnable yet; bootstrapping"
     bootstrap_python
     acted=true
