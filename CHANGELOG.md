@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0) (2026-07-26)
+
+### 🚀 Features
+
+- **feature:** add register-cross-repo-handoff skill ([60dee4e](https://github.com/xyzxyz442/x442-skills/commit/60dee4ec1f6a922eaae088503ac5cd98d8368d6d))
+- **feature:** give setup-project-tooling a .gitattributes baseline ([9852623](https://github.com/xyzxyz442/x442-skills/commit/985262399e623c910de1f3b0dea9b323e37c3818))
+- **feature:** multi-group sub-indexed boards in handoff payload ([091aaeb](https://github.com/xyzxyz442/x442-skills/commit/091aaebe67af18fd5c558fb37167f5c402cc992c))
+- **feature:** scaffold standalone boards and thread group identity in setup-handoff ([a326009](https://github.com/xyzxyz442/x442-skills/commit/a3260094f61ca5b4cc70d6ff7ac4c3fe17f67df2))
+
+### 🐞 Bug Fixes
+
+- **bug:** hard-fail handoff claim/release on an unresolvable id ([2eb8e99](https://github.com/xyzxyz442/x442-skills/commit/2eb8e99036abb0b64d225faf4384c8d5a9735fd4))
+- **bug:** recognize handoff hooks on any board name in merge-hooks ([4a9600c](https://github.com/xyzxyz442/x442-skills/commit/4a9600c8429e485c8dbb41b84ce169e945712876))
+- **bug:** require --kind in handoff hook discriminator to avoid stripping foreign groups ([7911584](https://github.com/xyzxyz442/x442-skills/commit/791158480b9c195710fb8a8e4db4d7905226da16))
+- **bug:** stop initialize.sh bootstrapping python in base-only repos ([aff1d6f](https://github.com/xyzxyz442/x442-skills/commit/aff1d6ffa9e3628c4438553bc8cf7e7025fdfda2))
+- **feature:** gather channel and language as multi-select in release-announcement ([b7d4a87](https://github.com/xyzxyz442/x442-skills/commit/b7d4a8761cb59c29f143e2ca2541d67993d23e99))
+
+### 📚 Documentation
+
+- **docs:** index register-cross-repo-handoff in AGENTS.md and skills catalog ([6a4de38](https://github.com/xyzxyz442/x442-skills/commit/6a4de3845949754bf90a8269688fd4f8b2e9c1c8))
+- **docs:** sync the engineering-suite handoff for v0.6.0 ([3e505e4](https://github.com/xyzxyz442/x442-skills/commit/3e505e46ab2e412ca72d227bf9b11a21c97a6b9f))
+- **docs:** sync the engineering-suite handoff for v0.7.0 ([9d2a3dd](https://github.com/xyzxyz442/x442-skills/commit/9d2a3dde6d2481979ba03d4151f8d4f41ad836f5))
+
+### 🧪 Tests
+
+- **test:** add register-cross-repo-handoff eval harness ([6b37d48](https://github.com/xyzxyz442/x442-skills/commit/6b37d48db9f7d8e1a78686938fdb10333b2ef069))
+- **test:** cover multi-group sub-indexed boards in setup-handoff harness ([f94d9f3](https://github.com/xyzxyz442/x442-skills/commit/f94d9f3168e6fe1b96c6aba6c1cc1656b2bc3453))
+
+### 🧹 Miscellaneous Chores
+
+- **config:** adopt the setup-project-tooling gitattributes baseline ([0165a2d](https://github.com/xyzxyz442/x442-skills/commit/0165a2dc44f53b95aa6fe6569aa8fd62cf401c3a))
+- **setup:** adopt the workspace-bootstrap layer from setup-project-tooling ([f72209f](https://github.com/xyzxyz442/x442-skills/commit/f72209f9baa2eec4ae1d9d5aa3162c2eb71e828e))
+- **setup:** re-sync this repo's handoff board onto the current payload ([fa51b57](https://github.com/xyzxyz442/x442-skills/commit/fa51b57aa248ceb3994108554eb12d908e4e050a))
+
 ## [0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0) (2026-07-23)
 
 ### 🚀 Features
