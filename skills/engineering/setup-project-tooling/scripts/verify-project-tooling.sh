@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # verify-project-tooling.sh — confirm the `setup-project-tooling` skill wired a repo correctly:
 # commit conventions (commitlint + local hook), staged-file lint/format (lint-staged),
-# editor/workspace config (.editorconfig + .vscode), and release automation (release-it) when wired.
+# editor/workspace config (.editorconfig + .vscode), git hygiene (.gitignore + .gitattributes), and
+# release automation (release-it) when wired.
 #
 # Read-only: it inspects files only. It never writes, never calls an LLM, never hits the network —
 # safe to run in CI or by hand. It checks end-state, not the interactive skill itself; release-it
@@ -114,7 +115,6 @@ else
   warn ".prettierrc absent (base Prettier config not written)"
 fi
 if [ -f .prettierignore ]; then ok ".prettierignore present"; else warn ".prettierignore absent"; fi
-if [ -f .gitignore ] && grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then ok ".gitignore ignores .husky (regenerated hooks stay untracked)"; else warn ".gitignore does not ignore .husky (base .gitignore not applied)"; fi
 if [ -f .vscode/settings.json ]; then
   if is_json .vscode/settings.json; then ok ".vscode/settings.json present and valid JSON"; else bad ".vscode/settings.json is not valid JSON"; fi
 else
@@ -137,7 +137,38 @@ else
 fi
 
 echo
-echo "5. Release automation (release-it) — optional per profile"
+echo "5. Git hygiene (.gitignore + .gitattributes)"
+echo "--------------------------------------------"
+if [ -f .gitignore ]; then
+  ok ".gitignore present"
+  if grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then ok ".gitignore ignores .husky (regenerated hooks stay untracked)"; else warn ".gitignore does not ignore .husky (base .gitignore not applied)"; fi
+else
+  warn ".gitignore absent (base ignore set not applied)"
+fi
+# Line endings. Everything this skill ships to a repo — scripts/husky.sh, initialize.sh,
+# scripts/py-tool.sh, the generated .husky/ hooks — is a `#!/usr/bin/env bash` payload, and a CRLF
+# checkout turns that shebang into `bash\r`, failing inside a git hook with a "no such file" naming
+# a file that exists. Ask git for the effective attribute instead of pattern-matching, so a blanket
+# `* text=auto eol=lf` counts as much as an explicit `*.sh` rule; grep only outside a work tree.
+if [ -f .gitattributes ]; then
+  ok ".gitattributes present"
+  EOL=""
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    EOL=$(git check-attr eol -- probe.sh 2> /dev/null | sed 's/.*: //')
+  fi
+  if [ "$EOL" = "lf" ]; then
+    ok ".gitattributes forces LF on *.sh (shebangs survive a Windows checkout)"
+  elif [ -z "$EOL" ] && grep -qE '^[[:space:]]*(\*|\*\.sh)[[:space:]].*eol=lf' .gitattributes; then
+    ok ".gitattributes declares eol=lf covering *.sh"
+  else
+    warn ".gitattributes does not force LF on *.sh (a CRLF checkout breaks the shipped hook payloads)"
+  fi
+else
+  warn ".gitattributes absent (line endings not normalized; a CRLF checkout breaks the shipped .sh payloads)"
+fi
+
+echo
+echo "6. Release automation (release-it) — optional per profile"
 echo "---------------------------------------------------------"
 if [ -f .release-it.json ]; then
   if is_json .release-it.json; then ok ".release-it.json present and valid JSON"; else bad ".release-it.json is not valid JSON"; fi

@@ -1,7 +1,52 @@
-# Force LF on shipped shell/python hook payloads so their `#!/usr/bin/env bash` shebangs
-# survive a Windows/WSL checkout (CRLF would break `bash\r`). See the skills' Prerequisites
-# sections. Extension-less git hooks (e.g. post-commit) are pinned by name.
+# This repo's own copy of the baseline `setup-project-tooling` ships as
+# skills/engineering/setup-project-tooling/assets/gitattributes — keep the two in step.
+# Reference: https://git-scm.com/docs/gitattributes
+#
+# `text=auto eol=lf` stores every text file with LF in the index and checks LF out on every
+# platform, Windows included. That is what keeps the shipped `#!/usr/bin/env bash` payloads under
+# skills/*/scripts/ runnable after a Windows/WSL clone: a CRLF checkout turns the shebang into
+# `bash\r`, and the script fails with a confusing "no such file or directory".
+* text=auto eol=lf
+
+# Shipped shell/python payloads and git hooks. Redundant under the default above, but stated
+# explicitly so the guarantee survives someone relaxing that default. See the skills' Prerequisites
+# sections. Extension-less git hooks are pinned by name.
 *.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
 *.py text eol=lf
-post-commit text eol=lf
 commit-msg text eol=lf
+pre-commit text eol=lf
+post-commit text eol=lf
+
+# Windows shells need CRLF: cmd.exe mis-parses a batch file stored with LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never line-ending-converted, never diffed as text. `*.db` covers the committed
+# code-review-graph fixtures under harness/, which are SQLite databases, not text.
+*.db binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.7z binary
+
+# Generated files. `linguist-generated=true` is GitHub's marker — it collapses the file in pull
+# request diffs and drops it from the repo's language stats; `-diff` is git's own, so a local
+# `git diff` skips the body too. Both keep lockfile churn out of review.
+pnpm-lock.yaml linguist-generated=true -diff
+package-lock.json linguist-generated=true -diff
+yarn.lock linguist-generated=true -diff
