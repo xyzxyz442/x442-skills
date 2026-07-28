@@ -173,6 +173,19 @@ echo "---------------------------------------------------------"
 if [ -f .release-it.json ]; then
   if is_json .release-it.json; then ok ".release-it.json present and valid JSON"; else bad ".release-it.json is not valid JSON"; fi
   if [ -f package.json ] && grep -q '"release"' package.json; then ok "package.json has a release script"; else bad ".release-it.json present but no release script in package.json"; fi
+  # The conventional-changelog plugin writes markdown to whatever `infile` names, extension and
+  # all. An extension-less "CHANGELOG" renders as plain text on GitHub and slips past every
+  # markdown-keyed tool (prettier infers no parser for it, so .prettierignore's CHANGELOG.md entry
+  # never applies). Warn rather than fail: the path is the repo's to choose.
+  INFILE=$(python3 -c "
+import json,sys
+p=json.load(open('.release-it.json')).get('plugins',{}).get('@release-it/conventional-changelog',{})
+print(p.get('infile','') if isinstance(p,dict) else '')" 2> /dev/null)
+  case "$INFILE" in
+    "") : ;;
+    *.md) ok "changelog infile is a markdown path ($INFILE)" ;;
+    *) warn "changelog infile '$INFILE' has no .md extension — the plugin writes markdown, so it renders as plain text and .prettierignore's CHANGELOG.md entry will not match" ;;
+  esac
 else
   warn ".release-it.json absent — release automation not wired (skip if intentional)"
 fi
