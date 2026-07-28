@@ -152,30 +152,72 @@ store what it does.
 
 #### .gitignore
 
-[`assets/gitignore`](assets/gitignore) is the common ignore set — a
-[toptal-generated](https://www.toptal.com/developers/gitignore) baseline for
-node/yarn/python/macOS/Linux/Windows/SonarQube/virtualenv/VS Code — plus a **user-specific** and
-**AI** tail:
+The file is a **generated body plus a constant tail**. The body comes from
+[toptal](https://www.toptal.com/developers/gitignore); the tail is the same on every project.
+
+**Body — regenerate from the API.** Always request this base:
+
+```text
+linux,macos,dotenv,windows,sonarqube,visualstudiocode
+```
+
+then add the templates for each stack the repo actually uses:
+
+| Detected  | Append              |
+| --------- | ------------------- |
+| Node / TS | `node,yarn`         |
+| Python    | `python,virtualenv` |
+
+Concatenate in that order (base, then Node, then Python) and fetch:
+
+```bash
+curl -sS "https://www.toptal.com/developers/gitignore/api/linux,macos,dotenv,windows,sonarqube,visualstudiocode,node,yarn,python,virtualenv"
+```
+
+Only add a stack's templates when that stack is present — a Python-only repo should not carry
+`node_modules/` and the whole yarn Zero-installs block.
+
+**Two patches to re-apply after every regeneration.** Both correct upstream rules that over-match
+in a real repo; a wholesale regeneration silently drops them, so re-apply them before committing:
+
+| Upstream     | Replace with   | Why                                                                                                                                                            |
+| ------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MANIFEST`   | `/MANIFEST`    | setuptools writes `MANIFEST` at the project root. Unanchored — and with `core.ignorecase=true` on macOS — it also swallows any directory named `manifest/`.    |
+| `[Ss]cripts` | `# [Ss]cripts` | The virtualenv template means a venv's `Scripts/` dir, but unanchored it swallows a repo's own `scripts/` — including the `scripts/husky.sh` this skill ships. |
+
+The macOS `Icon` rule ships with trailing `\r`s (the filename genuinely ends in `\r`). Strip them
+when regenerating — `prettier-plugin-sh` parses `.gitignore` and rewrites `Icon\r\r\n` to `Icon\n`,
+so leaving them in makes `prettier --check` fail. Do not expect git to do it for you: the
+`* text=auto eol=lf` in [`assets/gitattributes`](assets/gitattributes) leaves these bytes alone,
+because a lone `\r` makes git treat the line as unconvertible and store it verbatim. Strip the
+`\r`s and nothing else — the blank line that follows is upstream's own, and prettier does not
+collapse it. After that step the file is byte-identical to what the repo's own toolchain produces.
+
+**Tail — identical on every project**, appended after the generated body:
 
 ```gitignore
-# user-specific
-.husky
-.tmp
-
 # AI
 .code-review-graph/
 graphify-out/
 .claude/settings.local.json
+.claude/handoff/.locks/
+.agents/handoff/.locks/
+
+# user-specific
+.husky
+.tmp
 ```
 
-Greenfield (no `.gitignore`): copy the asset wholesale. Existing `.gitignore`: append any missing
-entries — at minimum the user-specific + AI tail — line-merged; never duplicate a line, never drop
-existing entries.
+The AI block must sit **above** any `!`-negation a repo adds for its own fixtures or test data,
+since a negation only takes effect after the rule it re-includes from.
 
-Sibling skills append their own paths rather than routing through this asset, because those paths
-depend on where they installed: `setup-graph-hooks` adds the graph output directories, and
-`setup-handoff` adds its board's `.locks/` directory. Running them after this skill is a no-op on
-the entries already here.
+Greenfield (no `.gitignore`): copy the asset wholesale. Existing `.gitignore`: append any missing
+entries — at minimum the tail — line-merged; never duplicate a line, never drop existing entries.
+
+The tail already carries the sibling skills' paths, so `setup-graph-hooks` (graph output
+directories) and `setup-handoff` (its board's `.locks/`) are a no-op here when they run after this
+skill. They still append their own paths rather than routing through this asset, because a
+non-default install location is theirs to know, not this asset's.
 
 #### .gitattributes
 

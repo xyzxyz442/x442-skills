@@ -1,5 +1,5 @@
-# Created by https://www.toptal.com/developers/gitignore/api/node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
-# Edit at https://www.toptal.com/developers/gitignore?templates=node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
+# Created by https://www.toptal.com/developers/gitignore/api/linux,macos,dotenv,windows,sonarqube,visualstudiocode,node,yarn,python,virtualenv
+# Edit at https://www.toptal.com/developers/gitignore?templates=linux,macos,dotenv,windows,sonarqube,visualstudiocode,node,yarn,python,virtualenv
 
 ### dotenv ###
 .env
@@ -27,7 +27,6 @@
 
 # Icon must end with two \r
 Icon
-
 
 # Thumbnails
 ._*
@@ -449,13 +448,15 @@ $RECYCLE.BIN/
 # and uncomment the following lines
 # .pnp.*
 
-# End of https://www.toptal.com/developers/gitignore/api/node,yarn,linux,macos,dotenv,python,windows,sonarqube,virtualenv,visualstudiocode
-
-# user-specific
-.husky
-.tmp
+# End of https://www.toptal.com/developers/gitignore/api/linux,macos,dotenv,windows,sonarqube,visualstudiocode,node,yarn,python,virtualenv
 
 # AI
 .code-review-graph/
 graphify-out/
 .claude/settings.local.json
+.claude/handoff/.locks/
+.agents/handoff/.locks/
+
+# user-specific
+.husky
+.tmp
