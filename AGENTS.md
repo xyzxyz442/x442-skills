@@ -210,3 +210,38 @@ not "the doc says resolved" — it requires `--verified-by`. `blocked` requires 
 Full protocol: [.agents/handoff/README.md](.agents/handoff/README.md).
 
 <!-- handoff:end -->
+
+<!-- cross-repo-handoff:begin (managed by register-cross-repo-handoff — do not edit between markers) -->
+
+## Cross-repo handoff coordination
+
+This repo coordinates handoffs with its peers on a **shared board** at `../ais/src/.agents/handoff`, in the
+`esbm` section (layout: `subfolder`). Claim before you work; release when you stop — the same
+protocol as a single-repo board, but the board is shared and sub-indexed by group.
+
+Peers in the `esbm` group:
+
+| Repo | Acts-next name (`audience:`) | What lives there |
+| ---- | --------------------------- | ---------------- |
+| `etl-postpaid-data` | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL |
+| `etl-prepaid-voice` | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL |
+| `fecs` | `esbm-esb-file-based-event-conversion-service` | FECS — Kafka consumer writing event payloads to NAS/Blob |
+| `x442-skills` ← this repo | `x442-skills` | agent skills — owns the porting/migration handoffs |
+
+**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`, `esbm-esb-file-based-event-conversion-service`.** File a handoff for another repo with its acts-next name:
+
+```text
+../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity low|medium|high
+../ais/src/.agents/handoff/handoff list      # shows only the esbm section
+../ais/src/.agents/handoff/handoff claim <id> "what you're doing"
+```
+
+Your session board and the edit gate are scoped to the `esbm` section, so you only see and
+lease this group's handoffs; other groups on the board are isolated. Do not edit a doc you do not
+hold the lease for. Handoff docs are committed to git history — never paste secrets, keys, or PII.
+
+Scope comes from the `.handoff-repos.json` cascade (user → workspace → subdirectory, nearest wins).
+After editing it, re-run `sync-cross-repo-handoff.sh` so this block, the board wiring, and the
+sub-indexes agree.
+
+<!-- cross-repo-handoff:end -->

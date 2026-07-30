@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .agents/handoff/scripts/hooks.sh --kind sessionstart --tool copilot"
+            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash ../ais/src/.agents/handoff/scripts/hooks.sh --kind sessionstart --tool copilot"
           }
         ]
       }
@@ -15,10 +15,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .agents/handoff/scripts/hooks.sh --kind posttool-edit --tool copilot"
+            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash ../ais/src/.agents/handoff/scripts/hooks.sh --kind posttool-edit --tool copilot"
           }
         ],
         "matcher": "Edit|Write|MultiEdit"
+      }
+    ],
+    "preToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash ../ais/src/.agents/handoff/scripts/hooks.sh --kind pretool-edit --tool copilot"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
+      }
+    ],
+    "agentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash ../ais/src/.agents/handoff/scripts/hooks.sh --kind stop --tool copilot"
+          }
+        ]
       }
     ]
   }
