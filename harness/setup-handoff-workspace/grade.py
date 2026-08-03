@@ -189,6 +189,52 @@ def grade_script_behavior(target):
                             not marker.exists(),
                             f"marker present: {marker.exists()}; stdout: {r.stdout.strip()[:100]!r}"))
 
+    # ...and WITH the opt-in it runs — the path that proves a quoted command survives to the shell.
+    # Before meta() stripped quotes, this failed with "command not found: \"sh -c '...'\"", so a
+    # command could be valid YAML or runnable but never both.
+    # The doc is left exactly as `new` writes it, `repos: []` included: that empty list is what
+    # doc_is_local() used to read as "belongs to another repo", making --run-verify unreachable
+    # for every doc the CLI creates.
+    (Path(target) / ".agents/handoff/config").write_text(
+        (Path(target) / ".agents/handoff/config").read_text() + "HANDOFF_ALLOW_VERIFY_CMD=1\n")
+    _handoff(target, "new", "vr", "--title", "Verify runs")
+    vr = doc / "vr-handoff.md"
+    marker2 = Path(target) / "VERIFY_RAN_OPTIN"
+    cmd2 = f"""sh -c 'echo ran: yes > {marker2}'"""
+    vr.write_text(vr.read_text().replace("status: open", f'status: open\nverify: "{cmd2}"', 1))
+    e.append(gc.expectation("test setup: the doc carries the template's default empty repos list",
+                            "repos: []" in vr.read_text(),
+                            f"repos line: {[ln for ln in vr.read_text().splitlines() if ln.startswith('repos')]}"))
+    _handoff(target, "claim", "vr")
+    r = _handoff(target, "release", "vr", "--status", "done", "--verified-by", "z",
+                 "--run-verify", allow_verify=True)
+    e.append(gc.expectation("a QUOTED verify: command runs verbatim under the opt-in (quotes stripped)",
+                            r.returncode == 0 and marker2.is_file()
+                            and marker2.read_text().strip() == "ran: yes",
+                            f"exit {r.returncode}; marker: {marker2.is_file()}; "
+                            f"stdout: {r.stdout.strip()[:100]!r}; stderr: {r.stderr.strip()[:100]!r}"))
+    e.append(gc.expectation("the verify: run is recorded in verified_by",
+                            "[verify: exit 0]" in r.stdout, f"stdout: {r.stdout.strip()[:140]!r}"))
+
+    # The gate is a security boundary: a doc scoped to OTHER repos is untrusted and must never
+    # auto-execute. Block-list syntax is the case that used to fail OPEN — meta() only reads the
+    # key's own line, so `repos:` followed by `- other-repo` looked like "unset", i.e. local.
+    for hid, repos_yaml, label in (("vf", "repos: [some-other-repo]", "flow list"),
+                                   ("vb", "repos:\n  - some-other-repo", "block list")):
+        _handoff(target, "new", hid, "--title", f"Foreign {label}")
+        fdoc = doc / f"{hid}-handoff.md"
+        fmark = Path(target) / f"VERIFY_FOREIGN_{hid}"
+        fcmd = f"""sh -c 'echo ran > {fmark}'"""
+        fdoc.write_text(fdoc.read_text()
+                        .replace("repos: []", repos_yaml, 1)
+                        .replace("status: open", f'status: open\nverify: "{fcmd}"', 1))
+        _handoff(target, "claim", hid)
+        r = _handoff(target, "release", hid, "--status", "done", "--verified-by", "z",
+                     "--run-verify", allow_verify=True)
+        e.append(gc.expectation(f"verify: is REFUSED for a doc scoped to another repo ({label})",
+                                not fmark.exists() and "was NOT run" in r.stdout,
+                                f"marker present: {fmark.exists()}; stdout: {r.stdout.strip()[:120]!r}"))
+
     # --- handoff types: standalone/isolated is gate-exempt --------------------------------
     _handoff(target, "new", "refdoc", "--standalone", "--title", "Reference")
     refdoc = doc / "refdoc-handoff.md"

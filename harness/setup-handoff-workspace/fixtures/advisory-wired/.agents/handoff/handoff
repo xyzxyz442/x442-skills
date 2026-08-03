@@ -995,12 +995,44 @@ cmd_release() {
   cmd_index
 }
 
-doc_is_local() { # a doc "belongs to" this repo when repos: is unset or names REPO_NAME
+# The effective `repos:` list — the inline flow list AND any block-list items on the lines after
+# it, normalized to space-separated names. meta() only ever sees the key's own line, so a doc
+# written in block style
+#
+#   repos:
+#     - other-repo
+#
+# reads as EMPTY there, i.e. "unset", i.e. local — the gate below failing OPEN for exactly the
+# foreign doc it exists to distrust. Returns nothing when the key is absent or its list is empty.
+repos_of() { # path -> space-separated repo names
+  awk '
+    NR == 1 && $0 == "---" { infm = 1; next }
+    infm && $0 == "---" { exit }
+    infm && /^repos:/ {
+      v = $0; sub(/^repos:[[:space:]]*/, "", v)
+      gsub(/[][,]/, " ", v)
+      printf "%s ", v
+      inlist = 1; next
+    }
+    infm && inlist && /^[[:space:]]+-[[:space:]]*/ {
+      v = $0; sub(/^[[:space:]]+-[[:space:]]*/, "", v)
+      printf "%s ", v; next
+    }
+    infm && /^[^[:space:]]/ { inlist = 0 }
+  ' "$1"
+}
+
+doc_is_local() { # a doc "belongs to" this repo when repos: is unset/empty or NAMES REPO_NAME
   local f="$1" repos
-  repos="$(meta "$f" repos)"
+  # `repos: []` is what the doc template writes, and an empty list means "unset" — not "some
+  # other repo's list". Testing the raw string treated the two characters "[]" as a foreign
+  # list, which made --run-verify unreachable for every doc `new` creates.
+  repos="$(repos_of "$f" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//')"
   [ -z "$repos" ] && return 0
   [ -z "$REPO_NAME" ] && return 0
-  case "$repos" in *"$REPO_NAME"*) return 0 ;; *) return 1 ;; esac
+  # Whole-name match, not substring: with REPO_NAME=api, a doc scoped to `[api-gateway]` is NOT
+  # this repo's, and must not unlock auto-execution here.
+  case " $repos " in *" $REPO_NAME "*) return 0 ;; *) return 1 ;; esac
 }
 
 surface_unblocked() { # closed_id -> print any open docs (in this section) blocked_on it
