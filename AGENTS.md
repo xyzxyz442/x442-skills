@@ -225,10 +225,9 @@ Peers in the `esbm` group:
 | ---- | --------------------------- | ---------------- |
 | `etl-postpaid-data` | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL |
 | `etl-prepaid-voice` | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL |
-| `fecs` | `esbm-esb-file-based-event-conversion-service` | FECS — Kafka consumer writing event payloads to NAS/Blob |
 | `x442-skills` ← this repo | `x442-skills` | agent skills — owns the porting/migration handoffs |
 
-**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`, `esbm-esb-file-based-event-conversion-service`.** File a handoff for another repo with its acts-next name:
+**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name:
 
 ```text
 ../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity low|medium|high
