@@ -15,6 +15,22 @@ TIER="$(bash "$HERE/embed-provider.sh" --tier 2> /dev/null | head -1)"
 SCOPE="$SCOPE" TIER="$TIER" python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
+
+# Status-probe open: plain ro first (the only variant correct on a WAL graph — immutable=1 ignores
+# the -wal and would report a freshly built graph as empty), immutable=1 only as a fallback for a
+# database needing journal rollback, where a read-only open raises CANTOPEN. The refresh writes on
+# every turn and every commit, so that case is routine, not rare.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 crg = os.path.exists(".code-review-graph/graph.db")
 gfy = os.path.exists("graphify-out/graph.json")
 # In-scope sibling repos this repo may read (empty unless register-cross-repo-graph has run).
@@ -25,7 +41,7 @@ stats, lines = [], []
 if crg or gfy or siblings:
     if crg:
         try:
-            c = sqlite3.connect("file:.code-review-graph/graph.db?mode=ro", uri=True)
+            c = probe_connect(".code-review-graph/graph.db")
             n = c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
             e = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
             c.close()

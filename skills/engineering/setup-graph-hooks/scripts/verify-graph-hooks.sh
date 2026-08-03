@@ -47,8 +47,25 @@ check_embeddings() {
   read -r EMB NODES EPROV <<< "$(
     python3 - << 'PY' 2> /dev/null
 import sqlite3
+
+
+# Status-probe open: plain ro first (the only variant correct on a WAL graph — immutable=1 ignores
+# the -wal), immutable=1 only as a fallback for a database needing journal rollback, where a
+# read-only open raises CANTOPEN and this check would misreport keyword mode on a repo full of
+# live vectors.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 try:
-    c = sqlite3.connect("file:.code-review-graph/graph.db?mode=ro", uri=True, timeout=2)
+    c = probe_connect(".code-review-graph/graph.db")
     nodes = c.execute("SELECT count(*) FROM nodes WHERE kind!='File'").fetchone()[0]
     emb = c.execute("SELECT count(*) FROM embeddings").fetchone()[0]
     row = c.execute("SELECT provider FROM embeddings GROUP BY provider "
@@ -120,7 +137,9 @@ GH=""
 [ -f .husky/post-commit ] && GH=.husky/post-commit
 [ -z "$GH" ] && [ -f .git/hooks/post-commit ] && GH=.git/hooks/post-commit
 if [ -n "$GH" ]; then grep -q 'graph-hooks-managed' "$GH" 2> /dev/null && ok "post-commit installed: $GH" || warn "post-commit exists but no managed marker: $GH"; else warn "no post-commit hook — commit-time refresh won't run"; fi
-for e in ".code-review-graph/" "graphify-out/"; do grep -qxF "$e" .gitignore 2> /dev/null && ok ".gitignore excludes $e" || warn ".gitignore missing $e"; done
+# tr -d '\r' first: a CRLF .gitignore stores ".code-review-graph/\r", which no whole-line match
+# equals, so this warned "missing" on repos that excluded it correctly.
+for e in ".code-review-graph/" "graphify-out/"; do tr -d '\r' < .gitignore 2> /dev/null | grep -qxF "$e" && ok ".gitignore excludes $e" || warn ".gitignore missing $e"; done
 
 echo
 echo "2. Wired tools + config validity"

@@ -37,8 +37,36 @@ recorded_provider() {
   [ -f "$DB" ] || return 0
   python3 - "$DB" << 'PY' 2> /dev/null
 import sqlite3, sys
+
+
+# Open the graph for a STATUS PROBE, degrading only as far as necessary.
+#
+# Plain mode=ro is tried first and is what almost always answers. It is kept first because it is
+# the only one that is correct on a WAL database: immutable=1 tells SQLite the file cannot change,
+# so it ignores the -wal file entirely and reports whatever was last checkpointed — on a freshly
+# built graph that can be zero rows, or no tables at all.
+#
+# immutable=1 is the fallback for the one case ro cannot serve: a database needing journal
+# rollback. CRG writes graph.db in `delete` journal mode on some repos, and SQLite refuses a
+# read-only connection against a hot journal (CANTOPEN) — the refresh is exactly such a writer and
+# runs every turn and every commit. immutable skips locking and recovery, so the probe answers
+# from the main file instead of failing into the caller's except and reporting "no vectors".
+#
+# The sqlite_master read forces the open/recovery path, so a failure surfaces here where it can be
+# retried rather than at the first real query.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 try:
-    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
+    c = probe_connect(sys.argv[1])
     row = c.execute(
         "SELECT provider FROM embeddings GROUP BY provider ORDER BY count(*) DESC LIMIT 1"
     ).fetchone()
@@ -65,8 +93,23 @@ recorded_tier() {
   python3 - "$DB" << 'PY' 2> /dev/null || printf 'keyword\n'
 import sqlite3, sys
 from urllib.parse import urlparse
+
+
+# See recorded_provider above: ro first (correct on WAL), immutable=1 only when a hot rollback
+# journal makes a read-only open impossible.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 try:
-    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
+    c = probe_connect(sys.argv[1])
     row = c.execute(
         "SELECT provider, count(*) FROM embeddings GROUP BY provider "
         "ORDER BY count(*) DESC LIMIT 1"

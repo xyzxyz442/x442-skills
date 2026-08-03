@@ -141,8 +141,13 @@ fi
 
 # ---- Layer 1: .gitignore (idempotent) --------------------------------------------------
 touch .gitignore
+# Strip CR before comparing: `grep -qxF` is a whole-line match, so on a repo whose .gitignore has
+# CRLF endings the stored line is ".code-review-graph/\r" and never equals the needle — the check
+# misses and every re-run appends another LF duplicate. (Git itself ignores the CR, so the existing
+# entries always worked; the bug is accretion, not a broken ignore.) A .vscode/settings.json with
+# "files.eol": "\r\n" is enough to produce one.
 for entry in ".code-review-graph/" "graphify-out/" ".claude/settings.local.json"; do
-  grep -qxF "$entry" .gitignore 2> /dev/null || printf '%s\n' "$entry" >> .gitignore
+  tr -d '\r' < .gitignore 2> /dev/null | grep -qxF "$entry" || printf '%s\n' "$entry" >> .gitignore
 done
 echo "  = .gitignore ensured"
 
