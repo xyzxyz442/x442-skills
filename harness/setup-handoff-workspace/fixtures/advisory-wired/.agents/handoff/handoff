@@ -315,13 +315,17 @@ norm_id() {
 # what norm_id did before ids were slugified, and it is the only thing legacy_id is for.
 legacy_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
 
-# Titles land in the doc as unquoted YAML (`title: <value>`), so a ":" inside the value turns the
-# line into a nested mapping and breaks every frontmatter parser that reads the doc (markdown
-# preview, external tooling). Quoting the value instead would leak literal quotes through meta()'s
-# plain-sed readers (list, INDEX, hooks), so the colon is folded to the board's em-dash convention:
-# "Handoff: auth suite" → "Handoff — auth suite". Applied wherever a title enters a doc — --title
-# on new/import and import's H1-derived fallback.
-norm_title() {
+# Free-text frontmatter values land in the doc as unquoted YAML (`key: <value>`), so a ":" inside
+# the value turns the line into a nested mapping and breaks every frontmatter parser that reads the
+# doc (markdown preview, external tooling). Quoting the value instead would leak literal quotes
+# through meta()'s plain-sed readers (list, INDEX, hooks), so the colon is folded to the board's
+# em-dash convention: "Handoff: auth suite" → "Handoff — auth suite".
+#
+# Applied to every frontmatter value that carries arbitrary user text: title (--title on new/import
+# and import's H1-derived fallback), note (--note), audience, severity, and the "external: ..."
+# blocked_on escape hatch. Not applied to ids/children (norm_id slugifies those) nor to the trailing
+# release note, which lands in the body's Activity log where a colon is harmless.
+fold_colons() {
   printf '%s' "$1" | sed \
     -e 's/[[:space:]]*:[[:space:]]*/ — /g' \
     -e 's/[[:space:]]\{1,\}/ /g' \
@@ -467,8 +471,13 @@ cmd_new() {
   id="$(norm_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   [ -f "$(doc_file "$id")" ] || [ -f "$(arch_file "$id")" ] && die "$id already exists"
   [ -n "$title" ] || title="$id"
-  title="$(norm_title "$title")"
+  title="$(fold_colons "$title")"
   [ -n "$title" ] || title="$id"
+  # Every other free-text value goes into frontmatter unquoted too, so fold them here — once,
+  # before any branch — rather than in each of the three type branches and their heredoc fallbacks.
+  note="$(fold_colons "$note")"
+  audience="$(fold_colons "$audience")"
+  severity="$(fold_colons "$severity")"
   local d target
   d="$(today)"
   target="$(doc_file "$id")"
@@ -650,8 +659,10 @@ cmd_import() {
   # title: --title, else the first markdown H1, else the id
   [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
   [ -n "$title" ] || title="$id"
-  title="$(norm_title "$title")"
+  title="$(fold_colons "$title")"
   [ -n "$title" ] || title="$id"
+  note="$(fold_colons "$note")"
+  severity="$(fold_colons "$severity")"
   local d dest
   d="$(today)"
   dest="$(doc_file "$id")"
@@ -905,8 +916,14 @@ cmd_release() {
 
   if [ "$status" = "blocked" ]; then
     [ -n "$blocked_on" ] || die "release --status blocked needs --blocked-on <handoff-id|\"external: ...\"> — what is it waiting on?"
-    # A handoff id blocker is canonicalized to its filename stem; "external: ..." is left as-is
-    # (that prefix exists precisely for blockers outside the board, which cannot be validated here).
+    # A handoff id blocker is canonicalized to its filename stem; "external: ..." is accepted
+    # unvalidated (that prefix exists precisely for blockers outside the board, which cannot be
+    # validated here) but is still colon-folded on the way in, since it lands in frontmatter as
+    # unquoted YAML: "external: vendor ticket" is stored as "external — vendor ticket". The typed
+    # spelling stays "external: ..." — that is what every doc and the usage string say — and the
+    # em-dash spelling is accepted too, so either form round-trips. No reader depends on the colon:
+    # the hooks take only the first word (${bo%% *} — "external", never an archived id),
+    # surface_unblocked substring-matches the closed id, and list/INDEX only display the value.
     # A blocker names another doc on this board, so resolve it the same way as a claim target —
     # otherwise a legacy-named blocker would be recorded under a slug that matches no file.
     #
@@ -914,7 +931,7 @@ cmd_release() {
     # doc; an unvalidated blocker deadlocks silently — the doc sits blocked forever and is never
     # surfaced as unblocked, which is worse than refusing the release outright.
     case "$blocked_on" in
-      external:*) ;;
+      external:* | 'external —'* | 'external -'*) blocked_on="$(fold_colons "$blocked_on")" ;;
       *)
         blocked_on="$(resolve_id "$blocked_on")" || die "unusable --blocked-on id: '$blocked_on'"
         [ "$blocked_on" = "$id" ] && die "$id cannot be blocked on itself — name the other handoff, or use --blocked-on \"external: ...\""

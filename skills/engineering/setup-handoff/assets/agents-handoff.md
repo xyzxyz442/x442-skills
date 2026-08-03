@@ -22,7 +22,8 @@ PLACEHOLDER_HANDOFF_DIR/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
 Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
-an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway.
+an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway, in
+`--title`, `--note`, `--audience`, `--severity`, and `--blocked-on`.
 
 Handoffs have a **type**. The default is `coordination` (the claim/release work item above). A
 `standalone` handoff is a self-contained reference/knowledge doc (porting guide, eval report,

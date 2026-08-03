@@ -190,7 +190,8 @@ will not finish here (SEVERITY is low, medium, or high):
 ```
 
 Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
-an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway.
+an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway, in
+`--title`, `--note`, `--audience`, `--severity`, and `--blocked-on`.
 
 Handoff docs are **committed to the repo and its git history** — never paste keys, secrets,
 passwords, or PII into one. Redact them; if the next agent needs a credential, prompt the user and

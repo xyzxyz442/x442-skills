@@ -80,6 +80,29 @@ def _force_expiry(target, hid, epoch="100"):
     f.write_text("\n".join(lines) + "\n")
 
 
+def _fm_colon_offenders(path):
+    """Frontmatter lines whose unquoted value carries a bare ':' — i.e. invalid YAML.
+
+    The CLI writes every frontmatter value unquoted (`key: value`), so a ':' inside a value
+    reopens the line as a nested mapping and every parser that reads the doc rejects it —
+    markdown preview included. There is no yaml module here (the harness is dependency-free
+    by design), so match the shape the CLI can actually emit instead of parsing.
+    """
+    text = path.read_text()
+    if not text.startswith("---\n"):
+        return []
+    bad = []
+    for line in text.split("\n---", 1)[0].splitlines()[1:]:
+        if ":" not in line:
+            continue
+        val = line.split(":", 1)[1].strip()
+        if val[:1] in ("'", '"', "[", "{"):  # quoted or a flow collection — parses fine
+            continue
+        if ":" in val:
+            bad.append(f"{path.name}: {line}")
+    return bad
+
+
 def grade_script_behavior(target):
     e = []
     doc = Path(target) / HD
@@ -294,6 +317,12 @@ def grade_script_behavior(target):
     ci = (doc / "colon-import-handoff.md").read_text()
     e.append(gc.expectation("import folds a ':' in the H1-derived title too",
                             "title: Guide — ports" in ci, f"frontmatter: {ci[:120]!r}"))
+    # `note:` is the other free-text value new/import write into frontmatter unquoted
+    _handoff(target, "new", "cn", "--title", "Colon note", "--note", "see: foo")
+    cn = (doc / "cn-handoff.md").read_text()
+    e.append(gc.expectation("a ':' in --note is folded to an em dash",
+                            "note: see — foo" in cn and "note: see:" not in cn,
+                            f"frontmatter: {cn[:160]!r}"))
 
     # --- --blocked-on is validated: an unclosable blocker deadlocks silently ---------------
     _handoff(target, "new", "bo1", "--title", "Blocked one")
@@ -307,10 +336,19 @@ def grade_script_behavior(target):
     r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "bo1")
     e.append(gc.expectation("blocked on ITSELF is REFUSED", r.returncode != 0,
                             f"exit {r.returncode}: {r.stderr.strip()[:110]}"))
+    # "external: ..." stays the documented spelling to TYPE — but it lands in frontmatter as
+    # unquoted YAML, so the value is folded on the way in and stored as "external — ...".
     r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "external: vendor ticket")
-    e.append(gc.expectation("an external: blocker is still accepted unvalidated",
-                            r.returncode == 0 and "external: vendor ticket" in (doc / "bo1-handoff.md").read_text(),
+    e.append(gc.expectation("an external: blocker is still accepted unvalidated, stored colon-free",
+                            r.returncode == 0
+                            and "blocked_on: external — vendor ticket" in (doc / "bo1-handoff.md").read_text(),
                             f"exit {r.returncode}"))
+    _handoff(target, "claim", "bo1")
+    r = _handoff(target, "release", "bo1", "--status", "blocked", "--blocked-on", "external — em dash blocker")
+    e.append(gc.expectation("the already-folded em-dash spelling of an external blocker is accepted too",
+                            r.returncode == 0
+                            and "blocked_on: external — em dash blocker" in (doc / "bo1-handoff.md").read_text(),
+                            f"exit {r.returncode}: {r.stderr.strip()[:110]}"))
     # a standalone doc IS a legal blocker, and retiring it must announce the dependent — the retire
     # path is newer than the unblock feature and originally skipped surface_unblocked entirely
     _handoff(target, "claim", "bo2")
@@ -370,6 +408,13 @@ def grade_script_behavior(target):
     e.append(gc.expectation("bundle closes once every child is done",
                             r.returncode == 0 and (doc / "archive/bundle-handoff.md").is_file(),
                             f"exit {r.returncode}; archived: {(doc / 'archive/bundle-handoff.md').is_file()}"))
+
+    # Catch-all over everything this suite produced: no field-by-field expectation can cover a
+    # value the CLI learns to write later, and one bad line breaks the whole doc for every parser.
+    offenders = sorted(o for p in [*doc.glob("*-handoff.md"), *(doc / "archive").glob("*-handoff.md")]
+                       for o in _fm_colon_offenders(p))
+    e.append(gc.expectation("every doc this suite wrote has YAML-safe frontmatter (no bare ':' in a value)",
+                            not offenders, f"offenders: {offenders[:3]}"))
     return e
 
 
