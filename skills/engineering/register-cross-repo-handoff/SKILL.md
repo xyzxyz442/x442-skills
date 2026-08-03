@@ -135,6 +135,12 @@ a shared board never collide, and ids may repeat across groups without clashing.
 - **Secrets.** Handoff docs are committed to git history — never paste keys, secrets, or PII; record
   a name and supply the value out of band.
 
+## Usage record
+
+[docs/cross-repo-handoff-usage-record.md](../../../docs/cross-repo-handoff-usage-record.md) records a
+real four-repo install on a shared board — the manifest used, the hook commands generated, the
+subfolder/prefix path table, how several groups stay isolated on one board, and the gotchas found.
+
 ## Verification harness
 
 `harness/register-cross-repo-handoff-workspace/` stands up a fixture workspace (groups sub-indexed

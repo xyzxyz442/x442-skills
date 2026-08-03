@@ -174,6 +174,12 @@ In cross-repo topology the shared board lives outside each repo. The installer w
 installer in each sibling so every one is wired. `audience` (which repo acts next) is what keeps a
 backend and a frontend agent apart — the lock only settles the genuine both-repos race.
 
+For a whole fleet — several repos, or several **groups** of repos sub-indexed on one shared board —
+drive this installer from a manifest with
+[`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md) instead of running it by
+hand per repo; a worked install is recorded in
+[docs/cross-repo-handoff-usage-record.md](../../../docs/cross-repo-handoff-usage-record.md).
+
 **Per-repo identity (shared board).** The shared `config` is repo-neutral — it carries no
 `REPO_NAME`, so no sibling's install clobbers another's identity. Each consuming repo's identity is
 baked into its **own** hook command as `HANDOFF_REPO=<repo>` (plus `HANDOFF_HDPATH` so the
