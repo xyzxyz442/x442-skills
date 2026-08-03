@@ -175,10 +175,13 @@ def grade_script_behavior(target):
     # verify: safe-by-default — a doc's verify: command is NOT executed without opt-in
     _handoff(target, "new", "vt", "--title", "Verify task")
     # inject a verify: command that leaves a marker FILE only if actually executed
-    # (printing the command text must NOT count as running it)
+    # (printing the command text must NOT count as running it). It is QUOTED and carries a ':',
+    # like any real command: unquoted it would break the doc's YAML, and quoting only works
+    # because meta() strips one surrounding pair.
     vt = doc / "vt-handoff.md"
     marker = Path(target) / "VERIFY_RAN"
-    txt = vt.read_text().replace("status: open", f"status: open\nverify: touch {marker}", 1)
+    cmd = f"""sh -c 'echo ran: yes > {marker}'"""
+    txt = vt.read_text().replace("status: open", f'status: open\nverify: "{cmd}"', 1)
     vt.write_text(txt)
     _handoff(target, "claim", "vt")
     r = _handoff(target, "release", "vt", "--status", "done", "--verified-by", "z", "--run-verify")

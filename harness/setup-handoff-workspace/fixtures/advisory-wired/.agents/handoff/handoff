@@ -198,8 +198,17 @@ no_such() { # id -> never returns; the shared unresolvable-id error for claim/re
   die "no such handoff: $1 (try: handoff list)${near:+ — did you mean: $near}"
 }
 
-meta() { # path key -> value from YAML frontmatter
-  sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1
+# One SURROUNDING quote pair is stripped, because a value that must survive as YAML has to be
+# quoted and every consumer here wants the bare text. `verify:` is the field that forces this: it
+# holds a shell command, so it always contains a ':' and — unlike every other field — cannot be
+# colon-folded without corrupting the command, leaving quoting as the only way to keep the doc
+# parseable. Without the strip, an author quoting it correctly gets `eval "\"cmd\""` → "command not
+# found", i.e. the two requirements (valid YAML / runnable command) were mutually exclusive.
+# The `t` branches after a successful double-quote strip so `"'x'"` loses one pair, not both.
+# Unquoted values pass through untouched, so docs written before this keep working.
+meta() { # path key -> value from YAML frontmatter, minus one surrounding quote pair
+  sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1 \
+    | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
 }
 
 # Update a frontmatter key in place, or insert it before the closing --- if absent.

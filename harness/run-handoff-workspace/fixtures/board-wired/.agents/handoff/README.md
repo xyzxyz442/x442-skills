@@ -111,7 +111,7 @@ content verbatim.
 | `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`).                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
 | `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                                                                                                                                                                                                                                         |
-| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
 
 ## Shared (cross-repo) board: per-repo identity
 
@@ -157,6 +157,18 @@ A doc may carry a `verify:` command as a machine gate for `done`. Because a cros
 automatically**. `release --status done` prints it and relies on `--verified-by`. Auto-execution
 requires BOTH `--run-verify` on the command line AND the install-time opt-in
 `HANDOFF_ALLOW_VERIFY_CMD=1`, and even then only for a doc whose `repos:` names this repo.
+
+**Quote the command.** It is the one field the colon fold does not apply to — folding would
+corrupt the command itself — so a command containing `:` (nearly all of them do) must be quoted
+or the doc stops being valid YAML:
+
+```yaml
+verify: "sqlite3 'file:graph.db?mode=ro' 'select count(*) from embeddings;'"
+```
+
+Readers strip one surrounding quote pair, so the command still reaches the shell verbatim. An
+unquoted command keeps working, but only for tools that read frontmatter the way this board does;
+a strict parser (markdown preview included) rejects the whole doc.
 
 ## Layout
 

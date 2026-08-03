@@ -148,6 +148,10 @@ automatically** — a cross-repo doc is untrusted. `release --status done` print
 pass `--verified-by`. Only re-release with `--run-verify` if the install opted in
 (`HANDOFF_ALLOW_VERIFY_CMD=1`) and the doc is local to this repo.
 
+**Quote the command** — `verify: "sqlite3 'file:x?mode=ro' 'select 1;'"`. It is the one field
+whose colons are not folded (that would corrupt the command), so an unquoted one breaks the doc's
+YAML. Readers strip one surrounding quote pair, so the command still runs verbatim.
+
 ## Anti-patterns
 
 - Editing a doc or its code without claiming → the hook denies it; claim first.

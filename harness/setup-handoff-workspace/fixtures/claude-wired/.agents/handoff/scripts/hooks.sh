@@ -98,7 +98,12 @@ LOCKS="$(sec_dir)/.locks"
 
 PAYLOAD="$(cat)"
 
-meta() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
+# Strips one surrounding quote pair, matching the CLI's meta() — a quoted value (see the `verify:`
+# field, which must be quoted to stay valid YAML) has to read the same in the hooks as in the tool.
+meta() {
+  sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1 \
+    | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
+}
 lock_session() { sed -n 's/^session=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_owner() { sed -n 's/^owner=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_expires() { sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null || echo 0; }
