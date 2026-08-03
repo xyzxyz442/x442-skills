@@ -600,6 +600,27 @@ def grade_grouped_board(_target):
                                   env={**os.environ, "HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}).stdout
             e.append(gc.expectation(f"{tag} the edit gate denies a stranger editing a claimed section doc",
                                     '"permissionDecision": "deny"' in deny, f"out: {deny[:120]!r}"))
+
+            # --blocked-on must resolve within the SECTION. Validating against the board root (which
+            # holds no docs under either layout) rejected every blocker, making `blocked` unreachable
+            # on a grouped board and pushing everyone onto the "external:" escape hatch, which opts
+            # out of the unblock notification entirely.
+            newdoc("auth", "blk", "Blocker")
+            newdoc("auth", "dep", "Dependent")
+            newdoc("infra", "otherblk", "Other-section blocker")
+            aenv = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}
+            r = sh(["bash", str(ho), "release", "dep", "--status", "blocked", "--blocked-on", "blk"], board, aenv)
+            e.append(gc.expectation(f"{tag} --blocked-on resolves a blocker inside the section",
+                                    r.returncode == 0, f"exit {r.returncode}: {r.stderr.strip()[:120]}"))
+            r = sh(["bash", str(ho), "release", "dep", "--status", "blocked", "--blocked-on", "nope-not-real"], board, aenv)
+            e.append(gc.expectation(f"{tag} --blocked-on still refuses a blocker that does not exist",
+                                    r.returncode != 0, f"exit {r.returncode}"))
+            r = sh(["bash", str(ho), "release", "dep", "--status", "blocked", "--blocked-on", "otherblk"], board, aenv)
+            e.append(gc.expectation(f"{tag} --blocked-on refuses a blocker in another section",
+                                    r.returncode != 0, f"exit {r.returncode}"))
+            r = sh(["bash", str(ho), "release", "blk", "--status", "done", "--verified-by", "grader"], board, aenv)
+            e.append(gc.expectation(f"{tag} closing the blocker surfaces the dependent as unblocked",
+                                    "Now unblocked" in r.stdout, f"out: {r.stdout[-160:]!r}"))
         return e
     finally:
         shutil.rmtree(base, ignore_errors=True)

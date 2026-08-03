@@ -918,7 +918,11 @@ cmd_release() {
       *)
         blocked_on="$(resolve_id "$blocked_on")" || die "unusable --blocked-on id: '$blocked_on'"
         [ "$blocked_on" = "$id" ] && die "$id cannot be blocked on itself — name the other handoff, or use --blocked-on \"external: ...\""
-        [ -f "$DIR/$blocked_on.md" ] || [ -f "$DIR/archive/$blocked_on.md" ] \
+        # Section-aware: the blocker lives wherever THIS section's docs live. Building the path at
+        # the board root instead (which this check used to do, from before boards had sections)
+        # looks in a directory that holds no docs on a subfolder-layout board, so every blocker id
+        # is rejected and `blocked` becomes unreachable on any grouped board.
+        [ -f "$(doc_file "$blocked_on")" ] || [ -f "$(arch_file "$blocked_on")" ] \
           || die "no such handoff to block on: $blocked_on (file it first, or use --blocked-on \"external: ...\"). Nothing would ever close it."
         ;;
     esac
@@ -974,13 +978,19 @@ doc_is_local() { # a doc "belongs to" this repo when repos: is unset or names RE
 }
 
 surface_unblocked() { # closed_id -> print any open docs (in this section) blocked_on it
-  local closed="$1" found=0 g gb
+  local closed="$1" closed_lc found=0 g gb
+  # Match case-insensitively. resolve_id returns whichever spelling the filesystem answered to:
+  # the canonical lowercase slug where a case-insensitive filesystem let it match an uppercase
+  # file, the file's own spelling where the legacy fallback found it. So a doc blocked on
+  # ESBINT-285-handoff can carry either spelling depending on where it was written, and an exact
+  # compare silently strands it — never resurfaced, which is the one thing `blocked` exists to do.
+  closed_lc="$(printf '%s' "$closed" | tr '[:upper:]' '[:lower:]')"
   while IFS= read -r g; do
     [ -n "$g" ] || continue
     gb="$(basename "$g" .md)"
     case "$gb" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
     [ "$(meta "$g" status)" = "blocked" ] || continue
-    case "$(meta "$g" blocked_on)" in *"$closed"*)
+    case "$(meta "$g" blocked_on | tr '[:upper:]' '[:lower:]')" in *"$closed_lc"*)
       [ "$found" = 0 ] && echo "Now unblocked (their blocker $closed is done):"
       found=1
       echo "  - $gb — $(meta "$g" title)"
