@@ -2,9 +2,9 @@
 id: cross-repo-refactor-eval-report-handoff
 title: Evaluation report — cross-repo graph hooks — freshness gate, caller-edge answers, loop-closing
 type: standalone
-status: open
+status: done
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-08-04
 note:
 ---
 
@@ -14,7 +14,8 @@ note:
 **Branch:** `feature/skill-eval-harness`
 **Scope evaluated:** C1 (freshness gate), C2 (caller-edge answers), C3 (close the sibling-refresh
 loop), F3 (docs: no cross-repo blast radius). Companion to
-[`cross-repo-refactor-safety-handoff.md`](cross-repo-refactor-safety-handoff.md).
+[`cross-repo-refactor-safety-handoff.md`](archive/cross-repo-refactor-safety-handoff.md) (retired
+2026-08-04 — every change it designed is now in the live code; this report is the record of that).
 
 All results below are measured, not asserted. The lab is the two-repo refactor simulation from the
 handoff §4: `acme-lib` (defines `compute_invoice_total`, called in-library by `billing.py`) and a
@@ -163,3 +164,7 @@ throwaway — CRG's registry is machine-global. Burn the once-per-hour allowance
 steady-state deny/advise behavior (handoff §4 gotcha). For C3b, staleness is driven by the git
 **commit time** (`git log -1 --format=%ct`) vs the `graph.db` mtime — backdate the db below the commit
 time, do not just `touch .git/HEAD`.
+
+## Activity
+
+- 2026-08-04 — retired (standalone) by Gunn Bhatrakarn (7e8142fa).

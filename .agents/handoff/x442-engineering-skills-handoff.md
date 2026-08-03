@@ -4,7 +4,7 @@ title: Handoff — x442-skills engineering suite
 type: standalone
 status: open
 created: 2026-07-20
-updated: 2026-08-03
+updated: 2026-08-04
 note:
 ---
 
@@ -74,9 +74,17 @@ Read this first if your collection already carries an earlier port.
    be excluded from prettier). It is the handoff layer's counterpart to
    `docs/graph-tools-during-development.md` — **ship it alongside the handoff skills** the same way
    §6 recommends for the graph doc. Copy list in §4.1, summary in §6.
-   **One known gap to brief the team on:** `handoff release --blocked-on` cannot resolve any doc on a
-   `subfolder`-layout board, so a blocker on a grouped board must be recorded in the doc body until
-   that is fixed. Tracked on our own board as `handoff-blocked-on-ignores-section-handoff`.
+   **The `--blocked-on` gap is now closed** (`781f450`). `release --status blocked` validated the
+   blocker's existence by building its path at the **board root**, which on a `subfolder`-layout board
+   holds no docs — so every blocker id was rejected and `blocked` was unreachable on any grouped
+   board. It now resolves through the section-aware `doc_file`/`arch_file`. Earlier ports told the
+   team to record blockers in the doc body as a workaround; that advice can be retired. **Re-port
+   `setup-handoff/scripts/payload/handoff`.** (Filed and closed on the shared board as
+   `handoff-blocked-on-ignores-section-handoff`.)
+   **Graph status probes no longer report live vectors as keyword mode** (`01b0064`). The session
+   cheatsheet's `search tier:` line is what tells an agent whether a shallow `semantic_search_nodes`
+   result is a quality signal or an availability one, so a probe that mislabels a working vector tier
+   as `keyword` pushes agents back to grep for no reason. **Re-port the `setup-graph-hooks` probe.**
 
 1. **suite v0.7.0 (2026-07-27).** Four themes; full range:
    [v0.6.0...v0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0). Re-verified
@@ -187,7 +195,7 @@ Read this first if your collection already carries an earlier port.
    `--verified-by`. Absent `type:` ⇒ `coordination`, so existing boards are unaffected. New surface:
    `handoff new --standalone` and `handoff import <file>` (bring an existing file onto the board).
    This very doc is a migrated standalone handoff; its sibling
-   [`handoff-types-eval-report`](./doc-types-eval-report-handoff.md) records the eval run (60/60 graders,
+   [`handoff-types-eval-report`](./archive/doc-types-eval-report-handoff.md) records the eval run (60/60 graders,
    verifier 18/18). To adopt: **re-port `setup-handoff/assets/` (now incl.
    `handoff-standalone-template.md`) + `scripts/payload/` + `scripts/setup-handoff.sh`, and
    `run-handoff/SKILL.md`.**
@@ -199,7 +207,7 @@ Read this first if your collection already carries an earlier port.
    `.locks/` line is skipped for cross-repo (verifier is topology-aware); and `handoff new` on a
    shared board **requires `--audience`**. Single-repo is byte-identical. A new **`cross-repo`**
    harness eval (two siblings + a shared parent board) guards the exact regression; sibling
-   [`handoff-cross-repo-eval-report`](./cross-repo-eval-report-handoff.md) records the run (73/73
+   [`handoff-cross-repo-eval-report`](./archive/cross-repo-eval-report-handoff.md) records the run (73/73
    graders, verifier 0-failed on both topologies). Re-port `setup-handoff/scripts/` (incl.
    `merge-hooks.py`, `verify-setup-handoff.sh`) + `scripts/payload/` + `assets/agents-handoff.md`.
    **File naming — `<id>-handoff.md`:** every board doc is now named `<id>-handoff.md` and the **id is

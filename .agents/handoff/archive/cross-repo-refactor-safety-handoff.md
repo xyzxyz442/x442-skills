@@ -2,9 +2,9 @@
 id: cross-repo-refactor-safety-handoff
 title: Handoff — cross-repo graph hooks — freshness gate + caller-edge answers
 type: standalone
-status: open
+status: done
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-08-04
 note:
 ---
 
@@ -211,3 +211,7 @@ These must hold when C1/C2 land:
 - House rules: never `rm` (use `trash`); no emojis; imperative second person.
 - Dogfood: `.graph-hooks/` is **tracked** in this repo. After changing a core, re-run
   `setup-graph-hooks.sh .` so the installed copy matches the skill source, and commit both.
+
+## Activity
+
+- 2026-08-04 — retired (standalone) by Gunn Bhatrakarn (7e8142fa).

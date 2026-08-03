@@ -2,11 +2,12 @@
 id: handoff-protocol-suite-handoff
 title: Handoff protocol — outstanding work bundle
 type: orchestrator
-status: open
-children: [blocked-on-validation-handoff, index-orchestrator-section-handoff, children-last-child-drop-handoff, retire-paths-skip-unblock-handoff, template-render-sed-injection-handoff, release-announcement-harness-handoff, x442-engineering-skills-handoff]
+status: done
+children: [blocked-on-validation-handoff, index-orchestrator-section-handoff, children-last-child-drop-handoff, retire-paths-skip-unblock-handoff, template-render-sed-injection-handoff, release-announcement-harness-handoff]
 created: 2026-07-21
-updated: 2026-07-21
+updated: 2026-08-04
 note: Tracks the open handoffs against the handoff protocol itself. Progress is derived from the children.
+verified_at: 2026-08-04
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -44,10 +45,16 @@ child status in this doc; `release --status done` refuses while any child is out
   paths never announced their dependents.
 - `template-render-sed-injection-handoff` — bug, **landed**. A `|` in `--title`/`--note` broke the
   `sed` render and produced a zero-byte doc while reporting success.
-- `release-announcement-harness-handoff` — the `release-announcement` skill has no eval workspace,
-  unlike every other skill in the repo.
-- `x442-engineering-skills-handoff` — the running changelog for the engineering suite. Standalone,
-  so it is a reference child rather than a work item; it closes when the suite stabilizes.
+- `release-announcement-harness-handoff` — gap, **landed**. The `release-announcement` skill was the
+  only skill in the repo with no eval workspace; it now has one under
+  `harness/release-announcement-workspace/`.
+
+`x442-engineering-skills-handoff` was originally listed here as a seventh child. It is not: it is a
+living porting guide for adopting this suite into an internal team collection, re-synced at every
+release, with no end state. Pinning a never-ending reference doc into a work bundle meant the bundle
+could never close on work that was in fact finished — the doc already conceded the point by calling
+it "a reference child rather than a work item". It was removed from `children:` and stays on the
+board as a standalone reference. **A bundle tracks work items only.**
 
 ## Sequencing
 
@@ -56,11 +63,8 @@ All five bugs are landed and independent of each other: `blocked-on-validation` 
 `children-last-child-drop` touched `children_of`, and `template-render-sed-injection` touched
 `cmd_new`. None overlapped the remaining children.
 
-`release-announcement-harness` is independent of everything else here and can run at any time; it
-adds a harness workspace rather than changing the payload.
-
-`x442-engineering-skills` is a log, not a task. It should be appended to as the other children land,
-and closed last.
+`release-announcement-harness` was independent of everything else here and touched no payload code;
+it added a harness workspace, and landed last of the six.
 
 Four of the five landed bugs share one root cause: a new path was added and an existing rule was
 not applied to it. `cmd_release`'s standalone and bundle branches skipped `surface_unblocked`;
@@ -83,7 +87,20 @@ so the board can surface it.
 
 ## Notes
 
+This bundle covers the protocol work filed up to 2026-07-23; it is not the last word on the
+payload. Three more defects of the same family were found and closed afterwards, filed separately
+rather than reopened into a closed bundle: [[title-colon-frontmatter-handoff]],
+[[frontmatter-colon-fields-handoff]] (`note`/`audience`/`severity`/`blocked_on` colon folding),
+[[verify-field-yaml-quoting-handoff]] (`meta()` strips a surrounding quote pair) and
+[[verify-run-repos-empty-list-handoff]] (`doc_is_local` misread `repos: []`, and failed open on
+block lists). The lesson in Sequencing held for all of them: a rule was added and not applied to
+every site that shares its shape.
+
 Known outstanding beyond this bundle: the `wmboacs` shared cross-repo board has neither the
 `scripts/` + `templates/` layout nor slugified ids. Re-running `setup-handoff` in each sibling repo
 migrates it. Not filed as a child because it is an operational task in another repo, not work on
 this payload.
+
+## Activity
+
+- 2026-08-04 — bundle complete — all 6 children done. Closed by Gunn Bhatrakarn (7e8142fa).

@@ -2,9 +2,9 @@
 id: cross-repo-eval-report-handoff
 title: Evaluation report — cross-repo shared-board identity fix
 type: standalone
-status: open
+status: done
 created: 2026-07-21
-updated: 2026-07-23
+updated: 2026-08-04
 note:
 ---
 
@@ -93,3 +93,7 @@ Reproduce: same command as above, per eval id in each workspace's `evals/evals.j
   installer's correct output.
 - **Coverage is behavioral, not agentic** — graders are deterministic; no LLM run proves an agent
   reads its own `audience`. Consistent with the existing harness limitation.
+
+## Activity
+
+- 2026-08-04 — retired (standalone) by Gunn Bhatrakarn (7e8142fa).

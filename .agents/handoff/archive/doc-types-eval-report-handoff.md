@@ -2,9 +2,9 @@
 id: doc-types-eval-report-handoff
 title: Evaluation report — handoff types (standalone/isolated)
 type: standalone
-status: open
+status: done
 created: 2026-07-20
-updated: 2026-07-20
+updated: 2026-08-04
 note:
 ---
 
@@ -92,3 +92,7 @@ lease lifecycle) still pass unchanged.
 - **Known cosmetic.** Imported titles containing `:` are stored unquoted (e.g.
   `title: Handoff: ...`); the sed-based `meta` reads them correctly and prettier tolerates them, but a
   strict YAML parser would not. Acceptable for this sed-based tool; revisit if a YAML consumer is added.
+
+## Activity
+
+- 2026-08-04 — retired (standalone) by Gunn Bhatrakarn (7e8142fa).
