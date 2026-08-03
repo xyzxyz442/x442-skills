@@ -4,7 +4,7 @@ title: Handoff — x442-skills engineering suite
 type: standalone
 status: open
 created: 2026-07-20
-updated: 2026-07-27
+updated: 2026-08-03
 note:
 ---
 
@@ -37,7 +37,48 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
 
 Read this first if your collection already carries an earlier port.
 
-0. **Latest — suite v0.7.0 (2026-07-27).** Four themes; full range:
+0. **Latest — unreleased, since suite v0.7.0 (2026-08-03).** Two themes; full range:
+   [v0.7.0...main](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...main). Not yet tagged —
+   port from `main` if you want either fix now, or wait for v0.8.0. The v0.7.0 cross-repo work is now
+   **dogfooded at multi-group scale**: this repo is one of four repos on a live shared board that
+   hosts **three sub-indexed sections** (`esbm` 3 repos / 6 docs, `fecs` 1 repo / 26 docs,
+   `etl-tooling` **no wired repos** / 43 docs), and `verify-cross-repo-handoff.sh` reports
+   **13 passed / 0 warnings / 0 failed** across the cascade, the board, and every member. Three
+   things that only showed up under real use: a group **needs no member repos** (docs are authored
+   board-side and routed by `audience` to repos that are not on the board — the shape to use for work
+   in repos you have not onboarded); **regrouping is a manifest edit, not a migration** (moving one
+   repo into its own group re-scaffolds the section, re-points its hooks, and silently re-renders
+   every peer table, because peers are group-mates — existing docs do **not** follow the repo); and
+   the fleet verifier checks that a peer block is present and correctly scoped but **not its
+   contents**, so let the sync own that block rather than hand-editing it.
+   **`setup-project-tooling` — release-it wrote an extension-less `CHANGELOG`.**
+   `assets/release-it.json` has carried `"infile": "CHANGELOG"` since the skill landed. The
+   conventional-changelog plugin writes markdown to exactly what that names, extension and all, so
+   **every repo scaffolded from the asset got a file named `CHANGELOG`** — plain text on GitHub, and
+   invisible to every markdown-keyed tool downstream. Nothing else in the skill agreed with it (the
+   sibling `.prettierignore` protects `CHANGELOG.md`; `SKILL.md` says `CHANGELOG.md`), and dogfooding
+   could not catch it because this repo's own `.release-it.json` had diverged to `CHANGELOG.md` — the
+   broken value was only ever exercised by _users_ of the skill. Fixed, and the verifier now reads the
+   plugin's `infile` and **warns** when it has no `.md` extension — warn, not fail, since the path is
+   the repo's to choose. **Re-port `setup-project-tooling/assets/release-it.json` +
+   `scripts/verify-project-tooling.sh`**, then check any repo you already scaffolded for a stray
+   extension-less `CHANGELOG` (rename it and point `.release-it.json` at `CHANGELOG.md`).
+   **New reference doc — a worked multi-repo, multi-group board install.**
+   `docs/cross-repo-handoff-usage-record.md` records a real four-repo install end to end: the
+   `.handoff-repos.json` actually used, the hook command the sync generates (`HANDOFF_REPO` /
+   `HANDOFF_HDPATH` / `HANDOFF_GROUP`, and why identity lives on the command rather than in the shared
+   board config), the full `subfolder` vs `prefix` path table (doc / archive / sub-index / leases /
+   roll-up — this is also the answer to "can two groups reuse an id?"), what group isolation actually
+   means in the order it bites, and the gotchas the install cost us (`GROUPS` is a bash builtin, hence
+   `HANDOFF_GROUPS`; the hook merge needs the `--kind` discriminator; generated `INDEX.md` files must
+   be excluded from prettier). It is the handoff layer's counterpart to
+   `docs/graph-tools-during-development.md` — **ship it alongside the handoff skills** the same way
+   §6 recommends for the graph doc. Copy list in §4.1, summary in §6.
+   **One known gap to brief the team on:** `handoff release --blocked-on` cannot resolve any doc on a
+   `subfolder`-layout board, so a blocker on a grouped board must be recorded in the doc body until
+   that is fixed. Tracked on our own board as `handoff-blocked-on-ignores-section-handoff`.
+
+1. **suite v0.7.0 (2026-07-27).** Four themes; full range:
    [v0.6.0...v0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 116/116 grader
    assertions across 11 evals, `run-handoff` 12/12, the new `register-cross-repo-handoff` grader
@@ -77,7 +118,7 @@ Read this first if your collection already carries an earlier port.
    wired, not on a stray file match. Out of the handoff scope but in the same release; re-port
    `setup-project-tooling/assets/` + `SKILL.md`.
 
-1. **suite v0.6.0 (2026-07-23).** Four themes; full range:
+2. **suite v0.6.0 (2026-07-23).** Four themes; full range:
    [v0.5.0...v0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 97/97 grader
    assertions across 10 evals, `run-handoff` 12/12, the new `release-announcement` grader 12/12 on
@@ -120,7 +161,7 @@ Read this first if your collection already carries an earlier port.
      is graded against the skill's own Rules; see §7). Out of this doc's engineering scope — catalog
      entry in [`skills/README.md`](skills/README.md).
 
-2. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
+3. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
    gains a lease-based **handoff board** for multi-agent / cross-session / cross-repo work: _claim
    before you edit, release when you stop, `done` only when verified against live code._
    `setup-handoff` installs the tool-generic `.agents/handoff/` payload, wires per-tool enforcement
@@ -169,7 +210,7 @@ Read this first if your collection already carries an earlier port.
    legacy fixture) were migrated to the suffix; `blocked_on` references are canonicalized too. All 11
    evals stay green (setup-handoff 61/61 incl. cross-repo 13/13, run-handoff 12/12). Re-port
    `scripts/payload/{handoff,hooks.sh}` and rename any existing board docs to `*-handoff.md`.
-3. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
+4. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional
    step" — observed with GitHub Copilot as the resource owner. Fixed: surfacing the choice is now
@@ -180,31 +221,31 @@ Read this first if your collection already carries an earlier port.
    are byte-identical — so this is a **wording-only re-port**: re-copy `setup-graph-hooks/SKILL.md`
    §8. See §2 (`setup-graph-hooks`) and §4.4 embeddings caveat, both otherwise unchanged.
 
-4. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
+5. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
    from markdown-only (ad-hoc `code-review-graph register` calls) to a **declared, committed
    `.graph-repos.json` manifest cascade** (user → repo → subdir, nearest wins, like `AGENTS.md`)
    applied by `sync-cross-repo-graph.sh`, with a real verifier and a shared Python resolver. It also
    now gets a **per-project** graphify merged graph instead of writing graphify's global one. **Delete
    the old version rather than merging into it.** See §2 and §4.1.
-5. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
+6. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
    stock Python template) matches the new `scripts/manifest/` **directory** on any case-insensitive
    filesystem, so `git add -A` ships the skill without its resolver. Fixed here in both our
    `.gitignore` and the template `setup-project-tooling` **ships to every scaffolded project**
    (`assets/gitignore` → `/MANIFEST`). **Check your own collection's `.gitignore` before porting** —
    the full check is in §4.1.
-6. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
+7. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
    unchanged from the last handoff, but still the most common source of "the graph looks broken" false
    alarms. See the embeddings caveat in §4.4.
-7. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
+8. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
    self-tested shared library plus a workspace for every skill — the five graph/onboarding skills
    plus the new `setup-handoff` and `run-handoff` — each with fixtures, `evals/evals.json`, and a
    `grade.py` that wraps the skill's own `verify-*.sh` (or, for `run-handoff`, drives the installed
    board). Graders are read-only and LLM-free. The `verify-*.sh` checkers remain the correctness
    source of truth; the harness adds repeatable, gradeable evals on top. See §7.
-8. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
+9. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
    a `[skip]`, not a `[FAIL]`). "Not configured" and "broken" are no longer conflated — see §4.3.
-9. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
-   `setup-project-tooling` and `repair-graph-hooks` are unchanged in behavior.
+10. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
+    `setup-project-tooling` and `repair-graph-hooks` are unchanged in behavior.
 
 ---
 
@@ -606,6 +647,8 @@ Copy each skill directory wholesale, preserving substructure:
   `scripts/manifest/` Python package**, same shape and same `.gitignore` gotcha as
   `register-cross-repo-graph` below), and `assets/`.
 - `docs/graph-tools-during-development.md` — the runtime companion for the graph layer (see §6).
+- `docs/cross-repo-handoff-usage-record.md` — the worked install record for the handoff layer, and the
+  reference for the `subfolder`/`prefix` path rules (see §6). Ship it with the handoff skills.
 
 Also carry the repo-root **`.gitattributes`** (LF guard for `*.sh`/`*.py`/`post-commit`) — it prevents
 CRLF from breaking shebangs on Windows/WSL checkouts.
@@ -835,6 +878,14 @@ read-only and LLM-free:
   a mid-size repo), escape hatches (`--graph-tried`), the **opt-in embeddings tier**, and build/verify
   commands. **Recommend shipping it alongside the graph skills** — it is the best single explainer for
   a developer new to the layer.
+- **[`docs/cross-repo-handoff-usage-record.md`](docs/cross-repo-handoff-usage-record.md)** — the same
+  thing for the handoff layer, written from a real four-repo install: the manifest used, the hook
+  command the sync generates and why identity rides on it rather than in the shared board `config`,
+  the `subfolder` vs `prefix` path table (doc / archive / sub-index / leases / roll-up), what group
+  isolation means step by step, the fleet verifier output, and the gotchas the install cost us.
+  **Recommend shipping it alongside `setup-handoff` / `run-handoff` / `register-cross-repo-handoff`** —
+  it answers the two questions every adopting team asks first ("can two groups reuse an id?" and "who
+  sees what?") without reading three `SKILL.md`s.
 - **[`docs/harness-structure.md`](docs/harness-structure.md)** — the **contract** for the skill
   eval/test harness (fixtures, graders, A/B on-vs-off). It is now **implemented** under `harness/`
   (a workspace per skill, including the first text-output grader; see §7), not a proposal. Read it for the file formats, the `lib/` API,
