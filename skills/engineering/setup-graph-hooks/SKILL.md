@@ -162,14 +162,32 @@ This installs the universal layer + `.graph-hooks/` cores, then renders and merg
 tool's native hook config. Re-running with a different `--primary` moves ownership idempotently
 (drops the old owner's end-of-turn hook) without disturbing the read-side hooks.
 
-### 5. Inject the AGENTS.md routing block (idempotent)
+### 5. Inject or refresh the AGENTS.md routing block (idempotent)
+
+Append the block when it is absent; **replace it in place when it is already there**. An
+append-only guard strands every repo that installed an earlier revision on stale routing — the
+verifier can only warn about it, and re-running the skill would never fix it.
 
 ```bash
-if ! grep -q 'graph-hooks:begin' "$REPO/AGENTS.md" 2> /dev/null; then
-  printf '\n' >> "$REPO/AGENTS.md"
-  cat "$SKILL_DIR/assets/agents-knowledge-graph.md" >> "$REPO/AGENTS.md"
-fi
+python3 - "$REPO/AGENTS.md" "$SKILL_DIR/assets/agents-knowledge-graph.md" << 'PY'
+import pathlib, sys
+
+agents, block = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
+text = agents.read_text() if agents.exists() else ""
+BEG, END = "<!-- graph-hooks:begin", "<!-- graph-hooks:end -->"
+i, j = text.find(BEG), text.find(END)
+if i >= 0 and j > i:                       # refresh: swap the managed span, keep the rest
+    new = text[:i] + block.strip() + "\n" + text[j + len(END) :].lstrip("\n")
+else:                                      # first install: append
+    new = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block
+if new != text:                            # unchanged block -> no write, so a re-run is a no-op
+    agents.write_text(new)
+PY
 ```
+
+Only the span between the markers is managed; anything the repo added before or after it
+survives. A second run with no upstream change writes nothing, which is what the `all-wired`
+harness fixture asserts.
 
 ### 6. Verify it fires
 
@@ -250,6 +268,21 @@ bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider off # back to keyword m
 
 The choice is written to `.code-review-graph/embed.env` — repo-local, not shell-local, because a
 commit from a GUI git client inherits no shell rc and would otherwise stop refreshing vectors.
+
+Switching provider or model **clears the existing vectors first**, then re-embeds every node.
+CRG converges on its own when a switch completes, but it autocommits per row, so an interrupted
+switch would otherwise leave two embedders in one table — and mixed vector families degrade every
+later search silently. `verify-graph-hooks.sh` FAILs on that state; clearing first means an
+interrupted run lands on a partial index, which it reports honestly instead.
+
+**Ollama users — model residency is a server setting, not something this skill can wire.** Each
+embed run reloads `qwen3-embedding` (~12 GB) if Ollama has already unloaded it; the default idle
+timeout is 5 minutes. `OLLAMA_KEEP_ALIVE` is read by `ollama serve`, **not** by the client, and
+CRG never sends a per-request `keep_alive` (Ollama's OpenAI-compatible `/v1/embeddings` ignores
+the field anyway). So writing it into `embed.env` would be a no-op that looks like a fix. If
+reload cost is a problem, tell the user to set it on the daemon itself — e.g.
+`launchctl setenv OLLAMA_KEEP_ALIVE 30m` before restarting Ollama on macOS, or the equivalent
+`Environment=` line in the systemd unit — and change nothing in the repo.
 
 ### 9. Report
 

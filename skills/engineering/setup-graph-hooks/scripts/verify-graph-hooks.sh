@@ -44,7 +44,7 @@ is_json_str() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.st
 # CRG's semantic_search() falls back to keyword search over node names. Only a half-finished
 # embed, or vectors the hooks can no longer refresh, deserve a warning.
 check_embeddings() {
-  read -r EMB NODES EPROV <<< "$(
+  read -r EMB NODES NPROV EPROV EDETAIL <<< "$(
     python3 - << 'PY' 2> /dev/null
 import sqlite3
 
@@ -68,11 +68,22 @@ try:
     c = probe_connect(".code-review-graph/graph.db")
     nodes = c.execute("SELECT count(*) FROM nodes WHERE kind!='File'").fetchone()[0]
     emb = c.execute("SELECT count(*) FROM embeddings").fetchone()[0]
-    row = c.execute("SELECT provider FROM embeddings GROUP BY provider "
-                    "ORDER BY count(*) DESC LIMIT 1").fetchone()
-    print(emb, nodes, (row[0] if row and row[0] else "-"))
+    # EVERY provider, not just the most common one. Reporting only the dominant provider hides a
+    # mixed table, which is the failure worth catching: vectors from two models are incomparable,
+    # and _cosine_similarity in CRG returns 0.0 on a width mismatch instead of raising, so mixing
+    # degrades retrieval silently, with a healthy-looking embedding count.
+    # NOTE: no apostrophes or backticks anywhere in this heredoc. It sits inside a $(...), and bash
+    # lexes the substitution body for quotes even though the delimiter is quoted, so a lone
+    # apostrophe is a syntax error at source time.
+    rows = c.execute("SELECT provider, count(*) FROM embeddings GROUP BY provider "
+                     "ORDER BY count(*) DESC").fetchall()
+    # Fields are whitespace-split by read, and a provider string ("openai:model@host") has no
+    # spaces, but it does have colons, so the per-provider detail joins on "|" and "=" instead.
+    print(emb, nodes, len(rows),
+          (rows[0][0] if rows and rows[0][0] else "-"),
+          "|".join(f"{p or '-'}={n}" for p, n in rows) or "-")
 except Exception:
-    print(0, 0, "-")
+    print(0, 0, 0, "-", "-")
 PY
   )"
 
@@ -81,7 +92,15 @@ PY
     return 0
   fi
 
-  if [ "${EMB:-0}" -lt "${NODES:-0}" ]; then
+  # One embedder owns the index. CRG re-embeds a node when its provider identity changes, but a
+  # plain `embed` appends and never purges rows written by a previous provider — and each row
+  # autocommits, so an interrupted switch leaves the table split. Nothing downstream notices:
+  # EmbeddingStore.count() ignores provider, so a search sees "vectors exist", gets zero rows back
+  # from its provider-filtered query, and quietly degrades to FTS/keyword. This is a FAIL, not a
+  # warning — the graph looks healthy while retrieval is broken.
+  if [ "${NPROV:-1}" -gt 1 ]; then
+    bad "semantic search: ${NPROV} embedding providers in one index (${EDETAIL}) — vector families are incomparable and searches silently degrade; fix: re-embed under one provider (./setup-embeddings.sh)"
+  elif [ "${EMB:-0}" -lt "${NODES:-0}" ]; then
     warn "semantic search: ${EMB}/${NODES} nodes embedded — interrupted embed; fix: code-review-graph embed"
   else
     ok "semantic search: vector mode (${EMB} embeddings, provider=${EPROV})"
@@ -92,6 +111,25 @@ PY
   if [ -z "$RESOLVED" ]; then
     warn "embeddings cannot refresh — .code-review-graph/embed.env missing; vectors will go stale"
     return 0
+  fi
+
+  # Recorded identity vs configured intent. A switch is legitimate, but the next embed rewrites
+  # every vector instead of topping up — worth saying out loud, because until it finishes the table
+  # is exactly the mixed state that FAILs above. Identity is "<provider>:<model>@<endpoint>".
+  EPROV_BARE="${EPROV%%:*}"
+  EPROV_MODEL="${EPROV#*:}"
+  EPROV_MODEL="${EPROV_MODEL%%@*}"
+  CFG_MODEL=""
+  if [ -f .code-review-graph/embed.env ]; then
+    case "$RESOLVED" in
+      openai) CFG_MODEL=$(sed -n 's/^CRG_OPENAI_MODEL=//p' .code-review-graph/embed.env | head -1) ;;
+      local) CFG_MODEL=$(sed -n 's/^CRG_EMBEDDING_MODEL=//p' .code-review-graph/embed.env | head -1) ;;
+    esac
+  fi
+  if [ "$EPROV_BARE" != "$RESOLVED" ]; then
+    warn "embedder drift: ${EMB} vectors were written by '${EPROV_BARE}' but embed.env resolves '${RESOLVED}' — the next embed re-embeds every node"
+  elif [ -n "$CFG_MODEL" ] && [ "$EPROV_MODEL" != "$EPROV" ] && [ "$CFG_MODEL" != "$EPROV_MODEL" ]; then
+    warn "embedder drift: ${EMB} vectors were written by model '${EPROV_MODEL}' but embed.env pins '${CFG_MODEL}' — the next embed re-embeds every node"
   fi
 
   # An Ollama-backed provider is only as live as its daemon.
@@ -261,11 +299,16 @@ if [ -f "$TIERBIN" ]; then
 else
   bad "$TIERBIN missing — session banner + grep pre-answers cannot mark the search tier"
 fi
-# The AGENTS.md routing block must carry the tier ladder so the agent knows to pin custom vectors.
+# The AGENTS.md routing block must carry the tier ladder so the agent knows to pin custom vectors,
+# and the search_mode rule so it can tell a degraded answer from a good one. Each sentinel marks a
+# revision of the asset; a block missing one predates it and step 5 of the skill will refresh it.
 if [ -f AGENTS.md ] && grep -q 'graph-hooks:begin' AGENTS.md 2> /dev/null; then
   grep -qi 'search tier' AGENTS.md 2> /dev/null \
     && ok "AGENTS.md routing block documents the search-tier ladder" \
     || warn "AGENTS.md graph-hooks block predates the search-tier ladder — re-run setup-graph-hooks to refresh it"
+  grep -q 'search_mode' AGENTS.md 2> /dev/null \
+    && ok "AGENTS.md routing block documents the search_mode honesty rule" \
+    || warn "AGENTS.md graph-hooks block predates the search_mode rule (routing still reads as a CRG->graphify->grep chain) — re-run setup-graph-hooks to refresh it"
 fi
 
 echo

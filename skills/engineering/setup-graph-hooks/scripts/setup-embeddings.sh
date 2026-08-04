@@ -220,10 +220,66 @@ print("  ~ .mcp.json env cleaned")
 PY
 }
 
+# One embedder owns the index. CRG re-embeds any node whose provider identity changed, so a
+# COMPLETE switch converges by itself — but every row autocommits, so an INTERRUPTED switch leaves
+# the table split between two embedders. That state is the dangerous one: vectors from different
+# models are incomparable, EmbeddingStore.count() ignores provider, so a later search sees "vectors
+# exist", gets nothing back from its provider-filtered query, and quietly degrades to FTS/keyword
+# with no error. Clearing first turns that failure mode into a partial single-provider index, which
+# verify-graph-hooks.sh reports honestly as an interrupted embed.
+#
+# CRG refresh_embeddings() is deliberately NOT the tool here: it refuses when the recorded identity
+# differs from the requested one ("Refresh never silently migrates an index to another model or
+# endpoint"), which is precisely what a provider switch is. It guards same-identity refreshes;
+# migrating between embedders is ours to do.
+purge_foreign_vectors() { # $1=provider  $2=model — drop vectors no longer comparable with these
+  [ -f .code-review-graph/graph.db ] || return 0
+  python3 - "$1" "$2" << 'PY'
+import sqlite3, sys
+
+want = "%s:%s" % (sys.argv[1], sys.argv[2])
+try:
+    c = sqlite3.connect(".code-review-graph/graph.db", timeout=5)
+    rows = c.execute("SELECT provider, count(*) FROM embeddings GROUP BY provider").fetchall()
+except sqlite3.Error as exc:
+    # A missing embeddings table is a genuine no-op: nothing has been embedded yet. Anything
+    # else — overwhelmingly a write lock held by the background refresh, which blocks reads too
+    # under an exclusive transaction — means we cannot tell whether foreign vectors are present.
+    # Guessing "none" would wave the embed through into a split index, so refuse instead.
+    if "no such table" in str(exc).lower():
+        sys.exit(0)
+    sys.stderr.write("  ! could not read the existing vectors: %s\n" % exc)
+    sys.exit(1)
+foreign = [(p or "-", n) for p, n in rows if not (p or "").startswith(want)]
+if rows and foreign:
+    total = sum(n for _, n in rows)
+    detail = ", ".join("%s (%d)" % (p, n) for p, n in foreign)
+    # A FAILED clear must not read as a successful one. The likeliest cause is a background
+    # refresh holding the write lock, and embedding into a table we did not manage to clear
+    # produces exactly the split index this whole step exists to prevent.
+    try:
+        c.execute("DELETE FROM embeddings")
+        c.commit()
+    except sqlite3.Error as exc:
+        sys.stderr.write("  ! could not clear the existing vectors: %s\n" % exc)
+        sys.exit(1)
+    print("  ~ cleared %d vector(s) written by a different embedder: %s" % (total, detail))
+    print("    they cannot be compared with %s vectors, so every node is re-embedded" % want)
+c.close()
+PY
+}
+
 # Delegate to the hooks' own gate rather than calling `code-review-graph embed` directly: it is
 # the single place that loads embed.env into the environment (CRG raises ValueError without
 # CRG_OPENAI_*), so the first embed exercises exactly the path every later refresh takes.
-first_embed() {
+first_embed() { # $1=provider  $2=model
+  purge_foreign_vectors "$1" "$2" || {
+    echo
+    echo "Refusing to embed: vectors from a different embedder are still in the index." >&2
+    echo "Something else is probably writing the graph right now (the end-of-turn refresh" >&2
+    echo "runs its embed in the background). Wait for it to finish, then re-run this." >&2
+    exit 1
+  }
   echo
   echo "Running the first embed in the foreground so you see it succeed or fail."
   bash "$PROBE" --run || {
@@ -264,7 +320,7 @@ apply_local() {
 CRG_EMBEDDING_MODEL=$m"
   write_cfg "$cfg"
   unsync_mcp_env
-  first_embed
+  first_embed local "$m"
   echo
   echo "The MCP server defaults to the local provider, so semantic_search_nodes_tool picks these"
   echo "vectors up with no further configuration."
@@ -307,7 +363,7 @@ apply_ollama() {
 CRG_OPENAI_BASE_URL=$base/v1
 CRG_OPENAI_API_KEY=ollama
 CRG_OPENAI_MODEL=$m"
-  first_embed
+  first_embed openai "$m"
   sync_mcp_env "$base" "$m"
 }
 
