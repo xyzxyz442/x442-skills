@@ -23,7 +23,7 @@ The graph layer is installed and maintained by a small family of skills; this do
 | Artifact        | `.code-review-graph/graph.db` (SQLite + FTS5)                   | `graphify-out/graph.json`                                    |
 | Best at         | symbol search, impact/blast-radius, review context              | neighborhood exploration, shortest path A→B, concept explain |
 | Refresh trigger | primary tool's end-of-turn hook **+** git `post-commit`         | git `post-commit` (single owner)                             |
-| Role in routing | **first** choice                                                | fallback on a CRG miss                                       |
+| Role in routing | targeted lookup, structure, impact                              | exploration — an intent lane, not a CRG fallback             |
 
 Both are **optional and dormant until built**. Every hook `command -v`-checks its tool and
 silently no-ops when the tool or its artifact is absent — the repo is safe with neither
@@ -79,18 +79,29 @@ those artifacts _fresh_ on the write path — the agent never has to think about
 
 The `<!-- graph-hooks -->` block in [AGENTS.md](../AGENTS.md) (reached by every tool via its
 `@AGENTS.md` import) tells assistants to prefer the graph **before** grep/find/glob or reading
-many files. The decision order is **CRG first, graphify on a miss, grep last**:
+many files. Routing is **by intent**, not by what just failed — pick the lane for the question
+you are asking:
 
-| Need                            | Use                                                         |
-| ------------------------------- | ----------------------------------------------------------- |
-| where is X defined              | `semantic_search_nodes_tool(query=X)`                       |
-| who calls / imports X           | `query_graph_tool(pattern=callers_of\|importers, target=X)` |
-| pre-refactor blast radius       | `get_impact_radius_tool(changed_files=[...])`               |
-| code review / PR impact         | `get_review_context_tool(changed_files=[...])`              |
-| architecture overview           | `list_communities_tool()`                                   |
-| CRG miss / neighborhood explore | `graphify query '<term>' --graph graphify-out/graph.json`   |
-| shortest path A→B               | `graphify path '<A>' '<B>' --graph graphify-out/graph.json` |
-| string / config / log text      | `grep` (append `--graph-tried` to bypass the gate)          |
+| Intent                                 | Lane                                                        |
+| -------------------------------------- | ----------------------------------------------------------- |
+| find code by meaning ("what does X")   | `semantic_search_nodes_tool(query=X)`                       |
+| who calls / imports a known symbol     | `query_graph_tool(pattern=callers_of\|importers, target=X)` |
+| pre-refactor blast radius              | `get_impact_radius_tool(changed_files=[...])`               |
+| code review / PR impact                | `get_review_context_tool(changed_files=[...])`              |
+| architecture overview                  | `list_communities_tool()`                                   |
+| explore / explain / onboard, code↔docs | `graphify query\|explain '<term>' --graph …/graph.json`     |
+| shortest path A→B                      | `graphify path '<A>' '<B>' --graph graphify-out/graph.json` |
+| exact string, config value, log text   | `grep` (append `--graph-tried` to bypass the gate)          |
+
+These are lanes, **not a chain**. Graphify is not a CRG fallback — it is where exploratory
+questions start. And a meaning-based search that does not answer goes to `grep`, not graphify:
+what the vectors cannot find is usually not in the AST graph at all.
+
+`semantic_search_nodes_tool` has **no minimum-score threshold** — it returns its top _k_ whether
+or not anything matched, so a weak hit is indistinguishable from a good one unless you look at
+the `search_mode` it reports (`semantic` | `fts` | `keyword`). Say which mode answered. Tier is
+what the repo _can_ do; `search_mode` is what the query actually did, and degrading below the
+live tier means the vectors did not answer — the one case where grep is the right next step.
 
 The graph indexes **code symbols** — functions, classes, imports, call edges. It does _not_
 index `.md`, `.json`, `.yml`, `.log`, or config text. For those, grep is correct and the hooks

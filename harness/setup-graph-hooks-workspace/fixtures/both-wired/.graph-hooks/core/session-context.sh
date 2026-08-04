@@ -15,6 +15,22 @@ TIER="$(bash "$HERE/embed-provider.sh" --tier 2> /dev/null | head -1)"
 SCOPE="$SCOPE" TIER="$TIER" python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
+
+# Status-probe open: plain ro first (the only variant correct on a WAL graph — immutable=1 ignores
+# the -wal and would report a freshly built graph as empty), immutable=1 only as a fallback for a
+# database needing journal rollback, where a read-only open raises CANTOPEN. The refresh writes on
+# every turn and every commit, so that case is routine, not rare.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 crg = os.path.exists(".code-review-graph/graph.db")
 gfy = os.path.exists("graphify-out/graph.json")
 # In-scope sibling repos this repo may read (empty unless register-cross-repo-graph has run).
@@ -25,7 +41,7 @@ stats, lines = [], []
 if crg or gfy or siblings:
     if crg:
         try:
-            c = sqlite3.connect("file:.code-review-graph/graph.db?mode=ro", uri=True)
+            c = probe_connect(".code-review-graph/graph.db")
             n = c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
             e = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
             c.close()
@@ -46,17 +62,26 @@ if crg or gfy or siblings:
         if tkind == "custom":
             stats.append(f"search tier: vector/custom ({tlabel or 'external'})")
             lines.append(
-                "semantic search     -> PIN vectors: semantic_search_nodes_tool(query=X, "
+                "semantic search      -> PIN vectors: semantic_search_nodes_tool(query=X, "
                 'provider="openai", model="...")  [tier custom, else drops to keyword]'
             )
         elif tkind == "local":
             stats.append("search tier: vector/local")
-            lines.append("semantic search     -> semantic_search_nodes_tool(query=X)  [tier local, read by default]")
+            lines.append("semantic search      -> semantic_search_nodes_tool(query=X)  [tier local, read by default]")
         else:
             stats.append("search tier: keyword")
             lines.append(
-                "semantic search     -> semantic_search_nodes_tool(query=X)  [tier KEYWORD/name match; "
+                "semantic search      -> semantic_search_nodes_tool(query=X)  [tier KEYWORD/name match; "
                 "./setup-embeddings.sh enables vectors]"
+            )
+        # Tier is what the repo CAN do; search_mode is what a query actually did. The tool has no
+        # score threshold — it returns top-k regardless — so a degraded answer is invisible unless
+        # the agent reads the mode. Only worth saying where vectors exist: keyword is the floor,
+        # nothing degrades below it.
+        if tkind in ("custom", "local"):
+            lines.append(
+                "say search_mode      -> results carry search_mode (semantic|fts|keyword); below the "
+                "live tier means the vectors did not answer — then grep is fair"
             )
     if gfy:
         try:
@@ -66,8 +91,11 @@ if crg or gfy or siblings:
             stats.append(f"graphify {len(nodes)} nodes, {comms} communities")
         except Exception:
             pass
+        # Graphify is an intent lane, not a CRG fallback: reach for it when the question is
+        # exploratory, up front. A meaning-based search that does not answer goes to grep, not
+        # here — what CRG's vectors miss is usually not in the AST graph at all.
         lines += [
-            "CRG miss / explore   -> graphify query '<term>' --graph graphify-out/graph.json",
+            "explore / onboard    -> graphify query|explain '<term>' --graph graphify-out/graph.json",
             "path A->B            -> graphify path '<from>' '<to>' --graph graphify-out/graph.json",
         ]
     if siblings:
