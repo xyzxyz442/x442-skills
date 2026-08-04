@@ -37,9 +37,29 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
 
 Read this first if your collection already carries an earlier port.
 
-0. **Latest — unreleased, since suite v0.7.0 (2026-08-03).** Two themes; full range:
-   [v0.7.0...main](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...main). Not yet tagged —
-   port from `main` if you want either fix now, or wait for v0.8.0. The v0.7.0 cross-repo work is now
+0. **v0.8.0 (2026-08-04).** Tagged and pushed — port from the tag. Full range:
+   [v0.7.0...v0.8.0](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...v0.8.0). Three themes:
+   handoff frontmatter that survives a strict YAML parser, multi-group dogfooding, and a release-it
+   changelog fix.
+   **Handoff frontmatter is now valid YAML in every field** (`bdc6e41`, `c947dfa`, `3dff07e`). Three
+   related defects, all in `setup-handoff/scripts/payload/`. First: `note`, `audience`, `severity`
+   and the `blocked_on` `external: …` escape hatch were written unquoted, so a colon in any of them
+   turned the line into a nested mapping and broke the doc for every parser — markdown preview
+   included. All are now folded to an em dash, exactly like titles. **What you type does not change**
+   (`--blocked-on "external: vendor ticket"` still works); only the stored value becomes
+   `external — vendor ticket`, and the em-dash spelling is accepted on input too. Second: `verify:`
+   is the one field that _cannot_ be folded — folding corrupts a shell command — so it has to be
+   quoted, but `meta()` handed the quotes to `eval` and a correctly quoted command died with
+   "command not found". `meta()` now strips one surrounding quote pair, in the CLI **and** in
+   `hooks.sh` (both copies, or the gate and the tool disagree). **Quote your `verify:` commands.**
+   Third: `doc_is_local()` read the doc template's own `repos: []` as "belongs to another repo", so
+   `--run-verify` was unreachable for every doc the CLI creates; it also failed **open** twice — a
+   block-list `repos:` naming other repos read as local, and `REPO_NAME=api` matched a doc scoped to
+   `[api-gateway]`. Both of those now narrow the gate. **Re-port
+   `setup-handoff/scripts/payload/{handoff,hooks.sh,README.md}` and `run-handoff/SKILL.md`.** No
+   migration is needed for docs you already have: unquoted values keep being read, only newly
+   written ones are folded.
+   The v0.7.0 cross-repo work is now
    **dogfooded at multi-group scale**: this repo is one of four repos on a live shared board that
    hosts **three sub-indexed sections** (`esbm` 3 repos / 6 docs, `fecs` 1 repo / 26 docs,
    `etl-tooling` **no wired repos** / 43 docs), and `verify-cross-repo-handoff.sh` reports
