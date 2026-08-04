@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.0](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...v0.8.0) (2026-08-04)
+
+### 🐞 Bug Fixes
+
+- **bug:** fold colons out of every free-text frontmatter value ([bdc6e41](https://github.com/xyzxyz442/x442-skills/commit/bdc6e417b93b462cf2dbe0eb1329f8c679ae8620))
+- **bug:** resolve --blocked-on inside the caller's board section ([781f450](https://github.com/xyzxyz442/x442-skills/commit/781f450523f66874bcd06cc3ab13d9f5250cfff4))
+- **bug:** stop graph status probes reporting live vectors as keyword mode ([01b0064](https://github.com/xyzxyz442/x442-skills/commit/01b0064ecd2904e649a0aec65dfe31a7d9406390))
+- **bug:** strip one surrounding quote pair when reading frontmatter ([c947dfa](https://github.com/xyzxyz442/x442-skills/commit/c947dfa13328d5b4b38bfb28ca4f8fcdcd98f429))
+- **bug:** treat an empty or block-list repos: as this repo's own doc ([3dff07e](https://github.com/xyzxyz442/x442-skills/commit/3dff07e9bfa70f9081cbd90c53e18e88eaef3280))
+- **bug:** write the changelog to CHANGELOG.md, not CHANGELOG ([96d29d7](https://github.com/xyzxyz442/x442-skills/commit/96d29d790bb353a428473001cfe6576a2a02f0c8))
+
+### 📚 Documentation
+
+- **docs:** close the protocol bundle and retire the landed reference docs ([309f4c5](https://github.com/xyzxyz442/x442-skills/commit/309f4c59e5cf617b134468578519603ba4005536))
+- **docs:** record the multi-group cross-repo handoff install ([ee5d6ed](https://github.com/xyzxyz442/x442-skills/commit/ee5d6edf3656d4d7e37c13c6fe25c77ab9c7f00c))
+- **docs:** sync the engineering-suite handoff for unreleased main ([1adfce4](https://github.com/xyzxyz442/x442-skills/commit/1adfce4e7a0b89cb4fecb54ca50496508d22aacb))
+
+### 🧹 Miscellaneous Chores
+
+- **deps:** upgrade release-it and add advisory overrides ([b2f2b3c](https://github.com/xyzxyz442/x442-skills/commit/b2f2b3c9c6a93accd901ef4b2459b3d33a47599f))
+- **setup:** resync the cross-repo handoff block after the fecs split ([8edfa9c](https://github.com/xyzxyz442/x442-skills/commit/8edfa9cd6ff0d366ac8c53c0a4b91523b14bba1e))
+- **setup:** wire this repo into the esbm cross-repo handoff board ([e52fa5c](https://github.com/xyzxyz442/x442-skills/commit/e52fa5ca8c88f2f89ab13d27987a0bbe9b23e6c4))
+
 ## [0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0) (2026-07-26)
 
 ### 🚀 Features
