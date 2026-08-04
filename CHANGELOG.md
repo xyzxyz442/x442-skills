@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/xyzxyz442/x442-skills/compare/v0.8.0...v0.9.0) (2026-08-04)
+
+### 🚀 Features
+
+- **setup-graph-hooks:** route the graph by intent, assert one embedder owns the index ([09a544d](https://github.com/xyzxyz442/x442-skills/commit/09a544d1c0080c81068ceb55ccf09e5ebed342e5))
+
+### 📚 Documentation
+
+- **docs:** sync routing docs and harness fixtures to the intent lanes ([ba9c09c](https://github.com/xyzxyz442/x442-skills/commit/ba9c09cd85d422b71231bacad0facfc692ae4e88))
+- **docs:** sync the engineering-suite handoff for v0.8.0 ([0ba6785](https://github.com/xyzxyz442/x442-skills/commit/0ba6785d874ebb0a815bf0c4600956796e0bd56b))
+
+### 🧹 Miscellaneous Chores
+
+- **config:** regenerate .gitignore from toptal with the shared AI tail ([6331963](https://github.com/xyzxyz442/x442-skills/commit/6331963de91f49d5b3357b06a18674171fa1d059))
+
 ## [0.8.0](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...v0.8.0) (2026-08-04)
 
 ### 🐞 Bug Fixes
