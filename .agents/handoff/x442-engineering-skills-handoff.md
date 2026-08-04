@@ -33,11 +33,59 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
 
 ---
 
+0. **v0.9.0 (2026-08-04).** Port from the tag. Full range:
+   [v0.8.0...v0.9.0](https://github.com/xyzxyz442/x442-skills/compare/v0.8.0...v0.9.0). One theme,
+   in `setup-graph-hooks`: **the graph routing block was wrong, and the embeddings index had no
+   owner.**
+   **Routing is now by intent, not by failure** (`09a544d`). The block every repo carries said
+   _"CRG first, graphify on miss, grep last"_. That chain cannot fire: `semantic_search_nodes_tool`
+   is pure top-_k_ with **no minimum-score threshold**, so it never returns zero and the "on miss"
+   branch was unreachable — while low-quality hits were consumed as if they were answers. The table
+   is now keyed by **intent** (targeted lookup / structure / exploration / exact text), graphify is
+   an exploration lane reached up front rather than a CRG fallback, and a meaning-based search that
+   does not answer routes to `grep`, not graphify. **Re-port
+   `setup-graph-hooks/assets/agents-knowledge-graph.md` and
+   `scripts/graph-hooks/core/session-context.sh`.**
+   **Step 5 now refreshes the block instead of only appending it.** Previously the injector skipped
+   any repo that already had `graph-hooks:begin`, so a routing fix could never reach an existing
+   install — the verifier could only warn. It now swaps the span between the markers and leaves
+   everything around it alone. **This is the change that makes every future block revision
+   portable**; without it your collection would need a manual edit per repo. Re-porting `SKILL.md`
+   step 5 is the highest-value part of this release.
+   **Say which `search_mode` answered.** There is no similarity floor and there will not be one:
+   the score CRG returns is a boosted RRF rank, not a cosine similarity, so there is nothing
+   well-defined to threshold. Instead the block now tells agents to read the `search_mode` field
+   CRG already returns (`semantic` | `fts` | `keyword`). Tier is what a repo _can_ do; `search_mode`
+   is what a query _did_. Degrading below the live tier means the vectors did not answer — the one
+   case where grep is the right next step.
+   **One embedder owns the embeddings index** (`09a544d`). CRG re-embeds a node whose provider
+   identity changes, so a completed switch converges — but rows autocommit, so an **interrupted**
+   switch splits the table between two embedders. Mixed vector families are incomparable,
+   `EmbeddingStore.count()` ignores provider, and `_cosine_similarity` returns `0.0` on a width
+   mismatch instead of raising, so a split index degrades every later search **silently**, behind a
+   healthy-looking embedding count. `setup-embeddings.sh` now clears foreign vectors before a
+   switch and **refuses to embed if it cannot** (an exclusive write lock — the end-of-turn refresh
+   embeds in the background — blocks the read too, and treating that as "nothing to clear" was the
+   subtle version of the same bug). `verify-graph-hooks.sh` previously reported only the _most
+   common_ provider, which hid the split outright; it now groups every provider, **FAILs** on more
+   than one, and warns when the recorded identity has drifted from `embed.env`. **Re-port
+   `setup-embeddings.sh` and `verify-graph-hooks.sh`.**
+   Note CRG's own `refresh_embeddings()` is **not** the migration tool — it refuses when the
+   recorded identity differs from the requested one, which is exactly what a switch is. It guards
+   same-identity refreshes; migrating is the skill's job.
+   **Not changed, deliberately:** `grep-steer.sh`. Its ladder is FTS5/`LIKE` over node names plus
+   usage edges — it has never run semantic search, and it reads `graphify-out/graph.json` inline as
+   a parallel source rather than shelling out on a miss. If you carry a port of it, leave it alone.
+   **`OLLAMA_KEEP_ALIVE` is documented, not wired**: it is read by `ollama serve`, and Ollama's
+   OpenAI-compatible `/v1/embeddings` ignores a per-request `keep_alive` (native `/api/embed`
+   honours it; CRG sends it on neither), so writing it into `embed.env` would be a no-op that looks
+   like a fix.
+
 ## 0. What changed since the last sync
 
 Read this first if your collection already carries an earlier port.
 
-0. **v0.8.0 (2026-08-04).** Tagged and pushed — port from the tag. Full range:
+1. **v0.8.0 (2026-08-04).** Tagged and pushed — port from the tag. Full range:
    [v0.7.0...v0.8.0](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...v0.8.0). Three themes:
    handoff frontmatter that survives a strict YAML parser, multi-group dogfooding, and a release-it
    changelog fix.
@@ -106,7 +154,7 @@ Read this first if your collection already carries an earlier port.
    result is a quality signal or an availability one, so a probe that mislabels a working vector tier
    as `keyword` pushes agents back to grep for no reason. **Re-port the `setup-graph-hooks` probe.**
 
-1. **suite v0.7.0 (2026-07-27).** Four themes; full range:
+2. **suite v0.7.0 (2026-07-27).** Four themes; full range:
    [v0.6.0...v0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 116/116 grader
    assertions across 11 evals, `run-handoff` 12/12, the new `register-cross-repo-handoff` grader
@@ -146,7 +194,7 @@ Read this first if your collection already carries an earlier port.
    wired, not on a stray file match. Out of the handoff scope but in the same release; re-port
    `setup-project-tooling/assets/` + `SKILL.md`.
 
-2. **suite v0.6.0 (2026-07-23).** Four themes; full range:
+3. **suite v0.6.0 (2026-07-23).** Four themes; full range:
    [v0.5.0...v0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 97/97 grader
    assertions across 10 evals, `run-handoff` 12/12, the new `release-announcement` grader 12/12 on
@@ -189,7 +237,7 @@ Read this first if your collection already carries an earlier port.
      is graded against the skill's own Rules; see §7). Out of this doc's engineering scope — catalog
      entry in [`skills/README.md`](skills/README.md).
 
-3. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
+4. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
    gains a lease-based **handoff board** for multi-agent / cross-session / cross-repo work: _claim
    before you edit, release when you stop, `done` only when verified against live code._
    `setup-handoff` installs the tool-generic `.agents/handoff/` payload, wires per-tool enforcement
@@ -238,7 +286,7 @@ Read this first if your collection already carries an earlier port.
    legacy fixture) were migrated to the suffix; `blocked_on` references are canonicalized too. All 11
    evals stay green (setup-handoff 61/61 incl. cross-repo 13/13, run-handoff 12/12). Re-port
    `scripts/payload/{handoff,hooks.sh}` and rename any existing board docs to `*-handoff.md`.
-4. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
+5. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional
    step" — observed with GitHub Copilot as the resource owner. Fixed: surfacing the choice is now
@@ -249,30 +297,30 @@ Read this first if your collection already carries an earlier port.
    are byte-identical — so this is a **wording-only re-port**: re-copy `setup-graph-hooks/SKILL.md`
    §8. See §2 (`setup-graph-hooks`) and §4.4 embeddings caveat, both otherwise unchanged.
 
-5. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
+6. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
    from markdown-only (ad-hoc `code-review-graph register` calls) to a **declared, committed
    `.graph-repos.json` manifest cascade** (user → repo → subdir, nearest wins, like `AGENTS.md`)
    applied by `sync-cross-repo-graph.sh`, with a real verifier and a shared Python resolver. It also
    now gets a **per-project** graphify merged graph instead of writing graphify's global one. **Delete
    the old version rather than merging into it.** See §2 and §4.1.
-6. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
+7. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
    stock Python template) matches the new `scripts/manifest/` **directory** on any case-insensitive
    filesystem, so `git add -A` ships the skill without its resolver. Fixed here in both our
    `.gitignore` and the template `setup-project-tooling` **ships to every scaffolded project**
    (`assets/gitignore` → `/MANIFEST`). **Check your own collection's `.gitignore` before porting** —
    the full check is in §4.1.
-7. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
+8. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
    unchanged from the last handoff, but still the most common source of "the graph looks broken" false
    alarms. See the embeddings caveat in §4.4.
-8. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
+9. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
    self-tested shared library plus a workspace for every skill — the five graph/onboarding skills
    plus the new `setup-handoff` and `run-handoff` — each with fixtures, `evals/evals.json`, and a
    `grade.py` that wraps the skill's own `verify-*.sh` (or, for `run-handoff`, drives the installed
    board). Graders are read-only and LLM-free. The `verify-*.sh` checkers remain the correctness
    source of truth; the harness adds repeatable, gradeable evals on top. See §7.
-9. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
-   a `[skip]`, not a `[FAIL]`). "Not configured" and "broken" are no longer conflated — see §4.3.
-10. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
+10. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
+    a `[skip]`, not a `[FAIL]`). "Not configured" and "broken" are no longer conflated — see §4.3.
+11. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
     `setup-project-tooling` and `repair-graph-hooks` are unchanged in behavior.
 
 ---
