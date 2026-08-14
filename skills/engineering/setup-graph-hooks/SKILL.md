@@ -236,7 +236,9 @@ Do not run the interactive menu — it expects a TTY. Read the machine's state, 
 
 ```bash
 bash "$SKILL_DIR/scripts/setup-embeddings.sh" --list
-# ollama=up|down  ollama_models=<embedding-capable only>  sentence_transformers=yes|no  current=<provider>
+# endpoint=<base> flavor=ollama|lmstudio|openai models=<embedding-capable only>   (one line per
+#                                                                                 reachable server)
+# sentence_transformers=yes|no  current=<provider>
 ```
 
 If `--list` reports `current=<a real provider>` (anything other than `off` or empty), embeddings
@@ -252,19 +254,35 @@ one, mirroring the installer and `verify-graph-hooks.sh` ("keyword mode … opti
 - **Local provider** — the default choice, and the only one that works with no further wiring:
   CRG's own default provider is `local`, so the MCP server reads the vectors as-is. Costs ~2 GB
   of PyTorch plus a one-time ~90 MB model fetch. No daemon needed.
-- **Ollama** — offer the detected embedding-capable models by name when the daemon is up. Skips
-  the PyTorch install, but the vectors are only readable if the MCP server gets `CRG_OPENAI_*`
-  in its environment **and** every call pins `provider="openai", model=<name>`. The script wires
-  the first into `.mcp.json` (localhost only) and prints the second. Say this before they choose.
+- **A model server — Ollama, LM Studio, or any OpenAI-compatible endpoint.** `--list` probes
+  `:11434` and `:1234` and reports each reachable server with the models it can actually embed
+  with, so offer those by name rather than asking which product they run. Skips the PyTorch
+  install, but the vectors are only readable if the MCP server gets `CRG_OPENAI_*` in its
+  environment **and** every call pins `provider="openai", model=<name>`. The script wires the
+  first into `.mcp.json` and `.vscode/mcp.json` (localhost only) and prints the second. Say this
+  before they choose.
 - **Keyword mode** — always a valid answer; the user can choose to stay in keyword mode.
 
 Apply the answer non-interactively, then let the hooks keep it fresh:
 
 ```bash
 bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider ollama --model qwen3-embedding
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider lmstudio # auto-detects :1234
+bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider openai --base-url http://host:port
 bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider local
 bash "$SKILL_DIR/scripts/setup-embeddings.sh" --provider off # back to keyword mode
 ```
+
+Flavor is taken from what answers the probe, never from the port's reputation: LM Studio ships an
+Ollama-compatible `/api/tags` shim that returns an empty model list, so a detector that asks it
+first reports LM Studio as an Ollama with no models. `/api/v0/models` (LM Studio only) is asked
+first for exactly that reason.
+
+Once a backend is configured, `core/embed-health.sh` keeps checking that it still holds — the
+write path, the index, and the MCP read path have to agree, and every way they can diverge is
+silent. `verify-graph-hooks.sh` renders its findings as `[warn]` lines and the session-start hook
+renders the same findings as a notice naming `.graph-hooks/setup-embeddings.sh`. Neither repairs
+anything on its own: switching backends re-embeds every node, which is the user's call.
 
 The choice is written to `.code-review-graph/embed.env` — repo-local, not shell-local, because a
 commit from a GUI git client inherits no shell rc and would otherwise stop refreshing vectors.

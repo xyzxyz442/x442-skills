@@ -113,15 +113,22 @@ difference (worse tolerance for paraphrased queries), not an availability one �
 [Semantic search is optional](#semantic-search-is-optional).
 
 ```mermaid
-flowchart LR
-    start([Code question]) --> crg{CRG can<br/>answer?}
-    crg -->|yes| A["semantic_search /<br/>query_graph /<br/>get_impact_radius"]
-    crg -->|miss| gfy{graphify<br/>helps?}
-    gfy -->|yes| B["graphify query /<br/>path / explain"]
-    gfy -->|no| xr{"symbol in an<br/>in-scope<br/>sibling repo?"}
-    xr -->|yes| C["cross_repo_search_tool<br/>(keep only in-scope aliases)"]
-    xr -->|no| grep["grep / find<br/>(non-code text,<br/>or --graph-tried)"]
+flowchart TD
+    start([Code question]) --> q{"what are you<br/>trying to do?"}
+    q -->|"find code by meaning"| A["semantic_search_nodes_tool"]
+    q -->|"callers / importers of<br/>a known symbol"| B["query_graph_tool"]
+    q -->|"blast radius, review impact"| C["get_impact_radius_tool /<br/>get_review_context_tool"]
+    q -->|"architecture overview"| D["list_communities_tool"]
+    q -->|"explore / explain / onboard"| E["graphify query / explain"]
+    q -->|"shortest path A→B"| F["graphify path"]
+    q -->|"symbol in an in-scope<br/>sibling repo"| G["cross_repo_search_tool<br/>(keep only in-scope aliases)"]
+    q -->|"exact string, config<br/>value, log text"| H["grep / find<br/>(--graph-tried)"]
+    A -.->|"search_mode came back<br/>below the live tier —<br/>the vectors did not answer"| H
 ```
+
+Read that as a fan, not a waterfall: you enter at the lane matching your intent. The one dotted
+edge is the _only_ sanctioned fallback — a meaning-based search that degraded below the live tier
+goes to `grep`, never sideways into another graph lane.
 
 ## What fires while you work
 
@@ -133,6 +140,17 @@ across Claude Code, Gemini CLI, and Copilot; only the wrapping differs per tool.
 When a session opens, a `SessionStart` hook injects a short query cheatsheet and the current
 graph stats (node/edge/file counts, last-updated commit) into context. This is why the
 assistant knows the graph exists and how to query it without you saying so.
+
+The same hook carries a second, conditional payload: if `core/embed-health.sh` finds the embedding
+setup broken, the session opens with a notice saying what is wrong and what to run. It fires for
+the four ways the write path, the index, and the read path can silently disagree — vectors written
+by an embedder the config no longer names, an endpoint that stopped answering, an endpoint that
+answers but no longer serves the configured model, and an MCP config pointing at a different
+endpoint or a different repo. Every one of those degrades semantic search to keyword without
+raising an error anywhere, so a session banner is realistically the only place a human finds out.
+
+It reports and stops. Nothing self-repairs, because switching backends re-embeds every node in the
+graph — not a thing to do to someone while they are opening a session.
 
 ### 2. Before a grep/find — grep steering
 
@@ -239,7 +257,8 @@ sequenceDiagram
 The payoff is measured in **context tokens the assistant burns to answer** — the graph returns
 a few compact rows (`kind  name  -> file:line`) where grep-and-read pulls whole files into
 context. The numbers below are **order-of-magnitude estimates** for a mid-size repo
-(~40 files, this repo's own graph is 98 nodes / 1,068 edges); they scale with repo size and the
+(~40 files; for scale, this repo's own graph is 811 nodes / 9,178 edges over 104 files); they
+scale with repo size and the
 model, but the _ratio_ holds. A graph query result is typically 200–1,000 tokens regardless of
 repo size; the grep/read path grows with the codebase.
 
@@ -288,9 +307,13 @@ transitive dependents that a first-pass grep would miss.
   _before_ the hash check can discover there is nothing to re-embed. So a no-op embed still costs
   a torch import. That is exactly why the refresh skips `embed` entirely when no provider is
   configured, instead of firing one and discarding the error.
-- **No redundant builds.** The single-owner rule (one `--primary` tool) plus the repo-global
-  `mkdir` lock and PID file collapse N tools / concurrent sessions to **one** refresh — the rest
-  no-op. Without this, N wired tools would each trigger a rebuild.
+- **No redundant builds — _within this layer_.** The single-owner rule (one `--primary` tool) plus
+  the repo-global `mkdir` lock and PID file collapse N tools / concurrent sessions to **one**
+  refresh. The invariant is enforced by a shared lock path, so it only binds refreshers that use
+  it: a refresh hook installed **outside** `.graph-hooks` — most likely a predecessor generation
+  still wired in your user-level config — takes its own lock, keeps its own PID file, and is
+  invisible to both this lock and `verify-graph-hooks.sh`. See
+  [Two generations of hooks](#two-generations-of-hooks-the-failure-the-verifier-cannot-see).
 - **Read-path throttle.** The grep-steerer's "one allowance per repo per hour" means it
   pre-answers or denies at most once per hour per repo, so it never turns into nagging — the
   first grep teaches, later duplicate greps get the cached answer inline.
@@ -358,15 +381,29 @@ code-review-graph embed
 Nothing else to configure: CRG's default provider _is_ `local`, so both the refresh hooks and
 the MCP server pick these vectors up on their own.
 
-**2. Ollama — no PyTorch, but two extra wires.** Ollama serves an OpenAI-compatible
-`/v1/embeddings` endpoint, so CRG's `openai` provider drives it locally. The setup script detects
-a running daemon and lists only its embedding-capable models (it asks `/api/show` for a
-`capabilities` array rather than guessing from the name), then writes the config for you.
+**2. A local model server — Ollama, LM Studio, or anything OpenAI-compatible.** Each serves a
+`/v1/embeddings` endpoint, so CRG's `openai` provider drives them all the same way. The setup
+script probes `:11434` and `:1234`, works out which flavor answered, and lists only the models that
+can actually embed — asking each server the question it can answer, because the portable
+`/v1/models` returns bare ids with no type:
+
+| Flavor     | Listing call              | Embedding models are                |
+| ---------- | ------------------------- | ----------------------------------- |
+| `ollama`   | `/api/tags` + `/api/show` | `capabilities` contains `embedding` |
+| `lmstudio` | `/api/v0/models`          | `type == "embeddings"`              |
+| `openai`   | `/v1/models`              | untyped — you pick                  |
 
 ```bash
-ollama pull qwen3-embedding
-bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider ollama
+bash .graph-hooks/setup-embeddings.sh --list # what is reachable right now
+bash .graph-hooks/setup-embeddings.sh        # pick a server and model together
+bash .graph-hooks/setup-embeddings.sh --provider lmstudio
+bash .graph-hooks/setup-embeddings.sh --provider openai --base-url http://host:port
 ```
+
+Detection order is load-bearing and reads backwards: `/api/v0/models` (LM Studio only) is probed
+**before** `/api/tags`, because LM Studio also answers `/api/tags` — an Ollama-compatibility shim
+that returns an empty model list. Ask `/api/tags` first and LM Studio is identified as an Ollama
+that has no models, which is both wrong and plausible.
 
 CRG treats a `localhost` base URL as non-cloud, so this path prints no egress warning and needs
 no `CRG_ACCEPT_CLOUD_EMBEDDINGS=1`. Nothing leaves the machine.
@@ -419,6 +456,72 @@ Common cases it fixes:
   graph builds**.
 - A new-machine or Windows checkout where the exec bit or CRLF broke a hook.
 - `code-review-graph` / `graphify` was reinstalled, upgraded, or moved and is now broken.
+
+### Two generations of hooks: the failure the verifier cannot see
+
+Both `verify-graph-hooks.sh` and `repair-graph-hooks` reason about **this repo's** wiring —
+`.graph-hooks/`, the per-tool config files, the git hook. Neither reads your **user-level** config
+(`~/.claude/settings.json` and friends). So a hook installed there is outside their field of view
+entirely, and the verifier will report `exactly 1 end-of-turn refresh owner — no duplication`
+while a second owner fires on every turn.
+
+This is not hypothetical: it is what an **earlier generation of this same layer** leaves behind. The
+predecessor installed standalone scripts (`~/.claude/scripts/graph-cheatsheet.py`,
+`smart-grep-hook.sh`, `read-glob-nudge.sh`, `stop-graph-update.sh`) into the user-level config, where
+they survive every later repo-local install. Both generations then run, and they do not coordinate:
+
+| Behavior           | `.graph-hooks` (current)     | Predecessor (user-level) | Result when both fire                                   |
+| ------------------ | ---------------------------- | ------------------------ | ------------------------------------------------------- |
+| Session cheatsheet | `session-context.sh`         | `graph-cheatsheet.py`    | Two cheatsheets, the old one teaching stale routing     |
+| Read nudge         | `read-nudge.sh`              | `read-glob-nudge.sh`     | The nudge is injected twice per read                    |
+| Grep steer         | `grep-steer.sh`              | `smart-grep-hook.sh`     | Two independent hourly allowances                       |
+| End-of-turn        | `graph-refresh.sh`           | `stop-graph-update.sh`   | Two concurrent refreshes — neither sees the other's PID |
+| `embed`            | gated on `embed-provider.sh` | bare `embed` (`local`)   | Provider flip-flop — see below                          |
+
+The refresh collision is the expensive one. The two refreshers key their PID files differently
+(`$TMPDIR/crg-graph-…` versus `/tmp/crg-claude-…`, and on macOS `$TMPDIR` is not `/tmp`), so the
+mutual-exclusion the lock was written to provide never engages, and two `code-review-graph update`
+processes contend on one SQLite file.
+
+The embedding consequence is worse, because it is **recurring work, not a one-time race**. The
+current layer runs `embed` through `embed-provider.sh`, which honours `.code-review-graph/embed.env`;
+the predecessor runs a bare `code-review-graph embed`, which takes CRG's default provider (`local`).
+When `embed.env` selects anything else, the two write vectors under different provider tags — and
+since `embed_nodes()` skips only rows whose hash **and provider** are unchanged, each run re-embeds
+every node the other just wrote. The graph settles into whichever fired last, and pays a full
+re-embed of the repo every single turn, forever.
+
+That is also why a persistent `embedder drift` warning from `verify-graph-hooks.sh` is worth reading
+as a **symptom rather than a misconfiguration**. The warning describes the state accurately —
+"N vectors were written by X but embed.env resolves Y" — but if re-running the embed never settles
+it, the cause is a second writer, not a wrong setting.
+
+Diagnose it by asking which hooks actually fire, rather than which ones this repo installed:
+
+```bash
+# any graph hook wired outside this repo's .graph-hooks layer?
+grep -l 'graph\|crg' ~/.claude/settings.json ~/.gemini/settings.json 2> /dev/null
+ls ~/.claude/scripts/ 2> /dev/null | grep -E 'graph|grep-hook|nudge'
+```
+
+Two live tells need no commands at all: **two graph cheatsheets** at session start, or the read
+nudge appearing **twice** for a single `Read`. Either one means two generations are installed.
+
+The fix is to retire the predecessor, not to rewire this repo — this repo is already correct. Do it
+by hand: it is your global config, it affects every repo on the machine, and `repair-graph-hooks`
+deliberately does not reach outside the project it was pointed at.
+
+**Deleting the payload is enough, and is the safer half.** The predecessor wires its hooks as
+`S="…"; [ -f "$S" ] && bash "$S" || true`, so once `~/.claude/scripts/` no longer holds the scripts,
+each entry exits 0 with no output — the duplication stops without editing a single line of global
+JSON. Removing the now-dead entries is then cosmetic, and can wait for a moment when you actually
+want to touch that file. Clear any orphaned `/tmp/crg-claude-*.pid` at the same time; nothing writes
+them once the predecessor is gone.
+
+The confirmation to look for is the embedding warning **clearing on its own**. With one writer left,
+the next `verify-graph-hooks.sh` should report the provider in `embed.env` and the provider recorded
+in the graph as the same thing — no re-embed, no drift. If the warning survives a single writer, it
+really is a misconfiguration this time.
 
 ## Cross-repo lookups
 
