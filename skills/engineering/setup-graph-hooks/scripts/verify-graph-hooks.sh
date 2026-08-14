@@ -255,7 +255,7 @@ if command -v code-review-graph > /dev/null 2>&1; then
     ok "CRG graph built"
     check_embeddings
   else
-    warn "CRG graph not built — run: code-review-graph install && code-review-graph build"
+    warn "CRG graph not built — run: code-review-graph build (register MCP separately, scoped: --platform <tool> --no-hooks --no-instructions --no-skills)"
   fi
 else
   warn "code-review-graph not installed (hooks stay silent until it is)"

@@ -203,14 +203,50 @@ diagnoses and fixes wiring/graph-state drift (and smoke-tests that the graph too
 
 ### 7. Build the graph (only if a tool is installed)
 
-Do not auto-run heavy builds. Offer the one-time commands and run them only if the user agrees:
+Do not auto-run heavy builds. Offer the one-time commands and run them only if the user agrees.
+
+**Scope `code-review-graph install` to the tools chosen in step 2, and let it register the MCP
+server only.** Bare `code-review-graph install` defaults to `--platform all` and writes far more
+than MCP config: it configures every platform it detects _or_ can create a file for (Codex, Cursor,
+Windsurf, Continue, OpenCode, Kiro, Qoder, CodeBuddy, …), injects its own instruction block into
+`CLAUDE.md` / `AGENTS.md` / `GEMINI.md` and creates rule files for tools this repo does not use
+(`.cursorrules`, `.windsurfrules`, `QODER.md`, `CODEBUDDY.md`, `.kiro/steering/`), generates four
+`.claude/skills/` skills, and merges **its own hooks** into `.claude/settings.json` alongside a git
+`pre-commit` hook. Those hooks are a second refresh owner — the exact duplicate-rebuild problem
+step 3's single-owner rule exists to prevent — and its instructions compete with the block step 5
+manages.
+
+`--platform` takes one value and is not repeatable, so run it once per chosen tool:
+
+| Chosen in step 2 | `--platform` value |
+| ---------------- | ------------------ |
+| Claude Code      | `claude-code`      |
+| Gemini CLI       | `gemini-cli`       |
+| GitHub Copilot   | `copilot`          |
+| Antigravity      | `antigravity`      |
 
 ```bash
-# CRG (recommended): MCP tools + graph search
-code-review-graph install && code-review-graph build
+# CRG (recommended): MCP tools + graph search. One call per chosen tool, MCP config only.
+for p in <platform-values-for-the-tools-chosen-in-step-2>; do
+  code-review-graph install --platform "$p" --no-hooks --no-instructions --no-skills
+done
+code-review-graph build
 # graphify (optional): CLI exploration — builds the initial graph
 graphify update .
 ```
+
+Why each opt-out:
+
+- `--no-hooks` — step 4 owns the hooks and step 3 owns the single refresh owner.
+- `--no-instructions` — step 5 owns the `AGENTS.md` routing block.
+- `--no-skills` — the generated `explore-codebase` skill routes to `get_architecture_overview_tool`,
+  which the routing block explicitly rules out in favour of `list_communities_tool`.
+
+Preview with `--dry-run` before running: it lists every platform config the invocation would touch,
+so you can confirm nothing outside the chosen tools appears. One caveat — CRG prints its
+"Graph instructions will be injected into:" preview _before_ it honours `--no-instructions`, so
+that list still shows under `--dry-run`. A real run prints
+`Skipped instruction injection (--no-instructions)` and writes none of them.
 
 Build graphify's graph only; do **not** add `graphify hook install`. The `post-commit` hook this
 skill installs already backgrounds `graphify update .` on every commit, so graphify's own hook would

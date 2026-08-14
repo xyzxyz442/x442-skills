@@ -235,7 +235,27 @@ if [ "$HAVE_CRG" = 0 ] && [ "$HAVE_GFY" = 0 ]; then
   echo "    pipx install code-review-graph    # MCP tools + graph search"
   echo "    pipx install graphifyy            # CLI only; installed command is 'graphify'"
 fi
-[ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ] && echo "  Build CRG:      code-review-graph install && code-review-graph build"
+if [ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ]; then
+  # Register CRG's MCP server for the wired tools ONLY. A bare `code-review-graph install`
+  # defaults to --platform all: it configures every platform it can detect or create a file for,
+  # writes competing instruction blocks, and merges its own hooks — a second refresh owner.
+  CRG_PLATFORMS=""
+  for t in $TOOLS_LIST; do
+    case "$t" in
+      claude) p="claude-code" ;;
+      gemini) p="gemini-cli" ;;
+      copilot) p="copilot" ;;
+      antigravity) p="antigravity" ;;
+      *) continue ;;
+    esac
+    CRG_PLATFORMS="${CRG_PLATFORMS:+$CRG_PLATFORMS }$p"
+  done
+  echo "  Build CRG:      register the MCP server for the wired tools only, then build:"
+  echo "    for p in $CRG_PLATFORMS; do"
+  echo "      code-review-graph install --platform \"\$p\" --no-hooks --no-instructions --no-skills"
+  echo "    done"
+  echo "    code-review-graph build"
+fi
 [ "$HAVE_GFY" = 1 ] && [ ! -d graphify-out ] && echo "  Build graphify: graphify update ."
 if [ "$HAVE_CRG" = 1 ]; then
   echo
