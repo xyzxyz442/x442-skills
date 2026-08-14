@@ -342,10 +342,18 @@ transitive dependents that a first-pass grep would miss.
 One-time build (only if you've installed the tools):
 
 ```bash
-# CRG (recommended): MCP tools + graph search
-code-review-graph install && code-review-graph build
-# graphify (optional): CLI exploration + git-hook freshness
-graphify update . && graphify hook install
+# CRG (recommended): MCP tools + graph search.
+# Register the MCP server once per wired tool, MCP config only — a bare
+# `code-review-graph install` is --platform all: it configures every platform it can detect or
+# create a file for, injects competing instruction blocks, and merges its own hooks (a second
+# refresh owner). Platform values: claude-code | gemini-cli | copilot | antigravity.
+for p in claude-code copilot; do
+  code-review-graph install --platform "$p" --no-hooks --no-instructions --no-skills
+done
+code-review-graph build
+# graphify (optional): CLI exploration. The post-commit hook already refreshes it, so do NOT add
+# `graphify hook install` — that would be a second refresh owner.
+graphify update .
 ```
 
 Verify the hooks are wired and firing:
