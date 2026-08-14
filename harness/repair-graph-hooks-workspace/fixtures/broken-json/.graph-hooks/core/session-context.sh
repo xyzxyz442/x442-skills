@@ -11,8 +11,13 @@ SCOPE="$(bash "$HERE/cross-repo-scope.sh" 2> /dev/null || true)"
 # Active read-path search tier (keyword | local <model> | custom <label>) so the session banner
 # tells the agent which tier its semantic searches will land in, and whether to pin a provider.
 TIER="$(bash "$HERE/embed-provider.sh" --tier 2> /dev/null | head -1)"
+# Embedding-config problems, as `code<TAB>message` lines; empty when healthy or when the core is
+# absent. Every condition it reports is silent by nature — drifted vectors, a dead endpoint, an MCP
+# server reading the wrong index — so the session banner is the only place a human reliably sees
+# them. Treated as optional (like embed-provider.sh) so an older install just gets no notice.
+HEALTH="$(bash "$HERE/embed-health.sh" 2> /dev/null || true)"
 
-SCOPE="$SCOPE" TIER="$TIER" python3 - << 'PY'
+SCOPE="$SCOPE" TIER="$TIER" HEALTH="$HEALTH" python3 - << 'PY'
 import json, os, shutil, sqlite3, subprocess
 
 
@@ -114,16 +119,41 @@ if crg or gfy or siblings:
         + "\nOverride the grep gate: append --graph-tried to any shell command."
     )
 
-# Setup nudge: CRG CLI installed but no graph built yet in this repo.
+notices = []
+
+# Embedding-config notice. Everything embed-health.sh reports degrades semantic search WITHOUT
+# erroring — drifted vectors, a dead endpoint, an MCP server reading an index nothing wrote — so a
+# session banner is the only place a human reliably finds out. It states the condition and the
+# literal repair command, and stops there: switching providers re-embeds every node in the graph,
+# which is not a decision to take on someone's behalf while they are opening a session.
+health = [ln.split("\t", 1)[1] for ln in os.environ.get("HEALTH", "").splitlines() if "\t" in ln]
+if health:
+    cmd = (
+        "bash .graph-hooks/setup-embeddings.sh"
+        if os.path.exists(".graph-hooks/setup-embeddings.sh")
+        else "the setup-graph-hooks skill's setup-embeddings.sh"
+    )
+    notices.append(
+        "Graph embeddings need attention:\n"
+        + "\n".join("  - " + m for m in health)
+        + "\n  Repair: " + cmd + " (choose an embedding backend; re-embeds the graph)"
+        + "\n  For wider hook or graph wiring problems, use the repair-graph-hooks skill."
+    )
+
+# Setup nudge: CRG CLI installed but no graph built yet in this repo. Mutually exclusive with the
+# health notice above, which needs a graph to have something to compare against.
 inside_git = subprocess.run(
     ["git", "rev-parse", "--is-inside-work-tree"],
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
 ).returncode == 0
 if shutil.which("code-review-graph") and inside_git and not os.path.isdir(".code-review-graph"):
-    out["systemMessage"] = (
+    notices.append(
         "Graph tool installed but not yet initialized. Ask me to set up: "
         "code-review-graph (code-review-graph install)"
     )
+
+if notices:
+    out["systemMessage"] = "\n".join(notices)
 
 if out:
     print(json.dumps(out))

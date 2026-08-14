@@ -37,8 +37,36 @@ recorded_provider() {
   [ -f "$DB" ] || return 0
   python3 - "$DB" << 'PY' 2> /dev/null
 import sqlite3, sys
+
+
+# Open the graph for a STATUS PROBE, degrading only as far as necessary.
+#
+# Plain mode=ro is tried first and is what almost always answers. It is kept first because it is
+# the only one that is correct on a WAL database: immutable=1 tells SQLite the file cannot change,
+# so it ignores the -wal file entirely and reports whatever was last checkpointed — on a freshly
+# built graph that can be zero rows, or no tables at all.
+#
+# immutable=1 is the fallback for the one case ro cannot serve: a database needing journal
+# rollback. CRG writes graph.db in `delete` journal mode on some repos, and SQLite refuses a
+# read-only connection against a hot journal (CANTOPEN) — the refresh is exactly such a writer and
+# runs every turn and every commit. immutable skips locking and recovery, so the probe answers
+# from the main file instead of failing into the caller's except and reporting "no vectors".
+#
+# The sqlite_master read forces the open/recovery path, so a failure surfaces here where it can be
+# retried rather than at the first real query.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 try:
-    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
+    c = probe_connect(sys.argv[1])
     row = c.execute(
         "SELECT provider FROM embeddings GROUP BY provider ORDER BY count(*) DESC LIMIT 1"
     ).fetchone()
@@ -54,9 +82,10 @@ PY
 #   keyword           no vectors — semantic_search falls back to name matching (the floor)
 #   local  <model>    vectors from CRG's built-in sentence-transformers provider (read by default)
 #   custom <label>    vectors from an external / OpenAI-compatible provider (ollama, hosted)
-# The custom label is "ollama" for a :11434 endpoint, else the endpoint host, else the model — a
-# hint for the agent, not something it must parse. Preference order at setup is custom > local >
-# keyword (resolve() above already writes custom-first); this only reports what is live now.
+# The custom label names the well-known local server behind the endpoint's port ("ollama" for
+# :11434, "lmstudio" for :1234), else the endpoint host, else the model — a hint for the agent, not
+# something it must parse. Preference order at setup is custom > local > keyword (resolve() above
+# already writes custom-first); this only reports what is live now.
 recorded_tier() {
   [ -f "$DB" ] || {
     printf 'keyword\n'
@@ -65,8 +94,23 @@ recorded_tier() {
   python3 - "$DB" << 'PY' 2> /dev/null || printf 'keyword\n'
 import sqlite3, sys
 from urllib.parse import urlparse
+
+
+# See recorded_provider above: ro first (correct on WAL), immutable=1 only when a hot rollback
+# journal makes a read-only open impossible.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 try:
-    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=2)
+    c = probe_connect(sys.argv[1])
     row = c.execute(
         "SELECT provider, count(*) FROM embeddings GROUP BY provider "
         "ORDER BY count(*) DESC LIMIT 1"
@@ -78,11 +122,17 @@ if not row or not row[0] or not row[1]:
 bare, _, detail = row[0].partition(":")   # "openai:qwen3-embedding@http://localhost:11434"
 if bare == "local":
     print("local " + (detail or "-")); raise SystemExit
+# Well-known local embedding servers, named by the port they conventionally serve on. Anything
+# else falls back to the hostname — a hint for the agent, never something it must parse.
+PORT_LABELS = {11434: "ollama", 1234: "lmstudio"}
+
 model, _, endpoint = detail.partition("@")
-if endpoint and ":11434" in endpoint:
-    label = "ollama"
-elif endpoint:
-    label = urlparse(endpoint).hostname or endpoint
+if endpoint:
+    try:
+        parsed = urlparse(endpoint)
+        label = PORT_LABELS.get(parsed.port) or parsed.hostname or endpoint
+    except ValueError:  # malformed port in the recorded endpoint
+        label = endpoint
 else:
     label = model or bare
 print("custom " + label)
