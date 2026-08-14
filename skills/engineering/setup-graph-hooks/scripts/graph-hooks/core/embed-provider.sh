@@ -82,9 +82,10 @@ PY
 #   keyword           no vectors — semantic_search falls back to name matching (the floor)
 #   local  <model>    vectors from CRG's built-in sentence-transformers provider (read by default)
 #   custom <label>    vectors from an external / OpenAI-compatible provider (ollama, hosted)
-# The custom label is "ollama" for a :11434 endpoint, else the endpoint host, else the model — a
-# hint for the agent, not something it must parse. Preference order at setup is custom > local >
-# keyword (resolve() above already writes custom-first); this only reports what is live now.
+# The custom label names the well-known local server behind the endpoint's port ("ollama" for
+# :11434, "lmstudio" for :1234), else the endpoint host, else the model — a hint for the agent, not
+# something it must parse. Preference order at setup is custom > local > keyword (resolve() above
+# already writes custom-first); this only reports what is live now.
 recorded_tier() {
   [ -f "$DB" ] || {
     printf 'keyword\n'
@@ -121,11 +122,17 @@ if not row or not row[0] or not row[1]:
 bare, _, detail = row[0].partition(":")   # "openai:qwen3-embedding@http://localhost:11434"
 if bare == "local":
     print("local " + (detail or "-")); raise SystemExit
+# Well-known local embedding servers, named by the port they conventionally serve on. Anything
+# else falls back to the hostname — a hint for the agent, never something it must parse.
+PORT_LABELS = {11434: "ollama", 1234: "lmstudio"}
+
 model, _, endpoint = detail.partition("@")
-if endpoint and ":11434" in endpoint:
-    label = "ollama"
-elif endpoint:
-    label = urlparse(endpoint).hostname or endpoint
+if endpoint:
+    try:
+        parsed = urlparse(endpoint)
+        label = PORT_LABELS.get(parsed.port) or parsed.hostname or endpoint
+    except ValueError:  # malformed port in the recorded endpoint
+        label = endpoint
 else:
     label = model or bare
 print("custom " + label)

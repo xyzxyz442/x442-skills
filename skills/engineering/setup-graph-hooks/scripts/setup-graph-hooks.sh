@@ -102,8 +102,13 @@ echo
 echo "Layer 1 — universal:"
 mkdir -p .graph-hooks
 cp -R "$HERE/graph-hooks/." .graph-hooks/
+# setup-embeddings.sh is the repair action the session-start notice names, so it has to exist inside
+# the repo being set up — the skill directory it ships from is not reachable from a consuming repo.
+# It already prefers .graph-hooks/core/embed-provider.sh over its own directory, so it was written
+# to run from here.
+cp "$HERE/setup-embeddings.sh" .graph-hooks/setup-embeddings.sh
 find .graph-hooks -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} +
-echo "  + .graph-hooks/ (cores + dispatcher + copilot wrappers)"
+echo "  + .graph-hooks/ (cores + dispatcher + copilot wrappers + setup-embeddings.sh)"
 
 # ---- Layer 1: git post-commit hook (husky-aware), appended idempotently ----------------
 install_hook() {
@@ -235,9 +240,10 @@ fi
 if [ "$HAVE_CRG" = 1 ]; then
   echo
   echo "  Optional — semantic search. The graph answers in keyword mode without it."
-  echo "  Enabling costs either a PyTorch install or a running Ollama daemon, so it is opt-in:"
-  echo "    ./setup-embeddings.sh --list     # see what this machine can do"
-  echo "    ./setup-embeddings.sh            # choose a provider"
+  echo "  Enabling costs either a PyTorch install or a running model server, so it is opt-in."
+  echo "  Ollama and LM Studio are detected automatically:"
+  echo "    .graph-hooks/setup-embeddings.sh --list   # see what this machine can do"
+  echo "    .graph-hooks/setup-embeddings.sh          # choose a backend"
 fi
 echo
 echo "Done. Re-run any time — this script is idempotent. Verify with: ./verify-graph-hooks.sh"
