@@ -98,8 +98,12 @@ graphify --version
 - **absent**: fine — the hooks are dormant by design; continue with wiring repair and tell the user
   the install commands (`pipx install code-review-graph`, `pipx install graphifyy` — note the
   double `y`: the package is `graphifyy`, the command is `graphify`).
-- **MCP not registered** (CRG present but its MCP tools missing): `code-review-graph install`
-  re-registers the server with the detected AI platforms.
+- **MCP not registered** (CRG present but its MCP tools missing): re-register the server, scoped to
+  the tools this repo actually wired — one call per tool, MCP config only:
+  `code-review-graph install --platform <claude-code|gemini-cli|copilot|antigravity> --no-hooks --no-instructions --no-skills`.
+  Never the bare `code-review-graph install`: it defaults to `--platform all`, configures every
+  platform it can detect or create a file for, injects competing instruction blocks, and merges its
+  own hooks — a second refresh owner, which is the drift this skill exists to repair.
 
 ### 1. Detect wiring (reuse the verifier)
 
