@@ -106,55 +106,38 @@ PY
     ok "semantic search: vector mode (${EMB} embeddings, provider=${EPROV})"
   fi
 
-  # Vectors exist but nothing can refresh them: the gate will skip embed from here on.
-  RESOLVED=$(bash .graph-hooks/core/embed-provider.sh 2> /dev/null)
-  if [ -z "$RESOLVED" ]; then
-    warn "embeddings cannot refresh — .code-review-graph/embed.env missing; vectors will go stale"
-    return 0
-  fi
-
-  # Recorded identity vs configured intent. A switch is legitimate, but the next embed rewrites
-  # every vector instead of topping up — worth saying out loud, because until it finishes the table
-  # is exactly the mixed state that FAILs above. Identity is "<provider>:<model>@<endpoint>".
-  EPROV_BARE="${EPROV%%:*}"
-  EPROV_MODEL="${EPROV#*:}"
-  EPROV_MODEL="${EPROV_MODEL%%@*}"
-  CFG_MODEL=""
-  if [ -f .code-review-graph/embed.env ]; then
-    case "$RESOLVED" in
-      openai) CFG_MODEL=$(sed -n 's/^CRG_OPENAI_MODEL=//p' .code-review-graph/embed.env | head -1) ;;
-      local) CFG_MODEL=$(sed -n 's/^CRG_EMBEDDING_MODEL=//p' .code-review-graph/embed.env | head -1) ;;
+  # Everything else that can be wrong with an embedding setup — the write path disagreeing with the
+  # index, an endpoint that stopped answering, a READ path that cannot see the vectors at all — is
+  # defined once in .graph-hooks/core/embed-health.sh and merely rendered here. The session-start
+  # notice renders that same output, so the verifier and the banner cannot drift apart on what
+  # "misconfigured" means, which is exactly what two hand-maintained copies of the comparison did.
+  #
+  # Optional core, following embed-provider.sh (which this script has always used without
+  # presence-checking): an install predating it reports nothing rather than failing.
+  #
+  # The inline checks this replaces probed "$BASE/api/tags" for liveness — an endpoint only Ollama
+  # serves, so a perfectly healthy LM Studio endpoint was reported as "ollama not reachable".
+  HEALTH=""
+  [ -f .graph-hooks/core/embed-health.sh ] && HEALTH=$(bash .graph-hooks/core/embed-health.sh 2> /dev/null)
+  if [ -n "$HEALTH" ]; then
+    # A here-doc, not a pipe: `warn` increments a counter the summary reads, and a pipeline would
+    # run the loop in a subshell where those increments are discarded.
+    TAB=$(printf '\t')
+    while IFS="$TAB" read -r _code msg; do
+      [ -n "${msg:-}" ] && warn "$msg"
+    done << EOF
+$HEALTH
+EOF
+  else
+    # The READ path is a different process from the refresh hooks: CRG's OpenAI provider needs
+    # CRG_OPENAI_* in the MCP server's own environment, and the tool's `provider` argument defaults
+    # to `local` regardless. Health found nothing wrong with that wiring, so say so positively.
+    case "$EPROV" in
+      openai:* | google:* | minimax:*)
+        ok "MCP read path configured — call the tool with provider=\"${EPROV%%:*}\" to use these vectors"
+        ;;
     esac
   fi
-  if [ "$EPROV_BARE" != "$RESOLVED" ]; then
-    warn "embedder drift: ${EMB} vectors were written by '${EPROV_BARE}' but embed.env resolves '${RESOLVED}' — the next embed re-embeds every node"
-  elif [ -n "$CFG_MODEL" ] && [ "$EPROV_MODEL" != "$EPROV" ] && [ "$CFG_MODEL" != "$EPROV_MODEL" ]; then
-    warn "embedder drift: ${EMB} vectors were written by model '${EPROV_MODEL}' but embed.env pins '${CFG_MODEL}' — the next embed re-embeds every node"
-  fi
-
-  # An Ollama-backed provider is only as live as its daemon.
-  if [ "$RESOLVED" = openai ] && [ -f .code-review-graph/embed.env ]; then
-    BASE=$(sed -n 's/^CRG_OPENAI_BASE_URL=//p' .code-review-graph/embed.env | head -1)
-    if [ -n "$BASE" ] && ! curl -sf --max-time 2 "${BASE%/v1}/api/tags" > /dev/null 2>&1; then
-      case "$BASE" in
-        *localhost* | *127.0.0.1*) warn "ollama not reachable at $BASE — embeddings will not refresh" ;;
-      esac
-    fi
-  fi
-
-  # The READ path is a different process from the refresh hooks. CRG's OpenAI provider needs
-  # CRG_OPENAI_* in the MCP server's own environment, and its `provider` argument defaults to
-  # `local` regardless — so a non-local graph whose MCP server is unconfigured writes vectors
-  # that semantic_search_nodes_tool will never read. The graph looks healthy; the feature is off.
-  case "$EPROV" in
-    openai:* | google:* | minimax:*)
-      if [ -f .mcp.json ] && grep -q 'CRG_OPENAI_BASE_URL' .mcp.json 2> /dev/null; then
-        ok "MCP read path configured — call the tool with provider=\"${EPROV%%:*}\" to use these vectors"
-      else
-        warn "MCP server has no CRG_OPENAI_* env — semantic_search will answer in keyword mode despite ${EMB} vectors"
-      fi
-      ;;
-  esac
 }
 
 echo "Repo: $ROOT"
