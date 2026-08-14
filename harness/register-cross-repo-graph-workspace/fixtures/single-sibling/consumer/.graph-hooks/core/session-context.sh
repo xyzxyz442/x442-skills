@@ -148,8 +148,8 @@ inside_git = subprocess.run(
 ).returncode == 0
 if shutil.which("code-review-graph") and inside_git and not os.path.isdir(".code-review-graph"):
     notices.append(
-        "Graph tool installed but not yet initialized. Ask me to set up: "
-        "code-review-graph (code-review-graph install)"
+        "Graph tool installed but not yet initialized. Ask me to set up code-review-graph "
+        "(setup-graph-hooks step 7 — MCP registration scoped to the wired tools, then build)"
     )
 
 if notices:
