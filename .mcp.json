@@ -5,9 +5,9 @@
       "args": ["code-review-graph", "serve"],
       "type": "stdio",
       "env": {
-        "CRG_OPENAI_BASE_URL": "http://localhost:11434/v1",
-        "CRG_OPENAI_API_KEY": "ollama",
-        "CRG_OPENAI_MODEL": "qwen3-embedding"
+        "CRG_OPENAI_BASE_URL": "http://localhost:1234/v1",
+        "CRG_OPENAI_API_KEY": "lm-studio",
+        "CRG_OPENAI_MODEL": "text-embedding-qwen3-embedding-4b"
       }
     }
   }
