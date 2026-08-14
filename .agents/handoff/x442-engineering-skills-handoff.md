@@ -4,7 +4,7 @@ title: Handoff — x442-skills engineering suite
 type: standalone
 status: open
 created: 2026-07-20
-updated: 2026-08-04
+updated: 2026-08-14
 note:
 ---
 
@@ -33,7 +33,64 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
 
 ---
 
-0. **v0.9.0 (2026-08-04).** Port from the tag. Full range:
+## 0. What changed since the last sync
+
+Read this first if your collection already carries an earlier port.
+
+1. **v0.10.0 (2026-08-14).** Port from the tag. Full range:
+   [v0.9.0...v0.10.0](https://github.com/xyzxyz442/x442-skills/compare/v0.9.0...v0.10.0). Two
+   themes, both in `setup-graph-hooks`: **the embedding backend is now discovered rather than
+   assumed, and `code-review-graph install` is no longer safe to run bare.**
+   **Any OpenAI-compatible embedding server is detected, not just Ollama** (`e942e6a`).
+   `setup-embeddings.sh` knew one backend; it now probes each candidate endpoint for its flavor and
+   lists every embedding-capable model across all of them. The probe **order** is the part worth
+   copying carefully: `/api/tags` looks Ollama-specific but **LM Studio serves it too** (it ships an
+   Ollama-compatibility surface), so asking `/api/tags` first misclassifies LM Studio as Ollama —
+   and when that Ollama install has no models pulled, you get a backend reported with an empty model
+   list and no obvious cause. `/api/v0/models` is served **only** by LM Studio, so it must be asked
+   first. `apply_ollama()` is replaced by an `apply_endpoint()` / `apply_named()` dispatch, and
+   `unsync_mcp_env()` now clears stale env from **both** MCP config shapes. **Re-port
+   `setup-embeddings.sh` and `graph-hooks/core/embed-provider.sh`.**
+   **A new `embed-health.sh` owns the definition of "this repo's embedding config is wrong"**
+   (`d7fc319`). Embeddings are configured in three places and are only correct when all three agree:
+   the **write** path (`.code-review-graph/embed.env`, read by the refresh hooks), the **index** (the
+   provider identity recorded on the rows), and the **read** path (the MCP server's own env block in
+   `.mcp.json` / `.vscode/mcp.json`). Every way they can disagree fails silently — a write/index
+   split re-embeds every node on every refresh forever, an unreachable endpoint makes each embed a
+   no-op, and a read-path mismatch leaves a graph full of vectors `semantic_search` never looks at,
+   because CRG's OpenAI provider raises without `CRG_OPENAI_*` and the tool swallows that into a
+   keyword-mode answer. The check now has **one** definition: `verify-graph-hooks.sh` renders it as
+   `[warn]` lines and `session-context.sh` as a session-start notice, both asking the script rather
+   than reimplementing the comparison, because two copies of "what counts as drifted" drift. Codes
+   are `drift | unreachable | readpath | cwd`; it never imports torch, never calls the embedder, and
+   always exits 0 — an unhealthy embedding config is a warning, never a failure. **Port the new
+   `graph-hooks/core/embed-health.sh`, and re-port `session-context.sh` and
+   `verify-graph-hooks.sh`.**
+   **`code-review-graph install` must be scoped to the tools you wired** (`ef1bfb1`, `9ac6ff1`).
+   Step 7 offered the bare command, which defaults to `--platform all`. In this repo that configures
+   **14 platforms** — Codex, Cursor, Windsurf, Continue, OpenCode, Kiro, Qoder, CodeBuddy and the
+   rest — creates rule files for tools the repo never chose (`.cursorrules`, `.windsurfrules`,
+   `QODER.md`, `CODEBUDDY.md`, `.kiro/steering/`), injects its own instruction block into
+   `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, generates four `.claude/skills/` skills, and merges **its
+   own hooks** into `.claude/settings.json` alongside a git `pre-commit` hook. Two of those are
+   outright conflicts with this suite: the injected instructions compete with the `AGENTS.md` block
+   step 5 manages, and the hooks are a **second refresh owner** — the duplicate-rebuild problem the
+   single-owner rule exists to prevent. `--platform` takes one value and is **not repeatable**, so
+   the skill now runs it once per chosen tool with `--no-hooks --no-instructions --no-skills`, and
+   ships the tool → platform mapping (`claude-code` / `gemini-cli` / `copilot` / `antigravity`). The
+   same bare command was also `repair-graph-hooks`' "MCP not registered" remedy — a repair skill
+   prescribing the drift it exists to fix — and is scoped there too. **Re-port
+   `setup-graph-hooks/SKILL.md` step 7, `setup-graph-hooks.sh`, `verify-graph-hooks.sh`, and
+   `repair-graph-hooks/SKILL.md`.**
+   One CRG quirk to expect while verifying that port: `--dry-run` prints its "Graph instructions will
+   be injected into:" preview **before** it honours `--no-instructions`, so the list still appears in
+   a dry run. A real run prints `Skipped instruction injection (--no-instructions)` and writes none
+   of them.
+   **Also dropped: `graphify hook install`** from the build guide. The `post-commit` hook this suite
+   installs already backgrounds `graphify update .`, so graphify's own hook is a second refresh owner
+   for exactly the same reason — it was documented in one place while `setup-graph-hooks/SKILL.md`
+   forbade it in another.
+2. **v0.9.0 (2026-08-04).** Port from the tag. Full range:
    [v0.8.0...v0.9.0](https://github.com/xyzxyz442/x442-skills/compare/v0.8.0...v0.9.0). One theme,
    in `setup-graph-hooks`: **the graph routing block was wrong, and the embeddings index had no
    owner.**
@@ -80,12 +137,7 @@ each skill's `SKILL.md` is the authoritative detail. This handoff is the executi
    OpenAI-compatible `/v1/embeddings` ignores a per-request `keep_alive` (native `/api/embed`
    honours it; CRG sends it on neither), so writing it into `embed.env` would be a no-op that looks
    like a fix.
-
-## 0. What changed since the last sync
-
-Read this first if your collection already carries an earlier port.
-
-1. **v0.8.0 (2026-08-04).** Tagged and pushed — port from the tag. Full range:
+3. **v0.8.0 (2026-08-04).** Tagged and pushed — port from the tag. Full range:
    [v0.7.0...v0.8.0](https://github.com/xyzxyz442/x442-skills/compare/v0.7.0...v0.8.0). Three themes:
    handoff frontmatter that survives a strict YAML parser, multi-group dogfooding, and a release-it
    changelog fix.
@@ -154,7 +206,7 @@ Read this first if your collection already carries an earlier port.
    result is a quality signal or an availability one, so a probe that mislabels a working vector tier
    as `keyword` pushes agents back to grep for no reason. **Re-port the `setup-graph-hooks` probe.**
 
-2. **suite v0.7.0 (2026-07-27).** Four themes; full range:
+4. **suite v0.7.0 (2026-07-27).** Four themes; full range:
    [v0.6.0...v0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 116/116 grader
    assertions across 11 evals, `run-handoff` 12/12, the new `register-cross-repo-handoff` grader
@@ -194,7 +246,7 @@ Read this first if your collection already carries an earlier port.
    wired, not on a stray file match. Out of the handoff scope but in the same release; re-port
    `setup-project-tooling/assets/` + `SKILL.md`.
 
-3. **suite v0.6.0 (2026-07-23).** Four themes; full range:
+5. **suite v0.6.0 (2026-07-23).** Four themes; full range:
    [v0.5.0...v0.6.0](https://github.com/xyzxyz442/x442-skills/compare/v0.5.0...v0.6.0). Re-verified
    on this repo's live board immediately before the release was cut: `setup-handoff` 97/97 grader
    assertions across 10 evals, `run-handoff` 12/12, the new `release-announcement` grader 12/12 on
@@ -237,7 +289,7 @@ Read this first if your collection already carries an earlier port.
      is graded against the skill's own Rules; see §7). Out of this doc's engineering scope — catalog
      entry in [`skills/README.md`](skills/README.md).
 
-4. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
+6. **suite v0.4.0–v0.5.0 — two new skills: `setup-handoff` + `run-handoff` (handoff coordination).** The suite
    gains a lease-based **handoff board** for multi-agent / cross-session / cross-repo work: _claim
    before you edit, release when you stop, `done` only when verified against live code._
    `setup-handoff` installs the tool-generic `.agents/handoff/` payload, wires per-tool enforcement
@@ -286,7 +338,7 @@ Read this first if your collection already carries an earlier port.
    legacy fixture) were migrated to the suffix; `blocked_on` references are canonicalized too. All 11
    evals stay green (setup-handoff 61/61 incl. cross-repo 13/13, run-handoff 12/12). Re-port
    `scripts/payload/{handoff,hooks.sh}` and rename any existing board docs to `*-handoff.md`.
-5. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
+7. **suite v0.3.1 (`setup-graph-hooks` embeddings offer now fires reliably).** Step 8's
    semantic-search offer was framed so heavily as "optional, never assumed" that an assistant
    would skip the `AskUserQuestion` prompt entirely and degrade to an unmentioned "optional
    step" — observed with GitHub Copilot as the resource owner. Fixed: surfacing the choice is now
@@ -297,30 +349,30 @@ Read this first if your collection already carries an earlier port.
    are byte-identical — so this is a **wording-only re-port**: re-copy `setup-graph-hooks/SKILL.md`
    §8. See §2 (`setup-graph-hooks`) and §4.4 embeddings caveat, both otherwise unchanged.
 
-6. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
+8. **`register-cross-repo-graph` was redesigned and is now a replacement, not an increment.** It went
    from markdown-only (ad-hoc `code-review-graph register` calls) to a **declared, committed
    `.graph-repos.json` manifest cascade** (user → repo → subdir, nearest wins, like `AGENTS.md`)
    applied by `sync-cross-repo-graph.sh`, with a real verifier and a shared Python resolver. It also
    now gets a **per-project** graphify merged graph instead of writing graphify's global one. **Delete
    the old version rather than merging into it.** See §2 and §4.1.
-7. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
+9. **A `.gitignore` bug that silently truncates the port.** An unanchored `MANIFEST` rule (from the
    stock Python template) matches the new `scripts/manifest/` **directory** on any case-insensitive
    filesystem, so `git add -A` ships the skill without its resolver. Fixed here in both our
    `.gitignore` and the template `setup-project-tooling` **ships to every scaffolded project**
    (`assets/gitignore` → `/MANIFEST`). **Check your own collection's `.gitignore` before porting** —
    the full check is in §4.1.
-8. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
-   unchanged from the last handoff, but still the most common source of "the graph looks broken" false
-   alarms. See the embeddings caveat in §4.4.
-9. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
-   self-tested shared library plus a workspace for every skill — the five graph/onboarding skills
-   plus the new `setup-handoff` and `run-handoff` — each with fixtures, `evals/evals.json`, and a
-   `grade.py` that wraps the skill's own `verify-*.sh` (or, for `run-handoff`, drives the installed
-   board). Graders are read-only and LLM-free. The `verify-*.sh` checkers remain the correctness
-   source of truth; the harness adds repeatable, gradeable evals on top. See §7.
-10. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
+10. **Semantic search / embeddings are an opt-in tier**, and keyword mode is the supported default —
+    unchanged from the last handoff, but still the most common source of "the graph looks broken" false
+    alarms. See the embeddings caveat in §4.4.
+11. **The eval harness now covers all seven skills** (was five at the last sync). `harness/` ships a
+    self-tested shared library plus a workspace for every skill — the five graph/onboarding skills
+    plus the new `setup-handoff` and `run-handoff` — each with fixtures, `evals/evals.json`, and a
+    `grade.py` that wraps the skill's own `verify-*.sh` (or, for `run-handoff`, drives the installed
+    board). Graders are read-only and LLM-free. The `verify-*.sh` checkers remain the correctness
+    source of truth; the harness adds repeatable, gradeable evals on top. See §7.
+12. **`verify-cross-repo-graph.sh` now exits 0 on a repo that never opted into cross-repo** (it reports
     a `[skip]`, not a `[FAIL]`). "Not configured" and "broken" are no longer conflated — see §4.3.
-11. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
+13. **Everything else is unchanged.** `initial-project` and `setup-graph-hooks` remain `stable`;
     `setup-project-tooling` and `repair-graph-hooks` are unchanged in behavior.
 
 ---
@@ -438,7 +490,8 @@ initial-project ──> (setup-project-tooling) ──> setup-graph-hooks
      refresh (husky-aware), `.gitignore` entries, `.code-review-graphignore` / `.graphifyignore`, and
      the `<!-- graph-hooks -->` routing block appended to `AGENTS.md`.
   2. **Shared behavior cores:** `grep-steer.sh`, `read-nudge.sh`, `session-context.sh`,
-     `graph-refresh.sh` (the incremental `update`), and `embed-provider.sh` (the embeddings gate)
+     `graph-refresh.sh` (the incremental `update`), `embed-provider.sh` (the embeddings gate) and
+     `embed-health.sh` (the one definition of embedding-config drift)
      under `.graph-hooks/core/`, dispatched by `.graph-hooks/hook.sh`. The per-tool stdin/stdout
      protocol lives once in `core/extract.py` + `core/emit.py`.
   3. **Per-tool hook config:** rendered by `config/render.py` and merged into each tool's native
@@ -486,7 +539,8 @@ initial-project ──> (setup-project-tooling) ──> setup-graph-hooks
   `.gitignore`; the two ignore files; per-tool config files; the `AGENTS.md` routing block. Idempotent
   and non-destructive. (`.code-review-graph/embed.env` only if embeddings were opted into.)
 - **Ships:** `scripts/` (installer, `setup-embeddings.sh`, verifier, `post-commit`, `graphignore`,
-  `config/`, and the `graph-hooks/` payload incl. `core/embed-provider.sh`) +
+  `config/`, and the `graph-hooks/` payload incl. `core/embed-provider.sh` and
+  `core/embed-health.sh`) +
   `assets/agents-knowledge-graph.md` (the routing block, which now tells agents that
   `semantic_search_nodes_tool` works with or without vectors — "do not reach for grep because a
   result looked shallow").
@@ -671,21 +725,21 @@ initial-project ──> (setup-project-tooling) ──> setup-graph-hooks
 `R` = required, `O` = optional (feature dormant if absent), `—` = not used. "Required by" scopes the
 dependency to the skills that actually use it.
 
-| Dependency                                                               | macOS | Linux | Windows (WSL) | Required by / notes                                                                                                                                                                                                                                                |
-| ------------------------------------------------------------------------ | :---: | :---: | :-----------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bash`                                                                   |   R   |   R   |       R       | All skills' scripts (`post-commit` is POSIX `sh`). macOS system bash 3.2 is fine.                                                                                                                                                                                  |
-| `git`                                                                    |   R   |   R   |       R       | All. `setup-graph-hooks`/`repair` require a git working tree.                                                                                                                                                                                                      |
-| `python3`                                                                |   R   |   R   |       R       | initial-project, setup-graph-hooks, repair, register, **setup-handoff** — JSON + sqlite engine (not `jq`). setup-handoff's enforcement gate parses hook payloads with it (preflight refuses a hard-enforcement primary without it). WSL: ensure a `python3` alias. |
-| `sqlite3` (Python stdlib)                                                |   R   |   R   |       R       | Graph read path (FTS5 preferred; falls back to `LIKE`).                                                                                                                                                                                                            |
-| `grep`                                                                   |   R   |   R   |       R       | All — only POSIX-portable flags (`-q -E -F -c -x`), BSD/GNU neutral.                                                                                                                                                                                               |
-| `node` + a package manager                                               |  R\*  |  R\*  |      R\*      | **`setup-project-tooling` only** (husky/commitlint/lint-staged/release-it live in `package.json`). The other four never execute Node.                                                                                                                              |
-| `prettier`, `eslint`                                                     |   O   |   O   |       O       | `setup-project-tooling`, Node/TS module (installed via npm; `prettier-plugin-sh` formats shell).                                                                                                                                                                   |
-| `black` / `sqlfluff` (+ `uv` or `pip`)                                   |   O   |   O   |       O       | `setup-project-tooling`, Python / Python-stream modules — installed into `.venv` via **uv (preferred) or pip**, not npm.                                                                                                                                           |
-| `code-review-graph` (MCP)                                                |   O   |   O   |       O       | Graph skills. `pipx install code-review-graph`. **`register` needs it actually installed**, not just dormant.                                                                                                                                                      |
-| `graphify` (CLI)                                                         |   O   |   O   |       O       | Graph skills. `pipx install graphifyy` (double `y`; command is `graphify`).                                                                                                                                                                                        |
-| **Embeddings** — `sentence-transformers`/PyTorch **or** an Ollama daemon |   O   |   O   |       O       | **Opt-in tier only** (`setup-embeddings.sh`). Keyword mode is the default and needs neither. `local` = ~2 GB PyTorch + ~90 MB model; `ollama` = resident daemon + `CRG_OPENAI_*` in the MCP env. Nothing else installs PyTorch.                                    |
-| `jq`                                                                     |   —   |   —   |       —       | Never used — all JSON handled by `python3`.                                                                                                                                                                                                                        |
-| `trash`                                                                  |   O   |   O   |       O       | Undo advice only — macOS/Homebrew `trash`; Linux `trash-cli`/`gio trash`. Never invoked.                                                                                                                                                                           |
+| Dependency                                                                                    | macOS | Linux | Windows (WSL) | Required by / notes                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------------------- | :---: | :---: | :-----------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bash`                                                                                        |   R   |   R   |       R       | All skills' scripts (`post-commit` is POSIX `sh`). macOS system bash 3.2 is fine.                                                                                                                                                                                                                      |
+| `git`                                                                                         |   R   |   R   |       R       | All. `setup-graph-hooks`/`repair` require a git working tree.                                                                                                                                                                                                                                          |
+| `python3`                                                                                     |   R   |   R   |       R       | initial-project, setup-graph-hooks, repair, register, **setup-handoff** — JSON + sqlite engine (not `jq`). setup-handoff's enforcement gate parses hook payloads with it (preflight refuses a hard-enforcement primary without it). WSL: ensure a `python3` alias.                                     |
+| `sqlite3` (Python stdlib)                                                                     |   R   |   R   |       R       | Graph read path (FTS5 preferred; falls back to `LIKE`).                                                                                                                                                                                                                                                |
+| `grep`                                                                                        |   R   |   R   |       R       | All — only POSIX-portable flags (`-q -E -F -c -x`), BSD/GNU neutral.                                                                                                                                                                                                                                   |
+| `node` + a package manager                                                                    |  R\*  |  R\*  |      R\*      | **`setup-project-tooling` only** (husky/commitlint/lint-staged/release-it live in `package.json`). The other four never execute Node.                                                                                                                                                                  |
+| `prettier`, `eslint`                                                                          |   O   |   O   |       O       | `setup-project-tooling`, Node/TS module (installed via npm; `prettier-plugin-sh` formats shell).                                                                                                                                                                                                       |
+| `black` / `sqlfluff` (+ `uv` or `pip`)                                                        |   O   |   O   |       O       | `setup-project-tooling`, Python / Python-stream modules — installed into `.venv` via **uv (preferred) or pip**, not npm.                                                                                                                                                                               |
+| `code-review-graph` (MCP)                                                                     |   O   |   O   |       O       | Graph skills. `pipx install code-review-graph`. **`register` needs it actually installed**, not just dormant.                                                                                                                                                                                          |
+| `graphify` (CLI)                                                                              |   O   |   O   |       O       | Graph skills. `pipx install graphifyy` (double `y`; command is `graphify`).                                                                                                                                                                                                                            |
+| **Embeddings** — `sentence-transformers`/PyTorch **or** an OpenAI-compatible embedding server |   O   |   O   |       O       | **Opt-in tier only** (`setup-embeddings.sh`). Keyword mode is the default and needs neither. `local` = ~2 GB PyTorch + ~90 MB model; a server (Ollama, LM Studio, or any OpenAI-compatible endpoint — auto-detected) = resident daemon + `CRG_OPENAI_*` in the MCP env. Nothing else installs PyTorch. |
+| `jq`                                                                                          |   —   |   —   |       —       | Never used — all JSON handled by `python3`.                                                                                                                                                                                                                                                            |
+| `trash`                                                                                       |   O   |   O   |       O       | Undo advice only — macOS/Homebrew `trash`; Linux `trash-cli`/`gio trash`. Never invoked.                                                                                                                                                                                                               |
 
 **Platform summary:** macOS and Linux are first-class (the scripts shim `md5sum || md5`, a `mkdir`
 lock instead of `flock`, `timeout || gtimeout ||` uncapped, and a `uname`-branched resource guard).
@@ -796,7 +850,13 @@ bash skills/engineering/setup-graph-hooks/scripts/setup-graph-hooks.sh <repo-roo
 bash skills/engineering/setup-graph-hooks/scripts/verify-graph-hooks.sh [repo-root]
 
 # build the graph, once, only if a tool is installed (NOTE: no `embed` — keyword mode is the default)
-code-review-graph install && code-review-graph build   # CRG: MCP tools + graph search
+# Register CRG's MCP server ONCE PER WIRED TOOL. A bare `code-review-graph install` is
+# --platform all: it configures every platform it can detect or create a file for, injects
+# competing instruction blocks, and merges its own hooks — a second refresh owner.
+for p in claude-code gemini-cli copilot; do
+  code-review-graph install --platform "$p" --no-hooks --no-instructions --no-skills
+done
+code-review-graph build                                # CRG: MCP tools + graph search
 graphify update .                                      # graphify: builds the initial graph (optional)
 # Do NOT run `graphify hook install` — setup-graph-hooks' post-commit already refreshes graphify,
 # so its own hook would be a second, redundant refresh owner (the duplicate-rebuild problem).
@@ -805,6 +865,7 @@ graphify update .                                      # graphify: builds the in
 bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --list
 bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider local
 bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider ollama --model qwen3-embedding
+bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider lmstudio --model text-embedding-qwen3-embedding-4b
 bash skills/engineering/setup-graph-hooks/scripts/setup-embeddings.sh --provider off   # keyword mode
 
 # register-cross-repo-graph — declare scope, preview, apply, verify ($SCOPE = repo root or a package)
