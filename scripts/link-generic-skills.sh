@@ -5,9 +5,27 @@ set -euo pipefail
 # directory (~/.agents/skills) used by AGENTS.md-aware CLIs. This is the default
 # target when no tool-specific path applies; use link-claude-skills.sh for the
 # Claude Code-specific location (~/.claude/skills).
+#
+# Usage: link-generic-skills.sh [--personal]
+#
+#   --personal   also link skills/personal/, which is skipped by default.
+#                Personal skills depend on one machine's setup (a local gateway,
+#                private credentials), so they are opt-in rather than promoted:
+#                the default must stay safe to run on someone else's checkout.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$HOME/.agents/skills"
+
+PERSONAL=0
+for arg in "$@"; do
+  case "$arg" in
+    --personal) PERSONAL=1 ;;
+    *)
+      echo "usage: $(basename "$0") [--personal]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # If the dest is a symlink that resolves into this repo, we'd end up writing the
 # per-skill symlinks back into the repo's own skills/ tree. Detect and bail out
@@ -25,11 +43,12 @@ fi
 
 mkdir -p "$DEST"
 
+FILTER=(-not -path '*/node_modules/*' -not -path '*/deprecated/*' -not -path '*/in-progress/*')
+[ "$PERSONAL" -eq 1 ] || FILTER+=(-not -path '*/personal/*')
+[ "$PERSONAL" -eq 1 ] && echo "including skills/personal/ (--personal)"
+
 find "$REPO/skills" -name SKILL.md \
-  -not -path '*/node_modules/*' \
-  -not -path '*/deprecated/*' \
-  -not -path '*/in-progress/*' \
-  -not -path '*/personal/*' \
+  "${FILTER[@]}" \
   -print0 \
   | while IFS= read -r -d '' skill_md; do
     src="$(dirname "$skill_md")"

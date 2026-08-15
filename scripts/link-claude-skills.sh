@@ -11,7 +11,9 @@ GENERIC="$HOME/.agents/skills"
 DEST="$HOME/.claude/skills"
 
 # Install (or refresh) the generic location first, so it is present to link from.
-"$REPO/scripts/link-generic-skills.sh"
+# Flags are forwarded verbatim: this script does no filtering of its own, it mirrors whatever the
+# generic install produced. So `--personal` belongs to that script and simply passes through.
+"$REPO/scripts/link-generic-skills.sh" "$@"
 
 # If DEST is a symlink into the repo or the generic dir, linking into it would
 # write back into a tree we read from. Detect and bail out instead.
