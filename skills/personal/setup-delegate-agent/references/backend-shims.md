@@ -18,12 +18,25 @@ to the profile's `settingsFile` `env` block.
 | Run dies on a context error that the automatic retry never caught          | Auto-compact only fires on Anthropic's exact "prompt is too long" wording; a gateway rewrites it | `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<ctx − 16000>` |
 | Output truncated well before the model's real limit                        | Default output cap too low for the backend                                                       | `CLAUDE_CODE_MAX_OUTPUT_TOKENS=<n>`             |
 
-## The auto-compact floor
+## Auto-compact
 
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW` is clamped to a 100k minimum. A profile whose `context` is below
-roughly 116k therefore cannot arm it at all, and `/compact` becomes the only recovery inside a long
-delegated session. That is a reason to prefer short, chunked dispatches on a small-context backend
-rather than one long one — not a reason to raise the declared `context` past what the backend
+Three ways to set the window, and they are not equivalent:
+
+| Where                                    | Form                              |
+| ---------------------------------------- | --------------------------------- |
+| `settings.json` in a `CLAUDE_CONFIG_DIR` | `"autoCompactWindow": 60000`      |
+| CLI flag                                 | `--autocompact auto\|<tokens>`    |
+| Environment                              | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` |
+
+An earlier version of this file claimed the window is clamped to a 100k minimum, inherited from the
+design notes rather than measured. A working local profile runs `autoCompactWindow: 60000`, so that
+floor does not apply to the settings key at minimum. Treat the clamp as unverified: if you need a
+small window, set it and confirm compaction actually fires rather than trusting either claim.
+
+What does hold: auto-compact only triggers on Anthropic's own "prompt is too long" wording. A
+gateway that rewrites the error text stops the retry from ever firing, and the run dies on a
+context error instead of compacting. On a small-context backend, prefer short chunked dispatches
+over one long session — and never raise a profile's declared `context` past what the backend
 actually serves, which only moves the failure later and makes it harder to read.
 
 ## Verifying a shim actually helped

@@ -151,11 +151,13 @@ else:
 never = resolved.get("never_delegate", [])
 never_txt = ", ".join(f"`{n}`" for n in never[:4]) + (", …" if len(never) > 4 else "")
 
+# Context limits are configured in decimal (CLAUDE_CODE_MAX_CONTEXT_TOKENS=256000), so divide by
+# 1000, not 1024 — otherwise a 256000-token window renders as "250k" and reads like a typo.
 ctx = p["context"]
 block = (block
          .replace("PLACEHOLDER_PROFILE", p["name"])
          .replace("PLACEHOLDER_MODEL", p["model"])
-         .replace("PLACEHOLDER_CONTEXT_K", f"{ctx // 1024}k")
+         .replace("PLACEHOLDER_CONTEXT_K", f"{round(ctx / 1000)}k")
          .replace("PLACEHOLDER_EGRESS_NOTE", note)
          .replace("PLACEHOLDER_EGRESS", p["egress"])
          .replace("PLACEHOLDER_DECISION", decision)

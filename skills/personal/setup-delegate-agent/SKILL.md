@@ -25,6 +25,20 @@ weights, and neither can see the other's credential.
 1. **Backend profiles** — a cascade of JSON manifests declaring where work can go. Only your
    personal, uncommitted manifest may define an endpoint; a committed repo manifest can narrow the
    set but never add to it.
+
+   A profile can be declared three ways. Prefer the first if you already have a working delegate:
+
+   | Key            | Use when                                                     |
+   | -------------- | ------------------------------------------------------------ |
+   | `configDir`    | You already run a delegate under its own `CLAUDE_CONFIG_DIR` |
+   | `settingsFile` | You have a `--settings` JSON file instead                    |
+   | `baseUrl`      | Nothing exists yet — declare the endpoint and model directly |
+
+   `configDir` adopts a directory whole: model, base URL, context window (from
+   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`), credential, and the delegate's own `CLAUDE.md` standing
+   rules all come from its `settings.json`. Nothing is restated in the manifest, so nothing can
+   drift out of sync with the setup that actually runs.
+
 2. **The dispatcher** (`.agents/bin/delegate-run`) — writes a brief, runs the backend headless with
    hard caps, and prints one line of JSON. Everything verbose stays on disk.
 3. **The consent gate** — the dispatcher refuses to run without recorded consent; a `PreToolUse`
@@ -85,10 +99,18 @@ If it resolves at least one profile, go to step 4.
 If nothing resolves, find out what is actually running before proposing anything:
 
 ```bash
-test -f ~/.claude-9arm.json && echo "found ~/.claude-9arm.json"
+# existing delegate config dirs (a settings.json beside a CLAUDE.md is the strongest signal)
+ls -d ~/.claude-* 2> /dev/null | while read -r d; do
+  [ -f "$d/settings.json" ] && echo "configDir candidate: $d"
+done
+# local runtimes
 curl -s -m 2 -o /dev/null -w 'lmstudio:%{http_code}\n' http://127.0.0.1:1234/v1/models
 curl -s -m 2 -o /dev/null -w 'ollama:%{http_code}\n' http://127.0.0.1:11434/api/tags
 ```
+
+Prefer a `configDir` candidate over declaring an endpoint by hand: adopting the directory means the
+model, base URL, context, and credential are read from the setup that already works, so they cannot
+drift. Read its `settings.json` for the egress class — never print the token.
 
 Show the user what was found, which of those you propose to declare, and **which of them are
 remote**. Then, only with their agreement:
@@ -98,8 +120,9 @@ bash "$SKILL/scripts/setup-delegate-agent.sh" --write-user-manifest ~/.agents/de
 ```
 
 That writes the example manifest at mode 600 and refuses to overwrite an existing file. Have the
-user edit it, then continue. Never write a token into it — a profile either points at an existing
-`settingsFile` that already holds the credential, or names an environment variable via `tokenEnv`.
+user edit it, then continue. Never write a token into it — a profile either points at a
+`configDir`/`settingsFile` that already holds the credential, or names an environment variable via
+`tokenEnv`.
 
 ### 4. Confirm the egress class before applying
 
@@ -155,9 +178,17 @@ code leaves the machine — the user should hear it from you, not discover it in
   prose. Treat it as a seatbelt, not a lock.
 - **The consent gate is cooperative.** It raises skipping the assessment from an omission to a
   deliberate act. It is not a sandbox — the real boundary is the tool allowlist and the worktree.
-- **Credentials are never written or read by these scripts.** A profile either delegates to a
-  `settingsFile` that the CLI reads itself, or names an environment variable. The verifier warns
-  about a world-readable credential file; it never modifies one.
+- **Credentials are never written or read by these scripts.** A profile either points at a
+  `configDir`/`settingsFile` whose credential the CLI reads itself, or names an environment
+  variable via `tokenEnv`. The verifier warns about a world-readable credential file; it never
+  modifies one. `tokenEnv` must be a variable _name_ — a value starting `sk-` is rejected.
+- **MCP is off for delegates by default.** The wrapper passes `--strict-mcp-config` so a delegated
+  run does not inherit the project's MCP servers, which would widen its reachable tools without
+  ever appearing in the `--allowedTools` the dispatch was approved against. Set `"strictMcp": false`
+  on a profile if you genuinely need them.
+- **A `configDir` profile brings its own `CLAUDE.md`.** That file is the delegate's standing
+  operating rules, and it belongs to you, not to this skill — the installer never writes or
+  rewrites it. It is the right place for "do only what the prompt asks, never widen the task".
 - **Backend quirks are opt-in.** See [references/backend-shims.md](references/backend-shims.md) —
   turn a shim on when you have the 400 that justifies it, not in advance.
 - Bundled files: `scripts/setup-delegate-agent.sh`, `scripts/verify-delegate-agent.sh`,

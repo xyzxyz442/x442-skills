@@ -83,14 +83,28 @@ jqp() { printf '%s' "$P" | jq -r "$1"; }
 BASE_URL="$(jqp '.base_url')"
 MODEL="$(jqp '.model')"
 SETTINGS="$(jqp '.settings_file // empty')"
+CONFIG_DIR="$(jqp '.config_dir // empty')"
 TOKEN_ENV="$(jqp '.token_env // empty')"
 EGRESS="$(jqp '.egress')"
+STRICT_MCP="$(jqp '.strict_mcp')"
 
 # ----------------------------------------------------------------------------- containment ---
-# Its own config dir: separate settings.json, separate session history, and no path by which the
-# child picks up the parent's subscription credential.
-export CLAUDE_CONFIG_DIR="${DELEGATE_CONFIG_DIR:-${HOME}/.delegate-agent/${PROFILE}}"
-mkdir -p "$CLAUDE_CONFIG_DIR"
+# A config dir gives the child its own settings.json, session history, and CLAUDE.md — separate
+# from the parent, with no path by which it picks up the parent's subscription credential.
+#
+# When the profile names one, use it as-is rather than manufacturing a fresh one: that directory
+# is the delegate's whole identity, including the standing operating rules in its CLAUDE.md.
+# Overriding it here would silently discard them.
+if [ -n "$CONFIG_DIR" ]; then
+  [ -d "$CONFIG_DIR" ] || {
+    echo "delegate-agent: profile '$PROFILE' names configDir '$CONFIG_DIR', which does not exist" >&2
+    exit 78
+  }
+  export CLAUDE_CONFIG_DIR="$CONFIG_DIR"
+else
+  export CLAUDE_CONFIG_DIR="${DELEGATE_CONFIG_DIR:-${HOME}/.delegate-agent/${PROFILE}}"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+fi
 
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DISABLE_AUTOUPDATER=1
@@ -107,9 +121,17 @@ export ANTHROPIC_DEFAULT_FABLE_MODEL="$MODEL"
 export CLAUDE_CODE_SUBAGENT_MODEL="$MODEL"
 
 CMD=(claude)
-if [ -n "$SETTINGS" ]; then
-  # The CLI reads the credential out of the settings file itself. This script never sees the
-  # token, so it cannot leak it into an error message, a log, or a transcript.
+# A delegate must not inherit the project's MCP servers: they widen its reachable tool surface
+# without ever appearing in the --allowedTools list the dispatch was approved against.
+[ "$STRICT_MCP" = "true" ] && CMD+=(--strict-mcp-config)
+
+if [ -n "$CONFIG_DIR" ]; then
+  # CLAUDE_CONFIG_DIR is already exported above; the CLI reads settings.json (base URL, token,
+  # model) out of it. This script never sees the token.
+  :
+elif [ -n "$SETTINGS" ]; then
+  # Same for an explicit --settings file: the CLI reads the credential, not us, so it cannot leak
+  # into an error message, a log, or a transcript.
   CMD+=(--settings "$SETTINGS")
 else
   export ANTHROPIC_BASE_URL="$BASE_URL"

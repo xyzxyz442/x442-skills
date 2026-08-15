@@ -3,9 +3,8 @@
   "default": "lmstudio",
   "profiles": {
     "9arm": {
-      "settingsFile": "~/.claude-9arm.json",
-      "context": 262144,
-      "notes": "hosted gateway — adopt an existing --settings file so the token stays out of this manifest",
+      "configDir": "~/.claude-9arm",
+      "notes": "adopt an existing CLAUDE_CONFIG_DIR whole: model, base URL, context, token and the delegate's own CLAUDE.md all come from its settings.json. Nothing is re-declared here, so nothing can drift.",
       "autoApprove": ["read-only", "formatting"],
       "alwaysAsk": ["writes-outside-worktree"],
       "maxQuestionRounds": 3

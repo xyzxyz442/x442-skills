@@ -91,14 +91,17 @@ def classify_egress(base_url: str) -> str:
 
 
 def read_settings_file(raw: str, warnings: list[str]) -> dict:
-    """Adopt an existing Claude Code --settings file as a profile source.
+    """Adopt an existing Claude Code settings file as a profile source.
 
-    Reads base URL and model out of it so a working setup does not have to be re-declared. The
-    auth token is deliberately NOT returned: this object is printed to stdout, and stdout ends up
-    in logs, transcripts, and the verifier's output. Only its presence and the file's mode travel,
-    which is what the credential-hygiene warning needs.
+    Works for both shapes the CLI accepts: a file passed to `--settings`, and the `settings.json`
+    inside a `CLAUDE_CONFIG_DIR`. They share a schema, so one reader covers both.
+
+    Reads base URL, model, and context window out of it so a working setup does not have to be
+    re-declared. The auth token is deliberately NOT returned: this object is printed to stdout,
+    and stdout ends up in logs, transcripts, and the verifier's output. Only its presence and the
+    file's mode travel, which is what the credential-hygiene warning needs.
     """
-    out = {"settings_file": None, "base_url": None, "model": None,
+    out = {"settings_file": None, "base_url": None, "model": None, "context": None,
            "has_token": False, "mode": None, "world_readable": None}
     p = os.path.expandvars(os.path.expanduser(raw))
     out["settings_file"] = p
@@ -124,6 +127,14 @@ def read_settings_file(raw: str, warnings: list[str]) -> dict:
     out["base_url"] = env.get("ANTHROPIC_BASE_URL")
     out["model"] = data.get("model") or env.get("ANTHROPIC_MODEL")
     out["has_token"] = bool(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY"))
+    # The settings file is the authority on its own window. Re-declaring `context` in the manifest
+    # is how the two drift, and the drift is silent until a dispatch overflows.
+    raw_ctx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+    if raw_ctx is not None:
+        try:
+            out["context"] = int(str(raw_ctx))
+        except ValueError:
+            warnings.append(f"{p}: CLAUDE_CODE_MAX_CONTEXT_TOKENS is not an integer ({raw_ctx!r})")
     return out
 
 
@@ -159,8 +170,20 @@ def load_profiles(path: str, data: dict, errors: list[str], warnings: list[str])
             errors.append(f"{where}: not an object")
             continue
 
-        settings = read_settings_file(p["settingsFile"], warnings) if isinstance(
-            p.get("settingsFile"), str) and p.get("settingsFile") else None
+        # Two ways to adopt an existing setup. `configDir` is a CLAUDE_CONFIG_DIR — the CLI reads
+        # its settings.json, session history, and CLAUDE.md itself, which also means the delegate
+        # carries its own standing operating rules. `settingsFile` is the older --settings form.
+        cfg_dir, sf = p.get("configDir"), p.get("settingsFile")
+        if cfg_dir and sf:
+            errors.append(f"{where}: give either configDir or settingsFile, not both")
+            continue
+        settings_src = None
+        if isinstance(cfg_dir, str) and cfg_dir:
+            settings_src = os.path.join(
+                os.path.expandvars(os.path.expanduser(cfg_dir)), "settings.json")
+        elif isinstance(sf, str) and sf:
+            settings_src = sf
+        settings = read_settings_file(settings_src, warnings) if settings_src else None
 
         base_url = p.get("baseUrl") or (settings or {}).get("base_url")
         if not isinstance(base_url, str) or not base_url:
@@ -187,7 +210,7 @@ def load_profiles(path: str, data: dict, errors: list[str], warnings: list[str])
             )
             continue
 
-        ctx = p.get("context", DEFAULT_CONTEXT)
+        ctx = p.get("context") or (settings or {}).get("context") or DEFAULT_CONTEXT
         if not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0:
             errors.append(f"{where}: context must be a positive integer")
             continue
@@ -235,6 +258,11 @@ def load_profiles(path: str, data: dict, errors: list[str], warnings: list[str])
             "max_question_rounds": rounds,
             "allow_tools": allow_tools,
             "token_env": token_env if isinstance(token_env, str) else None,
+            "config_dir": os.path.expandvars(os.path.expanduser(cfg_dir))
+            if isinstance(cfg_dir, str) and cfg_dir else None,
+            # Default on: a delegate should not inherit the project's MCP servers. It widens the
+            # tool surface past the allowlist without appearing in it.
+            "strict_mcp": p.get("strictMcp", True) is not False,
             "settings_file": (settings or {}).get("settings_file"),
             "has_token": (settings or {}).get("has_token", False),
             "settings_mode": (settings or {}).get("mode"),
