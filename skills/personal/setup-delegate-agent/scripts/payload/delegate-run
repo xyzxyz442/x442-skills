@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+# delegate-run — dispatch one bounded task to a configured delegation backend.
+#
+# Writes a dispatch record, runs delegate-agent headless with hard caps, captures the result, and
+# prints ONE line of JSON on stdout. Everything verbose stays on disk so the orchestrator's
+# context window never sees it — that is the output you delegated in order not to read.
+#
+# Usage:
+#   delegate-run --approve <task-id> --class <c> [--profile P] [--allow LIST]   # record consent
+#   delegate-run --task <file> --approved <task-id> [options]                   # dispatch
+#   delegate-run --prompt "..." --approved <task-id> [options]
+#   delegate-run --resume <session> --approved <task-id> --prompt "<answer>"    # answer an ask-back
+#
+# Options:
+#   --profile NAME     backend profile            (default: manifest default)
+#   --turns N          max agentic turns          (default 25)
+#   --timeout SEC      wall-clock kill            (default 1800)
+#   --allow LIST       --allowedTools value       (default: the profile's allowTools)
+#   --mode MODE        --permission-mode value    (default dontAsk)
+#   --worktree         run in an isolated git worktree
+#   --dry-run          print the command and exit
+#
+# Exit codes:
+#   0  ok          64 usage         65 no result       66 question (needs input)
+#   69 missing dep 70 agent error   75 timeout         77 misrouted   78 config/consent
+
+set -euo pipefail
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RESOLVER="${HERE}/resolve-backends.py"
+AGENT="${HERE}/delegate-agent"
+
+die() {
+  echo "delegate-run: $1" >&2
+  exit "${2:-64}"
+}
+emit() { jq -nc "$@"; }
+
+# GNU coreutils `timeout` is not present on a stock macOS. Accept either name and name the fix,
+# because "missing dependency" without the remedy just relocates the puzzle. Resolved here but
+# only *required* at the point of an actual run: recording consent and --dry-run never start a
+# backend, and failing those for a missing timeout would block the very step that decides not to
+# delegate at all.
+TIMEOUT_BIN=""
+for t in timeout gtimeout; do
+  command -v "$t" > /dev/null 2>&1 && {
+    TIMEOUT_BIN="$t"
+    break
+  }
+done
+command -v jq > /dev/null 2>&1 || die "missing dependency 'jq' (brew install jq)" 69
+
+ROOT="${DELEGATE_ROOT:-$(git rev-parse --show-toplevel 2> /dev/null || pwd)}"
+STATE="${ROOT}/.agents/delegate"
+DISPATCH="${STATE}/dispatch"
+RESULTS="${STATE}/results"
+APPROVALS="${STATE}/approvals"
+
+TASK_FILE=""
+PROMPT=""
+PROFILE="${DELEGATE_PROFILE:-}"
+TURNS=25
+TIMEOUT=1800
+ALLOW=""
+MODE="dontAsk"
+WORKTREE=0
+RESUME=""
+DRY=0
+APPROVE_ID=""
+APPROVED_ID=""
+CLASS=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --task)
+      TASK_FILE="$2"
+      shift 2
+      ;;
+    --prompt)
+      PROMPT="$2"
+      shift 2
+      ;;
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    --turns)
+      TURNS="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    --allow)
+      ALLOW="$2"
+      shift 2
+      ;;
+    --mode)
+      MODE="$2"
+      shift 2
+      ;;
+    --resume)
+      RESUME="$2"
+      shift 2
+      ;;
+    --approve)
+      APPROVE_ID="$2"
+      shift 2
+      ;;
+    --approved)
+      APPROVED_ID="$2"
+      shift 2
+      ;;
+    --class)
+      CLASS="$2"
+      shift 2
+      ;;
+    --worktree)
+      WORKTREE=1
+      shift
+      ;;
+    --dry-run)
+      DRY=1
+      shift
+      ;;
+    *) die "unknown option $1" ;;
+  esac
+done
+
+# ------------------------------------------------------------------------------ backend ---
+RESOLVED="$(python3 "$RESOLVER" --scope "$PWD" --root "$ROOT" 2> /dev/null)" \
+  || die "backend config did not resolve — run: python3 $RESOLVER --scope \"$PWD\" --root \"$ROOT\"" 78
+[ -n "$PROFILE" ] || PROFILE="$(printf '%s' "$RESOLVED" | jq -r '.default // empty')"
+[ -n "$PROFILE" ] || die "no --profile given and no default set" 78
+
+P="$(printf '%s' "$RESOLVED" | jq -c --arg n "$PROFILE" '.profiles[] | select(.name==$n)')"
+[ -n "$P" ] || die "profile '$PROFILE' is not permitted in this scope" 78
+
+jqp() { printf '%s' "$P" | jq -r "$1"; }
+EGRESS="$(jqp '.egress')"
+MAX_ROUNDS="$(jqp '.max_question_rounds')"
+[ -n "$ALLOW" ] || ALLOW="$(jqp '.allow_tools')"
+MAX_TURNS_CEILING="${DELEGATE_MAX_TURNS:-$(jqp '.max_turns // empty')}"
+MAX_TURNS_CEILING="${MAX_TURNS_CEILING:-60}"
+MAX_TIMEOUT_CEILING="${DELEGATE_MAX_TIMEOUT:-5400}"
+
+# Ceilings, not defaults. A caller asking for more is clamped rather than refused, so a bad
+# delegation degrades instead of failing outright.
+[ "$TURNS" -gt "$MAX_TURNS_CEILING" ] && TURNS="$MAX_TURNS_CEILING"
+[ "$TIMEOUT" -gt "$MAX_TIMEOUT_CEILING" ] && TIMEOUT="$MAX_TIMEOUT_CEILING"
+
+mkdir -p "$DISPATCH" "$RESULTS" "$APPROVALS"
+
+# ------------------------------------------------------------------ consent: record mode ---
+if [ -n "$APPROVE_ID" ]; then
+  case "$APPROVE_ID" in
+    */* | ..*) die "--approve id must be a plain slug (no path separators)" ;;
+  esac
+  [ -n "$CLASS" ] || die "--approve needs --class (what kind of work was approved)"
+  emit --arg id "$APPROVE_ID" --arg cls "$CLASS" --arg prof "$PROFILE" --arg allow "$ALLOW" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{task:$id, class:$cls, profile:$prof, allow:$allow, approved_at:$at}' \
+    > "${APPROVALS}/${APPROVE_ID}.json"
+  emit --arg id "$APPROVE_ID" --arg prof "$PROFILE" '{status:"approved", task:$id, profile:$prof}'
+  exit 0
+fi
+
+# ------------------------------------------------------------------ consent: enforce mode ---
+# The gate is what makes delegation a decision rather than a reflex. An autoApprove class still
+# needs a recorded approval for the TASK; what it skips is asking the human again.
+[ -n "$APPROVED_ID" ] || die "refusing to dispatch without --approved <task-id>; record consent first with --approve" 78
+case "$APPROVED_ID" in
+  */* | ..*) die "--approved id must be a plain slug (no path separators)" ;;
+esac
+APPROVAL="${APPROVALS}/${APPROVED_ID}.json"
+[ -f "$APPROVAL" ] || die "no approval on file for task '$APPROVED_ID' — the consent gate was skipped" 78
+APPROVED_PROFILE="$(jq -r '.profile // empty' "$APPROVAL")"
+[ "$APPROVED_PROFILE" = "$PROFILE" ] \
+  || die "task '$APPROVED_ID' was approved for profile '$APPROVED_PROFILE', not '$PROFILE'" 78
+APPROVED_ALLOW="$(jq -r '.allow // empty' "$APPROVAL")"
+if [ "$ALLOW" != "$APPROVED_ALLOW" ]; then
+  # Widening after approval is exactly the escalation the gate exists to stop. Narrowing is fine,
+  # but distinguishing the two textually is not reliable, so any change bounces back for re-approval.
+  die "allowlist differs from what was approved for '$APPROVED_ID' — re-approve to change scope" 77
+fi
+
+if [ -n "$TASK_FILE" ] && [ -n "$PROMPT" ]; then
+  die "give exactly one of --task or --prompt"
+fi
+if [ -z "$TASK_FILE" ] && [ -z "$PROMPT" ]; then
+  die "give exactly one of --task or --prompt"
+fi
+
+case "$MODE" in
+  dontAsk | acceptEdits | plan | default) ;;
+  bypassPermissions)
+    # There is no supported way to ask for this. A delegated process running unattended with all
+    # permissions is not a mode, it is an incident.
+    die "bypassPermissions is never permitted for a delegated dispatch" 77
+    ;;
+  *) die "bad --mode $MODE" ;;
+esac
+
+# ------------------------------------------------------------------------------ dispatch ---
+ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+BRIEF="${DISPATCH}/${ID}.task.md"
+RESULT="${RESULTS}/${ID}.result.json"
+LOG="${RESULTS}/${ID}.log"
+
+if [ -n "$TASK_FILE" ]; then
+  [ -r "$TASK_FILE" ] || die "cannot read $TASK_FILE"
+  cp "$TASK_FILE" "$BRIEF"
+else
+  printf '%s\n' "$PROMPT" > "$BRIEF"
+fi
+
+# The never-delegate floor. Union of the built-in list and every layer's additions; no approval
+# overrides it. This is a path-based heuristic over the brief, not a real classifier — it catches
+# the obvious "go read .env and tell me the key" and nothing subtler. Said plainly so nobody
+# mistakes it for a guarantee.
+NEVER="$(printf '%s' "$RESOLVED" | jq -r '.never_delegate[]')"
+while IFS= read -r pat; do
+  [ -n "$pat" ] || continue
+  # Compare as a literal fragment: globs in the list are patterns for humans, and a brief that
+  # mentions `secrets/` at all is worth bouncing regardless of what follows.
+  frag="${pat%%\**}"
+  frag="${frag%/}"
+  [ -n "$frag" ] || continue
+  if grep -qiF -- "$frag" "$BRIEF" 2> /dev/null; then
+    emit --arg id "$ID" --arg pat "$pat" --arg brief "$BRIEF" \
+      '{status:"misrouted", id:$id, reason:("brief references a never-delegate path: " + $pat),
+        pattern:$pat, brief:$brief}'
+    exit 77
+  fi
+done <<< "$NEVER"
+
+# Ask-back contract. Forcing the final message through a schema is what makes "I need input" a
+# first-class outcome instead of a guess buried in prose.
+SCHEMA='{"type":"object","required":["status"],"additionalProperties":false,"properties":{
+  "status":{"type":"string","enum":["done","needs_input","blocked"]},
+  "result":{"type":"string"},
+  "question":{"type":"string"},
+  "context":{"type":"string"}}}'
+
+CMD=("$AGENT" --profile "$PROFILE" -p
+  --output-format json
+  --json-schema "$SCHEMA"
+  --max-turns "$TURNS"
+  --permission-mode "$MODE"
+  --allowedTools "$ALLOW"
+  --disallowedTools 'WebFetch,WebSearch')
+[ "$WORKTREE" -eq 1 ] && CMD+=(--worktree)
+[ -n "$RESUME" ] && CMD+=(--resume "$RESUME")
+
+if [ "$DRY" -eq 1 ]; then
+  printf '%q ' "${CMD[@]}"
+  printf '< %q\n' "$BRIEF"
+  exit 0
+fi
+
+# Round accounting travels with the session, so answering an ask-back cannot reset the budget.
+ROUNDS=0
+if [ -n "$RESUME" ]; then
+  ROUND_FILE="${STATE}/rounds-${RESUME}"
+  [ -f "$ROUND_FILE" ] && ROUNDS="$(cat "$ROUND_FILE")"
+  ROUNDS=$((ROUNDS + 1))
+  if [ "$ROUNDS" -gt "$MAX_ROUNDS" ]; then
+    emit --arg id "$ID" --argjson r "$ROUNDS" --argjson m "$MAX_ROUNDS" \
+      '{status:"misrouted", id:$id, rounds:$r, max_rounds:$m,
+        reason:"question-round cap reached — the brief was underspecified; rewrite it or keep the task"}'
+    exit 77
+  fi
+fi
+
+[ -n "$TIMEOUT_BIN" ] \
+  || die "missing 'timeout' — install GNU coreutils (brew install coreutils). Without it a dispatch has no wall-clock kill, and a model that loses the tool-call format would spin unbounded." 69
+
+START=$(date +%s)
+set +e
+"$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$TIMEOUT" \
+  "${CMD[@]}" < "$BRIEF" > "$RESULT" 2> "$LOG"
+RC=$?
+set -e
+DURATION=$(($(date +%s) - START))
+
+if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+  emit --arg id "$ID" --arg log "$LOG" --argjson d "$DURATION" \
+    '{status:"timeout", id:$id, duration_s:$d, log:$log}'
+  exit 75
+fi
+if [ "$RC" -ne 0 ] || [ ! -s "$RESULT" ]; then
+  emit --arg id "$ID" --arg log "$LOG" --argjson rc "$RC" --argjson d "$DURATION" \
+    '{status:"error", id:$id, exit_code:$rc, duration_s:$d, log:$log}'
+  exit 70
+fi
+
+jq -e '.result' "$RESULT" > /dev/null 2>&1 || {
+  emit --arg id "$ID" --arg raw "$RESULT" '{status:"malformed", id:$id, raw:$raw}'
+  exit 65
+}
+
+SESSION="$(jq -r '.session_id // empty' "$RESULT")"
+[ -n "$SESSION" ] && printf '%s' "$ROUNDS" > "${STATE}/rounds-${SESSION}"
+
+# `.result` is the agent's final text. With --json-schema honoured it parses as our contract;
+# a backend that ignores the schema returns prose, which we treat as a plain answer rather than
+# failing — ask-back degrades to unavailable instead of taking the dispatch down with it.
+INNER="$(jq -r '.result' "$RESULT")"
+STATUS="$(printf '%s' "$INNER" | jq -r '.status // empty' 2> /dev/null || true)"
+
+case "$STATUS" in
+  needs_input)
+    Q="$(printf '%s' "$INNER" | jq -r '.question // empty')"
+    QCTX="$(printf '%s' "$INNER" | jq -r '.context // empty')"
+    # A question that is really a permissions request is not a question. Forwarding it would let
+    # the sub-agent negotiate its own scope through the orchestrator, making the allowlist advisory.
+    if printf '%s' "$Q" | grep -qiE 'bypasspermissions|--allow|allowedtools|grant me|wider (access|scope|permission)|unscoped bash'; then
+      emit --arg id "$ID" --arg q "$Q" --argjson d "$DURATION" \
+        '{status:"misrouted", id:$id, duration_s:$d, question:$q,
+          reason:"sub-agent asked to widen its own scope — scope changes are a re-brief, not a question"}'
+      exit 77
+    fi
+    emit --arg id "$ID" --arg s "$SESSION" --arg q "$Q" --arg c "$QCTX" \
+      --argjson d "$DURATION" --argjson r "$ROUNDS" --argjson m "$MAX_ROUNDS" \
+      '{status:"question", id:$id, session_id:$s, question:$q, context:$c,
+        duration_s:$d, round:$r, max_rounds:$m}'
+    exit 66
+    ;;
+  blocked)
+    emit --arg id "$ID" --arg s "$SESSION" --arg log "$LOG" --argjson d "$DURATION" \
+      --arg r "$(printf '%s' "$INNER" | jq -r '.result // "no reason given"')" \
+      '{status:"blocked", id:$id, session_id:$s, reason:$r, duration_s:$d, log:$log}'
+    exit 70
+    ;;
+  done)
+    OUT="$(printf '%s' "$INNER" | jq -r '.result // empty')"
+    ;;
+  *)
+    OUT="$INNER"
+    ;;
+esac
+
+jq -c --arg id "$ID" --arg raw "$RESULT" --arg log "$LOG" --arg out "$OUT" \
+  --argjson d "$DURATION" --arg prof "$PROFILE" --arg eg "$EGRESS" \
+  '{status:"ok", id:$id, profile:$prof, egress:$eg, duration_s:$d,
+    session_id:.session_id, result:$out, raw:$raw, log:$log}' "$RESULT"

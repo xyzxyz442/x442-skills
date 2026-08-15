@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "default": "lmstudio",
+  "profiles": {
+    "9arm": {
+      "settingsFile": "~/.claude-9arm.json",
+      "context": 262144,
+      "notes": "hosted gateway — adopt an existing --settings file so the token stays out of this manifest",
+      "autoApprove": ["read-only", "formatting"],
+      "alwaysAsk": ["writes-outside-worktree"],
+      "maxQuestionRounds": 3
+    },
+    "lmstudio": {
+      "baseUrl": "http://127.0.0.1:1234",
+      "model": "qwen3-coder-30b",
+      "context": 262144,
+      "notes": "LM Studio on this machine — no auth, egress classified local automatically",
+      "autoApprove": ["read-only", "formatting", "log-triage"],
+      "allowTools": "Read,Grep,Glob"
+    },
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434",
+      "model": "qwen3:30b",
+      "context": 131072
+    },
+    "generic": {
+      "baseUrl": "https://api.example.com",
+      "model": "some-model",
+      "tokenEnv": "MY_GATEWAY_TOKEN",
+      "notes": "any OpenAI/Anthropic-compatible endpoint; tokenEnv names the VARIABLE, never the value"
+    }
+  }
+}

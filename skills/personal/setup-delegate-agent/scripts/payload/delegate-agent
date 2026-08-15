@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# delegate-agent — the Claude Code CLI, bound to a configured delegation backend.
+#
+# This is a *process-level* alias. Claude Code resolves exactly one ANTHROPIC_BASE_URL per
+# process, so the only way to run a second agent on different weights is a second process with
+# a different environment. Nothing here leaks into the parent session, and the parent's
+# subscription credential is never visible to the child.
+#
+# Usage:  delegate-agent [--profile NAME] [any claude flag]
+#         delegate-agent -p "summarise these logs" --max-turns 10
+#
+# Profile comes from --profile, else $DELEGATE_PROFILE, else the manifest's default.
+# Backends are declared in ~/.agents/delegate-backends.json; see the setup-delegate-agent skill.
+#
+# Deliberately thin. An earlier draft also disabled experimental betas, adaptive thinking, and
+# prompt caching, and force-armed auto-compact — five workarounds for a local backend that may
+# not be the one you run. Each is a claim that should be made against a real 400, not in advance:
+# references/backend-shims.md lists them with the error text that justifies turning each on.
+
+set -euo pipefail
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RESOLVER="${HERE}/resolve-backends.py"
+
+PROFILE="${DELEGATE_PROFILE:-}"
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      PROFILE="${2:-}"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+command -v jq > /dev/null 2>&1 || {
+  echo "delegate-agent: missing dependency 'jq'" >&2
+  exit 69
+}
+[ -f "$RESOLVER" ] || {
+  echo "delegate-agent: resolver not found at $RESOLVER — re-run setup-delegate-agent" >&2
+  exit 69
+}
+
+# Guard against a runaway nest before doing any work: a delegate must not shell out to another
+# delegate. Without this, a model that rediscovers this script can fork indefinitely.
+if [ "${DELEGATE_DEPTH:-0}" -ge 1 ]; then
+  echo "delegate-agent: refusing to nest (DELEGATE_DEPTH=${DELEGATE_DEPTH})" >&2
+  exit 78
+fi
+export DELEGATE_DEPTH=$((${DELEGATE_DEPTH:-0} + 1))
+
+ROOT="${DELEGATE_ROOT:-$(git rev-parse --show-toplevel 2> /dev/null || pwd)}"
+RESOLVED="$(python3 "$RESOLVER" --scope "$PWD" --root "$ROOT" 2> /dev/null)" || {
+  echo "delegate-agent: backend config did not resolve. Run:" >&2
+  echo "  python3 $RESOLVER --scope \"$PWD\" --root \"$ROOT\"" >&2
+  exit 78
+}
+
+[ -n "$PROFILE" ] || PROFILE="$(printf '%s' "$RESOLVED" | jq -r '.default // empty')"
+[ -n "$PROFILE" ] || {
+  echo "delegate-agent: no profile given and no default set." >&2
+  echo "  available: $(printf '%s' "$RESOLVED" | jq -r '[.profiles[].name] | join(", ")')" >&2
+  exit 78
+}
+
+P="$(printf '%s' "$RESOLVED" | jq -c --arg n "$PROFILE" '.profiles[] | select(.name==$n)')"
+[ -n "$P" ] || {
+  echo "delegate-agent: profile '$PROFILE' is not permitted in this scope." >&2
+  echo "  permitted: $(printf '%s' "$RESOLVED" | jq -r '[.profiles[].name] | join(", ")')" >&2
+  exit 78
+}
+
+jqp() { printf '%s' "$P" | jq -r "$1"; }
+BASE_URL="$(jqp '.base_url')"
+MODEL="$(jqp '.model')"
+SETTINGS="$(jqp '.settings_file // empty')"
+TOKEN_ENV="$(jqp '.token_env // empty')"
+EGRESS="$(jqp '.egress')"
+
+# ----------------------------------------------------------------------------- containment ---
+# Its own config dir: separate settings.json, separate session history, and no path by which the
+# child picks up the parent's subscription credential.
+export CLAUDE_CONFIG_DIR="${DELEGATE_CONFIG_DIR:-${HOME}/.delegate-agent/${PROFILE}}"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export DISABLE_AUTOUPDATER=1
+export DISABLE_TELEMETRY=1
+
+# --------------------------------------------------------------------------------- routing ---
+# Every alias resolves to the same weights, so `inherit`, /model, subagent frontmatter, and the
+# Explore/Plan built-ins all land on the configured model rather than erroring on an unknown id.
+export ANTHROPIC_MODEL="$MODEL"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL"
+export ANTHROPIC_DEFAULT_FABLE_MODEL="$MODEL"
+export CLAUDE_CODE_SUBAGENT_MODEL="$MODEL"
+
+CMD=(claude)
+if [ -n "$SETTINGS" ]; then
+  # The CLI reads the credential out of the settings file itself. This script never sees the
+  # token, so it cannot leak it into an error message, a log, or a transcript.
+  CMD+=(--settings "$SETTINGS")
+else
+  export ANTHROPIC_BASE_URL="$BASE_URL"
+  if [ -n "$TOKEN_ENV" ]; then
+    if [ -z "${!TOKEN_ENV:-}" ]; then
+      echo "delegate-agent: profile '$PROFILE' expects the token in \$$TOKEN_ENV, which is unset." >&2
+      exit 78
+    fi
+    export ANTHROPIC_AUTH_TOKEN="${!TOKEN_ENV}"
+  elif [ "$EGRESS" = "local" ]; then
+    # Local runtimes (LM Studio, Ollama) ignore the bearer but the CLI insists on one.
+    export ANTHROPIC_AUTH_TOKEN="local-no-auth"
+  else
+    echo "delegate-agent: profile '$PROFILE' is remote but declares no tokenEnv or settingsFile." >&2
+    exit 78
+  fi
+  # A stale key would be sent as x-api-key alongside the bearer and trips the auth-conflict
+  # warning at startup. Drop it rather than let two credentials race.
+  unset ANTHROPIC_API_KEY
+fi
+
+exec "${CMD[@]}" "${ARGS[@]+"${ARGS[@]}"}"
