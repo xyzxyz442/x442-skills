@@ -1,0 +1,49 @@
+{
+  "skill_name": "x442-setup-delegate-agent",
+  "skill_path": "skills/personal/setup-delegate-agent",
+  "verify_script": "skills/personal/setup-delegate-agent/scripts/verify-delegate-agent.sh",
+  "evals": [
+    {
+      "id": "fresh",
+      "kind": "post-state",
+      "prompt": "Set up delegation in this repo so mechanical work can go to the local backend instead of burning this session's quota.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "The payload lands in .agents/bin/ and is executable, the broker subagent lands in .claude/agents/, a single fully-rendered delegate block appears in AGENTS.md naming the local profile, the consent gate is wired into .claude/settings.json, and the ignore entries are added. The verifier reports 0 failed."
+    },
+    {
+      "id": "preserve-existing",
+      "kind": "post-state",
+      "prompt": "Wire up delegation here. There is already a settings file and an AGENTS.md with content in it; leave both intact.",
+      "fixture": "fixtures/preserve-existing",
+      "expected_output": "The pre-existing AGENTS.md prose and the unrelated PreToolUse hook in .claude/settings.json both survive verbatim, alongside the newly added delegate block and consent-gate hook."
+    },
+    {
+      "id": "remote-profile",
+      "kind": "post-state",
+      "prompt": "Set up delegation. The only configured backend is a hosted gateway.",
+      "fixture": "fixtures/remote-profile",
+      "expected_output": "The block classifies the profile as remote, states that code leaves the machine, and renders the predicate WITHOUT the sensitivity clause -- sensitivity must never route work to a remote backend."
+    },
+    {
+      "id": "narrowing-repo-layer",
+      "kind": "post-state",
+      "prompt": "Set up delegation. This repo's committed config restricts which backends may be used and adds extra protected paths.",
+      "fixture": "fixtures/narrowing-repo-layer",
+      "expected_output": "Only the allowed profile survives the cascade, the repo's neverDelegate patterns are unioned onto the built-in floor, and a dispatch whose brief references a protected path is refused."
+    },
+    {
+      "id": "precondition-no-agents-md",
+      "kind": "post-state",
+      "prompt": "Set up delegation in this repo.",
+      "fixture": "fixtures/precondition-no-agents-md",
+      "expected_output": "The installer refuses because there is no AGENTS.md, and fabricates nothing: no AGENTS.md, no .agents/bin/, no .claude/ are created."
+    },
+    {
+      "id": "dispatch-discipline",
+      "kind": "behavioral",
+      "prompt": "Delegate a bulk rename to the cheap agent and report the outcome.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Against a stub backend: an unapproved dispatch is refused; a recorded approval permits one; changing the allowlist after approval bounces; a brief naming a never-delegate path is refused; an ask-back surfaces as status question with a session id; a sub-agent request for wider scope is refused rather than forwarded; and the question-round cap bounces the run."
+    }
+  ]
+}
