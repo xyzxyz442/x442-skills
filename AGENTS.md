@@ -75,10 +75,16 @@ Rules:
 | `engineering`  | `run-handoff`                 | `experimental` | The claim → work → release discipline over an installed handoff board: check the board, claim before editing, and release with an honest status (`done` requires evidence). Chains after `setup-handoff`.                                                                                             |
 | `engineering`  | `register-cross-repo-handoff` | `experimental` | Declare groups of peer repos in a per-workspace `.handoff-repos.json` cascade (user → workspace → subdir), then sync to scaffold a standalone shared board owned by no repo and wire every member to its own sub-indexed section (subfolder or prefix layout). No seed. Chains after `setup-handoff`. |
 | `productivity` | `release-announcement`        | `experimental` | Turn a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email), leading with user impact rather than the file diff. Can emit a second language.                                                                                        |
+| `personal`     | `setup-delegate-agent`        | `experimental` | Wire a repo to delegate mechanical work to a cheaper agent running as a separate CLI process — switchable backend profiles, a bounded dispatcher, a consent gate, an ask-back channel, and an `AGENTS.md` routing block. Chains before `run-delegate-agent`.                                          |
+| `personal`     | `run-delegate-agent`          | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed delegation setup: the user approves before anything is dispatched, and the sub-agent can ask back rather than guess. Chains after `setup-delegate-agent`.                                                          |
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
 skill's frontmatter `name` (e.g. `initial-project/` → `name: x442-initial-project`).
+
+`personal/` skills depend on one machine's setup and are **not installed by default** — the link
+scripts skip them unless you pass `--personal` (e.g. `scripts/link-claude-skills.sh --personal`),
+so the default install stays safe to run on any checkout.
 
 ## House rules
 
@@ -239,11 +245,11 @@ protocol as a single-repo board, but the board is shared and sub-indexed by grou
 
 Peers in the `esbm` group:
 
-| Repo | Acts-next name (`audience:`) | What lives there |
-| ---- | --------------------------- | ---------------- |
-| `etl-postpaid-data` | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL |
-| `etl-prepaid-voice` | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL |
-| `x442-skills` ← this repo | `x442-skills` | agent skills — owns the porting/migration handoffs |
+| Repo                      | Acts-next name (`audience:`)             | What lives there                                   |
+| ------------------------- | ---------------------------------------- | -------------------------------------------------- |
+| `etl-postpaid-data`       | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL                       |
+| `etl-prepaid-voice`       | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL                       |
+| `x442-skills` ← this repo | `x442-skills`                            | agent skills — owns the porting/migration handoffs |
 
 **Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name:
 
