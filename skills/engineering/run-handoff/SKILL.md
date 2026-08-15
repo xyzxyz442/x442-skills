@@ -88,6 +88,14 @@ handoff new <id> --standalone --title "…"        # a new standalone/reference 
 handoff import <file> --standalone [--id <id>]    # bring an existing file onto the board
 ```
 
+**A compaction brief is a standalone doc, and it summarizes the _conversation_.** When this
+session is running out of context and the work continues in a fresh one, file a standalone doc
+rather than trusting the transcript to survive. Write what the transcript holds and the code does
+not: the decisions you made and why, the approaches you ruled out (so the next agent does not
+re-walk them), what you were mid-way through, and the exact next step. Anything already captured
+in a commit, plan, or diff gets a path, not a paste. Fill in **Suggested skills** — a fresh agent
+starts with no idea which skills this repo expects.
+
 For a **bundle** of related handoffs that should be tracked together — a feature split across
 several units, or the open work against one subsystem — file an **orchestrator**:
 
@@ -158,6 +166,8 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Closing `done` on trust ("the doc said it was fixed") → the exact failure trackers rot into; the
   tool refuses without `--verified-by`.
 - Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
+- Writing a compaction brief that restates the diff → the next agent can read the diff; what it
+  cannot recover is why you chose that approach and what you already ruled out.
 - Writing child status into an orchestrator by hand → `list` derives it; your copy goes stale
   the moment a child closes, which is what the type exists to prevent.
 - Pasting a secret/key/password/PII into a doc → it lands in git history; redact it and request the
