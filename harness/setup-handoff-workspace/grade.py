@@ -30,6 +30,9 @@ VERIFY = SKILL / "scripts/verify-setup-handoff.sh"
 DETECT = SKILL / "scripts/detect-handoff.sh"
 
 HD = ".agents/handoff"
+# The CLI's unresolvable-id error. Asserted both ways: it must still fire for an id that really
+# does not exist, and must NOT fire for one that is only in another section of a grouped board.
+NO_SUCH = "no such handoff"
 CLAUDE_CFG = ".claude/settings.json"
 
 
@@ -110,6 +113,15 @@ def grade_script_behavior(target):
     _handoff(target, "new", "bt", "--title", "Backend task")
     e.append(gc.expectation("handoff new creates a doc", (doc / "bt-handoff.md").is_file(),
                             f"bt-handoff.md exists: {(doc / 'bt-handoff.md').is_file()}"))
+
+    # The grouped-board scope notice must stay invisible on a FLAT board: it keys off
+    # board_is_grouped(), so a plain single-repo board has to behave exactly as it did before.
+    r = _handoff(target, "list")
+    e.append(gc.expectation("flat board list stays silent on stderr (no section notice)",
+                            r.stderr.strip() == "", f"stderr: {r.stderr.strip()[:120]!r}"))
+    r = _handoff(target, "claim", "ghost-id", "x")
+    e.append(gc.expectation("flat board still reports an unknown id as no such handoff",
+                            NO_SUCH in r.stderr, f"stderr: {r.stderr.strip()[:120]!r}"))
 
     _handoff(target, "claim", "bt", "on it", session="sess-AAA")
     lease = _lease(target, "bt-handoff")
@@ -620,6 +632,43 @@ def grade_cross_repo(_target):
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def _scope_notice_expectations(sh, ho, board, tag):
+    """A sectioned board must never read as an empty board, nor report a real id as unknown just
+    because it sits in another section. This is the reachable path, not a corner one: the AGENTS.md
+    block's own documented commands are typed by hand and inherit no HANDOFF_GROUP (only the tool
+    hooks carry it), which is how a member repo came to read its own board as empty. Assumes the
+    grouped-board scaffold, where `node-drain` exists only in the infra section."""
+    e = []
+    noscope = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": ""}
+    inscope = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}
+
+    r = sh(["bash", str(ho), "list"], board, noscope)
+    e.append(gc.expectation(f"{tag} list with no group in scope warns instead of looking empty",
+                            "no HANDOFF_GROUP is set" in r.stderr,
+                            f"stderr: {r.stderr.strip()[:160]!r}"))
+    e.append(gc.expectation(f"{tag} that warning is on stderr, leaving stdout the plain table",
+                            "HANDOFF_GROUP" not in r.stdout and r.stdout.startswith("ID"),
+                            f"stdout head: {r.stdout[:60]!r}"))
+    r = sh(["bash", str(ho), "list"], board, inscope)
+    e.append(gc.expectation(f"{tag} no warning when a section IS in scope",
+                            r.stderr.strip() == "", f"stderr: {r.stderr.strip()[:120]!r}"))
+
+    # "no such handoff" for a doc that is merely in another section is actively wrong — the id is
+    # real, and that message sends the reader to `list`, which is empty/foreign for the same reason.
+    r = sh(["bash", str(ho), "claim", "node-drain", "x"], board, inscope)
+    named = "infra section" in r.stderr and NO_SUCH not in r.stderr
+    e.append(gc.expectation(f"{tag} claim on another section's id names that section",
+                            r.returncode != 0 and named, f"stderr: {r.stderr.strip()[:160]!r}"))
+    r = sh(["bash", str(ho), "claim", "node-drain", "x"], board, noscope)
+    e.append(gc.expectation(f"{tag} claim with no group in scope names the section too",
+                            r.returncode != 0 and "infra section" in r.stderr,
+                            f"stderr: {r.stderr.strip()[:160]!r}"))
+    r = sh(["bash", str(ho), "claim", "totally-made-up", "x"], board, inscope)
+    e.append(gc.expectation(f"{tag} a genuinely unknown id still reports no such handoff",
+                            NO_SUCH in r.stderr, f"stderr: {r.stderr.strip()[:120]!r}"))
+    return e
+
+
 def grade_grouped_board(_target):
     """A multi-group board: two groups co-located as sub-indexed sections + id collisions across
     groups, exercised under BOTH subfolder and prefix layouts. Self-contained (ignores the passed
@@ -715,6 +764,8 @@ def grade_grouped_board(_target):
             r = sh(["bash", str(ho), "release", "blk", "--status", "done", "--verified-by", "grader"], board, aenv)
             e.append(gc.expectation(f"{tag} closing the blocker surfaces the dependent as unblocked",
                                     "Now unblocked" in r.stdout, f"out: {r.stdout[-160:]!r}"))
+
+            e.extend(_scope_notice_expectations(sh, ho, board, tag))
         return e
     finally:
         shutil.rmtree(base, ignore_errors=True)

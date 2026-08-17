@@ -89,8 +89,9 @@ Start from [`assets/handoff-repos.example.json`](assets/handoff-repos.example.js
 4. **Verify**: `scripts/verify-cross-repo-handoff.sh --scope <workspace>` — read-only. Confirms each
    board is scaffolded with the expected group facts, each member is wired to its section, and the
    AGENTS.md blocks match the manifest. Exit 0 = healthy, exit 1 = broken (drift, missing wiring).
-5. **Report** the boards, groups, and members wired, and how to work the board (`handoff list` from
-   a member shows only that repo's section).
+5. **Report** the boards, groups, and members wired, and how to work the board
+   (`HANDOFF_GROUP=<group> handoff list` from a member shows only that repo's section — a hand-run
+   command needs the group; the hooks already carry it).
 
 Editing the manifest later is the same loop: change it, re-sync, re-verify. The verifier flags
 **drift** (a manifest edited but never synced) as a failure.
@@ -110,13 +111,20 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 
 ## Working the board
 
-From any member repo, the `handoff` CLI is scoped to that repo's section (its `HANDOFF_GROUP`):
+A member repo's section is selected by `HANDOFF_GROUP`. The wiring bakes it into each tool's hook
+command, so the session board and the edit gate are scoped automatically — but a command run by
+hand inherits nothing, so pass it:
 
 ```text
-../.agents/handoff/handoff list                       # only this repo's section
-../.agents/handoff/handoff new fix-x --audience web   # hand off to a peer
-../.agents/handoff/handoff claim fix-x "on it"
+HANDOFF_GROUP=<group> ../.agents/handoff/handoff list                     # only this repo's section
+HANDOFF_GROUP=<group> ../.agents/handoff/handoff new fix-x --audience web # hand off to a peer
+HANDOFF_GROUP=<group> ../.agents/handoff/handoff claim fix-x "on it"
 ```
+
+Leave it out on a sectioned board and the CLI says so rather than misleading you: `list` warns that
+nothing it printed is scoped to you, and `claim`/`release` report which section actually holds the
+id instead of "no such handoff". The rendered AGENTS.md block spells these commands out with the
+repo's own group already filled in.
 
 The board root `INDEX.md` is a **roll-up** across every section; each group also has its own
 sub-index. The session board and edit gate a repo sees are filtered to its own group, so groups on
