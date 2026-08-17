@@ -131,6 +131,11 @@ each_group() {
     [ -n "$g" ] && printf '%s\n' "$g"
   done
 }
+# The board hosts groups (config GROUPS + a layout) — distinct from grouped(), which asks whether
+# THIS invocation is acting inside a section. Lives here beside the other section helpers because
+# three call sites now need it (cmd_list's scope notice, no_such's cross-section lookup, cmd_index's
+# roll-up branch), the earliest of them ~600 lines before where it used to be defined.
+board_is_grouped() { [ -n "$LAYOUT" ] && [ -n "$BOARD_GROUPS" ]; }
 # The lock key for an id = its doc's file stem, so it is unique board-wide: subfolder namespaces via
 # the section's own .locks dir (plain stem), prefix bakes the group into the stem. Locks live in the
 # section dir so a repo only reaps/nags its own section's leases.
@@ -192,8 +197,32 @@ doc_of() { # id -> path, searching the caller's section (active then archive)
   return 1
 }
 
+# The board sections OTHER than the caller's whose section holds this id (active or archived), as a
+# comma list. Empty on a flat board, and empty when nothing anywhere holds it. Every lookup in this
+# script is confined to the caller's section, so this is the only thing that can tell "does not
+# exist" apart from "exists, but you cannot see it".
+sections_with_doc() { # id -> "auth, infra"
+  local id="$1" g out=""
+  board_is_grouped || return 0
+  while read -r g; do
+    [ -n "$g" ] || continue
+    [ "$g" = "$GROUP" ] && continue
+    { [ -f "$(doc_file "$id" "$g")" ] || [ -f "$(arch_file "$id" "$g")" ]; } && out="${out:+$out, }$g"
+  done < <(each_group)
+  printf '%s' "$out"
+}
+
 no_such() { # id -> never returns; the shared unresolvable-id error for claim/release
-  local near
+  local near other scope
+  # On a grouped board the id may be perfectly real and simply live in a section this invocation
+  # cannot see — HANDOFF_GROUP selects one section and nothing looks outside it. "no such handoff"
+  # is then actively wrong (the doc exists), and its advice makes it worse: it sends the reader to
+  # `list`, which is empty for the very same reason. Name the section that actually holds it.
+  other="$(sections_with_doc "$1")"
+  if [ -n "$other" ]; then
+    if [ -n "$GROUP" ]; then scope="your section is $GROUP"; else scope="you have no HANDOFF_GROUP set"; fi
+    die "$1 is on this board, in the $other section — but $scope. Re-run as: HANDOFF_GROUP=${other%%,*} handoff ..."
+  fi
   near="$(near_ids "$1")"
   die "no such handoff: $1 (try: handoff list)${near:+ — did you mean: $near}"
 }
@@ -759,6 +788,16 @@ cmd_import() {
 }
 
 cmd_list() {
+  # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
+  # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
+  # cannot see the work" indistinguishable — and this is the reachable case, not a corner one,
+  # because a `handoff list` typed by hand inherits no HANDOFF_GROUP (only the tool hooks carry it).
+  # Silence here is what let a member repo read its own board as empty. Notice goes to stderr so
+  # stdout stays exactly the table its readers parse.
+  if board_is_grouped && [ -z "$GROUP" ]; then
+    echo "handoff: this board is sectioned ($BOARD_GROUPS) and no HANDOFF_GROUP is set," >&2
+    echo "         so nothing below is scoped to you. Re-run as: HANDOFF_GROUP=<section> handoff list" >&2
+  fi
   printf '%-44s %-9s %-14s %-8s %s\n' ID STATUS AUDIENCE SEVERITY LOCK
   printf '%-44s %-9s %-14s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
     "---------" "--------------" "--------" "----"
@@ -1292,10 +1331,6 @@ rollup_index() {
     done < <(groups_for_rollup)
   } > "$out"
 }
-
-# The board hosts groups (config GROUPS + a layout) — distinct from grouped(), which asks whether
-# THIS invocation is acting inside a section.
-board_is_grouped() { [ -n "$LAYOUT" ] && [ -n "$BOARD_GROUPS" ]; }
 
 cmd_index() {
   # A board-level invocation on a grouped board (no HANDOFF_GROUP in scope) owns only the roll-up —
