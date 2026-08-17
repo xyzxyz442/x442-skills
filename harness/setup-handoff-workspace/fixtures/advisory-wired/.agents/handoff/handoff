@@ -283,6 +283,38 @@ children_of() { # path -> newline-separated child ids (canonicalized)
   done
 }
 
+# The write-side counterpart of children_of: a `--children` CSV in, the canonical comma-joined
+# `children:` value out. It exists so the two sides split the list the same way, because they used
+# not to:
+#
+#   * The write side split on WHITESPACE as well as commas (`for c in $(… | tr ',' ' ')`), so a
+#     quoted multi-word child id — the spelling the `id` positional argument explicitly supports —
+#     silently became several children. `--children 'rbac-gap,RBAC Gap Two'` recorded four ids, two
+#     of which named no doc: an inflated progress denominator and permanent MISSING children, so the
+#     bundle could never close. Splitting on `,` only (via IFS, scoped to this function) and
+#     TRIMMING each element's surrounding whitespace keeps `a,b,c` and `"a, b, c"` equivalent while
+#     leaving whitespace inside an element for norm_id to fold into a dash.
+#   * The write side canonicalized with norm_id, which slugifies unconditionally, so a legacy dotted
+#     id like `sprint-26.7.2-handoff` was recorded as `sprint-26-7-2-handoff`, matched no doc, and
+#     reported MISSING for the bundle's whole life. resolve_id — what the read side already used —
+#     prefers whichever spelling names a real file and falls back to the canonical slug when neither
+#     does, so a child planned but not yet filed still records (and still reports MISSING) as before.
+#
+# Trimming with a parameter expansion rather than `tr -d '[:space:]'`: the read side can delete all
+# whitespace because it only ever sees already-slugged ids, but here the input is what the user typed.
+children_csv() { # "a, b, c" -> "a-handoff, b-handoff, c-handoff"; non-zero on an unusable element
+  local raw="$1" out="" c
+  local IFS=','
+  for c in $raw; do
+    c="${c#"${c%%[![:space:]]*}"}" # strip leading whitespace
+    c="${c%"${c##*[![:space:]]}"}" # strip trailing whitespace
+    [ -n "$c" ] || continue
+    c="$(resolve_id "$c")" || return 1
+    out="${out:+$out, }$c"
+  done
+  printf '%s' "$out"
+}
+
 # "<done>/<total>" plus the ids still outstanding. A child that names no file counts as missing, not
 # as done — a typo must never read as progress.
 child_progress() { # path -> "done|total|outstanding-csv"
@@ -499,11 +531,7 @@ cmd_new() {
     # stored. A child that does not exist yet is allowed — a bundle is often planned before it is
     # filed — but `list` reports it as MISSING rather than counting it toward progress.
     local clist=""
-    local c
-    for c in $(printf '%s' "$children" | tr ',' ' '); do
-      c="$(norm_id "$c")" || die "unusable child id: '$c'"
-      clist="${clist:+$clist, }$c"
-    done
+    clist="$(children_csv "$children")" || die "unusable child id in --children: '$children' (each needs at least one letter or digit)"
     local tmpl
     tmpl="$(tmpl_path handoff-orchestrator-template.md)"
     if [ -f "$tmpl" ]; then
