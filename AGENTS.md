@@ -58,6 +58,7 @@ Rules:
   plugin marketplace read the frontmatter `name`, while the dev-loop link scripts also prefix the
   symlink directory.
 - **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"). Keep under ~200 chars.
+- **No `:` in any frontmatter value** (`name`, `description`, `argument-hint`, …): a colon breaks how the frontmatter renders in markdown previews and naive parsers, even inside a `>-` block scalar where YAML itself would allow it. Use an em dash instead. Same rule as handoff titles.
 - **Markdown-first**: most skills ship markdown only, with supporting samples/data under `references/`. Setup and automation skills _may_ ship executables (shell, Python) and config payloads — put runnable scripts under `scripts/` and bundled payloads (templates, config) under `assets/`. The no-destructive-shell-commands house rule still applies to every shipped file.
 - **One skill, one purpose**: if a skill describes two unrelated workflows, split it.
 - **Link, don't duplicate**: cross-reference other skills with relative links instead of copying their content.
@@ -239,11 +240,11 @@ protocol as a single-repo board, but the board is shared and sub-indexed by grou
 
 Peers in the `esbm` group:
 
-| Repo | Acts-next name (`audience:`) | What lives there |
-| ---- | --------------------------- | ---------------- |
-| `etl-postpaid-data` | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL |
-| `etl-prepaid-voice` | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL |
-| `x442-skills` ← this repo | `x442-skills` | agent skills — owns the porting/migration handoffs |
+| Repo                      | Acts-next name (`audience:`)             | What lives there                                   |
+| ------------------------- | ---------------------------------------- | -------------------------------------------------- |
+| `etl-postpaid-data`       | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL                       |
+| `etl-prepaid-voice`       | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL                       |
+| `x442-skills` ← this repo | `x442-skills`                            | agent skills — owns the porting/migration handoffs |
 
 **Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name.
 
