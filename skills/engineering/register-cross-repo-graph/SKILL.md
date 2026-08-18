@@ -5,7 +5,7 @@ description: >-
   frontend session resolving a backend symbol, or any "reference another project's source" /
   cross-repo / monorepo-sibling lookup — so agents query the sibling graph instead of grepping
   across folders and burning tokens. Declare the sibling repos in a per-project `.graph-repos.json`
-  (a user → repo → subdirectory cascade, like AGENTS.md), then sync: it registers them with
+  (a user → repo → subdirectory cascade, like AGENTS.md), then sync — it registers them with
   code-review-graph, merges a per-project graphify graph, and rewrites the routing block in
   AGENTS.md. Chains after setup-graph-hooks.
 ---
