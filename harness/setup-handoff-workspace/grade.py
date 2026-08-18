@@ -470,6 +470,58 @@ def grade_script_behavior(target):
                             r.returncode == 0 and (doc / "archive/bundle-handoff.md").is_file(),
                             f"exit {r.returncode}; archived: {(doc / 'archive/bundle-handoff.md').is_file()}"))
 
+    # --- release drops the lease on EVERY exit path --------------------------------------
+    # `claim` refuses standalone and orchestrator docs, so the only way a lease lands on one is
+    # reclassifying a doc claimed while it was still coordination — retiring a work item into a
+    # reference doc, or promoting it into a bundle index. Both branches of cmd_release `return`
+    # early and used to return BEFORE the clear_lock at the function's end, so the lease survived
+    # until the TTL reap, clearable by neither `release` (it will not) nor `claim` (it refuses the
+    # doc), and the board read as work-in-progress for hours.
+    def _retype(hid, new_type, extra_fm=()):
+        p = doc / f"{hid}-handoff.md"
+        out, done = [], False
+        for ln in p.read_text().splitlines():
+            if not done and ln.startswith("type: "):
+                out.append(f"type: {new_type}")
+                out.extend(extra_fm)
+                done = True
+            else:
+                out.append(ln)
+        p.write_text("\n".join(out) + "\n")
+
+    for hid, new_type, status, extra_fm in (
+        ("conv-ref", "standalone", "open", ()),
+        ("conv-retire", "standalone", "done", ()),
+        ("conv-bundle", "orchestrator", "open", ("children: [kid-a-handoff]",)),
+        ("conv-bundle-done", "orchestrator", "done", ("children: [kid-a-handoff]",)),
+    ):
+        _handoff(target, "new", hid, "--title", f"Converted to {new_type}")
+        _handoff(target, "claim", hid, "claimed while still coordination")
+        _retype(hid, new_type, extra_fm)
+        r = _handoff(target, "release", hid, "--status", status)
+        lock = doc / f".locks/{hid}-handoff"
+        e.append(gc.expectation(
+            f"release --status {status} on a {new_type} doc clears the lease it still held",
+            r.returncode == 0 and not lock.exists(),
+            f"exit {r.returncode}; lock present: {lock.exists()}; err: {r.stderr.strip()[:80]!r}"))
+
+    # The regression the fix must not cause: the coordination path already cleared its lease, and
+    # every status has to keep doing so.
+    _handoff(target, "new", "lease-blk", "--title", "Blocker for the lease sweep")
+    for hid, args in (
+        ("lease-open", ("--status", "open")),
+        ("lease-blocked", ("--status", "blocked", "--blocked-on", "lease-blk")),
+        ("lease-done", ("--status", "done", "--verified-by", "grader read the live code")),
+    ):
+        _handoff(target, "new", hid, "--title", "Coordination work")
+        _handoff(target, "claim", hid)
+        r = _handoff(target, "release", hid, *args)
+        lock = doc / f".locks/{hid}-handoff"
+        e.append(gc.expectation(
+            f"coordination release {args[1]} still clears its lease",
+            r.returncode == 0 and not lock.exists(),
+            f"exit {r.returncode}; lock present: {lock.exists()}; err: {r.stderr.strip()[:80]!r}"))
+
     # Catch-all over everything this suite produced: no field-by-field expectation can cover a
     # value the CLI learns to write later, and one bad line breaks the whole doc for every parser.
     offenders = sorted(o for p in [*doc.glob("*-handoff.md"), *(doc / "archive").glob("*-handoff.md")]

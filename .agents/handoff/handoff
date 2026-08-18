@@ -912,6 +912,17 @@ cmd_touch() {
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
+# Every release path ends the same way: drop the lease, then regenerate the index. It is a helper
+# rather than three copies because the standalone and orchestrator branches `return` early and used
+# to skip the `clear_lock` at the function's end — stranding any lease held on a doc that was
+# reclassified into one of those types after being claimed (`claim` refuses both types, so that
+# conversion is the only way a lease gets onto one). The lease then survived until the TTL reap,
+# and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
+finish_release() { # id
+  clear_lock "$(lock_key "$1")"
+  cmd_index
+}
+
 cmd_release() {
   local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [note]}"
   shift
@@ -983,7 +994,7 @@ cmd_release() {
         ;;
       *) die "orchestrators support --status open|done (a bundle has no lease to block on)" ;;
     esac
-    cmd_index
+    finish_release "$id"
     return
   fi
 
@@ -1012,7 +1023,7 @@ cmd_release() {
         ;;
       *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
     esac
-    cmd_index
+    finish_release "$id"
     return
   fi
 
@@ -1088,8 +1099,7 @@ cmd_release() {
     log_activity "$f" "$status — released by $me.${note}"
     echo "Released $id → $status."
   fi
-  clear_lock "$(lock_key "$id")"
-  cmd_index
+  finish_release "$id"
 }
 
 # The effective `repos:` list — the inline flow list AND any block-list items on the lines after
