@@ -58,6 +58,7 @@ Rules:
   plugin marketplace read the frontmatter `name`, while the dev-loop link scripts also prefix the
   symlink directory.
 - **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"). Keep under ~200 chars.
+- **No `:` in any frontmatter value** (`name`, `description`, `argument-hint`, …): a colon breaks how the frontmatter renders in markdown previews and naive parsers, even inside a `>-` block scalar where YAML itself would allow it. Use an em dash instead. Same rule as handoff titles.
 - **Markdown-first**: most skills ship markdown only, with supporting samples/data under `references/`. Setup and automation skills _may_ ship executables (shell, Python) and config payloads — put runnable scripts under `scripts/` and bundled payloads (templates, config) under `assets/`. The no-destructive-shell-commands house rule still applies to every shipped file.
 - **One skill, one purpose**: if a skill describes two unrelated workflows, split it.
 - **Link, don't duplicate**: cross-reference other skills with relative links instead of copying their content.
@@ -251,17 +252,24 @@ Peers in the `esbm` group:
 | `etl-prepaid-voice`       | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL                       |
 | `x442-skills` ← this repo | `x442-skills`                            | agent skills — owns the porting/migration handoffs |
 
-**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name:
+**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name.
+
+`HANDOFF_GROUP` is what scopes a command to this repo's section. The tool hooks set it for you, but
+a command you type by hand inherits nothing — so pass it explicitly:
 
 ```text
-../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity low|medium|high
-../ais/src/.agents/handoff/handoff list      # shows only the esbm section
-../ais/src/.agents/handoff/handoff claim <id> "what you're doing"
+HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff list      # only the esbm section
+HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity low|medium|high
+HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff claim <id> "what you're doing"
 ```
 
-Your session board and the edit gate are scoped to the `esbm` section, so you only see and
-lease this group's handoffs; other groups on the board are isolated. Do not edit a doc you do not
-hold the lease for. Handoff docs are committed to git history — never paste secrets, keys, or PII.
+Omit it on this sectioned board and `list` warns that nothing it shows is scoped to you, while
+`claim` cannot resolve an id in your section — it will tell you which section holds it.
+
+Your session board and the edit gate **are** scoped for you, because the hooks carry
+`HANDOFF_GROUP=esbm`: you only see and lease this group's handoffs, and other groups on the
+board are isolated. Do not edit a doc you do not hold the lease for. Handoff docs are committed to
+git history — never paste secrets, keys, or PII.
 
 Scope comes from the `.handoff-repos.json` cascade (user → workspace → subdirectory, nearest wins).
 After editing it, re-run `sync-cross-repo-handoff.sh` so this block, the board wiring, and the

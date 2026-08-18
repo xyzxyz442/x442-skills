@@ -3,7 +3,7 @@ name: x442-run-handoff
 description: >-
   Use when working in a repo that has a handoff board (.agents/handoff/) — before editing shared
   or cross-repo work, when picking up or filing a handoff, or when stopping mid-task. Enforces the
-  "claim before you work, release when you stop" discipline: check the board, claim your unit, work
+  "claim before you work, release when you stop" discipline — check the board, claim your unit, work
   under the lease, and release with an honest status (done requires evidence). Chains after
   setup-handoff, which installs the protocol.
 ---

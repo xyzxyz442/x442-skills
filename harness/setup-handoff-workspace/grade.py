@@ -30,6 +30,9 @@ VERIFY = SKILL / "scripts/verify-setup-handoff.sh"
 DETECT = SKILL / "scripts/detect-handoff.sh"
 
 HD = ".agents/handoff"
+# The CLI's unresolvable-id error. Asserted both ways: it must still fire for an id that really
+# does not exist, and must NOT fire for one that is only in another section of a grouped board.
+NO_SUCH = "no such handoff"
 CLAUDE_CFG = ".claude/settings.json"
 
 
@@ -110,6 +113,15 @@ def grade_script_behavior(target):
     _handoff(target, "new", "bt", "--title", "Backend task")
     e.append(gc.expectation("handoff new creates a doc", (doc / "bt-handoff.md").is_file(),
                             f"bt-handoff.md exists: {(doc / 'bt-handoff.md').is_file()}"))
+
+    # The grouped-board scope notice must stay invisible on a FLAT board: it keys off
+    # board_is_grouped(), so a plain single-repo board has to behave exactly as it did before.
+    r = _handoff(target, "list")
+    e.append(gc.expectation("flat board list stays silent on stderr (no section notice)",
+                            r.stderr.strip() == "", f"stderr: {r.stderr.strip()[:120]!r}"))
+    r = _handoff(target, "claim", "ghost-id", "x")
+    e.append(gc.expectation("flat board still reports an unknown id as no such handoff",
+                            NO_SUCH in r.stderr, f"stderr: {r.stderr.strip()[:120]!r}"))
 
     _handoff(target, "claim", "bt", "on it", session="sess-AAA")
     lease = _lease(target, "bt-handoff")
@@ -458,6 +470,58 @@ def grade_script_behavior(target):
                             r.returncode == 0 and (doc / "archive/bundle-handoff.md").is_file(),
                             f"exit {r.returncode}; archived: {(doc / 'archive/bundle-handoff.md').is_file()}"))
 
+    # --- release drops the lease on EVERY exit path --------------------------------------
+    # `claim` refuses standalone and orchestrator docs, so the only way a lease lands on one is
+    # reclassifying a doc claimed while it was still coordination — retiring a work item into a
+    # reference doc, or promoting it into a bundle index. Both branches of cmd_release `return`
+    # early and used to return BEFORE the clear_lock at the function's end, so the lease survived
+    # until the TTL reap, clearable by neither `release` (it will not) nor `claim` (it refuses the
+    # doc), and the board read as work-in-progress for hours.
+    def _retype(hid, new_type, extra_fm=()):
+        p = doc / f"{hid}-handoff.md"
+        out, done = [], False
+        for ln in p.read_text().splitlines():
+            if not done and ln.startswith("type: "):
+                out.append(f"type: {new_type}")
+                out.extend(extra_fm)
+                done = True
+            else:
+                out.append(ln)
+        p.write_text("\n".join(out) + "\n")
+
+    for hid, new_type, status, extra_fm in (
+        ("conv-ref", "standalone", "open", ()),
+        ("conv-retire", "standalone", "done", ()),
+        ("conv-bundle", "orchestrator", "open", ("children: [kid-a-handoff]",)),
+        ("conv-bundle-done", "orchestrator", "done", ("children: [kid-a-handoff]",)),
+    ):
+        _handoff(target, "new", hid, "--title", f"Converted to {new_type}")
+        _handoff(target, "claim", hid, "claimed while still coordination")
+        _retype(hid, new_type, extra_fm)
+        r = _handoff(target, "release", hid, "--status", status)
+        lock = doc / f".locks/{hid}-handoff"
+        e.append(gc.expectation(
+            f"release --status {status} on a {new_type} doc clears the lease it still held",
+            r.returncode == 0 and not lock.exists(),
+            f"exit {r.returncode}; lock present: {lock.exists()}; err: {r.stderr.strip()[:80]!r}"))
+
+    # The regression the fix must not cause: the coordination path already cleared its lease, and
+    # every status has to keep doing so.
+    _handoff(target, "new", "lease-blk", "--title", "Blocker for the lease sweep")
+    for hid, args in (
+        ("lease-open", ("--status", "open")),
+        ("lease-blocked", ("--status", "blocked", "--blocked-on", "lease-blk")),
+        ("lease-done", ("--status", "done", "--verified-by", "grader read the live code")),
+    ):
+        _handoff(target, "new", hid, "--title", "Coordination work")
+        _handoff(target, "claim", hid)
+        r = _handoff(target, "release", hid, *args)
+        lock = doc / f".locks/{hid}-handoff"
+        e.append(gc.expectation(
+            f"coordination release {args[1]} still clears its lease",
+            r.returncode == 0 and not lock.exists(),
+            f"exit {r.returncode}; lock present: {lock.exists()}; err: {r.stderr.strip()[:80]!r}"))
+
     # Catch-all over everything this suite produced: no field-by-field expectation can cover a
     # value the CLI learns to write later, and one bad line breaks the whole doc for every parser.
     offenders = sorted(o for p in [*doc.glob("*-handoff.md"), *(doc / "archive").glob("*-handoff.md")]
@@ -620,6 +684,43 @@ def grade_cross_repo(_target):
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def _scope_notice_expectations(sh, ho, board, tag):
+    """A sectioned board must never read as an empty board, nor report a real id as unknown just
+    because it sits in another section. This is the reachable path, not a corner one: the AGENTS.md
+    block's own documented commands are typed by hand and inherit no HANDOFF_GROUP (only the tool
+    hooks carry it), which is how a member repo came to read its own board as empty. Assumes the
+    grouped-board scaffold, where `node-drain` exists only in the infra section."""
+    e = []
+    noscope = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": ""}
+    inscope = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": "auth"}
+
+    r = sh(["bash", str(ho), "list"], board, noscope)
+    e.append(gc.expectation(f"{tag} list with no group in scope warns instead of looking empty",
+                            "no HANDOFF_GROUP is set" in r.stderr,
+                            f"stderr: {r.stderr.strip()[:160]!r}"))
+    e.append(gc.expectation(f"{tag} that warning is on stderr, leaving stdout the plain table",
+                            "HANDOFF_GROUP" not in r.stdout and r.stdout.startswith("ID"),
+                            f"stdout head: {r.stdout[:60]!r}"))
+    r = sh(["bash", str(ho), "list"], board, inscope)
+    e.append(gc.expectation(f"{tag} no warning when a section IS in scope",
+                            r.stderr.strip() == "", f"stderr: {r.stderr.strip()[:120]!r}"))
+
+    # "no such handoff" for a doc that is merely in another section is actively wrong — the id is
+    # real, and that message sends the reader to `list`, which is empty/foreign for the same reason.
+    r = sh(["bash", str(ho), "claim", "node-drain", "x"], board, inscope)
+    named = "infra section" in r.stderr and NO_SUCH not in r.stderr
+    e.append(gc.expectation(f"{tag} claim on another section's id names that section",
+                            r.returncode != 0 and named, f"stderr: {r.stderr.strip()[:160]!r}"))
+    r = sh(["bash", str(ho), "claim", "node-drain", "x"], board, noscope)
+    e.append(gc.expectation(f"{tag} claim with no group in scope names the section too",
+                            r.returncode != 0 and "infra section" in r.stderr,
+                            f"stderr: {r.stderr.strip()[:160]!r}"))
+    r = sh(["bash", str(ho), "claim", "totally-made-up", "x"], board, inscope)
+    e.append(gc.expectation(f"{tag} a genuinely unknown id still reports no such handoff",
+                            NO_SUCH in r.stderr, f"stderr: {r.stderr.strip()[:120]!r}"))
+    return e
+
+
 def grade_grouped_board(_target):
     """A multi-group board: two groups co-located as sub-indexed sections + id collisions across
     groups, exercised under BOTH subfolder and prefix layouts. Self-contained (ignores the passed
@@ -715,6 +816,8 @@ def grade_grouped_board(_target):
             r = sh(["bash", str(ho), "release", "blk", "--status", "done", "--verified-by", "grader"], board, aenv)
             e.append(gc.expectation(f"{tag} closing the blocker surfaces the dependent as unblocked",
                                     "Now unblocked" in r.stdout, f"out: {r.stdout[-160:]!r}"))
+
+            e.extend(_scope_notice_expectations(sh, ho, board, tag))
         return e
     finally:
         shutil.rmtree(base, ignore_errors=True)
