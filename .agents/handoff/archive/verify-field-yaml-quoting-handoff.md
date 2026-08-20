@@ -3,7 +3,7 @@ id: verify-field-yaml-quoting-handoff
 title: verify — frontmatter commands need quoting, not colon folding
 type: coordination
 status: done
-audience: 
+audience:
 repos: []
 severity: low
 created: 2026-08-03
@@ -30,11 +30,11 @@ with plain sed and would hand every reader a value with literal quotes still on 
 
 The CLI never writes `verify:` — a human or agent adds it by hand — so nothing in the tool
 emits the bad line today. But the field is documented, and any realistic command contains a
-colon, so docs that use it as documented are unparseable. Live example found on the shared
-board (`../ais/src/.agents/handoff`), archived:
+colon, so docs that use it as documented are unparseable. Live example found on a shared
+cross-repo board, archived:
 
 ```text
-esbm/archive/graph-hooks-sqlite-probe-handoff.md
+<group>/archive/graph-hooks-sqlite-probe-handoff.md
 verify: sqlite3 'file:.code-review-graph/graph.db?mode=ro' 'select count(*) from embeddings;'
 ```
 
