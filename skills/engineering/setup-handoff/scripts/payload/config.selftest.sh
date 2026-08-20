@@ -40,6 +40,26 @@ chk "repo beats board" 12 "$HC_TTL_HOURS"
 chk "repo identity" myrepo "$HC_REPO_NAME"
 chk "repo group" g1 "$HC_GROUP"
 
+mkdir -p "$T/board_null"
+printf '{"ttlHours": null}\n' > "$T/board_null/config.json"
+eval "$(handoff_config_load "$T/board_null")"
+chk "null ttlHours falls back to default" 4 "$HC_TTL_HOURS"
+
+# Simulate a machine without python3 (by shadowing the `command` builtin in a subshell) to prove
+# the no-python3 branch errors on a present repo config.json instead of silently ignoring it.
+mkdir -p "$T/board3" "$T/repo3/.agents"
+printf '{"repo":"myrepo3"}\n' > "$T/repo3/.agents/handoff.config.json"
+(
+  command() {
+    if [ "$1" = "-v" ] && [ "$2" = "python3" ]; then
+      return 1
+    fi
+    builtin command "$@"
+  }
+  handoff_config_load "$T/board3" "$T/repo3"
+) > /dev/null 2>&1
+chk "no-python3 errors on repo config.json" 1 "$([ $? -ne 0 ] && echo 1 || echo 0)"
+
 # Never execute config content: a command substitution must survive as a literal.
 printf 'REPO_NAME=$(touch %s/PWNED)\n' "$T" > "$T/board2_config"
 mkdir -p "$T/board2"

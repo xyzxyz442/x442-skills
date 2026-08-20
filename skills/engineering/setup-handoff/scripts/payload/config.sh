@@ -20,6 +20,10 @@ handoff_config_load() {
       echo "handoff: config.json needs python3, which is not installed" >&2
       return 3
     fi
+    if [ -n "$repo" ] && [ -f "$repo/.agents/handoff.config.json" ]; then
+      echo "handoff: $repo/.agents/handoff.config.json needs python3, which is not installed" >&2
+      return 3
+    fi
     _handoff_config_legacy_nopython "$board"
     return $?
   fi
@@ -89,8 +93,8 @@ emit("HC_REPO_NAME", cfg.get("repoName") or "")
 emit("HC_GROUP", cfg.get("group") or "")
 emit("HC_GROUPS", ",".join(str(g) for g in groups))
 emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or "")
-emit("HC_TTL_HOURS", cfg.get("ttlHours", 4))
-emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd", False))
+emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
+emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
 emit("HC_BOARD_PATH", cfg.get("boardPath") or "")
 PY
 }
