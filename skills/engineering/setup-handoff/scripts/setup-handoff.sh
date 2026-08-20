@@ -344,9 +344,12 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
       return 0
       ;;
   esac
-  # Cross-repo: bake THIS repo's identity into its own hook command (per-consumer). Single-repo
-  # leaves it empty so the command stays byte-identical (config REPO_NAME drives it). On a grouped
-  # board, --group also bakes HANDOFF_GROUP in so the hook scopes the repo to its own section.
+  # Cross-repo: these no longer get baked into the hook command itself (that would go stale on a
+  # rename, invisible to anyone reading the board). Instead merge-hooks.py reads them as its live
+  # source of truth for THIS repo's identity and writes it to .agents/handoff.config.json --
+  # both for a fresh install (nothing to migrate yet) and to override a migrated legacy prefix
+  # with what this run actually knows. Single-repo leaves HANDOFF_REPO empty, so merge-hooks.py
+  # writes no repo config there and the command stays byte-identical to a pre-existing one.
   local repo_id=""
   [ "$TOPOLOGY" = "cross-repo" ] && repo_id="$(basename "$REPO")"
   HANDOFF_HDPATH="$HDPATH" HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \

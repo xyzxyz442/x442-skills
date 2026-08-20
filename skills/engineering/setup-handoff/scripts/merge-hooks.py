@@ -137,6 +137,29 @@ def write_repo_config(repo_root: str, cfg: dict) -> None:
         fh.write("\n")
 
 
+def env_repo_config() -> dict:
+    """Build repo identity from setup-handoff.sh's live invocation env.
+
+    migrate_prefix only recovers identity that already exists as a legacy prefix somewhere in
+    the file -- a FRESH cross-repo install has no such prefix to recover, so without this it
+    would end up with no identity anywhere (exactly the unscoped-filing failure the refusal
+    guard exists to prevent). setup-handoff.sh always exports HANDOFF_REPO for a cross-repo
+    install (empty for single-repo, which is why this intentionally contributes nothing there),
+    plus HANDOFF_GROUP and HANDOFF_HDPATH (the board path) alongside it.
+    """
+    repo = os.environ.get("HANDOFF_REPO", "")
+    if not repo:
+        return {}
+    cfg = {"repo": repo}
+    grp = os.environ.get("HANDOFF_GROUP", "")
+    if grp:
+        cfg["group"] = grp
+    hdpath_env = os.environ.get("HANDOFF_HDPATH", "")
+    if hdpath_env:
+        cfg["boardPath"] = hdpath_env
+    return cfg
+
+
 def collect_managed_commands(data: dict) -> list:
     """Every command string from a handoff-managed hook group, across all wired events."""
     hooks = data.get("hooks")
@@ -249,9 +272,14 @@ def main(argv: list[str]) -> int:
     # drops the old HANDOFF_*=-prefixed commands entirely, and would take the prefixes with them.
     if repo_root is not None:
         commands = collect_managed_commands(load(path))
-        cfg, refusals = migrate_prefix(commands)
+        migrated, refusals = migrate_prefix(commands)
         for r in refusals:
             print(f"merge-hooks: refusing to migrate prefix: {r}", file=sys.stderr)
+        # Live env (this run's actual installer knowledge) wins over migrated history for the
+        # same key, but a migrated key the live env has no value for must survive the merge --
+        # e.g. a legacy HANDOFF_GROUP recovered from history when this run carries none.
+        live = env_repo_config()
+        cfg = {**migrated, **live}
         if cfg:
             write_repo_config(repo_root, cfg)
     tool = os.environ.get("HANDOFF_TOOL", "claude")
