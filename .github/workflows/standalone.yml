@@ -1,0 +1,30 @@
+name: standalone
+
+# This repo is the source of agent skills, not a participant in anyone's fleet. A committed
+# reference to another project breaks on every machine but the author's, and leaks internal
+# names into a public history. The pre-commit hook catches it locally; this catches it when
+# the hook was bypassed or never installed.
+#
+# Rule: AGENTS.md, House rules. Rationale and escape hatch: docs/standalone-rule.md.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-standalone:
+    name: no foreign-project references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check reads `git ls-files` to learn which path segments this repo contains,
+          # so it needs the tree — but no history.
+          fetch-depth: 1
+
+      - name: Verify the standalone rule
+        run: bash scripts/verify-standalone.sh

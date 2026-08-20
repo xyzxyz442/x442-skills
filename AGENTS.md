@@ -94,6 +94,15 @@ so the default install stays safe to run on any checkout.
 - **No destructive shell commands** in examples. Use `trash` instead of `rm`; never demonstrate `rm -rf`, `git push --force`, or `git reset --hard` without an explicit safety rail.
 - **Cite sources** when a skill encodes external API behavior or a vendor convention — link to the upstream doc so future-you can verify it still holds.
 - **Voice**: imperative, second person ("Do X", "Avoid Y"). No marketing language.
+- **Standalone repo — never reference another project.** This repo is the _source_ of skills, not a
+  participant in anyone's fleet. Nothing committed here may name, path to, or execute code in
+  another project: no `../<other-repo>/...` paths in config, hooks, or scripts; no real repo,
+  team, service, group, or product names in docs, examples, or fixtures. That includes wiring
+  this repo into a shared board, graph, or workspace owned elsewhere — install those _from_ here,
+  do not commit the result _into_ here. Examples use neutral placeholders (`acme-api`,
+  `acme-lib`, `svc-a`, `../workspace/src`). Enforced by
+  [`scripts/verify-standalone.sh`](scripts/verify-standalone.sh), which runs on `pre-commit`
+  and in CI — see [docs/standalone-rule.md](docs/standalone-rule.md) for the escape hatch.
 
 ## Coding guidelines
 
@@ -235,44 +244,3 @@ not "the doc says resolved" — it requires `--verified-by`. `blocked` requires 
 Full protocol: [.agents/handoff/README.md](.agents/handoff/README.md).
 
 <!-- handoff:end -->
-
-<!-- cross-repo-handoff:begin (managed by register-cross-repo-handoff — do not edit between markers) -->
-
-## Cross-repo handoff coordination
-
-This repo coordinates handoffs with its peers on a **shared board** at `../ais/src/.agents/handoff`, in the
-`esbm` section (layout: `subfolder`). Claim before you work; release when you stop — the same
-protocol as a single-repo board, but the board is shared and sub-indexed by group.
-
-Peers in the `esbm` group:
-
-| Repo                      | Acts-next name (`audience:`)             | What lives there                                   |
-| ------------------------- | ---------------------------------------- | -------------------------------------------------- |
-| `etl-postpaid-data`       | `esbm-dfts-etl-icrm-postpaid-data-usage` | iCRM postpaid data usage ETL                       |
-| `etl-prepaid-voice`       | `esbm-dfts-etl-icrm-prepaid-voice-usage` | iCRM prepaid voice usage ETL                       |
-| `x442-skills` ← this repo | `x442-skills`                            | agent skills — owns the porting/migration handoffs |
-
-**Peers you can hand off to: `esbm-dfts-etl-icrm-postpaid-data-usage`, `esbm-dfts-etl-icrm-prepaid-voice-usage`.** File a handoff for another repo with its acts-next name.
-
-`HANDOFF_GROUP` is what scopes a command to this repo's section. The tool hooks set it for you, but
-a command you type by hand inherits nothing — so pass it explicitly:
-
-```text
-HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff list      # only the esbm section
-HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity low|medium|high
-HANDOFF_GROUP=esbm ../ais/src/.agents/handoff/handoff claim <id> "what you're doing"
-```
-
-Omit it on this sectioned board and `list` warns that nothing it shows is scoped to you, while
-`claim` cannot resolve an id in your section — it will tell you which section holds it.
-
-Your session board and the edit gate **are** scoped for you, because the hooks carry
-`HANDOFF_GROUP=esbm`: you only see and lease this group's handoffs, and other groups on the
-board are isolated. Do not edit a doc you do not hold the lease for. Handoff docs are committed to
-git history — never paste secrets, keys, or PII.
-
-Scope comes from the `.handoff-repos.json` cascade (user → workspace → subdirectory, nearest wins).
-After editing it, re-run `sync-cross-repo-handoff.sh` so this block, the board wiring, and the
-sub-indexes agree.
-
-<!-- cross-repo-handoff:end -->

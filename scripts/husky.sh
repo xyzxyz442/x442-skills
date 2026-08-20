@@ -12,7 +12,7 @@
 # Usage: scripts/husky.sh <command> [args...]
 #   install      Run husky, then (re)generate .husky/commit-msg and .husky/pre-commit
 #   commit-msg   Hook body: lint the commit message  (git passes the message file as $1)
-#   pre-commit   Hook body: run the staged-file checks
+#   pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)
 #   -h, --help   Show usage information
 
 set -euo pipefail
@@ -26,7 +26,7 @@ print_usage() {
   echo "Usage: $0 <command> [args...]"
   echo "  install      Run husky, then (re)generate .husky/commit-msg and .husky/pre-commit"
   echo "  commit-msg   Hook body: lint the commit message (git passes the message file as \$1)"
-  echo "  pre-commit   Hook body: run the staged-file checks"
+  echo "  pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)"
   echo "  -h, --help   Show usage information"
 }
 
@@ -111,6 +111,12 @@ run_commit_msg() {
 }
 
 run_pre_commit() {
+  # The standalone rule is a hard gate, not a lint: a foreign-project reference that reaches
+  # main is a path that breaks on every other machine. Staged files only, so the hook stays fast.
+  if [ -x scripts/verify-standalone.sh ]; then
+    echo "husky: verify-standalone"
+    scripts/verify-standalone.sh --staged
+  fi
   run_step lint-staged --concurrent false
 }
 

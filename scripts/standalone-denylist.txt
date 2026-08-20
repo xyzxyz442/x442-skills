@@ -1,0 +1,49 @@
+# standalone-denylist.txt — identifiers that must never appear in this repo.
+#
+# Read by scripts/verify-standalone.sh. One extended-regex-safe name per line, matched
+# case-insensitively on word boundaries. Blank lines and `#` comments are ignored.
+#
+# This list is a backstop, not the rule. The rule is in AGENTS.md: no reference to any
+# project other than this one. The list catches names that have actually leaked in before,
+# and any new one a reviewer wants pinned down. A name absent from this list is still
+# forbidden by the rule — the `escaping` and `wiring` checks are what catch the general case.
+#
+# Add a name when a foreign identifier is removed from the repo, so it cannot come back.
+# Never add a name that legitimately appears here (this repo's own name, tool vendors).
+
+# --- shared handoff board and its host workspace ---
+esbm
+fecs
+icrm
+
+# --- service repos that were once wired to this repo ---
+etl-postpaid-data
+etl-prepaid-voice
+esbm-dfts-etl-icrm-postpaid-data-usage
+esbm-dfts-etl-icrm-prepaid-voice-usage
+esbm-esb-file-based-event-conversion-service
+etl-tooling
+dfts
+pyeqx
+
+# --- other repos and orgs in the same workspace ---
+# Surfaced by the v0.10.0 audit, from a foreign-repo migration registry that used to live in
+# .agents/handoff/. Pinned here so the registry cannot be reconstructed in this repo.
+teebat
+rama9
+impexagentsu-com
+wmboacs-com
+yupp-labs
+x-carpe-noctem
+givery
+merchant-payment-e2p
+zeals-data-engr-tech-asgmt
+verk
+2c2p
+badmintime
+zoom-web
+
+# --- the workspace directory this repo was once wired into ---
+# Matched on word boundaries, so the plural "AIs" in prose is unaffected only if spelled out;
+# prefer "AI assistants" in documentation to keep this unambiguous.
+ais
