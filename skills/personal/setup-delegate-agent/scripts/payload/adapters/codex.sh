@@ -29,14 +29,18 @@ case "$ACTION" in
     exit 0
     ;;
   parse)
-    raw="$(g '.raw_file')"; last="$(g '.last_message_file')"
+    raw="$(g '.raw_file')"
+    last="$(g '.last_message_file')"
     result=""
     [ -f "$last" ] && result="$(cat "$last")"
     # Session id appears in the JSONL event stream; field name varies by version, so take the
     # first non-empty of the known spellings rather than assuming one.
     sid="$(jq -rs '[.[]? | (.session_id // .sessionId // .conversation_id // empty)] | first // ""' \
-      < "$raw" 2>/dev/null || true)"
+      < "$raw" 2> /dev/null || true)"
     jq -nc --arg r "$result" --arg s "$sid" '{result:$r, session_id:$s}'
     ;;
-  *) echo "codex adapter: unknown action $ACTION" >&2; exit 64 ;;
+  *)
+    echo "codex adapter: unknown action $ACTION" >&2
+    exit 64
+    ;;
 esac

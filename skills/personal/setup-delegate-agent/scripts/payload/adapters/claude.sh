@@ -26,5 +26,8 @@ case "$ACTION" in
     raw="$(g '.raw_file')"
     jq -c '{result: (.result // ""), session_id: (.session_id // "")}' "$raw"
     ;;
-  *) echo "claude adapter: unknown action $ACTION" >&2; exit 64 ;;
+  *)
+    echo "claude adapter: unknown action $ACTION" >&2
+    exit 64
+    ;;
 esac

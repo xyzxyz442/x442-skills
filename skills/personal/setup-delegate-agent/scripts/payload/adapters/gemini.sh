@@ -25,9 +25,12 @@ case "$ACTION" in
     ;;
   parse)
     raw="$(g '.raw_file')"
-    result="$(jq -r '(.response // .result // .text // "")' < "$raw" 2>/dev/null || true)"
-    sid="$(jq -r '(.session_id // .sessionId // "")' < "$raw" 2>/dev/null || true)"
+    result="$(jq -r '(.response // .result // .text // "")' < "$raw" 2> /dev/null || true)"
+    sid="$(jq -r '(.session_id // .sessionId // "")' < "$raw" 2> /dev/null || true)"
     jq -nc --arg r "$result" --arg s "$sid" '{result:$r, session_id:$s}'
     ;;
-  *) echo "gemini adapter: unknown action $ACTION" >&2; exit 64 ;;
+  *)
+    echo "gemini adapter: unknown action $ACTION" >&2
+    exit 64
+    ;;
 esac

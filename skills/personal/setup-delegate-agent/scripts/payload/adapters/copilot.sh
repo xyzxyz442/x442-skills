@@ -28,9 +28,12 @@ case "$ACTION" in
   parse)
     raw="$(g '.raw_file')"
     # JSONL: one object per line. Take the last line carrying text, and the first session id seen.
-    result="$(jq -rs '[.[]? | (.content // .text // .message // empty)] | last // ""' < "$raw" 2>/dev/null || true)"
-    sid="$(jq -rs '[.[]? | (.session_id // .sessionId // empty)] | first // ""' < "$raw" 2>/dev/null || true)"
+    result="$(jq -rs '[.[]? | (.content // .text // .message // empty)] | last // ""' < "$raw" 2> /dev/null || true)"
+    sid="$(jq -rs '[.[]? | (.session_id // .sessionId // empty)] | first // ""' < "$raw" 2> /dev/null || true)"
     jq -nc --arg r "$result" --arg s "$sid" '{result:$r, session_id:$s}'
     ;;
-  *) echo "copilot adapter: unknown action $ACTION" >&2; exit 64 ;;
+  *)
+    echo "copilot adapter: unknown action $ACTION" >&2
+    exit 64
+    ;;
 esac
