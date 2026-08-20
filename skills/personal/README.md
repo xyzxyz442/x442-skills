@@ -19,10 +19,11 @@ person cloning this repo could not use it without setting that up first.
 
 ## Skills in this category
 
-| Skill                  | Status         | Purpose                                                                                                                                                                                              |
-| ---------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `setup-delegate-agent` | `experimental` | Wire a repo to delegate mechanical work to a cheaper agent running as a separate CLI process — backend profiles, a consent gate, and an AGENTS.md routing block. Chains before `run-delegate-agent`. |
-| `run-delegate-agent`   | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed delegation setup. Chains after `setup-delegate-agent`.                                                            |
+| Skill                      | Status         | Purpose                                                                                                                                                                                  |
+| -------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `register-delegate-agents` | `experimental` | Manage the `.agents/delegate.json` cascade — declare agents in an uncommittable layer, narrow per repo, set the primary. Chains before `setup-delegate-agent`.                           |
+| `setup-delegate-agent`     | `experimental` | Install the dispatcher, adapters, consent gate and credential scanning, and render an `AGENTS.md` routing block from the agents a repo permits. Chains after `register-delegate-agents`. |
+| `run-delegate-agent`       | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed setup. Chains after `setup-delegate-agent`.                                                           |
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](../README.md).
