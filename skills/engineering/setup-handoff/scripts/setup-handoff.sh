@@ -121,6 +121,7 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
   install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
   install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+  install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
   chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
   write_board_config "$HDEST/config" cross-repo ""
   echo "setup-handoff: scaffolded standalone board at $HDEST (topology=cross-repo${GROUP_LIST:+, groups=$GROUP_LIST}${LAYOUT:+, layout=$LAYOUT})"
@@ -226,6 +227,11 @@ install_file "$PAYLOAD/README.md" "$HDEST/README.md"
 install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
 install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
 install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+# Payload stamp: what version of the board machinery this install carries. Committed with the
+# payload so a teammate's checkout carries it too, and readable with `cat` — the hooks that read
+# it may run on a machine with nothing but bash. An ABSENT .version means a pre-versioning
+# install, not a corrupt one; readers treat the two the same and report "behind".
+install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
 chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
 
 # config (committed): board-global facts only. See write_board_config (top) for why REPO_NAME is

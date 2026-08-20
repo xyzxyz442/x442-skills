@@ -107,6 +107,11 @@ cp -R "$HERE/graph-hooks/." .graph-hooks/
 # It already prefers .graph-hooks/core/embed-provider.sh over its own directory, so it was written
 # to run from here.
 cp "$HERE/setup-embeddings.sh" .graph-hooks/setup-embeddings.sh
+# Payload stamp: what version of the hook tree this install carries. Committed with the payload so
+# a teammate's checkout carries it too, and readable with `cat` — the session-start core that reads
+# it runs before python3 is known to be present. An ABSENT .version means a pre-versioning install,
+# not a corrupt one; readers treat the two the same and report "behind".
+cp "$HERE/payload.version" .graph-hooks/.version
 find .graph-hooks -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} +
 echo "  + .graph-hooks/ (cores + dispatcher + copilot wrappers + setup-embeddings.sh)"
 
