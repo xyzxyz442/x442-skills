@@ -48,12 +48,26 @@ LM Studio's own `lms` CLI is **not** usable as an adapter. It is a model manager
 a plain completion with no tool use, no file editing, no allowlist and no resumable session, so a
 delegate driven through it could not read or change anything.
 
-## Models must support native function calling
+## Tool scoping is per-CLI, and getting it wrong disables everything
 
-An adapter can only expose tools the model actually calls. A model that emits `<tool_call>` as
-text has not called anything, and the CLI will return prose while having done nothing. The
-dispatcher detects that shape and reports it as blocked rather than as an answer, because a run
-that looks like a result but changed nothing is the most expensive failure available.
+The adapters do not share a tool vocabulary, and a name from the wrong one does not fail loudly:
+
+| CLI       | How tools are scoped                                                | Gotcha                                                                                                                |
+| --------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `claude`  | per-tool allowlist (`Read`, `Grep`, `Bash(cmd *)`)                  | —                                                                                                                     |
+| `copilot` | permission **kinds** — `shell()`, `write()`, `url()`, `<mcp>(tool)` | `--available-tools` takes real tool _names_ and disables all others; a Claude-style list there exposes **zero** tools |
+| `codex`   | sandbox levels only                                                 | an approved per-tool list is approximated                                                                             |
+| `gemini`  | approval mode / policy engine                                       | same                                                                                                                  |
+
+Copilot's file-reading tool is `view`, not `read`. Passing `read` to `--available-tools` filtered
+out every tool, the model imitated a tool call in prose, and nothing executed — while the run
+reported success. The copilot adapter therefore maps dispatch intent onto permission kinds and
+never filters by name.
+
+A tool call rendered as prose means nothing ran. The dispatcher detects that shape and reports it
+as blocked rather than as an answer, because a run that looks like a result but changed nothing is
+the most expensive failure available. Two causes produce it — the model lacks native function
+calling, or the adapter exposed it no tools — and the message names both.
 
 An adapter never reads a credential. Whatever the CLI already uses — its config dir, its own
 keychain entry, an env var the operator exported — is that CLI's business.

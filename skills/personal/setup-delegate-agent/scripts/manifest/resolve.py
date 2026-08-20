@@ -59,7 +59,7 @@ ADAPTERS = {
     # tools:   how faithfully a per-tool allowlist can be applied
     "claude": {"schema": "inline", "tools": "fine", "resume": True, "vendor": "anthropic"},
     "codex": {"schema": "file", "tools": "coarse", "resume": True, "vendor": "openai"},
-    "copilot": {"schema": "none", "tools": "fine", "resume": True, "vendor": "github"},
+    "copilot": {"schema": "none", "tools": "kind", "resume": True, "vendor": "github"},
     "gemini": {"schema": "none", "tools": "policy", "resume": True, "vendor": "google"},
 }
 PARTY_RANK = {"local": 0, "same-party": 1, "third-party": 2}
@@ -394,6 +394,11 @@ def main() -> int:  # noqa: C901
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter cannot force an output schema, so "
                 f"ask-back is best-effort — a blocked sub-agent may return prose instead of a question")
+        if a["capabilities"]["tools"] == "kind" and _toolset(a["allow_tools"]):
+            warnings.append(
+                f"{a['name']}: the {a['adapter']} adapter scopes by permission kind (shell, write, "
+                f"url), not by tool name — {a['allow_tools']!r} is mapped onto those kinds, not "
+                f"enforced tool-by-tool")
         if a["capabilities"]["tools"] == "coarse" and _toolset(a["allow_tools"]):
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter has sandbox levels, not a per-tool "

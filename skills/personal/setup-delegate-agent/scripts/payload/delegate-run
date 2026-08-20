@@ -323,13 +323,14 @@ SESSION="$(printf '%s' "$NORM" | jq -r '.session_id // empty')"
 INNER="$(printf '%s' "$NORM" | jq -r '.result // empty')"
 [ -n "$SESSION" ] && printf '%s' "$ROUNDS" > "${STATE}/rounds-${SESSION}"
 
-# A model without native function calling often emits the call as prose instead. The CLI then never
-# executes a tool, and the run "succeeds" having done nothing — the most expensive shape of failure,
-# because it looks like an answer. Name it rather than return it.
+# A tool call rendered as prose means nothing executed, and the run "succeeds" having done nothing —
+# the most expensive shape of failure, because it looks like an answer. There are two causes and
+# they are easy to confuse: the model genuinely lacks native function calling, or the adapter
+# exposed it no tools at all. Observed here as the latter, so the message names both.
 if printf '%s' "$INNER" | grep -qE '<tool_call>|<function='; then
   emit --arg id "$ID" --arg a "$AGENT" --arg ad "$ADAPTER" --argjson d "$DURATION" --arg l "$LOG" \
     '{status:"blocked", id:$id, agent:$a, adapter:$ad, duration_s:$d, log:$l,
-      reason:"the model emitted a tool call as text rather than a native function call, so no tool ran — this model cannot drive tool use through this adapter"}'
+      reason:"the model emitted a tool call as text, so no tool ran. Either the model lacks native function calling, or no tools were exposed to it — check the adapter\u0027s tool scoping before blaming the model."}'
   exit 70
 fi
 

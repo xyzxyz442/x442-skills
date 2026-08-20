@@ -31,12 +31,16 @@ case "$ACTION" in
     printf '%s\n' '--silent' '--output-format' 'json'
     m="$(g '.model')"
     [ -n "$m" ] && printf '%s\n' '--model' "$m"
-    # --available-tools is the hard bound (the model cannot see anything else); --allow-tool
-    # additionally suppresses the confirmation prompt, which a headless run cannot answer.
-    tools="$(g '.allow_tools')"
-    if [ -n "$tools" ]; then
-      printf '%s\n' '--available-tools' "$tools" '--allow-tool' "$tools"
-    fi
+    # copilot scopes by permission KIND, not by tool name. --available-tools takes real tool
+    # names and disables everything else, so passing a Claude-style list ("Read,Grep,Glob") there
+    # silently exposes ZERO tools — the model then imitates a tool call in prose and nothing runs.
+    # Map the dispatch intent onto the kinds copilot actually understands instead.
+    printf '%s\n' '--allow-all-tools'
+    printf '%s\n' '--deny-tool' 'url'
+    case "$(g '.mode')" in
+      acceptEdits) printf '%s\n' '--deny-tool' 'shell' ;;
+      *) printf '%s\n' '--deny-tool' 'shell' '--deny-tool' 'write' ;;
+    esac
     r="$(g '.resume')"
     [ -n "$r" ] && printf '%s\n' '--resume' "$r"
     exit 0
