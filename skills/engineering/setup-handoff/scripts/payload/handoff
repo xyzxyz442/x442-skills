@@ -16,8 +16,19 @@ LOCKS="$DIR/.locks"
 #   env > repo config.json > board config.json > legacy config > default
 # TTL_HOURS used to be read HERE, above the config load, which meant a value set in the board's
 # own config file was captured too late to ever apply. Every knob is now read AFTER the load.
+# Spelled out as an if/elif/else rather than `A || B || die`: eval "$(undefined_fn)" returns 0
+# even when the command substitution itself failed with a 127 (function not found), so a chained
+# `||` cannot fail closed here -- it silently continues with every HC_* variable unbound instead
+# of reporting the real problem. Each source attempt must be checked on its own.
 # shellcheck disable=SC1091
-. "$DIR/scripts/config.sh" 2> /dev/null || . "$DIR/config.sh"
+if [ -f "$DIR/scripts/config.sh" ]; then
+  . "$DIR/scripts/config.sh"
+elif [ -f "$DIR/config.sh" ]; then
+  . "$DIR/config.sh"
+else
+  echo "handoff: config.sh missing from this board — re-run setup-handoff to update it" >&2
+  exit 3
+fi
 REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
 eval "$(handoff_config_load "$DIR" "$REPO_DIR")" || exit 3
 
