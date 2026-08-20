@@ -49,6 +49,9 @@ from urllib.parse import urlparse
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 CLASS_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# A kind may also be the catch-all "*", which is what lets a capable same-party agent act as the
+# fallback for work no specialised tier claims.
+KIND_RE = re.compile(r"^(\*|[a-z0-9][a-z0-9-]*)$")
 MANIFEST = os.path.join(".agents", "delegate.json")
 
 # What each adapter's CLI can actually enforce. Declared rather than assumed, because a capability
@@ -233,8 +236,17 @@ def load_agents(path, data, may_define, errors, warnings):
             errors.append(f"{where}: context must be a positive integer")
             continue
 
+        rank = a.get("rank", 50)
+        if not isinstance(rank, int) or isinstance(rank, bool) or rank < 0:
+            errors.append(f"{where}: rank must be a non-negative integer (lower is tried first)")
+            continue
+        kinds = _slist(a.get("kinds"), where, "kinds", errors, KIND_RE)
+
         out[name] = {
             "name": name, "adapter": adapter, "model": model,
+            # Rank orders the ladder; kinds say what this agent is for. "*" means any kind, which
+            # is what makes a capable same-party agent usable as the catch-all fallback.
+            "rank": rank, "kinds": kinds if kinds is not None else ["*"],
             "command": a.get("command") or adapter,
             "base_url": base_url, "config_dir": cfg_dir if isinstance(cfg_dir, str) else None,
             "local_provider": local_provider, "vendor": a.get("vendor"),
@@ -312,6 +324,7 @@ def main() -> int:  # noqa: C901
     agents, never, policies = {}, list(BUILTIN_NEVER), []
     allow, default, default_layer = None, None, None
     primary, primary_layer = None, None
+    mode, mode_layer = None, None
 
     for d in ancestors(scope, args.home):
         f = os.path.join(d, MANIFEST)
@@ -347,6 +360,15 @@ def main() -> int:  # noqa: C901
             default, default_layer = data["default"], f
         if isinstance(data.get("primary"), str):
             primary, primary_layer = data["primary"], f
+        if isinstance(data.get("mode"), str):
+            if data["mode"] not in ("manual", "auto", "off"):
+                errors.append(f'{f}: mode must be "manual", "auto" or "off"')
+            else:
+                # A nearer layer may only make delegation MORE restrictive, same as every other
+                # knob: off beats manual beats auto.
+                order = {"auto": 0, "manual": 1, "off": 2}
+                mode = data["mode"] if mode is None or order[data["mode"]] > order[mode] else mode
+                mode_layer = f
         if isinstance(data.get("policy"), dict):
             policies.append((f, data["policy"]))
 
@@ -403,6 +425,13 @@ def main() -> int:  # noqa: C901
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter has sandbox levels, not a per-tool "
                 f"allowlist — {a['allow_tools']!r} is approximated, not enforced tool-by-tool")
+        unknown = [k for k in a["auto_approve"]
+                   if "*" not in a["kinds"] and k not in a["kinds"]]
+        if unknown:
+            errors.append(
+                f"{a['name']}: autoApprove names {unknown!r}, which are not in this agent's kinds "
+                f"{a['kinds']!r}. Pre-approving a kind an agent does not serve would dispatch "
+                f"unprompted work to an agent that was never assessed for it.")
         if a["settings_world_readable"]:
             warnings.append(f"{a['settings_path']} is mode {a['settings_mode']} and holds a token "
                             f"— group/world readable. Consider: chmod 600 {a['settings_path']}")
@@ -432,6 +461,9 @@ def main() -> int:  # noqa: C901
         "primary": primary, "primary_layer": primary_layer, "primary_vendor": primary_vendor,
         "agents": sorted(agents.values(), key=lambda a: a["name"]),
         "default": default, "default_layer": default_layer, "default_reason": default_reason,
+        # The ladder: try lower ranks first. Ties break by name so the order is stable across runs.
+        "prefer": [a["name"] for a in sorted(agents.values(), key=lambda x: (x["rank"], x["name"]))],
+        "mode": mode or "manual", "mode_layer": mode_layer,
         "never_delegate": [n for n in never if not (n in seen or seen.add(n))],
         "narrowed": narrowed, "warnings": warnings, "errors": errors,
     }, sys.stdout, indent=2)

@@ -36,6 +36,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A delegate must never be gated by the hooks it inherited from the repo it is working in. This
+# gate governs the ORCHESTRATOR's decision to delegate; the delegate's own tool use is already
+# bounded by its allowlist. Worse, an "ask" inside a headless run has nobody to answer it, so
+# leaving this out turns an inherited hook into a hang.
+[ "${DELEGATE_DEPTH:-0}" -ge 1 ] && exit 0
+
 command -v python3 > /dev/null 2>&1 || exit 0
 PAYLOAD="$(cat 2> /dev/null || true)"
 [ -n "$PAYLOAD" ] || exit 0

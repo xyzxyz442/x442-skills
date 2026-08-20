@@ -98,20 +98,19 @@ if [ -n "$KEEP" ]; then
 fi
 
 # ------------------------------------------------------------------------------ containment ---
+# Isolate the config dir ONLY when the agent brings its own credentials. A same-account agent
+# must inherit: a fresh CLAUDE_CONFIG_DIR is not logged in, even though the keychain entry exists,
+# and the CLI reports "Not logged in · Please run /login". Isolation is worth having when the agent
+# authenticates elsewhere — it keeps this machine's subscription credential out of that process —
+# but applying it to an agent that has no other credential simply breaks it.
 if [ -n "$CONFIG_DIR" ]; then
   [ -d "$CONFIG_DIR" ] || die "agent '$AGENT' names configDir '$CONFIG_DIR', which does not exist"
   export CLAUDE_CONFIG_DIR="$CONFIG_DIR"
-elif [ "$ADAPTER" = "claude" ]; then
+elif [ "$ADAPTER" = "claude" ] && { [ -n "$BASE_URL" ] || [ -n "$(get '.token_env')" ]; }; then
   export CLAUDE_CONFIG_DIR="${DELEGATE_CONFIG_DIR:-${HOME}/.delegate-agent/${AGENT}}"
   mkdir -p "$CLAUDE_CONFIG_DIR"
 fi
-# Endpoint wiring belongs to the adapter, not here: each CLI names its endpoint differently
-# (ANTHROPIC_BASE_URL, COPILOT_PROVIDER_BASE_URL, a local-provider flag), and hard-coding one
-# vendor's variable in the wrapper is why a local OpenAI server was unreachable before.
-while IFS= read -r _kv; do
-  [ -n "$_kv" ] || continue
-  export "${_kv?}"
-done < <(printf '%s' "$SPEC" | bash "${ADAPTERS}/${ADAPTER}.sh" env)
+
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1
 
 # Read argv line by line rather than with mapfile: macOS ships bash 3.2, where mapfile does

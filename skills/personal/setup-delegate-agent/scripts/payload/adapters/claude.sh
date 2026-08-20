@@ -15,6 +15,9 @@ case "$ACTION" in
     ;;
   build)
     [ "$(g '.strict_mcp')" = "true" ] && printf '%s\n' '--strict-mcp-config'
+    # An inherited config dir also carries the repo's project settings — including the delegation
+    # consent hook, which a delegate has no business running. Load user settings only.
+    [ -z "$(g '.config_dir')" ] && printf '%s\n' '--setting-sources' 'user'
     printf '%s\n' '-p' '--output-format' 'json'
     s="$(g '.schema_file')"
     [ -n "$s" ] && [ -f "$s" ] && printf '%s\n' '--json-schema' "$(cat "$s")"
