@@ -11,24 +11,23 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCKS="$DIR/.locks"
-TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
 
-# config (committed, written by setup-handoff): TOPOLOGY=single-repo|cross-repo, REPO_NAME=<name>.
-# A SHARED (cross-repo) board's config carries NO REPO_NAME — identity is per-consumer, supplied via
-# $HANDOFF_REPO (env). Prefer it over the shared config so audience/labeling/doc_is_local use the
-# calling repo's identity, not whoever installed last. Empty on a single-repo board (uses config).
-TOPOLOGY="single-repo"
-REPO_NAME=""
-# HANDOFF_GROUPS (board-global, config): comma-list of the groups a SHARED board hosts as sub-indexed
-# sections. (NOT `GROUPS` — that is a bash built-in array of the user's gids, e.g. 20, so a config key
-# named GROUPS can never be read back.) HANDOFF_GROUP_LAYOUT (board-global, config): subfolder|prefix
-# — how each section is laid out. Both absent on a plain single-repo board, so every section helper
-# below collapses to the flat layout (docs at $DIR/<id>.md, one INDEX.md), byte-identical.
-HANDOFF_GROUPS=""
-HANDOFF_GROUP_LAYOUT=""
+# Configuration comes from config.sh, the one place precedence is decided:
+#   env > repo config.json > board config.json > legacy config > default
+# TTL_HOURS used to be read HERE, above the config load, which meant a value set in the board's
+# own config file was captured too late to ever apply. Every knob is now read AFTER the load.
 # shellcheck disable=SC1091
-[ -f "$DIR/config" ] && . "$DIR/config"
-REPO_NAME="${HANDOFF_REPO:-$REPO_NAME}"
+. "$DIR/scripts/config.sh" 2> /dev/null || . "$DIR/config.sh"
+REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
+eval "$(handoff_config_load "$DIR" "$REPO_DIR")" || exit 3
+
+TOPOLOGY="$HC_TOPOLOGY"
+HANDOFF_GROUPS="${HANDOFF_GROUPS:-$HC_GROUPS}"
+HANDOFF_GROUP_LAYOUT="${HANDOFF_GROUP_LAYOUT:-$HC_GROUP_LAYOUT}"
+TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
+# Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
+# board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
+REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
 # --- group sections (multi-group / multi-workspace boards) -----------------------------
 # LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's
