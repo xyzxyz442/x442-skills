@@ -59,12 +59,30 @@ information the user needs before answering, not after.
 Classes listed in the profile's `autoApprove` (typically read-only or formatting work) still need
 an approval record for the task; what they skip is asking again. `alwaysAsk` classes always ask.
 
+## 2b. When this skill should fire at all
+
+**An explicit opt-out beats everything.** If the user says _don't delegate_, _do it yourself_, or
+_keep this here_, do the work yourself — that overrides auto mode and every heuristic below.
+
+**Explicit opt-in** skips the debate about whether to delegate, though not the consent gate:
+"delegate this", "do it cheaply", "offload this", or naming an agent directly ("use the local one").
+
+**Proactive** firing needs something countable, not a feeling. Before proposing delegation
+unprompted, be able to say which of these is true: the same mechanical edit repeats across several
+files; the input is bulk output nobody needs to read closely (logs, generated files); the task has
+a definition-of-done command that will prove it. If you cannot name one, do not propose it — an
+unprompted suggestion you cannot justify trains the user to ignore the next one.
+
 ## 3. Record consent, then dispatch
 
 ```bash
 .agents/bin/delegate-run --approve TASK_ID --class CLASS --allow 'Read,Grep,Glob,Edit'
-.agents/bin/delegate-run --task .agents/delegate/dispatch/SLUG.md --approved TASK_ID --worktree
+.agents/bin/delegate-run --task .agents/delegate/dispatch/SLUG.md --approved TASK_ID --kind KIND --worktree
 ```
+
+Always pass `--kind`. It is validated against what the agent is declared to be for, so a misrouted
+task bounces before it runs — and afterwards "why did this go there" has a written answer instead of
+a recollection. In `auto` mode the kind is also what decides whether the dispatch needs a prompt.
 
 Scope `--allow` to the narrowest set that can satisfy the definition of done — `Bash(pnpm test *)`,
 not `Bash`. The allowlist at dispatch must match what was approved; changing it bounces for

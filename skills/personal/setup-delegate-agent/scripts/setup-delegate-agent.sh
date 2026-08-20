@@ -96,12 +96,28 @@ block = pathlib.Path(sys.argv[2]).read_text()
 r = json.loads(sys.argv[3])
 agents = r["agents"]
 
-rows = ["| Agent | Adapter | Model | Context | Party |",
-        "| --- | --- | --- | --- | --- |"]
-for a in agents:
+order = {n: i for i, n in enumerate(r.get("prefer", []))}
+agents = sorted(agents, key=lambda a: order.get(a["name"], 999))
+rows = ["| # | Agent | Adapter | Model | Context | Party | Good for |",
+        "| --- | --- | --- | --- | --- | --- | --- |"]
+for i, a in enumerate(agents, 1):
     ctx = f"{round(a['context'] / 1000)}k" if a.get("context") else "—"
-    rows.append(f"| `{a['name']}` | `{a['adapter']}` | `{a['model']}` | {ctx} | **{a['party']}** |")
+    kinds = ", ".join(f"`{k}`" for k in a.get("kinds", [])) or "—"
+    rows.append(f"| {i} | `{a['name']}` | `{a['adapter']}` | `{a['model']}` | {ctx} "
+                f"| **{a['party']}** | {kinds} |")
 roster = "\n".join(rows)
+
+mode = r.get("mode", "manual")
+if mode == "auto":
+    auto_kinds = sorted({k for a in agents for k in a.get("auto_approve", [])})
+    listed = ", ".join(f"`{k}`" for k in auto_kinds) or "nothing yet"
+    mode_note = (f"Auto mode dispatches **without asking** only for pre-approved kinds ({listed}), "
+                 f"and only when the dispatch is read-only or worktree-isolated. Everything else "
+                 f"still prompts.")
+elif mode == "off":
+    mode_note = "**Delegation is disabled in this scope.** Do the work here."
+else:
+    mode_note = "Manual mode — every dispatch prompts before it runs."
 
 # The predicate is not cosmetic. Whether sensitivity is a reason to delegate or a reason not to
 # depends entirely on who else ends up seeing the code, so render the half that is true here.
@@ -129,6 +145,8 @@ never_txt = ", ".join(f"`{n}`" for n in never[:4]) + (", …" if len(never) > 4 
 
 block = (block
          .replace("PLACEHOLDER_PRIMARY", f"`{r.get('primary') or 'unset'}`")
+         .replace("PLACEHOLDER_MODE_NOTE", mode_note)
+         .replace("PLACEHOLDER_MODE", f"`{mode}`")
          .replace("PLACEHOLDER_ROSTER", roster)
          .replace("PLACEHOLDER_PARTY_NOTE", note)
          .replace("PLACEHOLDER_DECISION", decision)

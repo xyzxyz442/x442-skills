@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "primary": "claude",
+  "mode": "auto",
+  "default": "rank-one",
+  "agents": {
+    "rank-one": {
+      "rank": 1,
+      "adapter": "claude",
+      "model": "m",
+      "context": 4000,
+      "kinds": ["fetch-parse", "docstring"],
+      "autoApprove": ["fetch-parse"],
+      "allowTools": "Read,Grep"
+    },
+    "rank-two": { "rank": 2, "adapter": "claude", "model": "m", "kinds": ["*"] }
+  }
+}

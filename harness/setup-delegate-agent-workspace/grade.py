@@ -36,7 +36,7 @@ HOMES = HERE / "evals/homes"
 # NOTE: these directory names must not match the repo .gitignore. A fixture named "local" was
 # silently swallowed by the `[Ll]ocal` pattern inherited from the Visual Studio template — the
 # harness passed here and would have failed on a fresh clone.
-HOME_FOR = {"third-party": "third-party"}
+HOME_FOR = {"third-party": "third-party", "tier-routing": "tiered"}
 
 
 # The HOME layer must live OUTSIDE any git work tree, because the resolver refuses to let a
@@ -93,6 +93,8 @@ def _grade(target, eval_id):
         return _grade_dispatch(target, eval_id)
     if eval_id == "committed-layer-cannot-define":
         return _grade_committed(target, eval_id)
+    if eval_id == "tier-routing":
+        return _grade_tiers(target, eval_id)
 
     proc = _install(target, eval_id)
     exps = [gc.expectation("installer exits 0", proc.returncode == 0,
@@ -187,6 +189,110 @@ def _grade_committed(target, eval_id):
                        errs[:200] or "no error"),
         gc.expectation("resolver exits non-zero", res.returncode != 0, f"exit {res.returncode}"),
     ]
+
+
+def _grade_tiers(target, eval_id):
+    """The ladder, the mode, and the routing checks that make auto mode auditable."""
+    proc = _install(target, eval_id)
+    exps = [gc.expectation("installer exits 0", proc.returncode == 0,
+                           (proc.stderr or proc.stdout or "")[-200:] or "no output")]
+    res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
+    data = json.loads(res.stdout or "{}")
+    exps.append(gc.expectation("ladder is ordered by rank",
+                               data.get("prefer") == ["rank-one", "rank-two"],
+                               f"prefer={data.get('prefer')}"))
+    exps.append(gc.expectation("mode resolves from the declaring layer",
+                               data.get("mode") == "auto", f"mode={data.get('mode')}"))
+    text = (target / "AGENTS.md").read_text()
+    exps.append(gc.expectation("block states the delegation mode", "`auto`" in text,
+                               "mode rendered" if "`auto`" in text else "missing"))
+    exps.append(gc.expectation("block lists agents in ladder order",
+                               text.index("`rank-one`") < text.index("`rank-two`"),
+                               "rank-one before rank-two"))
+    exps.append(gc.contains(target, "AGENTS.md", "tried in this order",
+                            label="block says the roster is an order, not a set"))
+    exps.append(gc.contains(target, "AGENTS.md", "don't delegate",
+                            label="block documents the opt-out phrase"))
+
+    # A nearer layer may tighten the mode but never loosen it.
+    d = target / ".agents"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "delegate.json").write_text(json.dumps({"version": 1, "mode": "manual"}) + "\n")
+    res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
+    exps.append(gc.expectation("a nearer layer can tighten mode to manual",
+                               json.loads(res.stdout or "{}").get("mode") == "manual",
+                               "auto -> manual"))
+    (d / "delegate.json").write_text(json.dumps({"version": 1, "mode": "auto"}) + "\n")
+    res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
+    exps.append(gc.expectation("a nearer layer cannot loosen mode back to auto",
+                               json.loads(res.stdout or "{}").get("mode") == "auto",
+                               "home layer is already auto, so auto is not a loosening"))
+    (d / "delegate.json").unlink()
+
+    # Dispatch-level routing, against a stub: no model calls, pure control flow.
+    tmp_home = Path(tempfile.mkdtemp(prefix="x442-tier-home-")) / "home"
+    shutil.copytree(Path(_home(eval_id)), tmp_home)
+    man = tmp_home / ".agents/delegate.json"
+    cfg = json.loads(man.read_text())
+    cfg["agents"]["rank-one"]["command"] = str(STUBS / "stub-agent")
+    man.write_text(json.dumps(cfg, indent=2) + "\n")
+    run = target / ".agents/bin/delegate-run"
+    (target / "sample.js").write_text("export const answer = 42;\n")
+    (target / "big.js").write_text("// filler line to make this file large\n" * 900)
+
+    def d(args):
+        p2 = _run(["bash", str(run), *args], target, eval_id,
+                  {"STUB_MODE": "ok", "DELEGATE_HOME": str(tmp_home)})
+        out = (p2.stdout or "").strip().splitlines()
+        line = out[-1] if out else (p2.stderr or "").strip()
+        try:
+            return json.loads(line), p2.returncode, line
+        except Exception:
+            return {}, p2.returncode, line
+
+    out, _, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse"])
+    exps.append(gc.expectation("auto mode dispatches a pre-approved kind unprompted",
+                               out.get("status") == "ok", line[:140]))
+
+    _, rc, line = d(["--prompt", "write docs", "--kind", "docstring"])
+    exps.append(gc.expectation("a kind that is NOT pre-approved still requires consent", rc != 0,
+                               f"exit {rc}: {line[:120]}"))
+
+    out, _, line = d(["--prompt", "x", "--kind", "bulk-rename"])
+    exps.append(gc.expectation("a kind the agent does not serve is refused",
+                               out.get("status") == "misrouted", line[:160]))
+
+    _, rc, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse", "--allow", "Read,Edit"])
+    exps.append(gc.expectation("a pre-approved kind that can write outside a worktree is refused",
+                               rc != 0, f"exit {rc}: {line[:140]}"))
+
+    out, _, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse",
+                      "--allow", "Read,Edit", "--worktree"])
+    exps.append(gc.expectation("the same dispatch is permitted when worktree-isolated",
+                               out.get("status") == "ok", line[:140]))
+
+    out, _, line = d(["--prompt", "summarise big.js", "--kind", "fetch-parse"])
+    exps.append(gc.expectation("a brief whose files exceed the agent window is vetoed",
+                               out.get("status") == "misrouted" and out.get("est_tokens", 0) > 0,
+                               f"est={out.get('est_tokens')} budget={out.get('budget_tokens')}"))
+
+    # The gate must not fire inside a delegate: an ask in a headless run has nobody to answer it.
+    gate = target / ".agents/bin/consent-gate.sh"
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "cat .env"}})
+
+    def probe(env_extra):
+        pr = subprocess.run(["bash", str(gate), "--tool", "claude"], input=payload,
+                            capture_output=True, text=True, env=_env(eval_id, env_extra))
+        try:
+            return json.loads(pr.stdout)["hookSpecificOutput"]["permissionDecision"]
+        except Exception:
+            return "allow"
+
+    exps.append(gc.expectation("the orchestrator is asked before a credential read",
+                               probe({}) == "ask", "ask expected"))
+    exps.append(gc.expectation("a running delegate is exempt from the gate",
+                               probe({"DELEGATE_DEPTH": "1"}) == "allow", "allow expected"))
+    return exps
 
 
 def _grade_dispatch(target, eval_id):

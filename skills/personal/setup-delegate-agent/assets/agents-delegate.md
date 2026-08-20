@@ -5,11 +5,15 @@
 Mechanical work can be handed to a cheaper agent running as a separate CLI process, so this
 session's context and quota go on judgment instead of bulk.
 
-Primary assistant here is **PLACEHOLDER_PRIMARY**. Agents available in this scope —
+Primary assistant here is **PLACEHOLDER_PRIMARY**. Delegation mode is **PLACEHOLDER_MODE**.
+
+Agents in this scope, **tried in this order** —
 
 PLACEHOLDER_ROSTER
 
 PLACEHOLDER_PARTY_NOTE
+
+PLACEHOLDER_MODE_NOTE
 
 **Assess, ask, then dispatch — never dispatch first.**
 
@@ -35,8 +39,15 @@ Dispatch is two steps — record the consent you obtained, then run under it:
 
 ```text
 .agents/bin/delegate-run --approve TASK_ID --class CLASS --allow 'TOOLS'
-.agents/bin/delegate-run --task .agents/delegate/dispatch/SLUG.md --approved TASK_ID --worktree
+.agents/bin/delegate-run --task .agents/delegate/dispatch/SLUG.md --approved TASK_ID --kind KIND --worktree
 ```
+
+Declare `--kind` on every dispatch. It is validated against what the agent is for, so a misrouted
+task bounces instead of running somewhere it was never assessed for — and "why did this go there"
+has a written answer afterwards.
+
+Say **"don't delegate"** (or "do it yourself", "keep this here") to suppress delegation entirely
+for a request. That overrides everything below, including auto mode.
 
 One line of JSON comes back. Read `.result`; open `.raw` or `.log` only when triaging a failure —
 that is the output you delegated in order not to read. A `status: question` means the sub-agent

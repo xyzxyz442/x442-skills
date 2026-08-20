@@ -59,6 +59,46 @@ only error here with real consequences.
 This is what lets a project say _"frontier Claude is fine, that gateway is not"_ — a distinction
 `local` versus `remote` cannot express, because both are remote.
 
+## The ladder
+
+Agents carry a `rank` (lower is tried first) and the `kinds` of work they are for. `"*"` is the
+catch-all, which is what lets a capable same-party agent be the fallback for work no specialised
+tier claims.
+
+```jsonc
+"agents": {
+  "fast-cheap":  { "rank": 1, "kinds": ["codemod", "docstring"], "autoApprove": ["docstring"] },
+  "same-vendor": { "rank": 2, "kinds": ["*"] },        // capable fallback, costs quota
+  "on-machine":  { "rank": 3, "kinds": ["fetch-parse"] }  // offline-capable, usually slowest
+}
+```
+
+Order by what you actually want tried first, which is rarely capability. A same-vendor agent on a
+cheaper model needs no extra infrastructure and is always reachable, which makes it a good
+fallback — but it spends quota, so it is often not the first choice. An on-machine agent costs
+nothing and works offline, but if it is slow that belongs low in the order regardless.
+
+**Failover walks this order, and only on reachability.** If an endpoint does not answer, the
+dispatcher tries the next permitted agent. A poor _result_ never triggers it: retrying elsewhere
+would move work across a party boundary a policy deliberately drew. Because approval records the
+agent, a failover that changes the party forces re-approval rather than proceeding quietly.
+
+## Mode
+
+`mode` is `manual` (default), `auto`, or `off`, and a nearer layer may only tighten it —
+`off` beats `manual` beats `auto`.
+
+`auto` does **not** mean "never ask". It removes the prompt only for kinds listed in an agent's
+`autoApprove`, and only when the dispatch is read-only or worktree-isolated. Everything else still
+prompts. Pre-approving a kind an agent does not serve is a hard error, and auto-approving a
+dispatch that could write outside a worktree is refused at dispatch time — an unreviewed write is
+the failure you cannot detect afterwards.
+
+```bash
+python3 "$SKILL/scripts/register-delegate-agents.py" add --layer ~ \
+  --name fast-cheap --adapter claude --config-dir ~/.some-config-dir
+```
+
 ## Procedure
 
 ### 1. See what is available

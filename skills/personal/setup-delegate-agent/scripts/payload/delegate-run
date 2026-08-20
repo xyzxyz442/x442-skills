@@ -118,8 +118,8 @@ DISPATCH="${STATE}/dispatch"
 RESULTS="${STATE}/results"
 APPROVALS="${STATE}/approvals"
 
-TASK_FILE="" PROMPT="" AGENT="" TURNS="" TIMEOUT="" ALLOW="" MODE="dontAsk"
-WORKTREE=0 RESUME="" DRY=0 APPROVE_ID="" APPROVED_ID="" CLASS=""
+TASK_FILE="" PROMPT="" AGENT="" AGENT_EXPLICIT="" TURNS="" TIMEOUT="" ALLOW="" MODE="dontAsk"
+WORKTREE=0 RESUME="" DRY=0 APPROVE_ID="" APPROVED_ID="" CLASS="" KIND=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --task)
@@ -132,6 +132,7 @@ while [ $# -gt 0 ]; do
       ;;
     --agent)
       AGENT="$2"
+      AGENT_EXPLICIT=1
       shift 2
       ;;
     --turns)
@@ -166,6 +167,10 @@ while [ $# -gt 0 ]; do
       CLASS="$2"
       shift 2
       ;;
+    --kind)
+      KIND="$2"
+      shift 2
+      ;;
     --worktree)
       WORKTREE=1
       shift
@@ -184,8 +189,40 @@ RESOLVED="$(python3 "$RESOLVER" --scope "$PWD" 2> /dev/null)" \
 [ -n "$AGENT" ] || die "no --agent given and no default set in this scope" 78
 A="$(printf '%s' "$RESOLVED" | jq -c --arg n "$AGENT" '.agents[] | select(.name==$n)')"
 [ -n "$A" ] || die "agent '$AGENT' is not permitted in this scope" 78
+
+# Reachability failover, and ONLY reachability. If the chosen agent's endpoint does not answer,
+# walk down the ladder to the next permitted agent. A poor result never triggers this: retrying
+# elsewhere would move work across a party boundary that a policy deliberately drew, which is
+# exactly the boundary a restricted repo is relying on. Transport failure is safe to fail over;
+# dissatisfaction is not.
+reachable() {
+  local u
+  u="$(printf '%s' "$1" | jq -r '.base_url // empty')"
+  [ -n "$u" ] || return 0 # nothing to probe: an ambient-auth agent has no endpoint of its own
+  command -v curl > /dev/null 2>&1 || return 0
+  curl -s -m 3 -o /dev/null "$u" 2> /dev/null && return 0
+  curl -s -m 3 -o /dev/null "${u%/}/models" 2> /dev/null && return 0
+  return 1
+}
+FAILED_OVER=""
+if [ -z "$AGENT_EXPLICIT" ] && ! reachable "$A"; then
+  for _cand in $(printf '%s' "$RESOLVED" | jq -r '.prefer[]?'); do
+    [ "$_cand" = "$AGENT" ] && continue
+    _A="$(printf '%s' "$RESOLVED" | jq -c --arg n "$_cand" '.agents[] | select(.name==$n)')"
+    [ -n "$_A" ] || continue
+    if reachable "$_A"; then
+      FAILED_OVER="$AGENT"
+      AGENT="$_cand"
+      A="$_A"
+      break
+    fi
+  done
+  [ -n "$FAILED_OVER" ] || die "agent '$AGENT' is unreachable and no permitted agent below it answered" 70
+fi
 get() { printf '%s' "$A" | jq -r "$1 // empty"; }
 
+MODE_POLICY="$(printf '%s' "$RESOLVED" | jq -r '.mode // "manual"')"
+[ "$MODE_POLICY" = "off" ] && die "delegation is disabled in this scope (mode: off)" 78
 ADAPTER="$(get '.adapter')"
 PARTY="$(get '.party')"
 MAX_ROUNDS="$(get '.max_question_rounds')"
@@ -207,17 +244,58 @@ if [ -n "$APPROVE_ID" ]; then
   exit 0
 fi
 
+# ------------------------------------------------------------------------ routing checks ---
+# The kind is declared by the caller and validated against what this agent is FOR. Letting the
+# orchestrator decide the kind in the moment would make auto mode a judgement call with no record;
+# writing it into the dispatch means "why did this go here" has a written answer.
+AGENT_KINDS="$(get '.kinds[]?' 2> /dev/null || true)"
+if [ -n "$KIND" ]; then
+  case "$KIND" in
+    */* | ..*) die "--kind must be a plain slug" ;;
+  esac
+  if ! printf '%s' "$RESOLVED" | jq -e --arg n "$AGENT" --arg k "$KIND" \
+    '.agents[] | select(.name==$n) | (.kinds | index("*") or index($k))' > /dev/null 2>&1; then
+    emit --arg id "n/a" --arg a "$AGENT" --arg k "$KIND" \
+      --arg ks "$(printf '%s' "$AGENT_KINDS" | tr '\n' ',' | sed 's/,$//')" \
+      '{status:"misrouted", agent:$a, kind:$k, agent_kinds:$ks,
+        reason:("agent " + $a + " does not serve kind " + $k)}'
+    exit 77
+  fi
+fi
+
+# Auto mode removes the PROMPT for kinds you pre-approved; it never removes the gate for anything
+# else. And a pre-approved dispatch must still be one whose mistakes are recoverable: read-only, or
+# isolated in a worktree. Auto-approving an unreviewed write is the failure you cannot detect after
+# the fact, so it is refused rather than trusted.
+AUTO_OK=0
+if [ "$MODE_POLICY" = "auto" ] && [ -n "$KIND" ] && [ -z "$APPROVED_ID" ]; then
+  if printf '%s' "$RESOLVED" | jq -e --arg n "$AGENT" --arg k "$KIND" \
+    '.agents[] | select(.name==$n) | (.auto_approve | index($k))' > /dev/null 2>&1; then
+    WRITES=0
+    printf '%s' "$ALLOW" | grep -qiE '(^|,)[[:space:]]*(edit|write|multiedit)' && WRITES=1
+    [ "$MODE" = "acceptEdits" ] && WRITES=1
+    if [ "$WRITES" -eq 1 ] && [ "$WORKTREE" -ne 1 ]; then
+      die "kind '$KIND' is auto-approved, but this dispatch can write outside a worktree — add --worktree or approve it explicitly" 77
+    fi
+    AUTO_OK=1
+  fi
+fi
+
 # ------------------------------------------------------------------ consent: enforce mode ---
-[ -n "$APPROVED_ID" ] || die "refusing to dispatch without --approved TASK_ID; record consent first with --approve" 78
-case "$APPROVED_ID" in */* | ..*) die "--approved id must be a plain slug" ;; esac
-APPROVAL="${APPROVALS}/${APPROVED_ID}.json"
-[ -f "$APPROVAL" ] || die "no approval on file for task '$APPROVED_ID' — the consent gate was skipped" 78
-[ "$(jq -r '.agent // empty' "$APPROVAL")" = "$AGENT" ] \
-  || die "task '$APPROVED_ID' was approved for agent '$(jq -r .agent "$APPROVAL")', not '$AGENT'" 78
-# Widening after approval is the escalation the gate exists to stop. Narrowing is fine, but the two
-# are not reliably distinguishable textually, so any change bounces for re-approval.
-[ "$ALLOW" = "$(jq -r '.allow // empty' "$APPROVAL")" ] \
-  || die "allowlist differs from what was approved for '$APPROVED_ID' — re-approve to change scope" 77
+if [ -z "$APPROVED_ID" ] && [ "$AUTO_OK" -ne 1 ]; then
+  die "refusing to dispatch without --approved TASK_ID; record consent first with --approve" 78
+fi
+if [ -n "$APPROVED_ID" ]; then
+  case "$APPROVED_ID" in */* | ..*) die "--approved id must be a plain slug" ;; esac
+  APPROVAL="${APPROVALS}/${APPROVED_ID}.json"
+  [ -f "$APPROVAL" ] || die "no approval on file for task '$APPROVED_ID' — the consent gate was skipped" 78
+  [ "$(jq -r '.agent // empty' "$APPROVAL")" = "$AGENT" ] \
+    || die "task '$APPROVED_ID' was approved for agent '$(jq -r .agent "$APPROVAL")', not '$AGENT'" 78
+  # Widening after approval is the escalation the gate exists to stop. Narrowing is fine, but the two
+  # are not reliably distinguishable textually, so any change bounces for re-approval.
+  [ "$ALLOW" = "$(jq -r '.allow // empty' "$APPROVAL")" ] \
+    || die "allowlist differs from what was approved for '$APPROVED_ID' — re-approve to change scope" 77
+fi
 
 if { [ -n "$TASK_FILE" ] && [ -n "$PROMPT" ]; } || { [ -z "$TASK_FILE" ] && [ -z "$PROMPT" ]; }; then
   die "give exactly one of --task or --prompt"
@@ -241,6 +319,28 @@ if [ -n "$TASK_FILE" ]; then
   cp "$TASK_FILE" "$BRIEF"
 else
   printf '%s\n' "$PROMPT" > "$BRIEF"
+fi
+
+# Footprint veto. The kind chooses the tier; the footprint can only ever REFUSE it. A task whose
+# inputs will not fit the agent's window does not get truncated silently — truncation produces a
+# confident wrong answer, which is far more expensive than a refusal. Measured from the files the
+# brief actually names and that actually exist, so the number is checkable.
+CTX="$(get '.context')"
+if [ -n "$CTX" ] && [ "$CTX" != "null" ]; then
+  BYTES=0
+  for _p in $(grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]+' "$BRIEF" 2> /dev/null | sort -u); do
+    [ -f "$_p" ] || continue
+    _sz=$(wc -c < "$_p" 2> /dev/null | tr -d ' ')
+    BYTES=$((BYTES + _sz))
+  done
+  EST=$((BYTES / 4))
+  BUDGET=$((CTX * 70 / 100))
+  if [ "$EST" -gt "$BUDGET" ]; then
+    emit --arg id "$ID" --arg a "$AGENT" --argjson e "$EST" --argjson b "$BUDGET" --argjson c "$CTX" \
+      '{status:"misrouted", id:$id, agent:$a, est_tokens:$e, budget_tokens:$b, context:$c,
+        reason:"the files this brief names do not fit the agent context window — split the task or pick a larger tier"}'
+    exit 77
+  fi
 fi
 
 # The never-delegate floor: a cheap path pre-filter over the brief. Not a classifier — it catches
@@ -363,5 +463,7 @@ esac
 
 emit --arg id "$ID" --arg a "$AGENT" --arg ad "$ADAPTER" --arg p "$PARTY" --arg s "$SESSION" \
   --arg o "$OUT" --arg raw "$RAW" --arg l "$LOG" --argjson d "$DURATION" \
+  --arg fo "$FAILED_OVER" \
   '{status:"ok", id:$id, agent:$a, adapter:$ad, party:$p, duration_s:$d,
-    session_id:$s, result:$o, raw:$raw, log:$l}'
+    session_id:$s, result:$o, raw:$raw, log:$l}
+   + (if $fo == "" then {} else {failed_over_from:$fo} end)'

@@ -51,6 +51,13 @@
       "prompt": "This repo's committed config tries to declare its own agent.",
       "fixture": "fixtures/fresh",
       "expected_output": "The cascade refuses to let a layer inside a git work tree define agents, the declared agent never appears in the roster, and the reason names the escalation it prevents."
+    },
+    {
+      "id": "tier-routing",
+      "kind": "post-state",
+      "prompt": "Set up delegation where several agents are ranked and some kinds are pre-approved for unprompted dispatch.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "The ladder resolves in rank order and the block renders it as an order rather than a set, stating the mode and the opt-out phrase. A nearer layer can tighten the mode but not loosen it. At dispatch: a pre-approved kind goes unprompted, a non-approved kind still requires consent, a kind the agent does not serve is refused, a pre-approved kind that could write outside a worktree is refused until isolated, and a brief whose files exceed the agent window is vetoed with numbers. The consent gate asks the orchestrator but exempts a running delegate."
     }
   ]
 }
