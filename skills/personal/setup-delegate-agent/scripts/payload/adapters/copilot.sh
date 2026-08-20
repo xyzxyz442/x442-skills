@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # copilot adapter — GitHub Copilot CLI. Prompt as an ARGUMENT; per-tool allowlist; no schema.
 #
-# UNVERIFIED against a live backend. The flags come from `copilot --help` on this machine; the
-# ask-back contract in particular is best-effort here, because nothing forces the final message
-# into the {status, question} shape the dispatcher looks for.
+# Reaches any OpenAI-compatible endpoint through BYOK, which is what makes it usable for a local
+# model: `COPILOT_PROVIDER_BASE_URL` activates it, GitHub auth is not required, and an API key is
+# optional for local providers. That matters because an Anthropic-protocol CLI cannot talk to a
+# local OpenAI server at all.
+#
+# The ask-back contract is best-effort here: nothing forces the final message into the
+# {status, question} shape the dispatcher looks for, so a blocked sub-agent may return prose.
 set -euo pipefail
 ACTION="${1:?build|parse}"
 SPEC="$(cat)"
 g() { printf '%s' "$SPEC" | jq -r "$1 // empty"; }
 
 case "$ACTION" in
+  env)
+    # BYOK is activated by the base URL alone. Without one, copilot uses GitHub's own routing and
+    # these are all unset, which is the correct behaviour for a hosted Copilot agent.
+    b="$(g '.base_url')"
+    if [ -n "$b" ]; then
+      printf 'COPILOT_PROVIDER_BASE_URL=%s\n' "$b"
+      printf 'COPILOT_PROVIDER_TYPE=%s\n' "$(printf '%s' "$SPEC" | jq -r '.provider_type // "openai"')"
+      m="$(g '.model')"
+      [ -n "$m" ] && printf 'COPILOT_MODEL=%s\n' "$m"
+    fi
+    exit 0
+    ;;
   build)
     printf '%s\n' '-p' "$(cat "$(g '.prompt_file')")"
     printf '%s\n' '--silent' '--output-format' 'json'
@@ -27,9 +43,14 @@ case "$ACTION" in
     ;;
   parse)
     raw="$(g '.raw_file')"
-    # JSONL: one object per line. Take the last line carrying text, and the first session id seen.
-    result="$(jq -rs '[.[]? | (.content // .text // .message // empty)] | last // ""' < "$raw" 2> /dev/null || true)"
-    sid="$(jq -rs '[.[]? | (.session_id // .sessionId // empty)] | first // ""' < "$raw" 2> /dev/null || true)"
+    # copilot streams JSONL: the assistant message arrives as `assistant.message_delta` events and
+    # the session id only appears on the terminal `result` event. Reading a single `.content` field
+    # therefore returns nothing, which reads as a successful empty answer.
+    result="$(jq -rs '[.[]? | select(.type=="assistant.message_delta") | (.data.delta // .data.content // "")] | join("")' < "$raw" 2> /dev/null || true)"
+    if [ -z "$result" ]; then
+      result="$(jq -rs '[.[]? | select(.type=="assistant.message") | .data.content] | last // ""' < "$raw" 2> /dev/null || true)"
+    fi
+    sid="$(jq -rs '[.[]? | (.sessionId // .data.sessionId // empty)] | last // ""' < "$raw" 2> /dev/null || true)"
     jq -nc --arg r "$result" --arg s "$sid" '{result:$r, session_id:$s}'
     ;;
   *)

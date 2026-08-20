@@ -6,6 +6,13 @@ SPEC="$(cat)"
 g() { printf '%s' "$SPEC" | jq -r "$1 // empty"; }
 
 case "$ACTION" in
+  env)
+    b="$(g '.base_url')"
+    # A configDir supplies its own endpoint via the CLI's settings.json; setting it here too would
+    # give the child two sources of truth for where its traffic goes.
+    [ -n "$b" ] && [ -z "$(g '.config_dir')" ] && printf 'ANTHROPIC_BASE_URL=%s\n' "$b"
+    exit 0
+    ;;
   build)
     [ "$(g '.strict_mcp')" = "true" ] && printf '%s\n' '--strict-mcp-config'
     printf '%s\n' '-p' '--output-format' 'json'

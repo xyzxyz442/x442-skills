@@ -9,6 +9,7 @@ SPEC="$(cat)"
 g() { printf '%s' "$SPEC" | jq -r "$1 // empty"; }
 
 case "$ACTION" in
+  env) exit 0 ;;
   build)
     printf '%s\n' '-p' "$(cat "$(g '.prompt_file')")"
     printf '%s\n' '-o' 'json'

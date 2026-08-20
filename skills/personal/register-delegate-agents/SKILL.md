@@ -79,8 +79,14 @@ python3 "$SKILL/scripts/register-delegate-agents.py" add \
 ```
 
 Adapter is one of `claude`, `codex`, `copilot`, `gemini`, and it must match the endpoint's
-protocol, not your preference. A local LM Studio server speaks the OpenAI API, which an
-Anthropic-protocol CLI cannot talk to at all — reaching it needs `codex`, not a different base URL.
+protocol, not your preference. A local LM Studio or Ollama server speaks the OpenAI API, which an
+Anthropic-protocol CLI cannot talk to at all — so a local model needs `copilot` (via BYOK, giving
+it a `--base-url`) or `codex` (via `--local-provider`), never `claude` with a different base URL.
+
+Prefer `copilot` for a local model: `codex` emits a system message mid-conversation, and some chat
+templates reject that outright. Whichever you pick, the model must support **native function
+calling** — one that writes `<tool_call>` as text has not called anything, and the dispatcher will
+report the dispatch as blocked rather than hand you prose that changed nothing.
 
 To adopt a CLI you already run under its own config dir, point at the directory and let it supply
 model, endpoint, context, and credential:
