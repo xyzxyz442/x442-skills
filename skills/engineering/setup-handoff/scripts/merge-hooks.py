@@ -270,11 +270,24 @@ def main(argv: list[str]) -> int:
         repo_root = argv[idx + 1]
     # Extraction MUST happen before wire() (below) strips the managed hook groups -- strip_managed
     # drops the old HANDOFF_*=-prefixed commands entirely, and would take the prefixes with them.
+    #
+    # The refusal is ALL-OR-NOTHING for THIS file: migrate_prefix only ever sees the commands
+    # collected from `path` (one file per invocation, one invocation per tool), so a conflict
+    # here cannot suppress migration of a sibling tool's config, and a sibling's agreeing values
+    # can never dilute a real conflict in this file into a false "no conflict". On a refusal we
+    # return before wire() runs at all: no command rewrite, no prefix stripped, no --project-dir
+    # anchor added, no config write. Half-migrating (anchor added, prefix gone, identity nowhere)
+    # is the one outcome a re-run cannot recover from -- leaving the file exactly as it was,
+    # still running its old working prefix, is what makes a later fix (or re-run once the
+    # conflict is resolved by hand) safe.
     if repo_root is not None:
         commands = collect_managed_commands(load(path))
         migrated, refusals = migrate_prefix(commands)
-        for r in refusals:
-            print(f"merge-hooks: refusing to migrate prefix: {r}", file=sys.stderr)
+        if refusals:
+            for r in refusals:
+                print(f"merge-hooks: refusing to migrate {path}: {r}", file=sys.stderr)
+            print(f"merge-hooks: leaving {path} untouched -- resolve the conflict by hand, then re-run", file=sys.stderr)
+            return 1
         # Live env (this run's actual installer knowledge) wins over migrated history for the
         # same key, but a migrated key the live env has no value for must survive the merge --
         # e.g. a legacy HANDOFF_GROUP recovered from history when this run carries none.
