@@ -479,3 +479,10 @@ harness/**/iterations/**/run-*/transcript.md
 # be committed. This one overrides a *global* ignore (**/.claude/settings.local.json in the
 # user's core.excludesFile) — repo rules win over global, so the negation belongs here.
 !harness/**/fixtures/**/.claude/settings.local.json
+
+# Leases are deliberately NOT re-included here. The repair-handoff orphaned-lease fixture needs a
+# committed .locks/ directory, but that fixture carries its own .gitignore (the one setup-handoff
+# writes, excluding .agents/handoff/.locks/), and a nested .gitignore beats a parent's negation —
+# git cannot re-include a file whose parent directory is excluded. That lock is tracked via
+# `git add -f` instead, which keeps working because .gitignore only governs UNtracked files.
+# If you ever regenerate that fixture, force-add its .locks/ again or the eval passes vacuously.

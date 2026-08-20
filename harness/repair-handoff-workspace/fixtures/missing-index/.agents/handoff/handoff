@@ -1,0 +1,1388 @@
+#!/usr/bin/env bash
+# Handoff lease manager. See README.md for the protocol.
+#
+# Ownership lives ONLY in .locks/<id>/ (never mirrored into the docs, so the two
+# cannot desync). Durable state lives ONLY in each doc's YAML frontmatter.
+# INDEX.md is generated from both and must not be hand-edited.
+#
+# Portable across macOS (BSD) and Linux (GNU): no `sed -i`, no `date -r`-only,
+# frontmatter edits go through awk. Enforcement lives in hooks.sh.
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCKS="$DIR/.locks"
+TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
+
+# config (committed, written by setup-handoff): TOPOLOGY=single-repo|cross-repo, REPO_NAME=<name>.
+# A SHARED (cross-repo) board's config carries NO REPO_NAME — identity is per-consumer, supplied via
+# $HANDOFF_REPO (env). Prefer it over the shared config so audience/labeling/doc_is_local use the
+# calling repo's identity, not whoever installed last. Empty on a single-repo board (uses config).
+TOPOLOGY="single-repo"
+REPO_NAME=""
+# HANDOFF_GROUPS (board-global, config): comma-list of the groups a SHARED board hosts as sub-indexed
+# sections. (NOT `GROUPS` — that is a bash built-in array of the user's gids, e.g. 20, so a config key
+# named GROUPS can never be read back.) HANDOFF_GROUP_LAYOUT (board-global, config): subfolder|prefix
+# — how each section is laid out. Both absent on a plain single-repo board, so every section helper
+# below collapses to the flat layout (docs at $DIR/<id>.md, one INDEX.md), byte-identical.
+HANDOFF_GROUPS=""
+HANDOFF_GROUP_LAYOUT=""
+# shellcheck disable=SC1091
+[ -f "$DIR/config" ] && . "$DIR/config"
+REPO_NAME="${HANDOFF_REPO:-$REPO_NAME}"
+
+# --- group sections (multi-group / multi-workspace boards) -----------------------------
+# LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's
+# own section, wired per-repo into its hook command as $HANDOFF_GROUP by the cross-repo sync. A
+# handoff invocation only ever acts within its own GROUP; only cmd_index's roll-up reads across all
+# sections. Both empty => flat board, and every helper returns exactly today's paths.
+LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
+BOARD_GROUPS="${HANDOFF_GROUPS:-}"
+slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
+GROUP="${HANDOFF_GROUP:-}"
+[ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
+grouped() { [ -n "$LAYOUT" ] && [ -n "$GROUP" ]; } # is this invocation acting inside a group section?
+
+# All section-relative paths derive from (LAYOUT, group). Pass an explicit group for the roll-up;
+# omit it and they use the caller's own GROUP. `${1-$GROUP}` (bare -, not :-) so an explicit "" means
+# the flat board, while omission means "the caller's section".
+sec_dir() { # [group] -> dir holding that section's locks/archive/sub-index (subfolder only nests)
+  local g="${1-$GROUP}"
+  if [ "$LAYOUT" = "subfolder" ] && [ -n "$g" ]; then printf '%s' "$DIR/$g"; else printf '%s' "$DIR"; fi
+}
+doc_file() { # id [group] -> active doc path
+  local id="$1" g="${2-$GROUP}"
+  case "$LAYOUT" in
+    subfolder) [ -n "$g" ] && {
+      printf '%s' "$DIR/$g/$id.md"
+      return
+    } ;;
+    prefix) [ -n "$g" ] && {
+      printf '%s' "$DIR/$g--$id.md"
+      return
+    } ;;
+  esac
+  printf '%s' "$DIR/$id.md"
+}
+arch_file() { # id [group] -> archived doc path
+  local id="$1" g="${2-$GROUP}"
+  case "$LAYOUT" in
+    subfolder) [ -n "$g" ] && {
+      printf '%s' "$DIR/$g/archive/$id.md"
+      return
+    } ;;
+    prefix) [ -n "$g" ] && {
+      printf '%s' "$DIR/archive/$g--$id.md"
+      return
+    } ;;
+  esac
+  printf '%s' "$DIR/archive/$id.md"
+}
+sec_index() { # [group] -> sub-index path (roll-up lives at $DIR/INDEX.md when grouped)
+  local g="${1-$GROUP}"
+  case "$LAYOUT" in
+    subfolder) [ -n "$g" ] && {
+      printf '%s' "$DIR/$g/INDEX.md"
+      return
+    } ;;
+    prefix) [ -n "$g" ] && {
+      printf '%s' "$DIR/INDEX-$g.md"
+      return
+    } ;;
+  esac
+  printf '%s' "$DIR/INDEX.md"
+}
+# Emit the active (or archived) doc paths for a section, one per line, so callers iterate with
+# `while read … done < <(each_doc)` — process substitution keeps the loop body in the current shell
+# (accumulators persist) and stays safe with spaces in $DIR, unlike a command-substituted glob.
+each_doc() { # [group] -> active doc paths
+  local g="${1-$GROUP}" f
+  case "$LAYOUT" in
+    subfolder) if [ -n "$g" ]; then
+      for f in "$DIR/$g"/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+    prefix) if [ -n "$g" ]; then
+      for f in "$DIR/$g"--*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+  esac
+  for f in "$DIR"/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+}
+each_archive() { # [group] -> archived doc paths
+  local g="${1-$GROUP}" f
+  case "$LAYOUT" in
+    subfolder) if [ -n "$g" ]; then
+      for f in "$DIR/$g"/archive/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+    prefix) if [ -n "$g" ]; then
+      for f in "$DIR"/archive/"$g"--*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+      return
+    fi ;;
+  esac
+  for f in "$DIR"/archive/*-handoff.md; do [ -f "$f" ] && printf '%s\n' "$f"; done
+}
+# The groups a shared board hosts (config GROUPS), newline-separated; empty on a flat board.
+each_group() {
+  local g
+  local IFS=','
+  for g in $BOARD_GROUPS; do
+    g="$(slug "$g")"
+    [ -n "$g" ] && printf '%s\n' "$g"
+  done
+}
+# The board hosts groups (config GROUPS + a layout) — distinct from grouped(), which asks whether
+# THIS invocation is acting inside a section. Lives here beside the other section helpers because
+# three call sites now need it (cmd_list's scope notice, no_such's cross-section lookup, cmd_index's
+# roll-up branch), the earliest of them ~600 lines before where it used to be defined.
+board_is_grouped() { [ -n "$LAYOUT" ] && [ -n "$BOARD_GROUPS" ]; }
+# The lock key for an id = its doc's file stem, so it is unique board-wide: subfolder namespaces via
+# the section's own .locks dir (plain stem), prefix bakes the group into the stem. Locks live in the
+# section dir so a repo only reaps/nags its own section's leases.
+LOCKS="$(sec_dir)/.locks"
+lock_key() { basename "$(doc_file "$1")" .md; }
+
+die() {
+  echo "handoff: $*" >&2
+  exit 1
+}
+now() { date +%s; }
+# BSD `date -r <epoch>` vs GNU `date -d @<epoch>` — try both, fall back to the raw epoch.
+human() { date -r "$1" '+%Y-%m-%d %H:%M' 2> /dev/null || date -d "@$1" '+%Y-%m-%d %H:%M' 2> /dev/null || echo "$1"; }
+today() { date '+%Y-%m-%d'; }
+
+# Raw session id — the SAME value the tool puts in its hook payload's session_id.
+# hooks.sh matches session= against that payload, so this MUST be the raw id, not
+# the human-readable owner string. Empty when no tool exposes one (advisory mode).
+session_id() { printf '%s' "${HANDOFF_SESSION_ID:-${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}}"; }
+
+# Human-readable claimant, for display and the Activity log.
+whoami_id() {
+  local user session
+  user="$(git config user.name 2> /dev/null || echo "${USER:-agent}")"
+  session="$(session_id)"
+  session="${session:-$$}"
+  echo "${user} (${session:0:8})"
+}
+
+# Board ids that CONTAIN the one asked for. The automatic `-handoff` suffix means a "short" id can
+# fold to a phantom (`foo` -> `foo-handoff`) while the real doc is `foo-backend-handoff`, so naming
+# the near misses turns a dead end into an obvious fix. Comma-separated; empty when nothing is near.
+near_ids() { # id -> "a-handoff, b-handoff"
+  local needle="${1%-handoff}" p stem out=""
+  [ -n "$needle" ] || return 0
+  while read -r p; do
+    stem="$(basename "$p" .md)"
+    case "$stem" in *"$needle"*) out="${out:+$out, }$stem" ;; esac
+  done < <(
+    each_doc
+    each_archive
+  )
+  printf '%s' "$out"
+}
+
+doc_of() { # id -> path, searching the caller's section (active then archive)
+  # Reports failure through the EXIT STATUS, never `die`. Every caller runs this inside $( ), where
+  # `die`'s exit would leave only the subshell; with no `set -e` (see the top of this file) the
+  # caller then sails on with an empty path. That is exactly how `claim <phantom-id>` used to mint a
+  # real lock for a doc that does not exist and spray `sed: : No such file or directory`.
+  # Callers MUST `|| no_such "$id"`.
+  local id="$1" p
+  for p in "$(doc_file "$id")" "$(arch_file "$id")"; do
+    [ -f "$p" ] && {
+      echo "$p"
+      return 0
+    }
+  done
+  return 1
+}
+
+# The board sections OTHER than the caller's whose section holds this id (active or archived), as a
+# comma list. Empty on a flat board, and empty when nothing anywhere holds it. Every lookup in this
+# script is confined to the caller's section, so this is the only thing that can tell "does not
+# exist" apart from "exists, but you cannot see it".
+sections_with_doc() { # id -> "auth, infra"
+  local id="$1" g out=""
+  board_is_grouped || return 0
+  while read -r g; do
+    [ -n "$g" ] || continue
+    [ "$g" = "$GROUP" ] && continue
+    { [ -f "$(doc_file "$id" "$g")" ] || [ -f "$(arch_file "$id" "$g")" ]; } && out="${out:+$out, }$g"
+  done < <(each_group)
+  printf '%s' "$out"
+}
+
+no_such() { # id -> never returns; the shared unresolvable-id error for claim/release
+  local near other scope
+  # On a grouped board the id may be perfectly real and simply live in a section this invocation
+  # cannot see — HANDOFF_GROUP selects one section and nothing looks outside it. "no such handoff"
+  # is then actively wrong (the doc exists), and its advice makes it worse: it sends the reader to
+  # `list`, which is empty for the very same reason. Name the section that actually holds it.
+  other="$(sections_with_doc "$1")"
+  if [ -n "$other" ]; then
+    if [ -n "$GROUP" ]; then scope="your section is $GROUP"; else scope="you have no HANDOFF_GROUP set"; fi
+    die "$1 is on this board, in the $other section — but $scope. Re-run as: HANDOFF_GROUP=${other%%,*} handoff ..."
+  fi
+  near="$(near_ids "$1")"
+  die "no such handoff: $1 (try: handoff list)${near:+ — did you mean: $near}"
+}
+
+# One SURROUNDING quote pair is stripped, because a value that must survive as YAML has to be
+# quoted and every consumer here wants the bare text. `verify:` is the field that forces this: it
+# holds a shell command, so it always contains a ':' and — unlike every other field — cannot be
+# colon-folded without corrupting the command, leaving quoting as the only way to keep the doc
+# parseable. Without the strip, an author quoting it correctly gets `eval "\"cmd\""` → "command not
+# found", i.e. the two requirements (valid YAML / runnable command) were mutually exclusive.
+# The `t` branches after a successful double-quote strip so `"'x'"` loses one pair, not both.
+# Unquoted values pass through untouched, so docs written before this keep working.
+meta() { # path key -> value from YAML frontmatter, minus one surrounding quote pair
+  sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1 \
+    | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# Update a frontmatter key in place, or insert it before the closing --- if absent.
+# Portable (awk), unlike GNU-only `sed -i 's/a/&\nb/'`.
+set_field() {
+  local f="$1" key="$2" val="$3" t
+  t="$(mktemp)" || die "mktemp failed"
+  awk -v k="$key" -v v="$val" '
+    BEGIN { infm = 0; seen = 0 }
+    NR == 1 && $0 == "---" { infm = 1; print; next }
+    infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
+    infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
+    { print }
+  ' "$f" > "$t" && cat "$t" > "$f"
+  rm -f "$t"
+}
+
+log_activity() { # path message -> append to the doc's Activity log
+  local f="$1" msg="$2"
+  # the blank line after the heading is required — without it markdownlint flags every doc
+  # (MD022 blanks-around-headings / MD032 blanks-around-lists) the moment the first entry lands
+  grep -q '^## Activity' "$f" || printf '\n## Activity\n\n' >> "$f"
+  printf -- '- %s — %s\n' "$(today)" "$msg" >> "$f"
+}
+
+lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|exp"
+  local id="$1" d="${2:-$LOCKS}/$1"
+  [ -d "$d" ] || {
+    echo "free"
+    return
+  }
+  local owner exp
+  owner="$(sed -n 's/^owner=//p' "$d/owner" 2> /dev/null || echo unknown)"
+  exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+  if [ "$(now)" -ge "${exp:-0}" ]; then echo "expired|$owner|$exp"; else echo "held|$owner|$exp"; fi
+}
+
+is_archived() { [ -f "$(arch_file "$1")" ]; }
+
+# Handoff type. "standalone" = a self-contained reference/knowledge doc: gate-exempt (no lease
+# needed to edit) and not surfaced as claimable work. "coordination" (the default, and what an
+# absent `type:` means) = a lease-gated work item. Keep the absence⇒coordination rule so legacy
+# docs and existing boards behave exactly as before.
+doc_type() {
+  local t
+  t="$(meta "$1" type)"
+  printf '%s' "${t:-coordination}"
+}
+is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
+is_orchestrator() { [ "$(doc_type "$1")" = "orchestrator" ]; }
+
+# An orchestrator tracks a BUNDLE of related handoffs. It holds no work of its own, so like a
+# standalone it needs no lease and is gate-exempt; unlike a standalone it is not a reference doc but
+# an index whose progress is DERIVED from its children every time it is read. Nothing about child
+# status is stored on the orchestrator — a stored count would desync the moment a child closed
+# without the parent being updated, which is exactly the rot this doc is meant to prevent.
+children_of() { # path -> newline-separated child ids (canonicalized)
+  local raw c
+  raw="$(meta "$1" children)"
+  raw="${raw#[}"
+  raw="${raw%]}"
+  # Split on commas with IFS rather than `tr ',' '\n' | while read`: that pipeline silently DROPS
+  # the last element, because the final field carries no trailing newline and `read` returns
+  # non-zero on it, ending the loop before the body runs. A bundle quietly losing its last child is
+  # exactly the kind of miscount this doc type exists to prevent.
+  local IFS=','
+  for c in $raw; do
+    c="$(printf '%s' "$c" | tr -d '"[:space:]')"
+    [ -n "$c" ] || continue
+    resolve_id "$c" || continue
+    printf '\n'
+  done
+}
+
+# The write-side counterpart of children_of: a `--children` CSV in, the canonical comma-joined
+# `children:` value out. It exists so the two sides split the list the same way, because they used
+# not to:
+#
+#   * The write side split on WHITESPACE as well as commas (`for c in $(… | tr ',' ' ')`), so a
+#     quoted multi-word child id — the spelling the `id` positional argument explicitly supports —
+#     silently became several children. `--children 'rbac-gap,RBAC Gap Two'` recorded four ids, two
+#     of which named no doc: an inflated progress denominator and permanent MISSING children, so the
+#     bundle could never close. Splitting on `,` only (via IFS, scoped to this function) and
+#     TRIMMING each element's surrounding whitespace keeps `a,b,c` and `"a, b, c"` equivalent while
+#     leaving whitespace inside an element for norm_id to fold into a dash.
+#   * The write side canonicalized with norm_id, which slugifies unconditionally, so a legacy dotted
+#     id like `sprint-26.7.2-handoff` was recorded as `sprint-26-7-2-handoff`, matched no doc, and
+#     reported MISSING for the bundle's whole life. resolve_id — what the read side already used —
+#     prefers whichever spelling names a real file and falls back to the canonical slug when neither
+#     does, so a child planned but not yet filed still records (and still reports MISSING) as before.
+#
+# Trimming with a parameter expansion rather than `tr -d '[:space:]'`: the read side can delete all
+# whitespace because it only ever sees already-slugged ids, but here the input is what the user typed.
+children_csv() { # "a, b, c" -> "a-handoff, b-handoff, c-handoff"; non-zero on an unusable element
+  local raw="$1" out="" c
+  local IFS=','
+  for c in $raw; do
+    c="${c#"${c%%[![:space:]]*}"}" # strip leading whitespace
+    c="${c%"${c##*[![:space:]]}"}" # strip trailing whitespace
+    [ -n "$c" ] || continue
+    c="$(resolve_id "$c")" || return 1
+    out="${out:+$out, }$c"
+  done
+  printf '%s' "$out"
+}
+
+# "<done>/<total>" plus the ids still outstanding. A child that names no file counts as missing, not
+# as done — a typo must never read as progress.
+child_progress() { # path -> "done|total|outstanding-csv"
+  local total=0 done=0 out="" cf st
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    total=$((total + 1))
+    cf=""
+    [ -f "$(doc_file "$c")" ] && cf="$(doc_file "$c")"
+    [ -z "$cf" ] && [ -f "$(arch_file "$c")" ] && cf="$(arch_file "$c")"
+    if [ -z "$cf" ]; then
+      out="${out:+$out, }$c (MISSING)"
+      continue
+    fi
+    st="$(meta "$cf" status)"
+    if [ "$st" = "done" ]; then done=$((done + 1)); else out="${out:+$out, }$c ($st)"; fi
+  done <<< "$(children_of "$1")"
+  printf '%s|%s|%s' "$done" "$total" "$out"
+}
+
+# Every handoff doc file is named "<id>-handoff.md" and the id IS the filename stem. norm_id
+# canonicalizes any user-supplied id to that form (idempotent — never doubles the suffix), so
+# `new rbac-gap`, `claim rbac-gap`, and `claim rbac-gap-handoff` all resolve to rbac-gap-handoff.
+#
+# Ids are compared as literal strings everywhere — lease directory names under .locks/, blocked_on
+# cross-references, INDEX.md rows, and the hooks' case-sensitive *-handoff.md gate. So the id must
+# also be slugified to lowercase kebab-case, or "RBAC Gap" and "rbac-gap" become two leases over
+# one doc (and on a case-insensitive filesystem the edit gate silently fails open). Lowercasing
+# happens BEFORE the suffix test, so "RBAC-Handoff" yields rbac-handoff, not rbac-handoff-handoff.
+# Returns non-zero on an id that slugifies to nothing ("!!!"), so callers can die with usage.
+norm_id() {
+  local s
+  s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+  [ -n "$s" ] || return 1
+  case "$s" in *-handoff) printf '%s' "$s" ;; *) printf '%s-handoff' "$s" ;; esac
+}
+
+# The pre-slug spelling of an id: suffix-only canonicalization, no case/separator folding. This is
+# what norm_id did before ids were slugified, and it is the only thing legacy_id is for.
+legacy_id() { case "$1" in *-handoff) printf '%s' "$1" ;; *) printf '%s-handoff' "$1" ;; esac }
+
+# Free-text frontmatter values land in the doc as unquoted YAML (`key: <value>`), so a ":" inside
+# the value turns the line into a nested mapping and breaks every frontmatter parser that reads the
+# doc (markdown preview, external tooling). Quoting the value instead would leak literal quotes
+# through meta()'s plain-sed readers (list, INDEX, hooks), so the colon is folded to the board's
+# em-dash convention: "Handoff: auth suite" → "Handoff — auth suite".
+#
+# Applied to every frontmatter value that carries arbitrary user text: title (--title on new/import
+# and import's H1-derived fallback), note (--note), audience, severity, and the "external: ..."
+# blocked_on escape hatch. Not applied to ids/children (norm_id slugifies those) nor to the trailing
+# release note, which lands in the body's Activity log where a colon is harmless.
+fold_colons() {
+  printf '%s' "$1" | sed \
+    -e 's/[[:space:]]*:[[:space:]]*/ — /g' \
+    -e 's/[[:space:]]\{1,\}/ /g' \
+    -e 's/^ //' -e 's/ $//' \
+    -e 's/ —$//' -e 's/^— //'
+}
+
+# Resolve a user-supplied id to the id an EXISTING doc actually uses. Prefers the canonical slug,
+# but falls back to the pre-slug spelling when only that file exists — otherwise slugifying would
+# orphan docs on boards installed before this rule (their filenames are not being migrated: a
+# rename breaks blocked_on cross-references and git history for a cosmetic gain). Creation never
+# calls this — `new`/`import` always slugify, so no new non-conforming file is ever created.
+resolve_id() {
+  local want raw
+  want="$(norm_id "$1")" || return 1
+  if [ -f "$(doc_file "$want")" ] || [ -f "$(arch_file "$want")" ]; then
+    printf '%s' "$want"
+    return
+  fi
+  raw="$(legacy_id "$1")"
+  if [ -f "$(doc_file "$raw")" ] || [ -f "$(arch_file "$raw")" ]; then
+    printf '%s' "$raw"
+    return
+  fi
+  printf '%s' "$want" # neither exists — return canonical so doc_of reports it by its proper name
+}
+
+# The redaction reminder embedded at the top of every generated doc body. A handoff doc is
+# committed to git history, so secrets pasted into it persist. Kept as a function so the coordination
+# and standalone fallback templates stay identical.
+redaction_comment() {
+  echo "<!-- NEVER COMMIT SECRETS. This doc is committed to git history. Redact any keys,"
+  echo "     secrets, passwords, confidential data, or PII. If a credential is truly needed,"
+  echo "     prompt the user and record its NAME (env var / secret-manager ref), never the value. -->"
+}
+
+# Templates live in <board>/templates/. The flat fallback covers a board installed before the
+# restructure (templates sat next to the CLI); when neither exists the callers fall back to an
+# inline heredoc, so a missing template is never fatal.
+tmpl_path() {
+  if [ -f "$DIR/templates/$1" ]; then
+    printf '%s' "$DIR/templates/$1"
+  else
+    printf '%s' "$DIR/$1"
+  fi
+}
+
+# Fill a template's PLACEHOLDER_* tokens with literal values.
+#
+# This must NOT be `sed "s|PLACEHOLDER_NOTE|$note|"`. The value comes from --title/--note, i.e.
+# arbitrary user text: a `|` in it closes the s/// expression early (sed then reads the remainder as
+# a filename and fails), and `&` in a replacement expands to the whole match. The redirection has
+# already truncated the destination by then, so the failure lands as a ZERO-BYTE handoff doc while
+# the command still reports success. Bash's ${var//pat/rep} substitutes literally, needs no external
+# process, and cannot be broken by any character in the value.
+render_tmpl() { # tmpl-path KEY=value...
+  local content
+  content="$(cat "$1")" || return 1
+  shift
+  local kv k v
+  for kv in "$@"; do
+    k="${kv%%=*}"
+    v="${kv#*=}"
+    content="${content//$k/$v}"
+  done
+  printf '%s\n' "$content"
+}
+
+# Release a lease: remove its files then the now-empty dir. rmdir only removes an empty
+# directory, so this never recursively deletes anything unexpected (no `rm -rf`).
+clear_lock() {
+  rm -f "$LOCKS/$1/owner" 2> /dev/null
+  rmdir "$LOCKS/$1" 2> /dev/null || true
+}
+
+# Move an active doc to its archived location (section-aware), preferring git mv so history follows
+# the rename. A no-op if $f is not the section's active doc (e.g. already archived). Falls back to a
+# plain mv when the board lives outside any git worktree (a standalone shared board owned by no repo).
+#
+# Returns 0 when the doc was moved (or there was nothing to move), non-zero when the move failed —
+# and prints the reason. It used to end in `|| true`, which made every failure invisible: the doc
+# kept its `done` frontmatter, stayed in the live directory, and the caller still printed
+# "moved to archive/". `list` reads the live directory, so a closed handoff went on being injected
+# into every session-start board as open work, and someone eventually re-executed a finished item.
+# The `|| true` was there so a board outside any git worktree still works — but the plain-`mv`
+# fallback already covers that, so it only ever masked real failures.
+archive_doc() { # active-doc-path id
+  local f="$1" id="$2" dest err
+  [ "$f" = "$(doc_file "$id")" ] || return 0
+  dest="$(arch_file "$id")"
+  mkdir -p "$(dirname "$dest")" || return 1
+  git -C "$DIR" mv "$f" "$dest" 2> /dev/null && return 0
+  err="$(mv "$f" "$dest" 2>&1)" && return 0
+  printf 'archive failed: %s\n' "$err" >&2
+  return 1
+}
+
+# What every `done` path prints when archive_doc could not move the doc. The release itself already
+# succeeded in frontmatter, so this must not read as "the release failed" — it reads as "the doc is
+# done but still live", which is the one thing the operator has to act on.
+warn_archive_failed() { # id
+  echo "⚠️  $1 is marked done, but its doc could NOT be moved to archive/."
+  echo "    It is still in the live directory, so \`list\` will keep showing it as open work."
+  echo "    Move it manually: git mv $(doc_file "$1") $(arch_file "$1")"
+}
+
+cmd_new() {
+  local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--audience REPO] [--group G] [--severity S] [--note N]}"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --title)
+        title="${2:-}"
+        shift 2
+        ;;
+      --audience)
+        audience="${2:-}"
+        shift 2
+        ;;
+      --group)
+        group="${2:-}"
+        shift 2
+        ;;
+      --severity)
+        severity="${2:-}"
+        shift 2
+        ;;
+      --note)
+        note="${2:-}"
+        shift 2
+        ;;
+      --type)
+        type="${2:-}"
+        shift 2
+        ;;
+      --standalone)
+        type="standalone"
+        shift
+        ;;
+      --orchestrator)
+        type="orchestrator"
+        shift
+        ;;
+      --children)
+        children="${2:-}"
+        shift 2
+        ;;
+      *) shift ;;
+    esac
+  done
+  case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
+  [ -n "$children" ] && [ "$type" != "orchestrator" ] && die "--children only applies to --orchestrator"
+  # --group (or the wired $HANDOFF_GROUP) selects the board section this doc lands in. Overriding the
+  # ambient GROUP here reroutes doc_file/arch_file/sec_index/lock_key for the rest of this command; on
+  # a flat board (no LAYOUT) it is inert and the doc lands at the flat path exactly as before.
+  if [ -n "$group" ]; then
+    GROUP="$(slug "$group")"
+    LOCKS="$(sec_dir)/.locks"
+  fi
+  # files are always <id>-handoff.md and the id is a lowercase-kebab slug of what the caller passed
+  local raw_id="$id"
+  id="$(norm_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  [ -f "$(doc_file "$id")" ] || [ -f "$(arch_file "$id")" ] && die "$id already exists"
+  [ -n "$title" ] || title="$id"
+  title="$(fold_colons "$title")"
+  [ -n "$title" ] || title="$id"
+  # Every other free-text value goes into frontmatter unquoted too, so fold them here — once,
+  # before any branch — rather than in each of the three type branches and their heredoc fallbacks.
+  note="$(fold_colons "$note")"
+  audience="$(fold_colons "$audience")"
+  severity="$(fold_colons "$severity")"
+  local d target
+  d="$(today)"
+  target="$(doc_file "$id")"
+  mkdir -p "$(dirname "$target")" # the section subdir on a subfolder-layout board (a no-op when flat)
+
+  if [ "$type" = "orchestrator" ]; then
+    # An orchestrator: an index over a bundle of related handoffs. Gate-exempt (no lease), no
+    # audience/severity of its own. Children are canonicalized here so `--children rbac-gap` and
+    # `--children rbac-gap-handoff` record the same id; progress is derived at read time, never
+    # stored. A child that does not exist yet is allowed — a bundle is often planned before it is
+    # filed — but `list` reports it as MISSING rather than counting it toward progress.
+    local clist=""
+    clist="$(children_csv "$children")" || die "unusable child id in --children: '$children' (each needs at least one letter or digit)"
+    local tmpl
+    tmpl="$(tmpl_path handoff-orchestrator-template.md)"
+    if [ -f "$tmpl" ]; then
+      render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
+        "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
+        "PLACEHOLDER_CHILDREN=$clist" "PLACEHOLDER_NOTE=$note" > "$target"
+    else
+      {
+        echo "---"
+        echo "id: $id"
+        echo "title: $title"
+        echo "type: orchestrator"
+        echo "status: open"
+        echo "children: [$clist]"
+        echo "created: $d"
+        echo "updated: $d"
+        echo "note: $note"
+        echo "---"
+        echo
+        redaction_comment
+        echo
+        echo "## Bundle"
+        echo
+        echo "## Sequencing"
+        echo
+        echo "## Suggested skills"
+        echo
+      } > "$target"
+    fi
+    echo "Created $target (orchestrator over ${clist:-no children yet}) — no claim needed."
+  elif [ "$type" = "standalone" ]; then
+    # A standalone/reference doc: gate-exempt, self-contained, no audience/severity/lease.
+    local tmpl
+    tmpl="$(tmpl_path handoff-standalone-template.md)"
+    if [ -f "$tmpl" ]; then
+      render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
+        "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
+        "PLACEHOLDER_NOTE=$note" > "$target"
+    else
+      {
+        echo "---"
+        echo "id: $id"
+        echo "title: $title"
+        echo "type: standalone"
+        echo "status: open"
+        echo "created: $d"
+        echo "updated: $d"
+        echo "note: $note"
+        echo "---"
+        echo
+        redaction_comment
+        echo
+        echo "## Summary"
+        echo
+        echo "## Context"
+        echo
+        echo "## Suggested skills"
+        echo
+      } > "$target"
+    fi
+    echo "Created $target (standalone/reference) — no claim needed; edit it freely."
+  else
+    if [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ]; then
+      # Shared board: no single default identity. Use the calling repo's env identity if present,
+      # otherwise require an explicit --audience rather than defaulting to a stale/foreign name.
+      if [ -n "${HANDOFF_REPO:-}" ]; then
+        audience="$HANDOFF_REPO"
+      else die "cross-repo board: pass --audience <repo> (which repo acts next) — a shared board has no default identity"; fi
+    fi
+    local tmpl
+    tmpl="$(tmpl_path handoff-doc-template.md)"
+    if [ -f "$tmpl" ]; then
+      # PLACEHOLDER_* tokens (not {{...}} or <...>) so a prettier/lint pass on the shipped
+      # template never mangles them before `handoff new` fills them in.
+      render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
+        "PLACEHOLDER_AUDIENCE=$audience" "PLACEHOLDER_SEVERITY=$severity" \
+        "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
+        "PLACEHOLDER_NOTE=$note" > "$target"
+    else
+      {
+        echo "---"
+        echo "id: $id"
+        echo "title: $title"
+        echo "type: coordination"
+        echo "status: open"
+        [ -n "$audience" ] && echo "audience: $audience"
+        echo "severity: $severity"
+        echo "created: $d"
+        echo "updated: $d"
+        echo "note: $note"
+        echo "---"
+        echo
+        redaction_comment
+        echo
+        echo "## Context"
+        echo
+        echo "## Verify"
+        echo
+        echo "## Suggested skills"
+        echo
+      } > "$target"
+    fi
+    echo "Created $target — claim it before working: ./handoff claim $id \"...\""
+  fi
+  # Mirror the section into a `group:` frontmatter key for search/roll-up. Only on a grouped board, so
+  # a flat board's docs carry no group line and stay byte-identical to before this feature.
+  grouped && set_field "$target" group "$GROUP"
+  echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
+  cmd_index
+}
+
+# Bring an existing file onto the board as a handoff (default type: standalone). Used to migrate
+# reference docs. Never moves the source (the caller trashes it); we copy + normalize frontmatter.
+cmd_import() {
+  local src="" id="" title="" type="standalone" severity="" note="" group="${HANDOFF_GROUP:-}"
+  src="${1:?usage: handoff import <file> [--id ID] [--title T] [--type standalone|coordination] [--group G] [--severity S] [--note N]}"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id)
+        id="${2:-}"
+        shift 2
+        ;;
+      --group)
+        group="${2:-}"
+        shift 2
+        ;;
+      --title)
+        title="${2:-}"
+        shift 2
+        ;;
+      --type)
+        type="${2:-}"
+        shift 2
+        ;;
+      --severity)
+        severity="${2:-}"
+        shift 2
+        ;;
+      --note)
+        note="${2:-}"
+        shift 2
+        ;;
+      --standalone)
+        type="standalone"
+        shift
+        ;;
+      *) shift ;;
+    esac
+  done
+  [ -f "$src" ] || die "no such file: $src"
+  case "$type" in coordination | standalone) ;; *) die "bad --type: $type (use coordination|standalone)" ;; esac
+  [ -n "$id" ] || id="$(basename "$src" .md)"
+  # norm_id is the only sanitizer: it slugifies to lowercase kebab-case and appends the suffix, so
+  # board files are always <id>-handoff.md. It rejects an id with nothing alphanumeric in it.
+  id="$(norm_id "$id")" || die "could not derive a usable id from $src — pass --id"
+  if [ -n "$group" ]; then
+    GROUP="$(slug "$group")"
+    LOCKS="$(sec_dir)/.locks"
+  fi
+  [ -f "$(doc_file "$id")" ] || [ -f "$(arch_file "$id")" ] && die "$id already exists on the board"
+  # title: --title, else the first markdown H1, else the id
+  [ -n "$title" ] || title="$(sed -n 's/^# //p' "$src" | head -1)"
+  [ -n "$title" ] || title="$id"
+  title="$(fold_colons "$title")"
+  [ -n "$title" ] || title="$id"
+  note="$(fold_colons "$note")"
+  severity="$(fold_colons "$severity")"
+  local d dest
+  d="$(today)"
+  dest="$(doc_file "$id")"
+  mkdir -p "$(dirname "$dest")" # the section subdir on a subfolder-layout board (a no-op when flat)
+
+  if [ "$(head -1 "$src")" = "---" ]; then
+    # Source already has YAML frontmatter — copy it, then upsert the board keys via set_field.
+    cp "$src" "$dest"
+    set_field "$dest" id "$id"
+    set_field "$dest" title "$title"
+    set_field "$dest" type "$type"
+    [ -n "$(meta "$dest" status)" ] || set_field "$dest" status "open"
+    [ -n "$(meta "$dest" created)" ] || set_field "$dest" created "$d"
+    set_field "$dest" updated "$d"
+    [ "$type" = "coordination" ] && [ -n "$severity" ] && set_field "$dest" severity "$severity"
+  else
+    # No frontmatter — prepend a fresh block above the content, verbatim.
+    {
+      echo "---"
+      echo "id: $id"
+      echo "title: $title"
+      echo "type: $type"
+      echo "status: open"
+      [ "$type" = "coordination" ] && echo "severity: ${severity:-medium}"
+      echo "created: $d"
+      echo "updated: $d"
+      echo "note: $note"
+      echo "---"
+      echo
+    } > "$dest"
+    cat "$src" >> "$dest"
+  fi
+  grouped && set_field "$dest" group "$GROUP" # record the section for search; no-op on a flat board
+  echo "Imported $src → $dest (type: $type)."
+  echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
+  cmd_index
+}
+
+cmd_list() {
+  # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
+  # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
+  # cannot see the work" indistinguishable — and this is the reachable case, not a corner one,
+  # because a `handoff list` typed by hand inherits no HANDOFF_GROUP (only the tool hooks carry it).
+  # Silence here is what let a member repo read its own board as empty. Notice goes to stderr so
+  # stdout stays exactly the table its readers parse.
+  if board_is_grouped && [ -z "$GROUP" ]; then
+    echo "handoff: this board is sectioned ($BOARD_GROUPS) and no HANDOFF_GROUP is set," >&2
+    echo "         so nothing below is scoped to you. Re-run as: HANDOFF_GROUP=<section> handoff list" >&2
+  fi
+  printf '%-44s %-9s %-14s %-8s %s\n' ID STATUS AUDIENCE SEVERITY LOCK
+  printf '%-44s %-9s %-14s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
+    "---------" "--------------" "--------" "----"
+  local standalone="" orchestrators=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    local base
+    base="$(basename "$f" .md)"
+    case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+    if is_orchestrator "$f"; then
+      local prog done total out
+      prog="$(child_progress "$f")"
+      done="${prog%%|*}"
+      total="$(printf '%s' "$prog" | cut -d'|' -f2)"
+      out="${prog#*|*|}"
+      orchestrators="${orchestrators}$(printf '%-44s %-9s %s' "$base" "$done/$total done" "${out:-— all children done}")"$'\n'
+      continue
+    fi
+    if is_standalone "$f"; then
+      standalone="${standalone}$(printf '%-44s %-9s %s' "$base" "$(meta "$f" status)" "$(meta "$f" title)")"$'\n'
+      continue
+    fi
+    local kind owner exp
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$base")"
+    local lock='—'
+    case "$kind" in
+      held) lock="🔒 $owner until $(human "$exp")" ;;
+      expired) lock="⚠️  STALE $owner (expired $(human "$exp")) — reclaimable" ;;
+    esac
+    printf '%-44s %-9s %-14s %-8s %s\n' \
+      "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(meta "$f" severity)" "$lock"
+  done < <(each_doc)
+  if [ -n "$orchestrators" ]; then
+    printf '\nOrchestrators (bundles — progress derived from children, no claim needed):\n'
+    printf '%-44s %-9s %s\n' ID PROGRESS OUTSTANDING
+    printf '%s' "$orchestrators"
+  fi
+  if [ -n "$standalone" ]; then
+    printf '\nStandalone / reference (no claim needed):\n'
+    printf '%-44s %-9s %s\n' ID STATUS TITLE
+    printf '%s' "$standalone"
+  fi
+}
+
+cmd_claim() {
+  local id="${1:?usage: handoff claim <id> [note]}"
+  shift || true
+  # accept the short or full id, in any casing; the lease is keyed on the resolved stem
+  local raw_id="$id"
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  local note="${*:-}"
+  # Resolve the doc BEFORE deriving the lock key. The key is a pure function of the id, so an
+  # unresolvable id would otherwise mint a lease for a doc that does not exist.
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  local key
+  key="$(lock_key "$id")" # the lock is keyed on the doc's stem, unique board-wide across sections
+  is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
+  is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
+
+  local kind owner exp
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+  if [ "$kind" = "held" ]; then
+    die "$id is CLAIMED by $owner until $(human "$exp"). Do not work on it — pick another handoff, or ask $owner."
+  fi
+
+  # Atomic: mkdir fails if the directory already exists, so two racing agents
+  # cannot both win the lease. Do not replace this with a frontmatter edit.
+  # .locks/ itself is gitignored and may not exist on a fresh install — create the
+  # parent (non-atomic, fine) so the per-id mkdir (atomic, the real lock) can run.
+  mkdir -p "$LOCKS"
+  if ! mkdir "$LOCKS/$key" 2> /dev/null; then
+    die "$id was just claimed by someone else — re-run 'handoff list'"
+  fi
+
+  local me sess exp_new
+  me="$(whoami_id)"
+  sess="$(session_id)"
+  exp_new="$(($(now) + TTL_HOURS * 3600))"
+  {
+    echo "owner=$me"
+    echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
+    echo "claimed=$(now)"
+    echo "expires=$exp_new"
+    echo "note=$note"
+  } > "$LOCKS/$key/owner"
+
+  if [ "$kind" = "expired" ]; then
+    echo "⚠️  Took over an EXPIRED lease from $owner (expired $(human "$exp"))."
+    log_activity "$f" "lease taken over from $owner (expired $(human "$exp")) by $me"
+  fi
+  echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
+  cmd_index
+}
+
+cmd_touch() {
+  local id="${1:?usage: handoff touch <id>}"
+  id="$(resolve_id "$id")" || die "unusable id: '$1' (needs at least one letter or digit)"
+  local key
+  key="$(lock_key "$id")"
+  local kind owner exp
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+  [ "$kind" = "free" ] && die "$id is not claimed"
+  # rewrite the lease with a fresh expiry, preserving the other fields
+  local t
+  t="$(mktemp)"
+  grep -v '^expires=' "$LOCKS/$key/owner" > "$t"
+  echo "expires=$(($(now) + TTL_HOURS * 3600))" >> "$t"
+  cat "$t" > "$LOCKS/$key/owner"
+  rm -f "$t"
+  echo "Lease on $id extended ${TTL_HOURS}h."
+}
+
+# Every release path ends the same way: drop the lease, then regenerate the index. It is a helper
+# rather than three copies because the standalone and orchestrator branches `return` early and used
+# to skip the `clear_lock` at the function's end — stranding any lease held on a doc that was
+# reclassified into one of those types after being claimed (`claim` refuses both types, so that
+# conversion is the only way a lease gets onto one). The lease then survived until the TTL reap,
+# and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
+finish_release() { # id
+  clear_lock "$(lock_key "$1")"
+  cmd_index
+}
+
+cmd_release() {
+  local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [note]}"
+  shift
+  local raw_id="$id"
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  local status='' note='' verified_by='' blocked_on='' run_verify=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --status)
+        status="${2:?}"
+        shift 2
+        ;;
+      --verified-by)
+        verified_by="${2:?}"
+        shift 2
+        ;;
+      --blocked-on)
+        blocked_on="${2:?}"
+        shift 2
+        ;;
+      --run-verify)
+        run_verify=1
+        shift
+        ;;
+      *)
+        note="$note $1"
+        shift
+        ;;
+    esac
+  done
+  [ -n "$status" ] || die "release needs --status open|blocked|done"
+  case "$status" in open | blocked | done) ;; *) die "bad status: $status" ;; esac
+
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  local me
+  me="$(whoami_id)"
+
+  if is_orchestrator "$f"; then
+    # An orchestrator carries no lease of its own. `done` is the one place the bundle relationship
+    # is enforced: a bundle is finished exactly when every child is finished, so closing it while a
+    # child is still open (or names no file at all) is refused. That check is what stops an
+    # orchestrator from becoming the stale summary doc it exists to replace.
+    local prog pdone ptotal pout
+    prog="$(child_progress "$f")"
+    pdone="${prog%%|*}"
+    ptotal="$(printf '%s' "$prog" | cut -d'|' -f2)"
+    pout="${prog#*|*|}"
+    case "$status" in
+      open)
+        set_field "$f" status open
+        set_field "$f" updated "$(today)"
+        log_activity "$f" "updated (orchestrator, $pdone/$ptotal children done) by $me.${note}"
+        echo "Updated orchestrator $id — $pdone/$ptotal children done.${pout:+ Outstanding: $pout}"
+        ;;
+      done)
+        [ "$ptotal" -gt 0 ] || die "$id has no children — add children: [...] before closing the bundle"
+        [ "$pdone" -eq "$ptotal" ] || die "$id still has outstanding children: $pout"
+        set_field "$f" status done
+        set_field "$f" updated "$(today)"
+        set_field "$f" verified_at "$(today)"
+        log_activity "$f" "bundle complete — all $ptotal children done. Closed by $me.${note}"
+        if archive_doc "$f" "$id"; then
+          echo "✅ Bundle $id complete ($ptotal/$ptotal children done) → archive/."
+        else
+          warn_archive_failed "$id"
+        fi
+        surface_unblocked "$id" # a doc may be blocked on this bundle landing
+        ;;
+      *) die "orchestrators support --status open|done (a bundle has no lease to block on)" ;;
+    esac
+    finish_release "$id"
+    return
+  fi
+
+  if is_standalone "$f"; then
+    # A standalone/reference doc carries no lease and makes no live-code claim, so `done`
+    # just retires it (archive) with no --verified-by. Only open|done apply.
+    case "$status" in
+      open)
+        set_field "$f" status open
+        set_field "$f" updated "$(today)"
+        log_activity "$f" "updated (standalone) by $me.${note}"
+        echo "Updated standalone $id."
+        ;;
+      done)
+        set_field "$f" status done
+        set_field "$f" updated "$(today)"
+        log_activity "$f" "retired (standalone) by $me.${note}"
+        if archive_doc "$f" "$id"; then
+          echo "✅ Retired standalone $id → archive/."
+        else
+          warn_archive_failed "$id"
+        fi
+        # Every path that closes a doc must announce its dependents. This branch is newer than the
+        # unblock feature and originally skipped it, so anything blocked on a standalone deadlocked.
+        surface_unblocked "$id"
+        ;;
+      *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
+    esac
+    finish_release "$id"
+    return
+  fi
+
+  if [ "$status" = "blocked" ]; then
+    [ -n "$blocked_on" ] || die "release --status blocked needs --blocked-on <handoff-id|\"external: ...\"> — what is it waiting on?"
+    # A handoff id blocker is canonicalized to its filename stem; "external: ..." is accepted
+    # unvalidated (that prefix exists precisely for blockers outside the board, which cannot be
+    # validated here) but is still colon-folded on the way in, since it lands in frontmatter as
+    # unquoted YAML: "external: vendor ticket" is stored as "external — vendor ticket". The typed
+    # spelling stays "external: ..." — that is what every doc and the usage string say — and the
+    # em-dash spelling is accepted too, so either form round-trips. No reader depends on the colon:
+    # the hooks take only the first word (${bo%% *} — "external", never an archived id),
+    # surface_unblocked substring-matches the closed id, and list/INDEX only display the value.
+    # A blocker names another doc on this board, so resolve it the same way as a claim target —
+    # otherwise a legacy-named blocker would be recorded under a slug that matches no file.
+    #
+    # Then VALIDATE it. `blocked` is only meaningful if something can later close and release this
+    # doc; an unvalidated blocker deadlocks silently — the doc sits blocked forever and is never
+    # surfaced as unblocked, which is worse than refusing the release outright.
+    case "$blocked_on" in
+      external:* | 'external —'* | 'external -'*) blocked_on="$(fold_colons "$blocked_on")" ;;
+      *)
+        blocked_on="$(resolve_id "$blocked_on")" || die "unusable --blocked-on id: '$blocked_on'"
+        [ "$blocked_on" = "$id" ] && die "$id cannot be blocked on itself — name the other handoff, or use --blocked-on \"external: ...\""
+        # Section-aware: the blocker lives wherever THIS section's docs live. Building the path at
+        # the board root instead (which this check used to do, from before boards had sections)
+        # looks in a directory that holds no docs on a subfolder-layout board, so every blocker id
+        # is rejected and `blocked` becomes unreachable on any grouped board.
+        [ -f "$(doc_file "$blocked_on")" ] || [ -f "$(arch_file "$blocked_on")" ] \
+          || die "no such handoff to block on: $blocked_on (file it first, or use --blocked-on \"external: ...\"). Nothing would ever close it."
+        ;;
+    esac
+    set_field "$f" blocked_on "$blocked_on"
+  fi
+
+  if [ "$status" = "done" ]; then
+    # done is a claim about the LIVE CODE, not about the doc. Require evidence.
+    [ -n "$verified_by" ] || die "release --status done needs --verified-by \"<how you verified against live code>\" (e.g. a test run or file:line). Trust-closing is disabled."
+    local vcmd
+    vcmd="$(meta "$f" verify)"
+    if [ -n "$vcmd" ]; then
+      # SAFE BY DEFAULT: never auto-run a command from a doc (a cross-repo doc is
+      # untrusted). Run only with BOTH an explicit flag AND the install-time opt-in,
+      # and only for a doc whose origin is THIS repo.
+      if [ "$run_verify" = 1 ] && [ "${HANDOFF_ALLOW_VERIFY_CMD:-0}" = 1 ] && doc_is_local "$f"; then
+        echo "Running verify: $vcmd"
+        if ! (cd "$(git rev-parse --show-toplevel 2> /dev/null || echo "$DIR")" && eval "$vcmd"); then
+          die "verify command failed — not closing $id. Fix the code or the command."
+        fi
+        verified_by="$verified_by [verify: exit 0]"
+      else
+        echo "NOTE: this handoff carries a verify: command but it was NOT run"
+        echo "      ($vcmd)"
+        echo "      Run it yourself, or re-release with --run-verify (needs install opt-in HANDOFF_ALLOW_VERIFY_CMD=1 and a local doc)."
+      fi
+    fi
+  fi
+
+  set_field "$f" status "$status"
+  set_field "$f" updated "$(today)"
+  if [ "$status" = "done" ]; then
+    set_field "$f" verified_at "$(today)"
+    log_activity "$f" "done — verified against live code by $me: ${verified_by}.${note}"
+    if archive_doc "$f" "$id"; then
+      echo "✅ $id → done, moved to archive/. verified-by: $verified_by"
+    else
+      warn_archive_failed "$id"
+      echo "    verified-by: $verified_by"
+    fi
+    echo "🔒 This doc is committed to git history — confirm no secrets/keys/passwords/PII remain."
+    surface_unblocked "$id"
+  else
+    log_activity "$f" "$status — released by $me.${note}"
+    echo "Released $id → $status."
+  fi
+  finish_release "$id"
+}
+
+# The effective `repos:` list — the inline flow list AND any block-list items on the lines after
+# it, normalized to space-separated names. meta() only ever sees the key's own line, so a doc
+# written in block style
+#
+#   repos:
+#     - other-repo
+#
+# reads as EMPTY there, i.e. "unset", i.e. local — the gate below failing OPEN for exactly the
+# foreign doc it exists to distrust. Returns nothing when the key is absent or its list is empty.
+repos_of() { # path -> space-separated repo names
+  awk '
+    NR == 1 && $0 == "---" { infm = 1; next }
+    infm && $0 == "---" { exit }
+    infm && /^repos:/ {
+      v = $0; sub(/^repos:[[:space:]]*/, "", v)
+      gsub(/[][,]/, " ", v)
+      printf "%s ", v
+      inlist = 1; next
+    }
+    infm && inlist && /^[[:space:]]+-[[:space:]]*/ {
+      v = $0; sub(/^[[:space:]]+-[[:space:]]*/, "", v)
+      printf "%s ", v; next
+    }
+    infm && /^[^[:space:]]/ { inlist = 0 }
+  ' "$1"
+}
+
+doc_is_local() { # a doc "belongs to" this repo when repos: is unset/empty or NAMES REPO_NAME
+  local f="$1" repos
+  # `repos: []` is what the doc template writes, and an empty list means "unset" — not "some
+  # other repo's list". Testing the raw string treated the two characters "[]" as a foreign
+  # list, which made --run-verify unreachable for every doc `new` creates.
+  repos="$(repos_of "$f" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//')"
+  [ -z "$repos" ] && return 0
+  [ -z "$REPO_NAME" ] && return 0
+  # Whole-name match, not substring: with REPO_NAME=api, a doc scoped to `[api-gateway]` is NOT
+  # this repo's, and must not unlock auto-execution here.
+  case " $repos " in *" $REPO_NAME "*) return 0 ;; *) return 1 ;; esac
+}
+
+surface_unblocked() { # closed_id -> print any open docs (in this section) blocked_on it
+  local closed="$1" closed_lc found=0 g gb
+  # Match case-insensitively. resolve_id returns whichever spelling the filesystem answered to:
+  # the canonical lowercase slug where a case-insensitive filesystem let it match an uppercase
+  # file, the file's own spelling where the legacy fallback found it. So a doc blocked on
+  # ESBINT-285-handoff can carry either spelling depending on where it was written, and an exact
+  # compare silently strands it — never resurfaced, which is the one thing `blocked` exists to do.
+  closed_lc="$(printf '%s' "$closed" | tr '[:upper:]' '[:lower:]')"
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    gb="$(basename "$g" .md)"
+    case "$gb" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+    [ "$(meta "$g" status)" = "blocked" ] || continue
+    case "$(meta "$g" blocked_on | tr '[:upper:]' '[:lower:]')" in *"$closed_lc"*)
+      [ "$found" = 0 ] && echo "Now unblocked (their blocker $closed is done):"
+      found=1
+      echo "  - $gb — $(meta "$g" title)"
+      ;;
+    esac
+  done < <(each_doc)
+  return 0
+}
+
+cmd_reap() { # show (and with --force, clear) expired leases
+  local force="${1:-}"
+  local found=0
+  for d in "$LOCKS"/*/; do
+    [ -d "$d" ] || continue
+    local id
+    id="$(basename "$d")"
+    local kind owner exp
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$id")"
+    [ "$kind" = "expired" ] || continue
+    found=1
+    echo "⚠️  $id — held by $owner, expired $(human "$exp")"
+    if [ "$force" = "--force" ]; then
+      clear_lock "$id"
+      echo "   cleared."
+    fi
+  done
+  [ "$found" = 0 ] && echo "No expired leases."
+  return 0
+}
+
+# Write ONE section's sub-index. Operates on the caller's current GROUP/LOCKS; on a flat board this is
+# $DIR/INDEX.md and the output is byte-identical to before groups existed. Doc links stay `./$base.md`
+# because a sub-index always sits in the same directory as its docs (the group subdir for subfolder,
+# $DIR for prefix/flat), and archive links `./archive/$base.md` for the same reason.
+write_section_index() {
+  local out
+  out="$(sec_index)"
+  mkdir -p "$(dirname "$out")"
+  {
+    echo "<!-- GENERATED by ./handoff index — do not edit by hand. -->"
+    if grouped; then
+      echo "# Handoff Index — $GROUP"
+      echo
+      echo "Section \`$GROUP\` of the shared board${REPO_NAME:+ (viewed as $REPO_NAME)}. Generated $(date '+%Y-%m-%d %H:%M')."
+    else
+      echo "# Handoff Index"
+      echo
+      if [ "$TOPOLOGY" = "cross-repo" ]; then
+        echo "Shared coordination board${REPO_NAME:+ (viewed as $REPO_NAME)}. Generated $(date '+%Y-%m-%d %H:%M')."
+      else
+        echo "Coordination board for ${REPO_NAME:-this repo}. Generated $(date '+%Y-%m-%d %H:%M')."
+      fi
+    fi
+    echo "Claim before you work: \`./handoff claim <id>\`. Protocol: [README.md](./README.md)."
+    echo
+    echo "## Open"
+    echo
+    echo "| Handoff | Status | Acts next | Severity | Updated | Blocked on | Lease |"
+    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      local base
+      base="$(basename "$f" .md)"
+      case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+      # Neither standalone docs nor orchestrators are claimable work — an orchestrator listed here
+      # reads as an unclaimed open task, which is the opposite of what the type means.
+      is_standalone "$f" && continue
+      is_orchestrator "$f" && continue
+      local kind owner exp
+      IFS='|' read -r kind owner exp <<< "$(lock_state "$base")"
+      local lease="—"
+      [ "$kind" = "held" ] && lease="🔒 $owner"
+      [ "$kind" = "expired" ] && lease="⚠️ stale ($owner)"
+      local bo
+      bo="$(meta "$f" blocked_on)"
+      [ -n "$bo" ] && is_archived "${bo%% *}" && bo="$bo ✅ resolved"
+      echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" audience) | $(meta "$f" severity) | $(meta "$f" updated) | ${bo:-—} | $lease |"
+    done < <(each_doc)
+    echo
+    # Orchestrators: bundle indexes. Progress is derived from the children on every regeneration,
+    # exactly as `handoff list` does it, so the index cannot drift from the children's real state.
+    local has_orch=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      local base
+      base="$(basename "$f" .md)"
+      case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+      is_orchestrator "$f" || continue
+      if [ "$has_orch" = 0 ]; then
+        has_orch=1
+        echo "## Orchestrators (bundles — no claim needed)"
+        echo
+        echo "| Bundle | Progress | Outstanding |"
+        echo "| --- | --- | --- |"
+      fi
+      local prog pdone ptotal pout
+      prog="$(child_progress "$f")"
+      pdone="${prog%%|*}"
+      ptotal="$(printf '%s' "$prog" | cut -d'|' -f2)"
+      pout="${prog#*|*|}"
+      echo "| [$(meta "$f" title)](./$base.md) | $pdone/$ptotal done | ${pout:-— all children done} |"
+    done < <(each_doc)
+    [ "$has_orch" = 1 ] && echo
+    # Standalone / reference docs: self-contained, gate-exempt, no lease. Listed apart so they
+    # are not mistaken for claimable work.
+    local has_standalone=0
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      local base
+      base="$(basename "$f" .md)"
+      case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+      is_standalone "$f" || continue
+      if [ "$has_standalone" = 0 ]; then
+        has_standalone=1
+        echo "## Standalone / reference (no claim needed)"
+        echo
+        echo "| Handoff | Status | Updated |"
+        echo "| --- | --- | --- |"
+      fi
+      echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" updated) |"
+    done < <(each_doc)
+    [ "$has_standalone" = 1 ] && echo
+    echo "## Archive (done / superseded)"
+    echo
+    echo "| Handoff | Status | Verified |"
+    echo "| --- | --- | --- |"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      local base
+      base="$(basename "$f" .md)"
+      echo "| [$(meta "$f" title)](./archive/$base.md) | \`$(meta "$f" status)\` | $(meta "$f" verified_at) |"
+    done < <(each_archive)
+  } > "$out"
+}
+
+# The groups the roll-up covers: the board's declared GROUPS plus the caller's own, order-preserving,
+# de-duplicated. Defensive union in case a repo's section is not yet listed in the shared config.
+groups_for_rollup() {
+  {
+    each_group
+    [ -n "$GROUP" ] && printf '%s\n' "$GROUP"
+  } | awk 'NF && !seen[$0]++'
+}
+
+# Board-relative "./path" link from the roll-up (which lives at $DIR/INDEX.md) to any board file.
+rel_link() { printf './%s' "${1#"$DIR"/}"; }
+
+# Regenerate the board-root roll-up: one section per hosted group, each linking to its sub-index and
+# listing its open items. Read-only across sections (each group's docs are maintained by its own repo).
+rollup_index() {
+  local out="$DIR/INDEX.md" g
+  {
+    echo "<!-- GENERATED by ./handoff index — do not edit by hand. -->"
+    echo "# Handoff Index — all groups"
+    echo
+    echo "Shared board, one sub-indexed section per group. Generated $(date '+%Y-%m-%d %H:%M')."
+    echo "Work in your own group's section; claim before you work: \`./handoff claim <id>\`. Protocol: [README.md](./README.md)."
+    echo
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      echo "## $g"
+      echo
+      echo "Sub-index: [$(rel_link "$(sec_index "$g")")]($(rel_link "$(sec_index "$g")"))"
+      echo
+      echo "| Handoff | Status | Acts next | Severity | Updated | Lease |"
+      echo "| --- | --- | --- | --- | --- | --- |"
+      local glocks
+      glocks="$(sec_dir "$g")/.locks"
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        local base
+        base="$(basename "$f" .md)"
+        is_standalone "$f" && continue
+        is_orchestrator "$f" && continue
+        local kind owner exp
+        IFS='|' read -r kind owner exp <<< "$(lock_state "$base" "$glocks")"
+        local lease="—"
+        [ "$kind" = "held" ] && lease="🔒 $owner"
+        [ "$kind" = "expired" ] && lease="⚠️ stale ($owner)"
+        echo "| [$(meta "$f" title)]($(rel_link "$f")) | \`$(meta "$f" status)\` | $(meta "$f" audience) | $(meta "$f" severity) | $(meta "$f" updated) | $lease |"
+      done < <(each_doc "$g")
+      echo
+    done < <(groups_for_rollup)
+  } > "$out"
+}
+
+cmd_index() {
+  # A board-level invocation on a grouped board (no HANDOFF_GROUP in scope) owns only the roll-up —
+  # writing a section index would clobber $DIR/INDEX.md with a flat listing of nothing.
+  if board_is_grouped && [ -z "$GROUP" ]; then
+    rollup_index
+    echo "Wrote $DIR/INDEX.md"
+    return
+  fi
+  write_section_index
+  # A grouped board also gets a board-root roll-up across every section; a flat board's sub-index IS
+  # the board root, so there is nothing extra to write.
+  grouped && rollup_index
+  echo "Wrote $(sec_index)"
+}
+
+case "${1:-list}" in
+  list) cmd_list ;;
+  new)
+    shift
+    cmd_new "$@"
+    ;;
+  import)
+    shift
+    cmd_import "$@"
+    ;;
+  claim)
+    shift
+    cmd_claim "$@"
+    ;;
+  touch)
+    shift
+    cmd_touch "$@"
+    ;;
+  release)
+    shift
+    cmd_release "$@"
+    ;;
+  reap)
+    shift
+    cmd_reap "$@"
+    ;;
+  index) cmd_index ;;
+  *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
+esac

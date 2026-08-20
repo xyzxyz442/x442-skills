@@ -1,0 +1,43 @@
+{
+  "skill_name": "x442-repair-handoff",
+  "skill_path": "skills/engineering/repair-handoff",
+  "verify_script": "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh",
+  "notes": "repair-handoff is a prose skill that ships no verifier of its own — by design its success condition is that setup-handoff's verify-setup-handoff.sh goes green again and the board's own state reconciles. So this grader wraps THAT verifier and adds one targeted assertion per case. The `healthy` case is directly gradeable (repair is a no-op on a healthy board). The `stale-stamp`, `orphaned-lease`, and `missing-index` cases are repair TARGETS: their fixtures are drifted INPUTS, so grading the raw fixture fails or warns by design — an agent must run repair-handoff first, then the produced dir is re-graded. `not-wired` is a refusal case: the skill must decline and redirect to setup-handoff rather than scaffold a board. Same pre-state/post-state split as repair-graph-hooks.",
+  "evals": [
+    {
+      "id": "healthy",
+      "kind": "post-state",
+      "prompt": "Check the handoff board in this repo and repair anything that has drifted.",
+      "fixture": "fixtures/healthy",
+      "expected_output": "A fully wired, healthy board. repair-handoff must find nothing to fix and change nothing: verify-setup-handoff.sh still reports 0 failed, the payload stamp matches, and the working tree stays clean (idempotent no-op). Directly gradeable without an agent."
+    },
+    {
+      "id": "stale-stamp",
+      "kind": "pre-state",
+      "prompt": "This repo was wired a while ago and the handoff board may be out of date. Check it and bring it current.",
+      "fixture": "fixtures/stale-stamp",
+      "expected_output": "Repair TARGET (agent-required): .agents/handoff/.version records payload v0 while the skill ships v1, so verify-setup-handoff.sh reports a payload-drift [warn]. After repair-handoff re-runs the installer, the stamp matches what the skill ships and the drift warning is gone. Grading the raw fixture shows the warning by design."
+    },
+    {
+      "id": "orphaned-lease",
+      "kind": "pre-state",
+      "prompt": "Something on the handoff board is holding a lease I cannot release. Sort it out.",
+      "fixture": "fixtures/orphaned-lease",
+      "expected_output": "Repair TARGET (agent-required): .locks/deleted-doc-handoff holds a still-valid lease whose handoff doc does not exist, so `handoff reap` will not touch it (it filters on expiry) and the session hook reports it under 'Board needs attention'. After repair-handoff clears it ON APPROVAL, the lock directory is gone and no doc was deleted. Grading the raw fixture shows the orphan by design."
+    },
+    {
+      "id": "missing-index",
+      "kind": "pre-state",
+      "prompt": "The handoff INDEX is gone. Regenerate the board so it lists correctly again.",
+      "fixture": "fixtures/missing-index",
+      "expected_output": "Repair TARGET (agent-required): INDEX.md was deleted while handoff docs remain, so the session hook reports it and nothing lists the board. After repair-handoff runs `handoff index`, INDEX.md exists again and names the surviving doc. Grading the raw fixture fails the index assertion by design."
+    },
+    {
+      "id": "not-wired",
+      "kind": "post-state",
+      "prompt": "Repair the handoff board in this repo.",
+      "fixture": "fixtures/not-wired",
+      "expected_output": "Refusal case: there is no .agents/handoff/ at all, so this repo was never wired. repair-handoff must STOP and redirect to setup-handoff rather than scaffold a board. Success is that no board was fabricated — no .agents/handoff/ directory, no handoff CLI, no INDEX.md."
+    }
+  ]
+}
