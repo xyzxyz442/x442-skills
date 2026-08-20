@@ -4,31 +4,31 @@
 
 ### 🚀 Features
 
-* **feature:** detect any OpenAI-compatible embedding backend ([e942e6a](https://github.com/xyzxyz442/x442-skills/commit/e942e6a4476d5ae65cc48900830ad9b8cd0cd20a))
-* **feature:** warn on embedding-config drift at session start ([d7fc319](https://github.com/xyzxyz442/x442-skills/commit/d7fc319696b9c34743c5421f8944eefca37a0e4b))
+- **feature:** detect any OpenAI-compatible embedding backend ([e942e6a](https://github.com/xyzxyz442/x442-skills/commit/e942e6a4476d5ae65cc48900830ad9b8cd0cd20a))
+- **feature:** warn on embedding-config drift at session start ([d7fc319](https://github.com/xyzxyz442/x442-skills/commit/d7fc319696b9c34743c5421f8944eefca37a0e4b))
 
 ### 🐞 Bug Fixes
 
-* **bug:** scope code-review-graph install to the wired tools ([ef1bfb1](https://github.com/xyzxyz442/x442-skills/commit/ef1bfb122b68b1bdc8155437afbff8893313c0a2))
-* **bug:** scope MCP re-registration in repair-graph-hooks ([9ac6ff1](https://github.com/xyzxyz442/x442-skills/commit/9ac6ff1c01e08588b67a6873883b212e243cff13))
+- **bug:** scope code-review-graph install to the wired tools ([ef1bfb1](https://github.com/xyzxyz442/x442-skills/commit/ef1bfb122b68b1bdc8155437afbff8893313c0a2))
+- **bug:** scope MCP re-registration in repair-graph-hooks ([9ac6ff1](https://github.com/xyzxyz442/x442-skills/commit/9ac6ff1c01e08588b67a6873883b212e243cff13))
 
 ### 📚 Documentation
 
-* **docs:** document backend choice, the health notice, and fix stale routing ([aac7a27](https://github.com/xyzxyz442/x442-skills/commit/aac7a272e94b647fc980bea75de152c3b39516ff))
-* **docs:** fix both duplicate-refresh-owner commands in the build guide ([94847aa](https://github.com/xyzxyz442/x442-skills/commit/94847aa4d135fa3145d83532b71c7838abf844d4))
-* **docs:** sync the engineering-suite handoff for v0.10.0 ([8d68814](https://github.com/xyzxyz442/x442-skills/commit/8d688143db320a00dc454e0c24b3b9cbce668282))
-* **docs:** sync the engineering-suite handoff for v0.9.0 ([6a85127](https://github.com/xyzxyz442/x442-skills/commit/6a851276b88b4447afc9370e145b7ade3c798757))
+- **docs:** document backend choice, the health notice, and fix stale routing ([aac7a27](https://github.com/xyzxyz442/x442-skills/commit/aac7a272e94b647fc980bea75de152c3b39516ff))
+- **docs:** fix both duplicate-refresh-owner commands in the build guide ([94847aa](https://github.com/xyzxyz442/x442-skills/commit/94847aa4d135fa3145d83532b71c7838abf844d4))
+- **docs:** sync the engineering-suite handoff for v0.10.0 ([8d68814](https://github.com/xyzxyz442/x442-skills/commit/8d688143db320a00dc454e0c24b3b9cbce668282))
+- **docs:** sync the engineering-suite handoff for v0.9.0 ([6a85127](https://github.com/xyzxyz442/x442-skills/commit/6a851276b88b4447afc9370e145b7ade3c798757))
 
 ### 🧪 Tests
 
-* **test:** sync graph-hooks copies with the session-context notice ([3f9d891](https://github.com/xyzxyz442/x442-skills/commit/3f9d89197cf5685607b3526538133711ab63fa4f))
-* **test:** sync graph-hooks fixtures with the new core payload ([ba4e77d](https://github.com/xyzxyz442/x442-skills/commit/ba4e77d1e032cc1266c327012ea3902df332ba13))
+- **test:** sync graph-hooks copies with the session-context notice ([3f9d891](https://github.com/xyzxyz442/x442-skills/commit/3f9d89197cf5685607b3526538133711ab63fa4f))
+- **test:** sync graph-hooks fixtures with the new core payload ([ba4e77d](https://github.com/xyzxyz442/x442-skills/commit/ba4e77d1e032cc1266c327012ea3902df332ba13))
 
 ### 🧹 Miscellaneous Chores
 
-* **config:** point the graph MCP read path at lm-studio ([15de3fc](https://github.com/xyzxyz442/x442-skills/commit/15de3fcee1d3a02d4c949ba694f92187ffa26a01))
-* **deps:** bump release-it to 21.0.2 ([b078bfd](https://github.com/xyzxyz442/x442-skills/commit/b078bfd856e116ecef59bb50658cf734775c8923))
-* **deps:** update ip-address version constraints in workspace configuration ([187dfdd](https://github.com/xyzxyz442/x442-skills/commit/187dfdd5805d6e5ca364528a62a569ce54b9a0a6))
+- **config:** point the graph MCP read path at lm-studio ([15de3fc](https://github.com/xyzxyz442/x442-skills/commit/15de3fcee1d3a02d4c949ba694f92187ffa26a01))
+- **deps:** bump release-it to 21.0.2 ([b078bfd](https://github.com/xyzxyz442/x442-skills/commit/b078bfd856e116ecef59bb50658cf734775c8923))
+- **deps:** update ip-address version constraints in workspace configuration ([187dfdd](https://github.com/xyzxyz442/x442-skills/commit/187dfdd5805d6e5ca364528a62a569ce54b9a0a6))
 
 ## [0.9.0](https://github.com/xyzxyz442/x442-skills/compare/v0.8.0...v0.9.0) (2026-08-04)
 
@@ -65,8 +65,8 @@
 ### 🧹 Miscellaneous Chores
 
 - **deps:** upgrade release-it and add advisory overrides ([b2f2b3c](https://github.com/xyzxyz442/x442-skills/commit/b2f2b3c9c6a93accd901ef4b2459b3d33a47599f))
-- **setup:** resync the cross-repo handoff block after the fecs split ([8edfa9c](https://github.com/xyzxyz442/x442-skills/commit/8edfa9cd6ff0d366ac8c53c0a4b91523b14bba1e))
-- **setup:** wire this repo into the esbm cross-repo handoff board ([e52fa5c](https://github.com/xyzxyz442/x442-skills/commit/e52fa5ca8c88f2f89ab13d27987a0bbe9b23e6c4))
+- **setup:** resync the cross-repo handoff block after a group split ([8edfa9c](https://github.com/xyzxyz442/x442-skills/commit/8edfa9cd6ff0d366ac8c53c0a4b91523b14bba1e))
+- **setup:** wire this repo into a shared cross-repo handoff board ([e52fa5c](https://github.com/xyzxyz442/x442-skills/commit/e52fa5ca8c88f2f89ab13d27987a0bbe9b23e6c4))
 
 ## [0.7.0](https://github.com/xyzxyz442/x442-skills/compare/v0.6.0...v0.7.0) (2026-07-26)
 
