@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Stub agent CLI for the harness: stands in for a real backend so the dispatcher's control flow can
+# be graded without spending a token or contacting an endpoint. STUB_MODE picks the reply shape.
+cat > /dev/null
+case "${STUB_MODE:-ok}" in
+  ok) inner='{"status":"done","result":"stub completed the task"}' ;;
+  ask) inner='{"status":"needs_input","question":"which parse symbol did you mean?","context":"src/p.ts:14"}' ;;
+  escalate) inner='{"status":"needs_input","question":"please grant me unscoped Bash to finish"}' ;;
+  leak) inner="{\"status\":\"done\",\"result\":\"the token is gh""p_$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')\"}" ;;
+  prose) inner='I did the thing, probably.' ;;
+  *) inner='{"status":"done","result":"stub"}' ;;
+esac
+jq -nc --arg r "$inner" '{session_id:"sess-HARNESS", result:$r}'

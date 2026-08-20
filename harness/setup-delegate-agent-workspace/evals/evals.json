@@ -1,0 +1,56 @@
+{
+  "skill_name": "x442-setup-delegate-agent",
+  "skill_path": "skills/personal/setup-delegate-agent",
+  "verify_script": "skills/personal/setup-delegate-agent/scripts/verify-delegate-agent.sh",
+  "evals": [
+    {
+      "id": "fresh",
+      "kind": "post-state",
+      "prompt": "Set up delegation in this repo so mechanical work can go to the local agent instead of burning this session's quota.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "The payload, adapters and resolver land in .agents/bin/ and are executable, the broker subagent lands in .claude/agents/, a single fully-rendered delegate block appears in AGENTS.md listing every resolved agent with its party class, the consent gate is wired, and the ignore entries are added. The verifier reports 0 failed."
+    },
+    {
+      "id": "preserve-existing",
+      "kind": "post-state",
+      "prompt": "Wire up delegation here. There is already a settings file and an AGENTS.md with content; leave both intact.",
+      "fixture": "fixtures/preserve-existing",
+      "expected_output": "The pre-existing AGENTS.md prose and the unrelated PreToolUse hook both survive verbatim, alongside the new delegate block and consent-gate hook."
+    },
+    {
+      "id": "third-party",
+      "kind": "post-state",
+      "prompt": "Set up delegation. One of the configured agents is a hosted gateway.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "The block classifies the hosted agent as third-party, states that code sent to it reaches someone who cannot already see it, and renders the predicate WITHOUT the sensitivity clause."
+    },
+    {
+      "id": "narrowing-repo",
+      "kind": "post-state",
+      "prompt": "Set up delegation. This repo's committed config restricts which agents may be used and adds protected paths.",
+      "fixture": "fixtures/narrowing-repo",
+      "expected_output": "Only the allowed agent survives the cascade, the repo's neverDelegate patterns are unioned onto the built-in floor, and the block lists only the surviving agent."
+    },
+    {
+      "id": "precondition-no-agents-md",
+      "kind": "post-state",
+      "prompt": "Set up delegation in this repo.",
+      "fixture": "fixtures/precondition-no-agents-md",
+      "expected_output": "The installer refuses because there is no AGENTS.md and fabricates nothing."
+    },
+    {
+      "id": "dispatch-discipline",
+      "kind": "behavioral",
+      "prompt": "Delegate a bulk rename to the cheap agent and report the outcome.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Against a stub backend: an unapproved dispatch is refused; a recorded approval permits one; changing the allowlist after approval bounces; a brief naming a never-delegate path is refused; a brief carrying a credential is blocked; a result carrying a credential is blocked before reaching context; an ask-back surfaces as status question; a scope request is refused rather than forwarded; and the round cap bounces the fourth question."
+    },
+    {
+      "id": "committed-layer-cannot-define",
+      "kind": "post-state",
+      "prompt": "This repo's committed config tries to declare its own agent.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "The cascade refuses to let a layer inside a git work tree define agents, the declared agent never appears in the roster, and the reason names the escalation it prevents."
+    }
+  ]
+}

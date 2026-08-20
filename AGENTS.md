@@ -79,10 +79,17 @@ Rules:
 | `engineering`  | `repair-handoff`              | `experimental` | Smoke-test the handoff CLI, then re-check, validate, and repair the board wiring and board state (index drift, orphaned leases, doc frontmatter, section resolution). Chains after `setup-handoff`.                                                                                                   |
 | `engineering`  | `register-cross-repo-handoff` | `experimental` | Declare groups of peer repos in a per-workspace `.handoff-repos.json` cascade (user → workspace → subdir), then sync to scaffold a standalone shared board owned by no repo and wire every member to its own sub-indexed section (subfolder or prefix layout). No seed. Chains after `setup-handoff`. |
 | `productivity` | `release-announcement`        | `experimental` | Turn a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email), leading with user impact rather than the file diff. Can emit a second language.                                                                                        |
+| `personal`     | `register-delegate-agents`    | `experimental` | Manage the `.agents/delegate.json` cascade that decides which cheaper agents a repo may delegate to — declare agents in an uncommittable layer, narrow per repo, set the primary assistant. Chains before `setup-delegate-agent`.                                                                     |
+| `personal`     | `setup-delegate-agent`        | `experimental` | Install the dispatcher, per-vendor adapters, consent gate and credential scanning, and render an `AGENTS.md` routing block from the agents the cascade permits. Chains after `register-delegate-agents`, before `run-delegate-agent`.                                                                 |
+| `personal`     | `run-delegate-agent`          | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed delegation setup: the user approves before anything is dispatched, and the sub-agent can ask back rather than guess. Chains after `setup-delegate-agent`.                                                          |
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
 skill's frontmatter `name` (e.g. `initial-project/` → `name: x442-initial-project`).
+
+`personal/` skills depend on one machine's setup and are **not installed by default** — the link
+scripts skip them unless you pass `--personal` (e.g. `scripts/link-claude-skills.sh --personal`),
+so the default install stays safe to run on any checkout.
 
 ## House rules
 

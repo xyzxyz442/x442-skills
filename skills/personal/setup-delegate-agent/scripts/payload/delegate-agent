@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# delegate-agent — run ONE configured agent CLI as a separate process, with a scrubbed environment.
+#
+#   delegate-agent --agent NAME --spec SPEC_JSON_FILE
+#
+# Resolves the agent from the .agents/delegate.json cascade, asks that agent's adapter to build the
+# argv, strips credentials from the environment, and execs the CLI. Prompt arrives on stdin.
+#
+# A separate process is the whole mechanism: an agent CLI resolves one endpoint per process, so a
+# second tier needs a second process with a different environment. Nothing here leaks into the
+# parent session.
+
+set -euo pipefail
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RESOLVER="${HERE}/resolve-backends.py"
+ADAPTERS="${HERE}/adapters"
+
+die() {
+  echo "delegate-agent: $1" >&2
+  exit "${2:-78}"
+}
+
+AGENT=""
+SPEC_FILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --agent)
+      AGENT="$2"
+      shift 2
+      ;;
+    --spec)
+      SPEC_FILE="$2"
+      shift 2
+      ;;
+    *) die "unknown option $1" 64 ;;
+  esac
+done
+[ -n "$SPEC_FILE" ] && [ -r "$SPEC_FILE" ] || die "--spec FILE is required and must be readable" 64
+command -v jq > /dev/null 2>&1 || die "missing dependency 'jq'" 69
+[ -f "$RESOLVER" ] || die "resolver not found at $RESOLVER — re-run setup-delegate-agent" 69
+
+# Refuse to nest before doing any work: a delegate must not shell out to another delegate.
+# Without this a model that rediscovers this script can fork indefinitely.
+if [ "${DELEGATE_DEPTH:-0}" -ge 1 ]; then
+  die "refusing to nest (DELEGATE_DEPTH=${DELEGATE_DEPTH})"
+fi
+export DELEGATE_DEPTH=$((${DELEGATE_DEPTH:-0} + 1))
+
+RESOLVED="$(python3 "$RESOLVER" --scope "$PWD" 2> /dev/null)" \
+  || die "delegation config did not resolve — run: python3 $RESOLVER --scope \"$PWD\""
+[ -n "$AGENT" ] || AGENT="$(printf '%s' "$RESOLVED" | jq -r '.default // empty')"
+[ -n "$AGENT" ] || die "no --agent given and no default set in this scope"
+
+A="$(printf '%s' "$RESOLVED" | jq -c --arg n "$AGENT" '.agents[] | select(.name==$n)')"
+[ -n "$A" ] || die "agent '$AGENT' is not permitted in this scope (permitted: $(printf '%s' "$RESOLVED" | jq -r '[.agents[].name]|join(", ")'))"
+
+get() { printf '%s' "$A" | jq -r "$1 // empty"; }
+ADAPTER="$(get '.adapter')"
+COMMAND="$(get '.command')"
+CONFIG_DIR="$(get '.config_dir')"
+BASE_URL="$(get '.base_url')"
+[ -f "${ADAPTERS}/${ADAPTER}.sh" ] || die "no adapter for '$ADAPTER'"
+
+# Merge the agent's resolved facts into the caller's spec so the adapter sees one object.
+SPEC="$(jq -c -s '.[0] * .[1]' "$SPEC_FILE" <(printf '%s' "$A"))"
+
+# ------------------------------------------------------------------- credential scrubbing ---
+# A delegated process has no business holding this machine's secrets. Strip every credential-shaped
+# variable from the child environment; the CLI's own config dir supplies whatever it legitimately
+# needs. This is the one part of the "no secret reaches a sub-agent" rule that is fully enforceable
+# here, so it is done unconditionally rather than being made configurable.
+UNSET_ARGS=()
+while IFS='=' read -r k _; do
+  case "$k" in
+    *_TOKEN | *_KEY | *_SECRET | *_PASSWORD | *_PASSWD | *_CREDENTIALS | AWS_* | GITHUB_TOKEN | GH_TOKEN)
+      UNSET_ARGS+=("-u" "$k")
+      ;;
+  esac
+done < <(env)
+
+# Keep the one variable this agent legitimately needs, if it named one.
+KEEP="$(get '.token_env')"
+if [ -n "$KEEP" ]; then
+  FILTERED=()
+  skip_next=0
+  for i in "${!UNSET_ARGS[@]}"; do
+    if [ "$skip_next" -eq 1 ]; then
+      skip_next=0
+      continue
+    fi
+    if [ "${UNSET_ARGS[$i]}" = "-u" ] && [ "${UNSET_ARGS[$((i + 1))]}" = "$KEEP" ]; then
+      skip_next=1
+      continue
+    fi
+    FILTERED+=("${UNSET_ARGS[$i]}")
+  done
+  UNSET_ARGS=("${FILTERED[@]+"${FILTERED[@]}"}")
+fi
+
+# ------------------------------------------------------------------------------ containment ---
+if [ -n "$CONFIG_DIR" ]; then
+  [ -d "$CONFIG_DIR" ] || die "agent '$AGENT' names configDir '$CONFIG_DIR', which does not exist"
+  export CLAUDE_CONFIG_DIR="$CONFIG_DIR"
+elif [ "$ADAPTER" = "claude" ]; then
+  export CLAUDE_CONFIG_DIR="${DELEGATE_CONFIG_DIR:-${HOME}/.delegate-agent/${AGENT}}"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+fi
+[ -n "$BASE_URL" ] && [ -z "$CONFIG_DIR" ] && export ANTHROPIC_BASE_URL="$BASE_URL"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1
+
+# Read argv line by line rather than with mapfile: macOS ships bash 3.2, where mapfile does
+# not exist, and `env bash` resolves to it. Every script here must stay 3.2-compatible.
+ARGV=()
+while IFS= read -r _line; do
+  ARGV+=("$_line")
+done < <(printf '%s' "$SPEC" | bash "${ADAPTERS}/${ADAPTER}.sh" build)
+[ "${#ARGV[@]}" -gt 0 ] || die "adapter '$ADAPTER' produced no arguments"
+
+exec env "${UNSET_ARGS[@]+"${UNSET_ARGS[@]}"}" "$COMMAND" "${ARGV[@]}"

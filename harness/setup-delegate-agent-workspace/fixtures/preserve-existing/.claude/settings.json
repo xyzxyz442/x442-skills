@@ -1,0 +1,11 @@
+{
+  "enabledMcpjsonServers": ["some-server"],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [{ "type": "command", "command": "bash ./unrelated-hook.sh" }]
+      }
+    ]
+  }
+}

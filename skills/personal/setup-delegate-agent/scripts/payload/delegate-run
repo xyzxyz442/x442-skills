@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# delegate-run — dispatch one bounded task to a configured agent.
+#
+#   delegate-run --approve TASK_ID --class CLASS [--agent A] [--allow LIST]   # record consent
+#   delegate-run --task FILE --approved TASK_ID [options]                     # dispatch
+#   delegate-run --prompt "..." --approved TASK_ID [options]
+#   delegate-run --resume SESSION --prompt "answer" --approved TASK_ID        # answer an ask-back
+#
+# Prints ONE line of JSON. Everything verbose stays on disk, so the orchestrator's context never
+# sees the output you delegated in order not to read.
+#
+# Exit codes: 0 ok · 64 usage · 65 no result · 66 question · 69 missing dep · 70 agent error
+#             75 timeout · 77 misrouted · 78 config/consent
+
+set -euo pipefail
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RESOLVER="${HERE}/resolve-backends.py"
+ADAPTERS="${HERE}/adapters"
+AGENT_BIN="${HERE}/delegate-agent"
+
+die() {
+  echo "delegate-run: $1" >&2
+  exit "${2:-64}"
+}
+emit() { jq -nc "$@"; }
+
+command -v jq > /dev/null 2>&1 || die "missing dependency 'jq' (brew install jq)" 69
+command -v python3 > /dev/null 2>&1 || die "missing dependency 'python3'" 69
+
+# GNU coreutils `timeout` is absent on a stock macOS. Rather than make it a hard dependency, fall
+# back to a watchdog: a dispatch without a wall-clock kill is the failure mode where a model that
+# loses the tool-call format spins until something else notices.
+run_limited() {
+  # run_limited SECS STDIN_FILE CMD...
+  #
+  # stdin is passed as a PATH, not inherited. Backgrounding with `&` detaches stdin to /dev/null,
+  # so a redirect on the caller silently produced an empty prompt — and only on this path, since
+  # the GNU `timeout` branch inherits stdin normally and would have masked it.
+  local secs="$1" input="$2"
+  shift 2
+  if command -v timeout > /dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=30s "$secs" "$@" < "$input"
+    return $?
+  elif command -v gtimeout > /dev/null 2>&1; then
+    gtimeout --signal=TERM --kill-after=30s "$secs" "$@" < "$input"
+    return $?
+  fi
+  "$@" < "$input" &
+  local pid=$!
+  (
+    sleep "$secs"
+    kill -TERM "$pid" 2> /dev/null
+    sleep 30
+    kill -KILL "$pid" 2> /dev/null
+  ) &
+  local wd=$!
+  local rc=0
+  wait "$pid" 2> /dev/null || rc=$?
+  kill "$wd" 2> /dev/null || true
+  wait "$wd" 2> /dev/null || true
+  return "$rc"
+}
+
+# ------------------------------------------------------------------------------- secrets ---
+# Fail-closed by contract, and provably so. Two traps make a naive implementation useless:
+#
+#   1. trivy's secret scanner SKIPS .md files. Briefs are markdown, so scanning one in place
+#      always reports clean — a scan that tests nothing while looking like it passed. Every
+#      target is therefore copied to a .txt before scanning.
+#   2. A missing, broken, or misconfigured scanner is indistinguishable from a clean result.
+#      So each run first scans a canary that MUST be detected; if it is not, the scanner is not
+#      working and the dispatch is refused rather than waved through.
+#
+# Known coverage limit: trivy's default ruleset does not flag bare AWS access-key pairs. This is a
+# net, not a wall — it is the second line of defence behind never-delegate paths and env scrubbing.
+scan_secrets() {
+  local target="$1" label="$2"
+  command -v trivy > /dev/null 2>&1 || {
+    emit --arg l "$label" '{status:"blocked", reason:("secret scanner unavailable, refusing to " + $l + " unscanned — install trivy")}'
+    exit 78
+  }
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  # Canary: built at runtime so no literal credential ever appears in this file.
+  local canary
+  # 18 random bytes render as exactly 36 hex chars, so nothing has to truncate the stream. A
+  # `| head -c 36` here would SIGPIPE its producer, and under `set -o pipefail` that silently
+  # kills the whole dispatch — the scan would never run and the failure would look like success.
+  canary="gh""p_$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')"
+  printf 'token: %s\n' "$canary" > "${tmp}/canary.txt"
+  if [ "$(_trivy_count "${tmp}/canary.txt")" -eq 0 ]; then
+    emit --arg l "$label" '{status:"blocked", reason:("secret scanner is present but detected nothing in a known-positive canary, refusing to " + $l + " — the scanner is misconfigured")}'
+    exit 78
+  fi
+
+  cp "$target" "${tmp}/scan.txt"
+  local n
+  n="$(_trivy_count "${tmp}/scan.txt")"
+  [ "$n" -eq 0 ] && return 0
+  local kinds
+  kinds="$(trivy fs --scanners secret --quiet --format json "${tmp}/scan.txt" 2> /dev/null \
+    | jq -r '[.Results[]?.Secrets[]?.RuleID] | unique | join(", ")' 2> /dev/null)"
+  emit --arg l "$label" --arg k "$kinds" --argjson n "$n" \
+    '{status:"blocked", reason:("secret detected, refusing to " + $l), findings:$n, rules:$k}'
+  exit 78
+}
+
+_trivy_count() {
+  trivy fs --scanners secret --quiet --format json "$1" 2> /dev/null \
+    | jq '[.Results[]?.Secrets[]?] | length' 2> /dev/null || echo 0
+}
+
+ROOT="${DELEGATE_ROOT:-$(git rev-parse --show-toplevel 2> /dev/null || pwd)}"
+STATE="${ROOT}/.agents/delegate"
+DISPATCH="${STATE}/dispatch"
+RESULTS="${STATE}/results"
+APPROVALS="${STATE}/approvals"
+
+TASK_FILE="" PROMPT="" AGENT="" TURNS="" TIMEOUT="" ALLOW="" MODE="dontAsk"
+WORKTREE=0 RESUME="" DRY=0 APPROVE_ID="" APPROVED_ID="" CLASS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --task)
+      TASK_FILE="$2"
+      shift 2
+      ;;
+    --prompt)
+      PROMPT="$2"
+      shift 2
+      ;;
+    --agent)
+      AGENT="$2"
+      shift 2
+      ;;
+    --turns)
+      TURNS="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    --allow)
+      ALLOW="$2"
+      shift 2
+      ;;
+    --mode)
+      MODE="$2"
+      shift 2
+      ;;
+    --resume)
+      RESUME="$2"
+      shift 2
+      ;;
+    --approve)
+      APPROVE_ID="$2"
+      shift 2
+      ;;
+    --approved)
+      APPROVED_ID="$2"
+      shift 2
+      ;;
+    --class)
+      CLASS="$2"
+      shift 2
+      ;;
+    --worktree)
+      WORKTREE=1
+      shift
+      ;;
+    --dry-run)
+      DRY=1
+      shift
+      ;;
+    *) die "unknown option $1" ;;
+  esac
+done
+
+RESOLVED="$(python3 "$RESOLVER" --scope "$PWD" 2> /dev/null)" \
+  || die "delegation config did not resolve — run: python3 $RESOLVER --scope \"$PWD\"" 78
+[ -n "$AGENT" ] || AGENT="$(printf '%s' "$RESOLVED" | jq -r '.default // empty')"
+[ -n "$AGENT" ] || die "no --agent given and no default set in this scope" 78
+A="$(printf '%s' "$RESOLVED" | jq -c --arg n "$AGENT" '.agents[] | select(.name==$n)')"
+[ -n "$A" ] || die "agent '$AGENT' is not permitted in this scope" 78
+get() { printf '%s' "$A" | jq -r "$1 // empty"; }
+
+ADAPTER="$(get '.adapter')"
+PARTY="$(get '.party')"
+MAX_ROUNDS="$(get '.max_question_rounds')"
+[ -n "$ALLOW" ] || ALLOW="$(get '.allow_tools')"
+[ -n "$TURNS" ] || TURNS="$(get '.max_turns')"
+[ -n "$TIMEOUT" ] || TIMEOUT="$(get '.timeout')"
+mkdir -p "$DISPATCH" "$RESULTS" "$APPROVALS"
+
+# ------------------------------------------------------------------ consent: record mode ---
+if [ -n "$APPROVE_ID" ]; then
+  case "$APPROVE_ID" in */* | ..*) die "--approve id must be a plain slug" ;; esac
+  [ -n "$CLASS" ] || die "--approve needs --class (what kind of work was approved)"
+  emit --arg id "$APPROVE_ID" --arg c "$CLASS" --arg a "$AGENT" --arg al "$ALLOW" \
+    --arg p "$PARTY" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{task:$id, class:$c, agent:$a, allow:$al, party:$p, approved_at:$at}' \
+    > "${APPROVALS}/${APPROVE_ID}.json"
+  emit --arg id "$APPROVE_ID" --arg a "$AGENT" --arg p "$PARTY" \
+    '{status:"approved", task:$id, agent:$a, party:$p}'
+  exit 0
+fi
+
+# ------------------------------------------------------------------ consent: enforce mode ---
+[ -n "$APPROVED_ID" ] || die "refusing to dispatch without --approved TASK_ID; record consent first with --approve" 78
+case "$APPROVED_ID" in */* | ..*) die "--approved id must be a plain slug" ;; esac
+APPROVAL="${APPROVALS}/${APPROVED_ID}.json"
+[ -f "$APPROVAL" ] || die "no approval on file for task '$APPROVED_ID' — the consent gate was skipped" 78
+[ "$(jq -r '.agent // empty' "$APPROVAL")" = "$AGENT" ] \
+  || die "task '$APPROVED_ID' was approved for agent '$(jq -r .agent "$APPROVAL")', not '$AGENT'" 78
+# Widening after approval is the escalation the gate exists to stop. Narrowing is fine, but the two
+# are not reliably distinguishable textually, so any change bounces for re-approval.
+[ "$ALLOW" = "$(jq -r '.allow // empty' "$APPROVAL")" ] \
+  || die "allowlist differs from what was approved for '$APPROVED_ID' — re-approve to change scope" 77
+
+if { [ -n "$TASK_FILE" ] && [ -n "$PROMPT" ]; } || { [ -z "$TASK_FILE" ] && [ -z "$PROMPT" ]; }; then
+  die "give exactly one of --task or --prompt"
+fi
+case "$MODE" in
+  dontAsk | acceptEdits | plan | default) ;;
+  bypassPermissions) die "bypassPermissions is never permitted for a delegated dispatch" 77 ;;
+  *) die "bad --mode $MODE" ;;
+esac
+
+ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+BRIEF="${DISPATCH}/${ID}.task.md"
+RAW="${RESULTS}/${ID}.raw"
+LAST="${RESULTS}/${ID}.last.txt"
+LOG="${RESULTS}/${ID}.log"
+SCHEMA="${RESULTS}/${ID}.schema.json"
+SPEC="${RESULTS}/${ID}.spec.json"
+
+if [ -n "$TASK_FILE" ]; then
+  [ -r "$TASK_FILE" ] || die "cannot read $TASK_FILE"
+  cp "$TASK_FILE" "$BRIEF"
+else
+  printf '%s\n' "$PROMPT" > "$BRIEF"
+fi
+
+# The never-delegate floor: a cheap path pre-filter over the brief. Not a classifier — it catches
+# "go read .env and tell me the key" and nothing subtler. The content scan below is the real check.
+while IFS= read -r pat; do
+  [ -n "$pat" ] || continue
+  frag="${pat%%\**}"
+  frag="${frag%/}"
+  [ -n "$frag" ] || continue
+  if grep -qiF -- "$frag" "$BRIEF" 2> /dev/null; then
+    emit --arg id "$ID" --arg p "$pat" \
+      '{status:"misrouted", id:$id, pattern:$p, reason:("brief references a never-delegate path: " + $p)}'
+    exit 77
+  fi
+done <<< "$(printf '%s' "$RESOLVED" | jq -r '.never_delegate[]')"
+
+# Content scan before anything leaves. This is the enforceable half of the no-secret rule.
+scan_secrets "$BRIEF" "dispatch this brief"
+
+# Written on ONE line on purpose. The adapter contract is one argv element per line, so a value
+# containing a newline is split into several arguments — a multi-line schema reached the CLI as
+# fragments and was rejected as invalid JSON.
+printf '%s\n' '{"type":"object","required":["status"],"additionalProperties":false,"properties":{"status":{"type":"string","enum":["done","needs_input","blocked"]},"result":{"type":"string"},"question":{"type":"string"},"context":{"type":"string"}}}' > "$SCHEMA"
+
+jq -nc --arg at "$ALLOW" --arg m "$MODE" --argjson mt "$TURNS" --argjson to "$TIMEOUT" \
+  --arg sf "$SCHEMA" --arg pf "$BRIEF" --arg lm "$LAST" --arg rf "$RAW" --arg r "$RESUME" \
+  --argjson wt "$([ "$WORKTREE" -eq 1 ] && echo true || echo false)" \
+  '{allow_tools:$at, mode:$m, max_turns:$mt, timeout:$to, schema_file:$sf, prompt_file:$pf,
+    last_message_file:$lm, raw_file:$rf, resume:$r, worktree:$wt}' > "$SPEC"
+
+if [ "$DRY" -eq 1 ]; then
+  printf '%s' "$(jq -c -s '.[0] * .[1]' "$SPEC" <(printf '%s' "$A"))" \
+    | bash "${ADAPTERS}/${ADAPTER}.sh" build | tr '\n' ' '
+  echo
+  exit 0
+fi
+
+ROUNDS=0
+if [ -n "$RESUME" ]; then
+  RF="${STATE}/rounds-${RESUME}"
+  [ -f "$RF" ] && ROUNDS="$(cat "$RF")"
+  ROUNDS=$((ROUNDS + 1))
+  if [ "$ROUNDS" -gt "$MAX_ROUNDS" ]; then
+    emit --arg id "$ID" --argjson r "$ROUNDS" --argjson m "$MAX_ROUNDS" \
+      '{status:"misrouted", id:$id, rounds:$r, max_rounds:$m,
+        reason:"question-round cap reached — the brief was underspecified; rewrite it or keep the task"}'
+    exit 77
+  fi
+fi
+
+START=$(date +%s)
+set +e
+run_limited "$TIMEOUT" "$BRIEF" "$AGENT_BIN" --agent "$AGENT" --spec "$SPEC" > "$RAW" 2> "$LOG"
+RC=$?
+set -e
+DURATION=$(($(date +%s) - START))
+
+if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ] || [ "$RC" -eq 143 ]; then
+  emit --arg id "$ID" --arg l "$LOG" --argjson d "$DURATION" '{status:"timeout", id:$id, duration_s:$d, log:$l}'
+  exit 75
+fi
+if [ "$RC" -ne 0 ] || [ ! -s "$RAW" ]; then
+  emit --arg id "$ID" --arg l "$LOG" --argjson rc "$RC" --argjson d "$DURATION" \
+    '{status:"error", id:$id, exit_code:$rc, duration_s:$d, log:$l}'
+  exit 70
+fi
+
+# Scan what came BACK before any of it reaches the orchestrator's context. A sub-agent that read a
+# credential and echoed it must not be the reason a secret lands in this session's transcript,
+# which persists to disk and cannot be redacted after the fact.
+scan_secrets "$RAW" "return this result"
+
+NORM="$(printf '%s' "$(jq -c -s '.[0] * .[1]' "$SPEC" <(printf '%s' "$A"))" \
+  | bash "${ADAPTERS}/${ADAPTER}.sh" parse 2> /dev/null || true)"
+[ -n "$NORM" ] || {
+  emit --arg id "$ID" --arg raw "$RAW" '{status:"malformed", id:$id, raw:$raw}'
+  exit 65
+}
+SESSION="$(printf '%s' "$NORM" | jq -r '.session_id // empty')"
+INNER="$(printf '%s' "$NORM" | jq -r '.result // empty')"
+[ -n "$SESSION" ] && printf '%s' "$ROUNDS" > "${STATE}/rounds-${SESSION}"
+
+STATUS="$(printf '%s' "$INNER" | jq -r '.status // empty' 2> /dev/null || true)"
+case "$STATUS" in
+  needs_input)
+    Q="$(printf '%s' "$INNER" | jq -r '.question // empty')"
+    # A question that is really a permissions request is not a question. Forwarding it would let the
+    # sub-agent negotiate its own scope through the orchestrator, making the allowlist advisory.
+    if printf '%s' "$Q" | grep -qiE 'bypasspermissions|--allow|allowedtools|grant me|wider (access|scope|permission)|unscoped bash'; then
+      emit --arg id "$ID" --arg q "$Q" '{status:"misrouted", id:$id, question:$q,
+        reason:"sub-agent asked to widen its own scope — scope changes are a re-brief, not a question"}'
+      exit 77
+    fi
+    emit --arg id "$ID" --arg s "$SESSION" --arg q "$Q" \
+      --arg c "$(printf '%s' "$INNER" | jq -r '.context // empty')" \
+      --argjson d "$DURATION" --argjson r "$ROUNDS" --argjson m "$MAX_ROUNDS" \
+      '{status:"question", id:$id, session_id:$s, question:$q, context:$c, duration_s:$d, round:$r, max_rounds:$m}'
+    exit 66
+    ;;
+  blocked)
+    emit --arg id "$ID" --arg s "$SESSION" --arg l "$LOG" --argjson d "$DURATION" \
+      --arg r "$(printf '%s' "$INNER" | jq -r '.result // "no reason given"')" \
+      '{status:"blocked", id:$id, session_id:$s, reason:$r, duration_s:$d, log:$l}'
+    exit 70
+    ;;
+  done) OUT="$(printf '%s' "$INNER" | jq -r '.result // empty')" ;;
+  *) OUT="$INNER" ;;
+esac
+
+emit --arg id "$ID" --arg a "$AGENT" --arg ad "$ADAPTER" --arg p "$PARTY" --arg s "$SESSION" \
+  --arg o "$OUT" --arg raw "$RAW" --arg l "$LOG" --argjson d "$DURATION" \
+  '{status:"ok", id:$id, agent:$a, adapter:$ad, party:$p, duration_s:$d,
+    session_id:$s, result:$o, raw:$raw, log:$l}'

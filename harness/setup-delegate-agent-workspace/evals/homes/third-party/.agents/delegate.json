@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "primary": "claude",
+  "default": "hosted",
+  "agents": {
+    "hosted": {
+      "adapter": "claude",
+      "baseUrl": "https://gateway.example.co",
+      "model": "some-open-model",
+      "context": 256000
+    },
+    "local-qwen": {
+      "adapter": "codex",
+      "localProvider": "lmstudio",
+      "model": "qwen-local"
+    }
+  }
+}
