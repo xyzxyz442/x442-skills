@@ -1,389 +1,434 @@
 #!/usr/bin/env python3
-# resolve.py — resolve the delegate-backends cascade into ONE effective set of backend profiles.
+# resolve.py — resolve the .agents/delegate.json cascade into ONE effective delegation roster.
 #
-#   resolve.py --scope <dir> --root <git-root> [--user-manifest <path>]
+#   resolve.py --scope <dir> [--home <dir>]
 #
-# Layers, applied lowest -> highest precedence:
+# Layers are every ancestor directory of <scope>, root -> leaf, each contributing its
+# .agents/delegate.json if present. $HOME is always included, so ~/.agents/delegate.json is the
+# machine-wide layer without being a special case. Nearest layer wins.
 #
-#   1. user    ~/.agents/delegate-backends.json   (personal, this machine, NOT committed)
-#   2. repo    <root>/.delegate-backends.json     (committed, team-shared)
-#   3. subdir  <dir>/.delegate-backends.json for each dir from <root> down to <scope>, deepest last
+# There is no git-root special case, and that is the point: a workspace directory holding a
+# hundred independent repos is not itself a repo, so anchoring on a git root would make its
+# policy unreachable from inside any of them.
 #
-# The asymmetry is the point, and it is why this resolver does not look like its siblings
-# (.graph-repos.json, .handoff-repos.json). Those cascade whole entries and use {"remove": true}
-# tombstones because every layer is equally entitled to declare one. Here it is not:
+# WHO MAY DEFINE AN AGENT
 #
-#   * ONLY the user layer may define `profiles`. A profile names a host that your source code
-#     gets shipped to. A committed manifest that could introduce one would let a pull request
-#     silently add an exfiltration target to every clone of the repo. A repo layer declaring
-#     `profiles` is a hard error, not a merge.
-#   * Repo layers NARROW, via `allow` — intersected across layers, so a nearer layer can only
-#     ever remove reach, never add it. That makes tombstones unnecessary: `allow` already is the
-#     un-inherit mechanism, and it fails safe (an empty intersection means no delegation at all).
-#   * `neverDelegate` is a UNION across every layer, including the user layer. Sensitivity is a
-#     property of the codebase, so a nearer layer must not be able to drop a protection a lower
-#     one asserted. No approval overrides it either — the dispatcher refuses these paths outright.
+# A layer may declare `agents` only if it is NOT inside a git work tree. A file inside a repo is
+# committable, and a committed manifest that could introduce an agent would add an egress target
+# to every clone of that repo via pull request. So definition lives in uncommittable layers
+# (your home dir, a workspace dir) and repos may only NARROW.
 #
-# Emits one JSON object on stdout. Read-only and network-free: this never writes anything and
-# never dials an endpoint, so the installer and the verifier can both call it and can never
-# disagree about the effective set. Reachability is probed by the shell callers, not here.
+# NARROWING IS MONOTONIC
+#
+# Every knob a nearer layer can set moves in exactly one direction — stricter:
+#
+#   allow            intersect      fewer agents reachable
+#   neverDelegate    union          more protected paths
+#   allowTools       intersect      fewer tools
+#   allowModels      intersect      fewer models
+#   autoApprove      intersect      more prompting
+#   alwaysAsk        union          more prompting
+#   maxQuestionRounds/maxTurns/timeout   min      smaller budgets
+#   strictMcp        OR             can force strict, never un-strict
+#   requireParty     strictest      local > same-party > third-party
+#
+# So no layering order and no planted file can ever WIDEN what the machine permits. That is what
+# makes walking up from the filesystem safe: an unexpected ancestor manifest can only subtract.
+#
+# Read-only and network-free. Both the installer and the verifier call it, so they can never
+# disagree about the effective roster. Reachability is probed by callers, not here.
 import argparse
 import ipaddress
 import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from urllib.parse import urlparse
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 CLASS_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-MANIFEST = ".delegate-backends.json"
-# DELEGATE_USER_MANIFEST exists so a test fixture or an eval grader can resolve against a manifest
-# it controls. Without it every such run would read the operator's real backend config — which is
-# both unrepeatable and a way for a fixture to accidentally reference a live endpoint.
-USER_MANIFEST = os.environ.get("DELEGATE_USER_MANIFEST") or os.path.join(
-    os.path.expanduser("~"), ".agents", "delegate-backends.json")
+MANIFEST = os.path.join(".agents", "delegate.json")
 
-DEFAULT_CONTEXT = 131072
+# What each adapter's CLI can actually enforce. Declared rather than assumed, because a capability
+# that silently does nothing is worse than one that is absent — the consent gate would be
+# approving a scope nobody enforces.
+ADAPTERS = {
+    # schema:  how a forced output shape is expressed (needed for the ask-back protocol)
+    # tools:   how faithfully a per-tool allowlist can be applied
+    "claude": {"schema": "inline", "tools": "fine", "resume": True, "vendor": "anthropic"},
+    "codex": {"schema": "file", "tools": "coarse", "resume": True, "vendor": "openai"},
+    "copilot": {"schema": "none", "tools": "fine", "resume": True, "vendor": "github"},
+    "gemini": {"schema": "none", "tools": "policy", "resume": True, "vendor": "google"},
+}
+PARTY_RANK = {"local": 0, "same-party": 1, "third-party": 2}
 DEFAULT_ROUNDS = 3
 DEFAULT_ALLOW_TOOLS = "Read,Grep,Glob"
-# Paths that are never delegable regardless of configuration. A repo may add to this; nothing
-# can subtract from it. Kept deliberately short — a floor, not a policy.
+# A floor, not a policy. A repo may add to this; nothing may subtract from it.
 BUILTIN_NEVER = [".env", ".env.*", "secrets/**", "*.pem", "*.key", "id_rsa*", ".ssh/**"]
 
 
-def layer_files(scope: str, root: str) -> list[tuple[str, str, bool]]:
-    """(layer-name, manifest-path, committed?) lowest precedence first."""
-    out: list[tuple[str, str, bool]] = [("user", USER_MANIFEST, False)]
-    out.append(("repo", os.path.join(root, MANIFEST), True))
-    rel = os.path.relpath(scope, root)
-    if rel not in (".", ""):
-        cur = root
-        for part in rel.split(os.sep):
-            if part in ("", os.pardir):
-                continue
-            cur = os.path.join(cur, part)
-            out.append((os.path.relpath(cur, root), os.path.join(cur, MANIFEST), True))
+def ancestors(scope: str, home: str) -> list[str]:
+    """Every directory from the filesystem root down to scope, with $HOME guaranteed present."""
+    out, cur = [], os.path.realpath(scope)
+    while True:
+        out.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    out.reverse()
+    h = os.path.realpath(home)
+    if h not in out:
+        out.insert(0, h)
     return out
 
 
-def classify_egress(base_url: str) -> str:
-    """local iff the endpoint cannot leave this machine's trust boundary.
-
-    Everything unrecognised is classified `remote`. Guessing `local` on an unparseable host is
-    the one error with a real blast radius here: it would re-arm the sensitivity clause and route
-    credentials off-box. Unknown therefore fails toward the stricter answer.
-    """
+def in_git_worktree(d: str) -> bool:
     try:
-        host = (urlparse(base_url).hostname or "").strip("[]")
+        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True, timeout=5)
+        return r.returncode == 0 and r.stdout.strip() == "true"
     except Exception:  # noqa: BLE001
-        return "remote"
-    if not host:
-        return "remote"
-    if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
-        return "local"
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return "remote"
-    return "local" if (ip.is_loopback or ip.is_private or ip.is_link_local) else "remote"
+        return False
 
 
-def read_settings_file(raw: str, warnings: list[str]) -> dict:
-    """Adopt an existing Claude Code settings file as a profile source.
+def classify_party(base_url: str | None, adapter: str, vendor: str | None,
+                   primary_vendor: str | None, local_provider: str | None) -> str:
+    """local | same-party | third-party.
 
-    Works for both shapes the CLI accepts: a file passed to `--settings`, and the `settings.json`
-    inside a `CLAUDE_CONFIG_DIR`. They share a schema, so one reader covers both.
-
-    Reads base URL, model, and context window out of it so a working setup does not have to be
-    re-declared. The auth token is deliberately NOT returned: this object is printed to stdout,
-    and stdout ends up in logs, transcripts, and the verifier's output. Only its presence and the
-    file's mode travel, which is what the credential-hygiene warning needs.
+    `local` means the work never leaves the machine. `same-party` means it goes to a vendor who
+    already sees this code because they run your primary assistant — delegating there adds no new
+    observer. `third-party` means it adds one. Unknown always resolves to third-party: guessing
+    downward is the only error here with real blast radius.
     """
-    out = {"settings_file": None, "base_url": None, "model": None, "context": None,
+    if local_provider:
+        return "local"
+    if base_url:
+        try:
+            host = (urlparse(base_url).hostname or "").strip("[]")
+        except Exception:  # noqa: BLE001
+            return "third-party"
+        if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
+            return "local"
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_loopback or ip.is_private or ip.is_link_local:
+                return "local"
+        except ValueError:
+            pass
+    v = vendor or ADAPTERS.get(adapter, {}).get("vendor")
+    # A custom base URL means the traffic goes wherever that host is, regardless of which CLI
+    # speaks to it — an Anthropic-speaking gateway on someone else's domain is not Anthropic.
+    if base_url and v == ADAPTERS.get(adapter, {}).get("vendor") and not vendor:
+        return "third-party"
+    if primary_vendor and v and v == primary_vendor:
+        return "same-party"
+    return "third-party"
+
+
+def read_settings(path: str, warnings: list[str]) -> dict:
+    """Read a CLI's own settings file for base URL / model / context. Never returns the token."""
+    out = {"path": path, "base_url": None, "model": None, "context": None,
            "has_token": False, "mode": None, "world_readable": None}
-    p = os.path.expandvars(os.path.expanduser(raw))
-    out["settings_file"] = p
-    if not os.path.isfile(p):
-        warnings.append(f"settingsFile {p} does not exist")
+    if not os.path.isfile(path):
+        warnings.append(f"{path} does not exist")
         return out
     try:
-        st = os.stat(p)
+        st = os.stat(path)
         out["mode"] = oct(stat.S_IMODE(st.st_mode))
         out["world_readable"] = bool(stat.S_IMODE(st.st_mode) & 0o077)
     except OSError:
         pass
     try:
-        with open(p) as f:
-            data = json.load(f)
+        data = json.load(open(path))
     except Exception as e:  # noqa: BLE001
-        warnings.append(f"settingsFile {p}: invalid JSON ({e})")
+        warnings.append(f"{path}: invalid JSON ({e})")
         return out
     if not isinstance(data, dict):
-        warnings.append(f"settingsFile {p}: expected a JSON object")
         return out
     env = data.get("env") if isinstance(data.get("env"), dict) else {}
-    out["base_url"] = env.get("ANTHROPIC_BASE_URL")
+    out["base_url"] = env.get("ANTHROPIC_BASE_URL") or env.get("OPENAI_BASE_URL")
     out["model"] = data.get("model") or env.get("ANTHROPIC_MODEL")
-    out["has_token"] = bool(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY"))
-    # The settings file is the authority on its own window. Re-declaring `context` in the manifest
-    # is how the two drift, and the drift is silent until a dispatch overflows.
-    raw_ctx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS")
-    if raw_ctx is not None:
+    out["has_token"] = bool(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")
+                            or env.get("OPENAI_API_KEY"))
+    raw = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+    if raw is not None:
         try:
-            out["context"] = int(str(raw_ctx))
+            out["context"] = int(str(raw))
         except ValueError:
-            warnings.append(f"{p}: CLAUDE_CODE_MAX_CONTEXT_TOKENS is not an integer ({raw_ctx!r})")
+            warnings.append(f"{path}: CLAUDE_CODE_MAX_CONTEXT_TOKENS is not an integer")
     return out
 
 
-def _str_list(value, where: str, field: str, errors: list[str], pattern=None) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list) or any(not isinstance(v, str) or not v for v in value):
+def _slist(v, where, field, errors, pattern=None):
+    if v is None:
+        return None
+    if not isinstance(v, list) or any(not isinstance(x, str) or not x for x in v):
         errors.append(f"{where}: {field} must be an array of non-empty strings")
-        return []
-    if pattern is not None:
-        bad = [v for v in value if not pattern.match(v)]
+        return None
+    if pattern:
+        bad = [x for x in v if not pattern.match(x)]
         if bad:
             errors.append(f"{where}: {field} entries must match {pattern.pattern} (got {bad!r})")
-            return [v for v in value if pattern.match(v)]
-    return value
+            return [x for x in v if pattern.match(x)]
+    return v
 
 
-def load_profiles(path: str, data: dict, errors: list[str], warnings: list[str]) -> dict[str, dict]:
-    raw = data.get("profiles")
+def _toolset(s):
+    return {t.strip() for t in s.split(",") if t.strip()}
+
+
+def load_agents(path, data, may_define, errors, warnings):
+    """Parse this layer's `agents` block. Refuses definition from a committable layer."""
+    raw = data.get("agents")
     if raw is None:
         return {}
+    if not may_define:
+        errors.append(
+            f'{path}: this layer is inside a git work tree and may not define "agents". A '
+            f"committed manifest that could add an agent would add an egress target to every "
+            f'clone. Define it in an uncommittable layer (~/.agents/delegate.json or a workspace '
+            f'directory) and narrow here with "allow" instead.'
+        )
+        return {}
     if not isinstance(raw, dict):
-        errors.append(f'{path}: "profiles" must be an object keyed by profile name')
+        errors.append(f'{path}: "agents" must be an object keyed by agent name')
         return {}
 
-    out: dict[str, dict] = {}
-    for name, p in raw.items():
-        where = f"{path}[profiles.{name}]"
+    out = {}
+    for name, a in raw.items():
+        where = f"{path}[agents.{name}]"
         if not NAME_RE.match(name):
-            errors.append(f"{where}: profile name must match {NAME_RE.pattern}")
+            errors.append(f"{where}: name must match {NAME_RE.pattern}")
             continue
-        if not isinstance(p, dict):
+        if not isinstance(a, dict):
             errors.append(f"{where}: not an object")
             continue
-
-        # Two ways to adopt an existing setup. `configDir` is a CLAUDE_CONFIG_DIR — the CLI reads
-        # its settings.json, session history, and CLAUDE.md itself, which also means the delegate
-        # carries its own standing operating rules. `settingsFile` is the older --settings form.
-        cfg_dir, sf = p.get("configDir"), p.get("settingsFile")
-        if cfg_dir and sf:
-            errors.append(f"{where}: give either configDir or settingsFile, not both")
+        adapter = a.get("adapter")
+        if adapter not in ADAPTERS:
+            errors.append(f"{where}: adapter must be one of {sorted(ADAPTERS)} (got {adapter!r})")
             continue
-        settings_src = None
+
+        cfg_dir = a.get("configDir")
+        settings = None
         if isinstance(cfg_dir, str) and cfg_dir:
-            settings_src = os.path.join(
-                os.path.expandvars(os.path.expanduser(cfg_dir)), "settings.json")
-        elif isinstance(sf, str) and sf:
-            settings_src = sf
-        settings = read_settings_file(settings_src, warnings) if settings_src else None
+            cfg_dir = os.path.expandvars(os.path.expanduser(cfg_dir))
+            settings = read_settings(os.path.join(cfg_dir, "settings.json"), warnings)
 
-        base_url = p.get("baseUrl") or (settings or {}).get("base_url")
-        if not isinstance(base_url, str) or not base_url:
-            errors.append(f'{where}: needs a "baseUrl", or a "settingsFile" that supplies one')
-            continue
-        model = p.get("model") or (settings or {}).get("model")
+        model = a.get("model") or (settings or {}).get("model")
         if not isinstance(model, str) or not model:
-            errors.append(f'{where}: needs a "model", or a "settingsFile" that supplies one')
+            errors.append(f'{where}: needs a "model" (or a configDir whose settings supply one)')
             continue
 
-        egress = p.get("egress")
-        derived = classify_egress(base_url)
-        if egress is None:
-            egress = derived
-        elif egress not in ("local", "remote"):
-            errors.append(f'{where}: egress must be "local" or "remote" (got {egress!r})')
-            continue
-        elif egress == "local" and derived == "remote":
-            # Declaring a public host "local" is how the sensitivity clause gets re-armed against
-            # an endpoint that is anything but. Refuse rather than trust the label.
-            errors.append(
-                f"{where}: declared egress=local but {base_url} is not a loopback/private address "
-                f"— refusing to treat it as on-machine"
-            )
+        base_url = a.get("baseUrl") or (settings or {}).get("base_url")
+        local_provider = a.get("localProvider")
+        if local_provider and adapter != "codex":
+            errors.append(f"{where}: localProvider is only meaningful for the codex adapter")
             continue
 
-        ctx = p.get("context") or (settings or {}).get("context") or DEFAULT_CONTEXT
-        if not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0:
+        ctx = a.get("context") or (settings or {}).get("context")
+        if ctx is not None and (not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0):
             errors.append(f"{where}: context must be a positive integer")
             continue
-        rounds = p.get("maxQuestionRounds", DEFAULT_ROUNDS)
-        if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 0:
-            errors.append(f"{where}: maxQuestionRounds must be a non-negative integer")
-            continue
-        allow_tools = p.get("allowTools", DEFAULT_ALLOW_TOOLS)
-        if not isinstance(allow_tools, str) or not allow_tools:
-            errors.append(f"{where}: allowTools must be a non-empty string")
-            continue
-
-        # A token is never stored here and never read by our scripts. Either the profile points at
-        # a settingsFile and the CLI reads the credential itself, or `tokenEnv` names an environment
-        # variable the caller has already exported. Both keep the secret out of this repo, out of
-        # this resolver's stdout, and out of any transcript that quotes it.
-        token_env = p.get("tokenEnv")
-        if token_env is not None and (not isinstance(token_env, str) or not token_env):
-            errors.append(f"{where}: tokenEnv must be the NAME of an environment variable")
-            continue
-        if isinstance(token_env, str) and token_env.startswith(("sk-", "sk_")):
-            errors.append(
-                f"{where}: tokenEnv looks like a token value, not a variable name. Put the secret "
-                f"in the environment and name the variable here."
-            )
-            continue
-
-        auto = _str_list(p.get("autoApprove"), where, "autoApprove", errors, CLASS_RE)
-        always = _str_list(p.get("alwaysAsk"), where, "alwaysAsk", errors, CLASS_RE)
-        overlap = sorted(set(auto) & set(always))
-        if overlap:
-            # alwaysAsk wins below; say so rather than letting the caller guess.
-            warnings.append(
-                f"{where}: {overlap!r} in both autoApprove and alwaysAsk — alwaysAsk wins")
 
         out[name] = {
-            "name": name,
-            "base_url": base_url,
-            "model": model,
-            "context": ctx,
-            "egress": egress,
-            "egress_declared": p.get("egress") is not None,
-            "auto_approve": [c for c in auto if c not in always],
-            "always_ask": always,
-            "max_question_rounds": rounds,
-            "allow_tools": allow_tools,
-            "token_env": token_env if isinstance(token_env, str) else None,
-            "config_dir": os.path.expandvars(os.path.expanduser(cfg_dir))
-            if isinstance(cfg_dir, str) and cfg_dir else None,
-            # Default on: a delegate should not inherit the project's MCP servers. It widens the
-            # tool surface past the allowlist without appearing in it.
-            "strict_mcp": p.get("strictMcp", True) is not False,
-            "settings_file": (settings or {}).get("settings_file"),
-            "has_token": (settings or {}).get("has_token", False),
-            "settings_mode": (settings or {}).get("mode"),
+            "name": name, "adapter": adapter, "model": model,
+            "command": a.get("command") or adapter,
+            "base_url": base_url, "config_dir": cfg_dir if isinstance(cfg_dir, str) else None,
+            "local_provider": local_provider, "vendor": a.get("vendor"),
+            "context": ctx, "notes": a.get("notes", "") if isinstance(a.get("notes"), str) else "",
             "settings_world_readable": (settings or {}).get("world_readable"),
-            "notes": p.get("notes", "") if isinstance(p.get("notes"), str) else "",
-            "layer": "user",
-            "manifest": path,
+            "settings_path": (settings or {}).get("path"),
+            "settings_mode": (settings or {}).get("mode"),
+            "has_token": (settings or {}).get("has_token", False),
+            "layer": path, "capabilities": dict(ADAPTERS[adapter]),
+            # Base limits; policy layers may only tighten these.
+            "allow_tools": a.get("allowTools", DEFAULT_ALLOW_TOOLS),
+            "allow_models": _slist(a.get("allowModels"), where, "allowModels", errors),
+            "auto_approve": _slist(a.get("autoApprove"), where, "autoApprove", errors, CLASS_RE) or [],
+            "always_ask": _slist(a.get("alwaysAsk"), where, "alwaysAsk", errors, CLASS_RE) or [],
+            "max_question_rounds": a.get("maxQuestionRounds", DEFAULT_ROUNDS),
+            "max_turns": a.get("maxTurns", 25),
+            "timeout": a.get("timeout", 1800),
+            "strict_mcp": a.get("strictMcp", True) is not False,
+            "require_party": None,
         }
     return out
+
+
+def tighten(agent, pol, where, errors):
+    """Apply one policy block. Every knob moves toward stricter or not at all."""
+    if not isinstance(pol, dict):
+        errors.append(f"{where}: policy entry must be an object")
+        return
+    if "allowTools" in pol:
+        if not isinstance(pol["allowTools"], str):
+            errors.append(f"{where}: allowTools must be a string")
+        else:
+            agent["allow_tools"] = ",".join(
+                sorted(_toolset(agent["allow_tools"]) & _toolset(pol["allowTools"])))
+    if "allowModels" in pol:
+        v = _slist(pol["allowModels"], where, "allowModels", errors)
+        if v is not None:
+            agent["allow_models"] = sorted(set(v) if agent["allow_models"] is None
+                                           else set(agent["allow_models"]) & set(v))
+    if "autoApprove" in pol:
+        v = _slist(pol["autoApprove"], where, "autoApprove", errors, CLASS_RE)
+        if v is not None:
+            agent["auto_approve"] = sorted(set(agent["auto_approve"]) & set(v))
+    if "alwaysAsk" in pol:
+        v = _slist(pol["alwaysAsk"], where, "alwaysAsk", errors, CLASS_RE)
+        if v is not None:
+            agent["always_ask"] = sorted(set(agent["always_ask"]) | set(v))
+    for key, field in (("maxQuestionRounds", "max_question_rounds"),
+                       ("maxTurns", "max_turns"), ("timeout", "timeout")):
+        if key in pol:
+            v = pol[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                errors.append(f"{where}: {key} must be a non-negative integer")
+            else:
+                agent[field] = min(agent[field], v)
+    if pol.get("strictMcp") is True:
+        agent["strict_mcp"] = True
+    if "requireParty" in pol:
+        v = pol["requireParty"]
+        if v not in PARTY_RANK:
+            errors.append(f"{where}: requireParty must be one of {sorted(PARTY_RANK)}")
+        else:
+            cur = agent["require_party"]
+            agent["require_party"] = v if cur is None or PARTY_RANK[v] < PARTY_RANK[cur] else cur
 
 
 def main() -> int:  # noqa: C901
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", required=True)
-    ap.add_argument("--root", required=True)
-    ap.add_argument("--user-manifest", default=USER_MANIFEST)
+    ap.add_argument("--home", default=os.environ.get("DELEGATE_HOME") or os.path.expanduser("~"))
     args = ap.parse_args()
 
     scope = os.path.realpath(args.scope)
-    root = os.path.realpath(args.root)
+    errors, warnings, layers, narrowed = [], [], [], []
+    agents, never, policies = {}, list(BUILTIN_NEVER), []
+    allow, default, default_layer = None, None, None
+    primary, primary_layer = None, None
 
-    errors: list[str] = []
-    warnings: list[str] = []
-    layers: list[dict] = []
-    narrowed: list[dict] = []
-
-    profiles: dict[str, dict] = {}
-    never: list[str] = list(BUILTIN_NEVER)
-    allow: set[str] | None = None
-    default: str | None = None
-    default_layer: str | None = None
-
-    for name, file, committed in layer_files(scope, root):
-        if name == "user":
-            file = args.user_manifest
-        present = os.path.isfile(file)
-        layers.append({"layer": name, "file": file, "committed": committed, "present": present})
+    for d in ancestors(scope, args.home):
+        f = os.path.join(d, MANIFEST)
+        present = os.path.isfile(f)
+        committable = in_git_worktree(d) if present else False
+        if present:
+            layers.append({"dir": d, "file": f, "committable": committable})
         if not present:
             continue
         try:
-            with open(file) as f:
-                data = json.load(f)
+            data = json.load(open(f))
         except Exception as e:  # noqa: BLE001
-            errors.append(f"{file}: invalid JSON ({e})")
+            errors.append(f"{f}: invalid JSON ({e})")
             continue
         if not isinstance(data, dict):
-            errors.append(f"{file}: expected a JSON object")
+            errors.append(f"{f}: expected a JSON object")
             continue
         if data.get("version", 1) != 1:
-            warnings.append(f"{file}: unknown version {data.get('version')!r} — parsing as version 1")
+            warnings.append(f"{f}: unknown version {data.get('version')!r} — parsing as version 1")
 
-        if committed and data.get("profiles") is not None:
-            errors.append(
-                f'{file}: a committed manifest may not define "profiles". A profile names a host '
-                f"your code is shipped to; declaring one here would add an egress target to every "
-                f'clone. Define it in {args.user_manifest} and narrow with "allow" instead.'
-            )
-        if not committed:
-            profiles.update(load_profiles(file, data, errors, warnings))
+        agents.update(load_agents(f, data, not committable, errors, warnings))
 
-        never.extend(_str_list(data.get("neverDelegate"), file, "neverDelegate", errors))
-
+        v = _slist(data.get("neverDelegate"), f, "neverDelegate", errors)
+        if v:
+            never.extend(v)
         if data.get("allow") is not None:
-            entries = _str_list(data.get("allow"), file, "allow", errors, NAME_RE)
-            layer_allow = set(entries)
-            allow = layer_allow if allow is None else (allow & layer_allow)
-            narrowed.append({"layer": name, "manifest": file, "allow": sorted(layer_allow)})
-
+            v = _slist(data.get("allow"), f, "allow", errors, NAME_RE)
+            if v is not None:
+                s = set(v)
+                allow = s if allow is None else (allow & s)
+                narrowed.append({"file": f, "allow": sorted(s)})
         if isinstance(data.get("default"), str):
-            default, default_layer = data["default"], name
+            default, default_layer = data["default"], f
+        if isinstance(data.get("primary"), str):
+            primary, primary_layer = data["primary"], f
+        if isinstance(data.get("policy"), dict):
+            policies.append((f, data["policy"]))
 
-    # Narrowing is applied after every layer is read, so `allow` is the intersection of all of
-    # them. An entry naming a profile the user layer never defined is a typo with a security
-    # smell — it silently widens nothing, but it means the author believed it did.
+    # Party depends on the primary assistant, so it is computed after every layer has been read.
+    primary_vendor = ADAPTERS.get(primary, {}).get("vendor") if primary else None
+    if primary and primary not in ADAPTERS:
+        warnings.append(f"primary {primary!r} is not a known adapter — party falls back to third-party")
+    for a in agents.values():
+        a["party"] = classify_party(a["base_url"], a["adapter"], a["vendor"],
+                                    primary_vendor, a["local_provider"])
+
+    # Narrowing after every layer, so `allow` is the intersection of all of them.
     if allow is not None:
-        for a in sorted(allow):
-            if a not in profiles:
-                warnings.append(
-                    f"allow lists {a!r}, which no user-layer profile defines — it grants nothing")
-        dropped = sorted(set(profiles) - allow)
-        for d in dropped:
-            profiles.pop(d)
+        for name in sorted(allow):
+            if name not in agents:
+                warnings.append(f"allow lists {name!r}, which no layer defines — it grants nothing")
+        dropped = sorted(set(agents) - allow)
+        for name in dropped:
+            agents.pop(name)
         if dropped:
-            narrowed.append({"layer": "effective", "dropped": dropped})
-        if not profiles:
-            errors.append(
-                "the allow lists intersect to nothing — no profile is permitted in this scope")
+            narrowed.append({"effect": "dropped", "agents": dropped})
+        if not agents:
+            errors.append("the allow lists intersect to nothing — no agent is permitted here")
 
-    if default is not None and default not in profiles:
-        errors.append(
-            f"default profile {default!r} (set by the {default_layer} layer) is not among the "
-            f"permitted profiles {sorted(profiles)!r}")
-        default = None
-    if default is None:
-        default = sorted(profiles)[0] if len(profiles) == 1 else None
-        default_layer = "implicit" if default else None
+    for f, pol in policies:
+        for key, block in pol.items():
+            targets = agents.values() if key == "*" else [agents[key]] if key in agents else []
+            for a in targets:
+                tighten(a, block, f"{f}[policy.{key}]", errors)
 
-    for p in profiles.values():
-        if p["settings_world_readable"]:
+    for a in list(agents.values()):
+        rp = a["require_party"]
+        if rp and PARTY_RANK[a["party"]] > PARTY_RANK[rp]:
+            narrowed.append({"effect": "party", "agent": a["name"],
+                             "required": rp, "actual": a["party"]})
+            agents.pop(a["name"])
+            continue
+        if a["allow_models"] is not None and a["model"] not in a["allow_models"]:
+            narrowed.append({"effect": "model", "agent": a["name"],
+                             "model": a["model"], "allowed": a["allow_models"]})
+            agents.pop(a["name"])
+            continue
+        # A capability that cannot be enforced must be visible, not assumed.
+        if a["capabilities"]["schema"] == "none":
             warnings.append(
-                f"{p['settings_file']} is mode {p['settings_mode']} and holds an auth token — "
-                f"group/world readable. Consider: chmod 600 {p['settings_file']}"
-            )
+                f"{a['name']}: the {a['adapter']} adapter cannot force an output schema, so "
+                f"ask-back is best-effort — a blocked sub-agent may return prose instead of a question")
+        if a["capabilities"]["tools"] == "coarse" and _toolset(a["allow_tools"]):
+            warnings.append(
+                f"{a['name']}: the {a['adapter']} adapter has sandbox levels, not a per-tool "
+                f"allowlist — {a['allow_tools']!r} is approximated, not enforced tool-by-tool")
+        if a["settings_world_readable"]:
+            warnings.append(f"{a['settings_path']} is mode {a['settings_mode']} and holds a token "
+                            f"— group/world readable. Consider: chmod 600 {a['settings_path']}")
 
-    # Deduplicate while preserving order: the union is a floor, and a repeated pattern in the
-    # output would read as if it were weighted.
-    seen: set[str] = set()
-    never_out = [n for n in never if not (n in seen or seen.add(n))]
+    # Default selection. A repo that narrows away the machine-wide default is the NORMAL case,
+    # not a misconfiguration, so fall back rather than erroring — and say which layer caused it.
+    default_reason = None
+    if default is not None and default not in agents:
+        if len(agents) == 1:
+            only = next(iter(agents))
+            default_reason = (f"{default!r} (set by {default_layer}) is not permitted here; "
+                              f"fell back to the only permitted agent {only!r}")
+            default = only
+            default_layer = "fallback"
+        else:
+            errors.append(
+                f"default {default!r} (set by {default_layer}) is not permitted here, and "
+                f"{len(agents)} agents remain — declare a default in this scope")
+            default = None
+    if default is None and len(agents) == 1:
+        default, default_layer = next(iter(agents)), "implicit"
 
+    seen = set()
     json.dump({
         "scope": scope,
-        "scope_rel": os.path.relpath(scope, root) if scope != root else ".",
-        "root": root,
         "layers": layers,
-        "profiles": sorted(profiles.values(), key=lambda p: p["name"]),
-        "default": default,
-        "default_layer": default_layer,
-        "never_delegate": never_out,
-        "narrowed": narrowed,
-        "warnings": warnings,
-        "errors": errors,
+        "primary": primary, "primary_layer": primary_layer, "primary_vendor": primary_vendor,
+        "agents": sorted(agents.values(), key=lambda a: a["name"]),
+        "default": default, "default_layer": default_layer, "default_reason": default_reason,
+        "never_delegate": [n for n in never if not (n in seen or seen.add(n))],
+        "narrowed": narrowed, "warnings": warnings, "errors": errors,
     }, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 1 if errors else 0
