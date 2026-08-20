@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
+# x442-payload-version: setup-project-tooling 1
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
+#
+# The marker line above is this skill's payload stamp. setup-project-tooling has no single
+# payload directory — its assets scatter across scripts/, .husky/, and root configs — so the
+# version rides in the one file that is unambiguously the skill's and always present. Keep it
+# on line 2, byte-identical to scripts/payload.version, so a one-line read finds it. An ABSENT
+# marker means a pre-versioning install, not a corrupt one.
 #
 # One script owns both halves of the hook lifecycle: `install` generates the gitignored
 # .husky/ hook files, and the per-hook sub-commands are what those generated files execute.

@@ -228,10 +228,33 @@ doc_id_of() {
   printf '%s' "$base"
 }
 
+# Board conditions that do NOT self-heal. reap_expired (above, run first) already clears any lease
+# whose owner lacks a future expires= — including a lock directory with no owner file at all — so
+# only a lease that is still VALID can be broken in a way worth reporting. Both checks below are
+# answerable from this repo alone, with no reference to the skill that installed the board; that
+# skill directory is unreachable from a consuming repo, which is why a stale-PAYLOAD check cannot
+# live here at all and belongs in verify-setup-handoff.sh instead. Reports and stops: a session
+# hook names the repair skill, it never repairs.
+board_health() {
+  local d id
+  for d in "$LOCKS"/*; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    # Checked across every layout's doc location rather than via arch_file, whose prefix-layout
+    # path re-adds a group prefix the lock id already carries.
+    [ -f "$(sec_dir)/$id.md" ] || [ -f "$(sec_dir)/archive/$id.md" ] || [ -f "$DIR/archive/$id.md" ] \
+      || printf 'lease .locks/%s has no handoff doc — orphaned by a rename or delete\n' "$id"
+  done
+  if [ ! -f "$DIR/INDEX.md" ] && [ -n "$(each_doc)" ]; then
+    printf 'INDEX.md is missing while handoff docs exist — the generated index is gone\n'
+  fi
+}
+
 case "$KIND" in
 
   sessionstart)
     reap_expired # stale leases self-heal at the start of every session
+    health="$(board_health)"
     out=""
     refs=""
     while IFS= read -r f; do
@@ -260,7 +283,7 @@ case "$KIND" in
       fi
       out="${out}${line}"$'\n'
     done < <(each_doc)
-    [ -z "$out" ] && [ -z "$refs" ] && exit 0
+    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && exit 0
     # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
     # into the hook command; single-repo uses the default in-repo location.
     hd="${HANDOFF_HDPATH:-.agents/handoff}"
@@ -275,6 +298,11 @@ Standalone / reference (no claim needed — edit freely):
 ${refs}"
     ctx="${ctx}
 Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
+    [ -n "$health" ] && ctx="${ctx}
+
+Board needs attention:
+$(printf '%s\n' "$health" | sed 's/^/  - /')
+  Repair: use the repair-handoff skill (re-running setup-handoff does not fix board state)."
     emit_context "$ctx"
     ;;
 

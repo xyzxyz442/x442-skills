@@ -1,0 +1,5 @@
+# AGENTS
+
+Shared guidelines.
+
+@guidelines

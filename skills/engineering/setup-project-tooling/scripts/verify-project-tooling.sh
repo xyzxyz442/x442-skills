@@ -34,6 +34,27 @@ warn() {
   printf '  [warn] %s\n' "$1"
   W=$((W + 1))
 }
+
+# Compare the installed payload stamp against the version this skill ships. A behind-but-working
+# install is a WARNING, never a FAIL — it still functions, it just predates a payload change, and
+# reserving the non-zero exit for real breakage keeps the harness contract meaningful. Silent when
+# the skill's own payload.version is unreadable, which is what happens if the verifier is copied
+# somewhere detached from its skill directory: unknown is not the same as behind.
+check_payload_version() { # installed-version skill-name   (caller reads the stamp; shapes differ)
+  local installed="$1" skill="$2" shipped
+  shipped="$(awk 'NR==1{print $2}' "$(dirname "$0")/payload.version" 2> /dev/null)"
+  [ -n "$shipped" ] || return 0
+  if [ -z "$installed" ]; then
+    warn "payload version unknown (pre-versioning install) — re-run $skill"
+  elif [ "$installed" -lt "$shipped" ] 2> /dev/null; then
+    warn "payload v$installed installed, skill ships v$shipped — re-run $skill"
+  elif [ "$installed" -gt "$shipped" ] 2> /dev/null; then
+    warn "payload v$installed installed is newer than the skill's v$shipped — this $skill copy is stale"
+  else
+    ok "payload v$installed matches the version $skill ships"
+  fi
+}
+
 is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
 
 echo "Repo: $ROOT"
@@ -59,6 +80,11 @@ if [ -f commitlint.config.mjs ]; then
 else
   bad "commitlint.config.mjs missing at repo root"
 fi
+# This skill has no single payload directory, so its stamp rides as a marker comment in
+# scripts/husky.sh — the one shipped file that is unambiguously ours and always present.
+check_payload_version \
+  "$(sed -n 's/^# x442-payload-version: [^ ][^ ]* //p' scripts/husky.sh 2> /dev/null | head -1)" \
+  setup-project-tooling
 
 echo
 echo "2. Declared tooling in package.json"
