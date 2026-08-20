@@ -41,7 +41,7 @@ The design these skills share — and what they wire into the repos they touch:
 
 ```text
 .
-├── AGENTS.md                       # shared rules for all AIs (source of truth)
+├── AGENTS.md                       # shared rules for all AI assistants (source)
 ├── CLAUDE.md                       # Claude Code overrides (imports AGENTS.md)
 ├── ANTIGRAVITY.md                  # Antigravity overrides
 ├── GEMINI.md                       # Gemini CLI overrides (deprecating)

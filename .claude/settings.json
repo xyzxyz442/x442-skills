@@ -1,14 +1,12 @@
 {
-  "enabledMcpjsonServers": [
-    "code-review-graph"
-  ],
+  "enabledMcpjsonServers": ["code-review-graph"],
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash \"$CLAUDE_PROJECT_DIR/../ais/src/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude"
           }
         ]
       }
@@ -18,16 +16,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "HANDOFF_REPO=x442-skills HANDOFF_HDPATH=../ais/src/.agents/handoff HANDOFF_GROUP=esbm bash \"$CLAUDE_PROJECT_DIR/../ais/src/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude"
           }
         ],
         "matcher": "Edit|Write|MultiEdit"
       }
-    ]
-  },
-  "permissions": {
-    "additionalDirectories": [
-      "../ais/src/.agents/handoff"
     ]
   }
 }

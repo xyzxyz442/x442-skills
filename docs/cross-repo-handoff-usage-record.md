@@ -10,20 +10,20 @@ generated hook commands, the board layout, and the verifier output are copied ve
 illustrative. Where a feature is described but not exercised here (the `prefix` layout, a group
 given its own separate board), it is marked as such and shown from the skill's contract.
 
-| Fact                    | Value                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Board                   | `ais/src/.agents/handoff` — a standalone directory, owned by no member repo                                  |
-| Topology                | `cross-repo`                                                                                                 |
-| Groups hosted           | `esbm`, `etl-tooling`, `fecs` — three sections on one board                                                  |
-| Layout                  | `subfolder` — each section is `<board>/<group>/`                                                             |
-| Members                 | `esbm`: `etl-prepaid-voice`, `etl-postpaid-data`, `x442-skills` · `fecs`: `fecs` · `etl-tooling`: none wired |
-| Docs per section        | `esbm` 6 · `etl-tooling` 43 · `fecs` 26                                                                      |
-| Declared in             | `ais/src/.handoff-repos.json` (workspace layer of the cascade)                                               |
-| Wired into this repo by | commit `e52fa5c` — `.claude/settings.json`, `.github/hooks/handoff.json`, `AGENTS.md`                        |
-| Health                  | `verify-cross-repo-handoff.sh` → **13 passed, 0 warnings, 0 failed**                                         |
+| Fact                    | Value                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Board                   | `workspace/src/.agents/handoff` — a standalone directory, owned by no member repo                  |
+| Topology                | `cross-repo`                                                                                       |
+| Groups hosted           | `acme`, `svc-tooling`, `events` — three sections on one board                                      |
+| Layout                  | `subfolder` — each section is `<board>/<group>/`                                                   |
+| Members                 | `acme`: `svc-voice`, `svc-billing`, `x442-skills` · `events`: `events` · `svc-tooling`: none wired |
+| Docs per section        | `acme` 6 · `svc-tooling` 43 · `events` 26                                                          |
+| Declared in             | `workspace/src/.handoff-repos.json` (workspace layer of the cascade)                               |
+| Wired into this repo by | commit `e52fa5c` — `.claude/settings.json`, `.github/hooks/handoff.json`, `AGENTS.md`              |
+| Health                  | `verify-cross-repo-handoff.sh` → **13 passed, 0 warnings, 0 failed**                               |
 
-The board started as a single `esbm` section holding all four repos and grew into three sections
-while this document was being written — `fecs` was split into its own group, and `etl-tooling` was
+The board started as a single `acme` section holding all four repos and grew into three sections
+while this document was being written — `events` was split into its own group, and `svc-tooling` was
 added. That regrouping is itself recorded below (§4), because it is the operation an adopting team
 will reach for first and it is a manifest edit, not a migration.
 
@@ -48,7 +48,7 @@ sync is the only writer.
 
 The cascade is `~/.agents/handoff-repos.json` → `<workspace>/.handoff-repos.json` →
 `<subdir>/.handoff-repos.json`, nearest wins — the same shape as `AGENTS.md`. Only the workspace
-layer exists here, at `ais/src/.handoff-repos.json`:
+layer exists here, at `workspace/src/.handoff-repos.json`:
 
 ```json
 {
@@ -56,29 +56,29 @@ layer exists here, at `ais/src/.handoff-repos.json`:
   "board": "./.agents/handoff",
   "layout": "subfolder",
   "groups": {
-    "fecs": {
+    "events": {
       "repos": [
         {
-          "alias": "fecs",
-          "path": "./esbm-esb-file-based-event-conversion-service",
-          "audience": "esbm-esb-file-based-event-conversion-service",
-          "notes": "FECS — Kafka consumer writing event payloads to NAS/Blob"
+          "alias": "events",
+          "path": "./acme-svc-event-writer",
+          "audience": "acme-svc-event-writer",
+          "notes": "Events — Kafka consumer writing event payloads to NAS/Blob"
         }
       ]
     },
-    "esbm": {
+    "acme": {
       "repos": [
         {
-          "alias": "etl-prepaid-voice",
-          "path": "./esbm-dfts-etl-icrm-prepaid-voice-usage",
-          "audience": "esbm-dfts-etl-icrm-prepaid-voice-usage",
-          "notes": "iCRM prepaid voice usage ETL"
+          "alias": "svc-voice",
+          "path": "./acme-svc-voice-ingest",
+          "audience": "acme-svc-voice-ingest",
+          "notes": "voice usage ingest"
         },
         {
-          "alias": "etl-postpaid-data",
-          "path": "./esbm-dfts-etl-icrm-postpaid-data-usage",
-          "audience": "esbm-dfts-etl-icrm-postpaid-data-usage",
-          "notes": "iCRM postpaid data usage ETL"
+          "alias": "svc-billing",
+          "path": "./acme-svc-billing-ingest",
+          "audience": "acme-svc-billing-ingest",
+          "notes": "billing usage ingest"
         },
         {
           "alias": "x442-skills",
@@ -88,7 +88,7 @@ layer exists here, at `ais/src/.handoff-repos.json`:
         }
       ]
     },
-    "etl-tooling": {
+    "svc-tooling": {
       "repos": []
     }
   }
@@ -100,12 +100,12 @@ Three details worth copying:
 - **Paths resolve against the manifest that declared them**, so a committed relative path means the
   same checkout on every machine. `x442-skills` lives outside the workspace and is reached with
   `../../x442-skills` — a member does **not** have to be a sibling of the board.
-- **`audience` is the acts-next routing name**, defaulting to `alias`. Here the ESBM services use
+- **`audience` is the acts-next routing name**, defaulting to `alias`. Here the ACME services use
   their full repo names while `x442-skills` uses its alias. That name is what another repo types in
   `handoff new … --audience <name>` to hand work over.
-- **A group may declare no repos at all.** `etl-tooling` has `"repos": []` and still gets a real
+- **A group may declare no repos at all.** `svc-tooling` has `"repos": []` and still gets a real
   section with 43 docs in it. Nothing is wired to it, so no repo's hooks scope a session there —
-  the docs are authored board-side (`handoff new --group etl-tooling …`) and routed by `audience` to
+  the docs are authored board-side (`handoff new --group svc-tooling …`) and routed by `audience` to
   repos that are not board members. That is the shape to use for tracking work in repos you have not
   onboarded yet, or will never onboard.
 
@@ -114,11 +114,11 @@ Three details worth copying:
 ```bash
 # preview — writes nothing, surfaces resolve errors (missing repo, bad path)
 bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh \
-  --scope ../ais/src --dry-run
+  --scope ../workspace/src --dry-run
 
 # apply
 bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh \
-  --scope ../ais/src --tools claude,copilot --primary copilot
+  --scope ../workspace/src --tools claude,copilot --primary copilot
 ```
 
 Landing in this repo as commit `e52fa5c`:
@@ -134,9 +134,9 @@ itself — nothing repo-specific is written into the shared board:
 
 ```text
 HANDOFF_REPO=x442-skills \
-HANDOFF_HDPATH=../ais/src/.agents/handoff \
-HANDOFF_GROUP=esbm \
-bash "$CLAUDE_PROJECT_DIR/../ais/src/.agents/handoff/scripts/hooks.sh" \
+HANDOFF_HDPATH=../workspace/src/.agents/handoff \
+HANDOFF_GROUP=acme \
+bash "$CLAUDE_PROJECT_DIR/../workspace/src/.agents/handoff/scripts/hooks.sh" \
   --kind sessionstart --tool claude
 ```
 
@@ -150,7 +150,7 @@ The board's own `config` stays repo-neutral and holds only board-global facts:
 
 ```text
 TOPOLOGY=cross-repo
-HANDOFF_GROUPS=esbm,etl-tooling,fecs
+HANDOFF_GROUPS=acme,svc-tooling,events
 HANDOFF_GROUP_LAYOUT=subfolder
 ```
 
@@ -160,14 +160,14 @@ unreadable, because `GROUPS` is a bash builtin already holding the user's gids.
 
 Per-tool wiring in this repo: **Copilot is primary** (it gets `preToolUse` deny + `agentStop` nag),
 **Claude is advisory** (`SessionStart` board injection + `PostToolUse` index regen). Claude also gets
-`permissions.additionalDirectories: ["../ais/src/.agents/handoff"]` so it may read and execute the
+`permissions.additionalDirectories: ["../workspace/src/.agents/handoff"]` so it may read and execute the
 board script that lives outside the repo.
 
 ```mermaid
 flowchart TD
     subgraph cascade["Manifest cascade (nearest wins)"]
         U["user<br/>~/.agents/handoff-repos.json"]
-        W["workspace<br/>ais/src/.handoff-repos.json<br/>(the one used here)"]
+        W["workspace<br/>workspace/src/.handoff-repos.json<br/>(the one used here)"]
         S["subdir<br/>&lt;dir&gt;/.handoff-repos.json"]
     end
     U --> R{{"resolve.py<br/>overlay by alias<br/>remove:true un-inherits"}}
@@ -176,21 +176,21 @@ flowchart TD
     R --> B["setup-handoff --board-only<br/>scaffold each distinct board"]
     R --> M["setup-handoff --topology cross-repo --group g<br/>once per member repo"]
     R --> X["render.py<br/>peer table into each AGENTS.md"]
-    B --> BD[("shared board<br/>ais/src/.agents/handoff")]
-    M --> H1["etl-prepaid-voice hooks"]
-    M --> H2["etl-postpaid-data hooks"]
+    B --> BD[("shared board<br/>workspace/src/.agents/handoff")]
+    M --> H1["svc-voice hooks"]
+    M --> H2["svc-billing hooks"]
     M --> H3["x442-skills hooks"]
-    M --> H4["fecs hooks"]
-    H1 -.->|HANDOFF_GROUP=esbm| BD
-    H2 -.->|HANDOFF_GROUP=esbm| BD
-    H3 -.->|HANDOFF_GROUP=esbm| BD
-    H4 -.->|HANDOFF_GROUP=fecs| BD
+    M --> H4["events hooks"]
+    H1 -.->|HANDOFF_GROUP=acme| BD
+    H2 -.->|HANDOFF_GROUP=acme| BD
+    H3 -.->|HANDOFF_GROUP=acme| BD
+    H4 -.->|HANDOFF_GROUP=events| BD
 ```
 
 ## 3. Board anatomy under `subfolder` layout
 
 ```text
-ais/src/.agents/handoff/
+workspace/src/.agents/handoff/
 ├── handoff              # the CLI — every member runs this one script
 ├── config               # TOPOLOGY / HANDOFF_GROUPS / HANDOFF_GROUP_LAYOUT
 ├── INDEX.md             # roll-up across ALL sections (generated)
@@ -199,13 +199,13 @@ ais/src/.agents/handoff/
 ├── templates/           # doc scaffolds
 ├── .locks/              # board-level locks (empty on a grouped board)
 ├── archive/             # board-level archive (sections keep their own)
-├── esbm/                # ── section: this repo's group ──
+├── acme/                # ── section: this repo's group ──
 │   ├── INDEX.md         # sub-index for this group only (generated)
 │   ├── .locks/          # leases for this group only
 │   ├── archive/
 │   └── <id>-handoff.md  # 6 docs
-├── etl-tooling/         # ── section with no wired member repo (43 docs) ──
-└── fecs/                # ── section: one repo, split out of esbm (26 docs) ──
+├── svc-tooling/         # ── section with no wired member repo (43 docs) ──
+└── events/                # ── section: one repo, split out of acme (26 docs) ──
 ```
 
 Every section-relative path derives from `(layout, group)`. This is the whole table the CLI branches
@@ -222,7 +222,7 @@ on — worth reading once, because it is also the answer to "can two groups use 
 
 The lock key is always the doc's **file stem**, which is what makes it unique board-wide: `subfolder`
 namespaces by putting `.locks` inside the section, `prefix` bakes the group into the stem. Either
-way, `sprint-1-handoff` in group `esbm` and `sprint-1-handoff` in group `fecs` are two
+way, `sprint-1-handoff` in group `acme` and `sprint-1-handoff` in group `events` are two
 different docs with two different leases.
 
 Choose `subfolder` unless something downstream cannot cope with nested directories (a flat docs
@@ -234,30 +234,30 @@ Several unrelated project groups share this one physical location without ever s
 The board config's `HANDOFF_GROUPS` is a comma-list; each member repo's hook command pins exactly
 one `HANDOFF_GROUP`. Three sections are live here, and they cover three different shapes:
 
-| Section       | Members wired                                           | Shape                                                                         |
-| ------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `esbm`        | `etl-prepaid-voice`, `etl-postpaid-data`, `x442-skills` | the ordinary case — peers handing work to each other                          |
-| `fecs`        | `fecs`                                                  | one repo given its own section, split out of `esbm`                           |
-| `etl-tooling` | none                                                    | a section with no wired repo — docs authored board-side, routed by `audience` |
+| Section       | Members wired                             | Shape                                                                         |
+| ------------- | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `acme`        | `svc-voice`, `svc-billing`, `x442-skills` | the ordinary case — peers handing work to each other                          |
+| `events`      | `events`                                  | one repo given its own section, split out of `acme`                           |
+| `svc-tooling` | none                                      | a section with no wired repo — docs authored board-side, routed by `audience` |
 
 ```mermaid
 flowchart TD
-    subgraph board["shared board — ais/src/.agents/handoff"]
+    subgraph board["shared board — workspace/src/.agents/handoff"]
         RU["INDEX.md — roll-up across every section"]
-        subgraph s1["esbm/"]
+        subgraph s1["acme/"]
             A1["INDEX.md · .locks/ · 6 docs"]
         end
-        subgraph s2["fecs/"]
+        subgraph s2["events/"]
             A2["INDEX.md · .locks/ · 26 docs"]
         end
-        subgraph s3["etl-tooling/"]
+        subgraph s3["svc-tooling/"]
             A3["INDEX.md · .locks/ · 43 docs"]
         end
     end
-    pv["etl-prepaid-voice<br/>HANDOFF_GROUP=esbm"] --> s1
-    pd["etl-postpaid-data<br/>HANDOFF_GROUP=esbm"] --> s1
-    xs["x442-skills<br/>HANDOFF_GROUP=esbm"] --> s1
-    fc["fecs repo<br/>HANDOFF_GROUP=fecs"] --> s2
+    pv["svc-voice<br/>HANDOFF_GROUP=acme"] --> s1
+    pd["svc-billing<br/>HANDOFF_GROUP=acme"] --> s1
+    xs["x442-skills<br/>HANDOFF_GROUP=acme"] --> s1
+    fc["events repo<br/>HANDOFF_GROUP=events"] --> s2
     none["(no wired repo)"] -.-> s3
     s1 -.-> RU
     s2 -.-> RU
@@ -270,10 +270,10 @@ What isolation actually means, in the order it bites:
    `HANDOFF_GROUP`; `each_doc` globs that section alone. From this repo, `list` returns 6 docs, not
    the 75 on the board.
 2. **Leases are per-section.** A repo reaps and nags only its own group's expired leases, so a stale
-   lock in `fecs` never interferes with `esbm`.
-3. **The session-start injection is per-section.** An agent opening a session in the `fecs` repo is
-   shown the `fecs` board and nothing else — the session board printed at the top of a Claude session
-   in _this_ repo is the `esbm` section for the same reason.
+   lock in `events` never interferes with `acme`.
+3. **The session-start injection is per-section.** An agent opening a session in the `events` repo is
+   shown the `events` board and nothing else — the session board printed at the top of a Claude session
+   in _this_ repo is the `acme` section for the same reason.
 4. **The edit gate is per-section.** The `pretool-edit` deny only knows about docs in the caller's
    group.
 5. **Only the roll-up reads across groups.** `<board>/INDEX.md` iterates `HANDOFF_GROUPS` plus the
@@ -284,18 +284,18 @@ Groups are therefore **co-located, not merged**. Two groups on one board share a
 
 ### Regrouping is a manifest edit, not a migration
 
-`fecs` began as a fourth member of `esbm` and was moved into a group of its own. The whole operation
+`events` began as a fourth member of `acme` and was moved into a group of its own. The whole operation
 is: move its entry to a new group key in `.handoff-repos.json`, re-sync, re-verify. The sync then
-does the rest — scaffolds `fecs/`, rewrites that repo's hook commands to `HANDOFF_GROUP=fecs`, and
+does the rest — scaffolds `events/`, rewrites that repo's hook commands to `HANDOFF_GROUP=events`, and
 **re-renders every peer table**, since peers are group-mates. In this repo that showed up as a
-one-line AGENTS.md diff: `fecs` dropped out of the peer list and out of the "peers you can hand off
+one-line AGENTS.md diff: `events` dropped out of the peer list and out of the "peers you can hand off
 to" line. It is no longer a peer of this repo — work aimed at it now crosses a section boundary and
 has to be filed in its section.
 
 Two consequences to plan for before splitting a group:
 
-- **Existing docs do not follow the repo automatically.** The section is scaffolded empty; the FECS
-  docs that used to sit in `esbm/` are in `fecs/` because they were moved there deliberately.
+- **Existing docs do not follow the repo automatically.** The section is scaffolded empty; the Events
+  docs that used to sit in `acme/` are in `events/` because they were moved there deliberately.
 - **The verifier does not check peer-table _contents_.** It confirms the block is present and scoped
   to the right group. A manifest edited but never synced is caught as drift; a hand-edited peer table
   matching the right group is not. Let the sync own that block.
@@ -310,11 +310,11 @@ the skill's contract as the reference. The `prefix` layout is likewise untested 
 Adding a group later is the same loop as any manifest edit:
 
 ```bash
-# 1. edit ais/src/.handoff-repos.json — add the group and its repos
+# 1. edit workspace/src/.handoff-repos.json — add the group and its repos
 # 2. preview, apply, verify
-bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh --scope ../ais/src --dry-run
-bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh --scope ../ais/src
-bash skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-handoff.sh --scope ../ais/src
+bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh --scope ../workspace/src --dry-run
+bash skills/engineering/register-cross-repo-handoff/scripts/sync-cross-repo-handoff.sh --scope ../workspace/src
+bash skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-handoff.sh --scope ../workspace/src
 ```
 
 The sync byte-compares before writing, so re-running leaves every member's `git status` clean, and
@@ -323,13 +323,13 @@ silent.
 
 ## 5. Working the board from a member repo
 
-From `x442-skills`, with `HANDOFF_GROUP=esbm` supplied by the hook environment:
+From `x442-skills`, with `HANDOFF_GROUP=acme` supplied by the hook environment:
 
 ```text
-../ais/src/.agents/handoff/handoff list
-../ais/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity medium
-../ais/src/.agents/handoff/handoff claim <id> "what you're doing"
-../ais/src/.agents/handoff/handoff release <id> --status done --verified-by "how you verified"
+../workspace/src/.agents/handoff/handoff list
+../workspace/src/.agents/handoff/handoff new <id> --title "..." --audience <peer> --severity medium
+../workspace/src/.agents/handoff/handoff claim <id> "what you're doing"
+../workspace/src/.agents/handoff/handoff release <id> --status done --verified-by "how you verified"
 ```
 
 Live output, truncated:
@@ -339,9 +339,9 @@ ID                                           STATUS    AUDIENCE                 
 -------------------------------------------- --------- --------------------------- -------- ----
 graph-hooks-sqlite-probe-handoff             open      x442-skills                 medium   —
 handoff-blocked-on-ignores-section-handoff   open      x442-skills                 medium   —
-pyeqx-common-initialize-gap-handoff          open      esbm-dfts-etl-icrm-...      high     —
-rotted-tests-raw-to-kafka-process-handoff    open      esbm-dfts-etl-icrm-...      high     —
-yarnrc-supply-chain-defaults-handoff         open      esbm-dfts-etl-icrm-...      medium   —
+acme-common-initialize-gap-handoff          open      acme-svc-billing-in...      high     —
+rotted-tests-raw-to-kafka-process-handoff    open      acme-svc-billing-in...      high     —
+yarnrc-supply-chain-defaults-handoff         open      acme-svc-billing-in...      medium   —
 
 Orchestrators (bundles — progress derived from children, no claim needed):
 ID                                           PROGRESS  OUTSTANDING
@@ -349,7 +349,7 @@ package-json-repo-migrations-handoff         4/100 done  migrate-… (MISSING), 
 ```
 
 Cross-repo routing is visible in the `AUDIENCE` column: the two `x442-skills` rows are bugs that a
-service repo found in this repo's skills and handed back; the `esbm-dfts-…` rows are work pointed the
+service repo found in this repo's skills and handed back; the `acme-svc-…` rows are work pointed the
 other way. That column, not any directory, is what says who acts next.
 
 The orchestrator row is the third doc type doing its job at fleet scale: it indexes a 100-repo
@@ -363,7 +363,7 @@ when four repos read the same section.
 ## 6. Verification
 
 ```bash
-bash skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-handoff.sh --scope ../ais/src
+bash skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-handoff.sh --scope ../workspace/src
 ```
 
 ```text
@@ -371,25 +371,25 @@ bash skills/engineering/register-cross-repo-handoff/scripts/verify-cross-repo-ha
   [PASS] cascade resolves with no errors
 
 2. boards
-  [PASS] board .../ais/src/.agents/handoff has payload
-  [PASS] board .../ais/src/.agents/handoff is cross-repo
-  [PASS] board .../ais/src/.agents/handoff hosts groups: esbm,etl-tooling,fecs
-  [PASS] board .../ais/src/.agents/handoff layout=subfolder
+  [PASS] board .../workspace/src/.agents/handoff has payload
+  [PASS] board .../workspace/src/.agents/handoff is cross-repo
+  [PASS] board .../workspace/src/.agents/handoff hosts groups: acme,svc-tooling,events
+  [PASS] board .../workspace/src/.agents/handoff layout=subfolder
 
 3. member repos
-  [PASS] esbm/etl-prepaid-voice AGENTS.md block present + scoped to esbm
-  [PASS] esbm/etl-prepaid-voice claude hooks wired to section esbm
-  [PASS] esbm/etl-postpaid-data AGENTS.md block present + scoped to esbm
-  [PASS] esbm/etl-postpaid-data claude hooks wired to section esbm
-  [PASS] esbm/x442-skills AGENTS.md block present + scoped to esbm
-  [PASS] esbm/x442-skills claude hooks wired to section esbm
-  [PASS] fecs/fecs AGENTS.md block present + scoped to fecs
-  [PASS] fecs/fecs claude hooks wired to section fecs
+  [PASS] acme/svc-voice AGENTS.md block present + scoped to acme
+  [PASS] acme/svc-voice claude hooks wired to section acme
+  [PASS] acme/svc-billing AGENTS.md block present + scoped to acme
+  [PASS] acme/svc-billing claude hooks wired to section acme
+  [PASS] acme/x442-skills AGENTS.md block present + scoped to acme
+  [PASS] acme/x442-skills claude hooks wired to section acme
+  [PASS] events/events AGENTS.md block present + scoped to events
+  [PASS] events/events claude hooks wired to section events
 
 Summary: 13 passed, 0 warnings, 0 failed
 ```
 
-Note what is _not_ in section 3: `etl-tooling` has no member repos, so there is nothing to verify
+Note what is _not_ in section 3: `svc-tooling` has no member repos, so there is nothing to verify
 per-repo. It appears only in the board's group list. A section with no wired repo is a legitimate
 state, not a gap the verifier is failing to notice.
 
@@ -415,7 +415,7 @@ Ordered by how much time each cost.
   under a week. Because peers are group-mates, every split silently rewrites who each repo can hand
   work to — re-read the peer table in your own `AGENTS.md` after any re-sync rather than trusting the
   set you remember.
-- **A section can outnumber its repos.** `etl-tooling` carries 43 docs and zero wired members; the
+- **A section can outnumber its repos.** `svc-tooling` carries 43 docs and zero wired members; the
   `package-json-repo-migrations` orchestrator indexes 100 children. Sections are cheap — do not force
   unrelated work into one group just because only one group has repos wired to it.
 - **`INDEX.md` files are generated — exclude them from formatters.** Their tables are intentionally

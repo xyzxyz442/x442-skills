@@ -161,8 +161,8 @@ Read this first if your collection already carries an earlier port.
    written ones are folded.
    The v0.7.0 cross-repo work is now
    **dogfooded at multi-group scale**: this repo is one of four repos on a live shared board that
-   hosts **three sub-indexed sections** (`esbm` 3 repos / 6 docs, `fecs` 1 repo / 26 docs,
-   `etl-tooling` **no wired repos** / 43 docs), and `verify-cross-repo-handoff.sh` reports
+   hosts **three sub-indexed sections** (one group of 3 repos / 6 docs, one of 1 repo / 26 docs,
+   and a third with **no wired repos** / 43 docs), and `verify-cross-repo-handoff.sh` reports
    **13 passed / 0 warnings / 0 failed** across the cascade, the board, and every member. Three
    things that only showed up under real use: a group **needs no member repos** (docs are authored
    board-side and routed by `audience` to repos that are not on the board — the shape to use for work

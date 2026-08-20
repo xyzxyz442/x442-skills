@@ -35,7 +35,7 @@ Titles are now folded, but two fields still admit colons:
 Fix (this session): `norm_title()` was generalized to `fold_colons()` and applied to every
 free-text frontmatter value the CLI writes — `note`, and also `audience`/`severity`, which
 turned out to have the same hole and were never listed. `blocked_on` keeps `external: …` as
-the spelling to *type* and folds it on write, so it stores as `external — …`.
+the spelling to _type_ and folds it on write, so it stores as `external — …`.
 
 ## Where
 
@@ -46,13 +46,13 @@ the spelling to *type* and folds it on write, so it stores as `external — …`
   covered by one call; applied to the `external:` arm of the `blocked_on` case in `cmd_release`,
   which also now accepts the `external — …` and `external - …` spellings.
 - Installed copies synced: `.agents/handoff/handoff`, the three harness fixture boards, and the
-  shared cross-repo board at `../ais/src/.agents/handoff/handoff` (plus its `README.md`).
+  external shared cross-repo board this repo was wired to at the time (plus its `README.md`).
 - `harness/setup-handoff-workspace/grade.py` — new `_fm_colon_offenders()` helper (no yaml
   dependency); the `external:` expectation now asserts colon-free storage; three added:
   `--note` folding, the em-dash blocker spelling, and a catch-all sweep over every doc the
   suite writes.
 - Docs: `skills/engineering/run-handoff/SKILL.md`, `skills/engineering/setup-handoff/scripts/
-  payload/README.md` (Naming + the `blocked_on` field row),
+payload/README.md` (Naming + the `blocked_on` field row),
   `skills/engineering/setup-handoff/assets/agents-handoff.md`, `AGENTS.md` routing block.
 
 ## Verify
@@ -70,7 +70,7 @@ has YAML-safe frontmatter". Or directly: `handoff new t --note "a: b"` and a doc
 
 ## Decisions
 
-- ~~Do not silently fold `blocked_on`~~ — resolved: the *typed* spelling stays `external: …`
+- ~~Do not silently fold `blocked_on`~~ — resolved: the _typed_ spelling stays `external: …`
   (every doc, the usage string, and the harness expectation keep their meaning), and only the
   stored value is folded. Nothing reads the colon: the hooks take `${bo%% *}` — "external",
   never an archived id — `surface_unblocked` substring-matches the closed id, and list/INDEX
