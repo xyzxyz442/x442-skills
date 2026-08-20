@@ -350,7 +350,7 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   local repo_id=""
   [ "$TOPOLOGY" = "cross-repo" ] && repo_id="$(basename "$REPO")"
   HANDOFF_HDPATH="$HDPATH" HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \
-    python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" \
+    python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" --repo-root "$REPO" \
     && echo "  wired $tool ($([ "$primary" = 1 ] && echo 'hard enforcement' || echo advisory)): $cfg" \
     || echo "  WARN: could not wire $tool config: $cfg" >&2
 }
