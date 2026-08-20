@@ -3,7 +3,7 @@ id: verify-run-repos-empty-list-handoff
 title: repos — [] blocks --run-verify for every doc new creates
 type: coordination
 status: done
-audience: 
+audience:
 repos: []
 severity: low
 created: 2026-08-03
@@ -44,7 +44,7 @@ handoff release vq --status done --verified-by z --run-verify
 
 Nothing else reads `repos:`, so the blast radius is exactly this one gate.
 
-Fix (this session): `doc_is_local()` now reads the *effective* list rather than the raw line.
+Fix (this session): `doc_is_local()` now reads the _effective_ list rather than the raw line.
 Probing the whole boundary first turned up **two more defects in the same function**, both in
 the opposite direction — the gate failing OPEN — and both contradicting this doc's own
 "`repos: [other-repo]` must keep returning false" invariant:
