@@ -30,23 +30,29 @@ KIND=""
 REPO=""
 TOOL="claude"
 PROJECT_DIR=""
+# Each flag shifts 2 (flag + value) when a value is present, but only 1 when it's the last
+# argument (`${2:-}` silently reads empty rather than erroring, so `shift 2` on a lone trailing
+# flag would try to shift past the end of $@ — a no-op that never advances $#, spinning this loop
+# forever and hanging the tool session that invoked the hook). The arithmetic guarantees the loop
+# always advances by at least 1, so a missing value degrades to an empty flag value instead of a
+# hang — consistent with this file's general rule that a hook must never hard-fail the session.
 while [ $# -gt 0 ]; do
   case "$1" in
     --kind)
       KIND="${2:-}"
-      shift 2
+      shift $(($# > 1 ? 2 : 1))
       ;;
     --repo)
       REPO="${2:-}"
-      shift 2
+      shift $(($# > 1 ? 2 : 1))
       ;;
     --tool)
       TOOL="${2:-}"
-      shift 2
+      shift $(($# > 1 ? 2 : 1))
       ;;
     --project-dir)
       PROJECT_DIR="${2:-}"
-      shift 2
+      shift $(($# > 1 ? 2 : 1))
       ;;
     *) shift ;;
   esac
@@ -58,19 +64,29 @@ done
 # the git toplevel is a cwd-dependent guess, and neither existing is correct for a standalone
 # board operated directly.
 #
-# Spelled out as an if/elif/else rather than `. A 2>/dev/null || . B`: eval "$(fn)" returns 0 even
-# when the command substitution itself failed with a 127 (function not found) — command
-# substitution swallows a failed source's exit status, and `eval ""` then succeeds — so a chained
-# `||` cannot fail closed here. It would leave handoff_config_load undefined, `eval` would still
-# report success, and the script would run on to die under `set -u` with a raw
-# "HC_TOPOLOGY: unbound variable". Each source attempt is checked on its own instead.
+# Two places here used to trust a chained `||` to fail closed, and both are wrong for the same
+# underlying reason: command substitution swallows the exit status of what ran INSIDE it, so
+# whatever wraps the substitution (a bare `.`, or `eval`) reports its OWN status, never the
+# callee's.
+#   1. Sourcing config.sh: `. A 2>/dev/null || . B` — if BOTH files are missing, the `.` fails
+#      with 127, but that never reaches a `||` check because there's no B being compared against;
+#      it just runs on. Fixed with an explicit if/elif/else that checks each candidate itself.
+#   2. Loading config: `eval "$(handoff_config_load ...)" || exit 0` — when the function ITSELF
+#      fails (malformed board or repo config.json, or python3 missing while a config.json exists)
+#      it prints nothing and returns 3, but `eval` reports the status of evaluating that (empty)
+#      string, which is 0 — so `|| exit 0` never fires, every HC_* stays unset, and the script
+#      dies under `set -u` on the first read, crashing BEFORE any deny/allow decision is emitted.
+#      Fixed by capturing the function's own output into a plain variable first (a plain
+#      assignment DOES propagate the command substitution's exit status), branching on THAT, and
+#      only then evaluating the captured text.
 #
-# Unlike the `handoff` CLI (which hard-exits when config.sh is missing), THIS hook must never
-# hard-fail the user's editing session — a pretool hook that dies breaks ordinary edits — and must
-# never silently disable the deny gate either. So a missing config.sh falls back to built-in
-# defaults (the gate only needs to know the board directory, which it already has via $DIR; it
-# does not need config to enforce leases), the degradation is recorded in CONFIG_MISSING, and
-# (sessionstart only — pretool/posttool/stop stay silent and fast) it is surfaced to the user.
+# Unlike the `handoff` CLI (which hard-exits on either failure), THIS hook must never hard-fail the
+# user's editing session — a pretool hook that dies breaks ordinary edits — and must never silently
+# disable the deny gate either. So EITHER failure (config.sh missing, or handoff_config_load itself
+# failing) falls back to built-in defaults (the gate only needs to know the board directory, which
+# it already has via $DIR; it does not need config to enforce leases). The degradation is recorded
+# in CONFIG_MISSING and, sessionstart only (pretool/posttool/stop stay silent and fast), surfaced
+# to the user.
 CONFIG_MISSING=0
 # shellcheck disable=SC1091
 if [ -f "$DIR/scripts/config.sh" ]; then
@@ -79,6 +95,17 @@ elif [ -f "$DIR/config.sh" ]; then
   . "$DIR/config.sh"
 else
   CONFIG_MISSING=1
+fi
+
+if [ "$CONFIG_MISSING" != "1" ]; then
+  REPO_DIR="$PROJECT_DIR"
+  [ -z "$REPO_DIR" ] && REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
+  _hc_out=""
+  if _hc_out="$(handoff_config_load "$DIR" "$REPO_DIR")"; then
+    eval "$_hc_out"
+  else
+    CONFIG_MISSING=1
+  fi
 fi
 
 if [ "$CONFIG_MISSING" = "1" ]; then
@@ -90,10 +117,6 @@ if [ "$CONFIG_MISSING" = "1" ]; then
   HC_TTL_HOURS=4
   HC_ALLOW_VERIFY_CMD=0
   HC_BOARD_PATH=""
-else
-  REPO_DIR="$PROJECT_DIR"
-  [ -z "$REPO_DIR" ] && REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
-  eval "$(handoff_config_load "$DIR" "$REPO_DIR")" || exit 0
 fi
 
 TOPOLOGY="$HC_TOPOLOGY"

@@ -16,10 +16,21 @@ LOCKS="$DIR/.locks"
 #   env > repo config.json > board config.json > legacy config > default
 # TTL_HOURS used to be read HERE, above the config load, which meant a value set in the board's
 # own config file was captured too late to ever apply. Every knob is now read AFTER the load.
-# Spelled out as an if/elif/else rather than `A || B || die`: eval "$(undefined_fn)" returns 0
-# even when the command substitution itself failed with a 127 (function not found), so a chained
-# `||` cannot fail closed here -- it silently continues with every HC_* variable unbound instead
-# of reporting the real problem. Each source attempt must be checked on its own.
+#
+# Two places this file used to trust a chained `||` to fail closed, and both were wrong for the
+# same underlying reason: command substitution swallows the exit status of what ran INSIDE it, so
+# whatever wraps the substitution (a bare `.`, or `eval`) reports its OWN status, never the
+# callee's.
+#   1. Sourcing config.sh: `A 2>/dev/null || B` -- if BOTH are missing, the `.` fails with 127,
+#      but there is no `||` comparison that can catch it (there's no B to try in that shape). An
+#      explicit if/elif/else checks each candidate on its own instead.
+#   2. Loading config: `eval "$(handoff_config_load ...)" || exit 3` -- when the function ITSELF
+#      fails (malformed board or repo config.json, or python3 missing while a config.json exists)
+#      it prints nothing and returns 3, but `eval` reports the status of evaluating that (empty)
+#      string, which is 0 -- so `|| exit 3` never fires and every HC_* stays unset, dying under
+#      `set -u`. Fixed by capturing the function's own output into a plain variable first (a plain
+#      assignment DOES propagate the command substitution's exit status), branching on THAT, and
+#      only then evaluating the captured text.
 # shellcheck disable=SC1091
 if [ -f "$DIR/scripts/config.sh" ]; then
   . "$DIR/scripts/config.sh"
@@ -30,7 +41,13 @@ else
   exit 3
 fi
 REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
-eval "$(handoff_config_load "$DIR" "$REPO_DIR")" || exit 3
+_hc_out=""
+if _hc_out="$(handoff_config_load "$DIR" "$REPO_DIR")"; then
+  eval "$_hc_out"
+else
+  # handoff_config_load already wrote the reason to stderr -- don't print a second, vaguer one.
+  exit 3
+fi
 
 TOPOLOGY="$HC_TOPOLOGY"
 HANDOFF_GROUPS="${HANDOFF_GROUPS:-$HC_GROUPS}"
