@@ -31,16 +31,21 @@ command -v python3 > /dev/null 2>&1 || die "missing dependency 'python3'" 69
 # back to a watchdog: a dispatch without a wall-clock kill is the failure mode where a model that
 # loses the tool-call format spins until something else notices.
 run_limited() {
-  local secs="$1"
-  shift
+  # run_limited SECS STDIN_FILE CMD...
+  #
+  # stdin is passed as a PATH, not inherited. Backgrounding with `&` detaches stdin to /dev/null,
+  # so a redirect on the caller silently produced an empty prompt — and only on this path, since
+  # the GNU `timeout` branch inherits stdin normally and would have masked it.
+  local secs="$1" input="$2"
+  shift 2
   if command -v timeout > /dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30s "$secs" "$@"
+    timeout --signal=TERM --kill-after=30s "$secs" "$@" < "$input"
     return $?
   elif command -v gtimeout > /dev/null 2>&1; then
-    gtimeout --signal=TERM --kill-after=30s "$secs" "$@"
+    gtimeout --signal=TERM --kill-after=30s "$secs" "$@" < "$input"
     return $?
   fi
-  "$@" &
+  "$@" < "$input" &
   local pid=$!
   (
     sleep "$secs"
@@ -255,11 +260,10 @@ done <<< "$(printf '%s' "$RESOLVED" | jq -r '.never_delegate[]')"
 # Content scan before anything leaves. This is the enforceable half of the no-secret rule.
 scan_secrets "$BRIEF" "dispatch this brief"
 
-cat > "$SCHEMA" << 'JSON'
-{"type":"object","required":["status"],"additionalProperties":false,
- "properties":{"status":{"type":"string","enum":["done","needs_input","blocked"]},
- "result":{"type":"string"},"question":{"type":"string"},"context":{"type":"string"}}}
-JSON
+# Written on ONE line on purpose. The adapter contract is one argv element per line, so a value
+# containing a newline is split into several arguments — a multi-line schema reached the CLI as
+# fragments and was rejected as invalid JSON.
+printf '%s\n' '{"type":"object","required":["status"],"additionalProperties":false,"properties":{"status":{"type":"string","enum":["done","needs_input","blocked"]},"result":{"type":"string"},"question":{"type":"string"},"context":{"type":"string"}}}' > "$SCHEMA"
 
 jq -nc --arg at "$ALLOW" --arg m "$MODE" --argjson mt "$TURNS" --argjson to "$TIMEOUT" \
   --arg sf "$SCHEMA" --arg pf "$BRIEF" --arg lm "$LAST" --arg rf "$RAW" --arg r "$RESUME" \
@@ -289,7 +293,7 @@ fi
 
 START=$(date +%s)
 set +e
-run_limited "$TIMEOUT" "$AGENT_BIN" --agent "$AGENT" --spec "$SPEC" < "$BRIEF" > "$RAW" 2> "$LOG"
+run_limited "$TIMEOUT" "$BRIEF" "$AGENT_BIN" --agent "$AGENT" --spec "$SPEC" > "$RAW" 2> "$LOG"
 RC=$?
 set -e
 DURATION=$(($(date +%s) - START))

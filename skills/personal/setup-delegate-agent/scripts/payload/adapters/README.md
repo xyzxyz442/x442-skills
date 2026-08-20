@@ -10,6 +10,10 @@ build   spec -> one argv element per line on stdout
 parse   spec -> normalised {result, session_id} JSON, given .raw_file
 ```
 
+**Argv elements must not contain newlines.** `build` emits one element per line, so a value
+with an embedded newline is split into several arguments. Anything multi-line (a JSON schema,
+a prompt) must be written on one line or passed by file path.
+
 The spec carries: `model`, `allow_tools`, `mode`, `max_turns`, `timeout`, `schema_file`,
 `prompt_file`, `last_message_file`, `raw_file`, `resume`, `worktree`, `local_provider`,
 `config_dir`, `base_url`, `strict_mcp`.
