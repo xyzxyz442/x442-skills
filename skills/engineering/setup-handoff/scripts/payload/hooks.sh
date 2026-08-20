@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Handoff hooks — makes the claim/release protocol self-enforcing.
 # Wired into each tool's hook config by setup-handoff (see the skill).
-# Usage: hooks.sh --kind sessionstart|pretool-edit|posttool-edit|stop [--tool claude|gemini|copilot] [--repo <name>]
+# Usage: hooks.sh --kind sessionstart|pretool-edit|posttool-edit|stop [--tool claude|gemini|copilot] [--repo <name>] [--project-dir <path>]
 #
 # Every kind reads the hook's JSON payload on stdin. Identity is the payload's
 # session_id, which `handoff claim` records verbatim into .locks/<id>/owner as
@@ -26,10 +26,10 @@ else
   DIR="$SELF_DIR"
 fi
 LOCKS="$DIR/.locks"
-TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
 KIND=""
 REPO=""
 TOOL="claude"
+PROJECT_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --kind)
@@ -44,25 +44,68 @@ while [ $# -gt 0 ]; do
       TOOL="${2:-}"
       shift 2
       ;;
+    --project-dir)
+      PROJECT_DIR="${2:-}"
+      shift 2
+      ;;
     *) shift ;;
   esac
 done
 
-# config (committed): TOPOLOGY, REPO_NAME. On a SHARED (cross-repo) board the config carries no
-# REPO_NAME — the consuming repo's identity is its own, passed per-repo via $HANDOFF_REPO (baked
-# into the hook command by setup-handoff). So env identity wins over the shared config value.
-TOPOLOGY="single-repo"
-REPO_NAME=""
+# Configuration comes from config.sh — see the precedence note there. Identity used to be
+# DECLARED in the hook command as a HANDOFF_REPO= prefix; it is now DISCOVERED from the consuming
+# repo's own config. Resolution order is deliberate: --project-dir is exact and tool-provided,
+# the git toplevel is a cwd-dependent guess, and neither existing is correct for a standalone
+# board operated directly.
+#
+# Spelled out as an if/elif/else rather than `. A 2>/dev/null || . B`: eval "$(fn)" returns 0 even
+# when the command substitution itself failed with a 127 (function not found) — command
+# substitution swallows a failed source's exit status, and `eval ""` then succeeds — so a chained
+# `||` cannot fail closed here. It would leave handoff_config_load undefined, `eval` would still
+# report success, and the script would run on to die under `set -u` with a raw
+# "HC_TOPOLOGY: unbound variable". Each source attempt is checked on its own instead.
+#
+# Unlike the `handoff` CLI (which hard-exits when config.sh is missing), THIS hook must never
+# hard-fail the user's editing session — a pretool hook that dies breaks ordinary edits — and must
+# never silently disable the deny gate either. So a missing config.sh falls back to built-in
+# defaults (the gate only needs to know the board directory, which it already has via $DIR; it
+# does not need config to enforce leases), the degradation is recorded in CONFIG_MISSING, and
+# (sessionstart only — pretool/posttool/stop stay silent and fast) it is surfaced to the user.
+CONFIG_MISSING=0
 # shellcheck disable=SC1091
-[ -f "$DIR/config" ] && . "$DIR/config"
-[ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$REPO_NAME}"
+if [ -f "$DIR/scripts/config.sh" ]; then
+  . "$DIR/scripts/config.sh"
+elif [ -f "$DIR/config.sh" ]; then
+  . "$DIR/config.sh"
+else
+  CONFIG_MISSING=1
+fi
+
+if [ "$CONFIG_MISSING" = "1" ]; then
+  HC_TOPOLOGY="single-repo"
+  HC_REPO_NAME=""
+  HC_GROUP=""
+  HC_GROUPS=""
+  HC_GROUP_LAYOUT=""
+  HC_TTL_HOURS=4
+  HC_ALLOW_VERIFY_CMD=0
+  HC_BOARD_PATH=""
+else
+  REPO_DIR="$PROJECT_DIR"
+  [ -z "$REPO_DIR" ] && REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
+  eval "$(handoff_config_load "$DIR" "$REPO_DIR")" || exit 0
+fi
+
+TOPOLOGY="$HC_TOPOLOGY"
+TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
+[ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
 # group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
 # this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
 # the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
-LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
+LAYOUT="${HANDOFF_GROUP_LAYOUT:-$HC_GROUP_LAYOUT}"
 slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
-GROUP="${HANDOFF_GROUP:-}"
+GROUP="${HANDOFF_GROUP:-$HC_GROUP}"
 [ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
 sec_dir() { if [ "$LAYOUT" = "subfolder" ] && [ -n "$GROUP" ]; then printf '%s' "$DIR/$GROUP"; else printf '%s' "$DIR"; fi; }
 arch_file() { # id -> archived doc path in this section
@@ -283,7 +326,7 @@ case "$KIND" in
       fi
       out="${out}${line}"$'\n'
     done < <(each_doc)
-    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && exit 0
+    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && exit 0
     # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
     # into the hook command; single-repo uses the default in-repo location.
     hd="${HANDOFF_HDPATH:-.agents/handoff}"
@@ -303,6 +346,10 @@ Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
 Board needs attention:
 $(printf '%s\n' "$health" | sed 's/^/  - /')
   Repair: use the repair-handoff skill (re-running setup-handoff does not fix board state)."
+    [ "$CONFIG_MISSING" = "1" ] && ctx="${ctx}
+
+This board is missing scripts/config.sh — identity and settings are running on built-in defaults.
+Re-run setup-handoff to update it."
     emit_context "$ctx"
     ;;
 
