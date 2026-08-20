@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "primary": "claude",
+  "default": "local-qwen",
+  "agents": {
+    "local-qwen": {
+      "adapter": "codex",
+      "localProvider": "lmstudio",
+      "model": "qwen-local",
+      "context": 256000,
+      "allowTools": "Read,Grep,Glob",
+      "autoApprove": ["read-only", "formatting"]
+    },
+    "local-alt": {
+      "adapter": "codex",
+      "localProvider": "ollama",
+      "model": "qwen-alt"
+    }
+  }
+}

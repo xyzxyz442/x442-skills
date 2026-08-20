@@ -33,6 +33,9 @@ HOMES = HERE / "evals/homes"
 
 # Which HOME layer each eval resolves against. Pinning this keeps a graded run from reading the
 # operator's real roster, which would be unrepeatable and could point a fixture at a live endpoint.
+# NOTE: these directory names must not match the repo .gitignore. A fixture named "local" was
+# silently swallowed by the `[Ll]ocal` pattern inherited from the Visual Studio template — the
+# harness passed here and would have failed on a fresh clone.
 HOME_FOR = {"third-party": "third-party"}
 
 
@@ -45,13 +48,13 @@ _HOME = {"path": None}
 
 
 def _home(eval_id):
-    return str(_HOME["path"] or (HOMES / HOME_FOR.get(eval_id, "local")))
+    return str(_HOME["path"] or (HOMES / HOME_FOR.get(eval_id, "on-machine")))
 
 
 def _isolated_home(eval_id):
     tmp = tempfile.mkdtemp(prefix="x442-delegate-home-")
     dest = Path(tmp) / "home"
-    shutil.copytree(HOMES / HOME_FOR.get(eval_id, "local"), dest)
+    shutil.copytree(HOMES / HOME_FOR.get(eval_id, "on-machine"), dest)
     return dest, (lambda: shutil.rmtree(tmp, ignore_errors=True))
 
 
