@@ -34,6 +34,27 @@ warn() {
   printf '  [warn] %s\n' "$1"
   W=$((W + 1))
 }
+
+# Compare the installed payload stamp against the version this skill ships. A behind-but-working
+# install is a WARNING, never a FAIL — it still functions, it just predates a payload change, and
+# reserving the non-zero exit for real breakage keeps the harness contract meaningful. Silent when
+# the skill's own payload.version is unreadable, which is what happens if the verifier is copied
+# somewhere detached from its skill directory: unknown is not the same as behind.
+check_payload_version() { # installed-version skill-name   (caller reads the stamp; shapes differ)
+  local installed="$1" skill="$2" shipped
+  shipped="$(awk 'NR==1{print $2}' "$(dirname "$0")/payload.version" 2> /dev/null)"
+  [ -n "$shipped" ] || return 0
+  if [ -z "$installed" ]; then
+    warn "payload version unknown (pre-versioning install) — re-run $skill"
+  elif [ "$installed" -lt "$shipped" ] 2> /dev/null; then
+    warn "payload v$installed installed, skill ships v$shipped — re-run $skill"
+  elif [ "$installed" -gt "$shipped" ] 2> /dev/null; then
+    warn "payload v$installed installed is newer than the skill's v$shipped — this $skill copy is stale"
+  else
+    ok "payload v$installed matches the version $skill ships"
+  fi
+}
+
 # Two shapes, two names. They used to share the name `is_json` across the verify scripts with
 # different argument meanings (a file path in some, a JSON string in others) — one copy-paste away
 # from a check that silently always passes.
@@ -152,6 +173,7 @@ done
 for f in pretool-shell.sh pretool-read.sh sessionstart.sh endturn.sh; do
   [ -f ".graph-hooks/copilot/$f" ] && ok "copilot/$f present" || warn "copilot/$f missing (copilot hooks would no-op)"
 done
+check_payload_version "$(awk 'NR==1{print $2}' .graph-hooks/.version 2> /dev/null)" setup-graph-hooks
 
 # git hook + gitignore
 GH=""
