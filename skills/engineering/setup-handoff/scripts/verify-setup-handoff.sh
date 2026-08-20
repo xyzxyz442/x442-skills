@@ -140,15 +140,23 @@ if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
   else warn "scripts/config.sh missing — re-run setup-handoff"; fi
 else bad "config missing (no config.json)"; fi
 # A typo'd key is inert and silent today; name it. Unknown keys are a warning, not a failure —
-# a future payload may add keys this verifier predates.
+# a future payload may add keys this verifier predates. A file that fails to parse must NOT
+# report either PASS or WARN here: exit 2 (distinct from the "found unknown keys" success path)
+# is how the python side tells the shell "could not check" from "checked, found nothing" — the
+# malformed-JSON FAIL above already covers that condition, so this check stays silent rather
+# than printing a false PASS for a check it never actually performed.
 if [ -f "$HD/config.json" ] && command -v python3 > /dev/null 2>&1; then
   UNKNOWN="$(python3 -c '
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd","boardPath"}
 try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
+except Exception: sys.exit(2)
+if not isinstance(d, dict): sys.exit(2)
 print(",".join(sorted(set(d)-known)))' "$HD/config.json" 2> /dev/null)"
-  [ -n "$UNKNOWN" ] && warn "config.json has unknown key(s): $UNKNOWN" || ok "config.json keys all recognised"
+  RC=$?
+  if [ "$RC" -eq 0 ]; then
+    [ -n "$UNKNOWN" ] && warn "config.json has unknown key(s): $UNKNOWN" || ok "config.json keys all recognised"
+  fi
 fi
 if [ "$TOPO" = "cross-repo" ]; then
   # Shared board lives outside the worktree and owns its own .gitignore; a consumer .locks/ entry
