@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# Minimal `timeout` stand-in for the harness. Stock macOS ships no GNU coreutils, so without this
-# every graded dispatch would stop at the dependency preflight and test nothing downstream.
-# It intentionally does NOT enforce a limit — the harness grades control flow, not wall-clock
-# behaviour, and a stub that could kill a run would make failures look like timeouts.
-while [[ "$1" == --* ]]; do shift; done
-shift # drop the duration argument
-exec "$@"

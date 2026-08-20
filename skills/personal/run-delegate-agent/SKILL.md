@@ -25,15 +25,17 @@ The decision is yours to make and the user's to approve.
 Weigh four things. They are independent — a task can be perfectly mechanical and still be a bad
 delegation because it does not fit, or because of where it would go.
 
-| Axis       | Ask                                                          | Disqualifying answer                                  |
-| ---------- | ------------------------------------------------------------ | ----------------------------------------------------- |
-| **Fit**    | Is the work mechanical, with a checkable definition of done? | Needs design judgment, or "done" is a matter of taste |
-| **Size**   | Do the files it must read fit the profile's context window?  | One file, or the set, blows the window                |
-| **Egress** | Is the profile local or remote?                              | Remote, and the material is confidential              |
-| **Risk**   | What does a wrong cheap edit cost, given the allowlist?      | Writes outside a worktree with no test to catch it    |
+| Axis      | Ask                                                          | Disqualifying answer                                  |
+| --------- | ------------------------------------------------------------ | ----------------------------------------------------- |
+| **Fit**   | Is the work mechanical, with a checkable definition of done? | Needs design judgment, or "done" is a matter of taste |
+| **Size**  | Do the files it must read fit the profile's context window?  | One file, or the set, blows the window                |
+| **Party** | Is the agent local, same-party, or third-party?              | Third-party, and the material is confidential         |
+| **Risk**  | What does a wrong cheap edit cost, given the allowlist?      | Writes outside a worktree with no test to catch it    |
 
-Read the active profile and its egress class out of the `AGENTS.md` delegate block — the setup
-skill renders them there so you do not have to guess.
+Read the roster and each agent's party class out of the `AGENTS.md` delegate block — the setup
+skill renders them there so you do not have to guess. `local` never leaves the machine;
+`same-party` goes to the vendor already running your primary assistant, so it adds no
+observer; `third-party` adds one.
 
 Estimate size rather than hoping: roughly bytes ÷ 4 ≈ tokens for everything it must open. If one
 task would pull in a large tree, split it into per-file or per-directory dispatches instead. A
@@ -48,10 +50,10 @@ more to check than to have done yourself.
 ## 2. Ask the user, and say what you concluded
 
 Present the assessment, not just the question — an approval prompt with no reasoning trains
-reflexive clicking. Include the profile, its egress, what will be touched, the tool allowlist, and
+reflexive clicking. Include the agent, its party class, what will be touched, the tool allowlist, and
 your recommendation, **including when your recommendation is not to delegate**.
 
-If the profile is remote, say so in the prompt. "This sends the file to a hosted endpoint" is
+If the agent is third-party, say so in the prompt. "This sends the file to someone who cannot
 information the user needs before answering, not after.
 
 Classes listed in the profile's `autoApprove` (typically read-only or formatting work) still need
@@ -101,6 +103,20 @@ A `status: misrouted` naming a scope request means the sub-agent asked to widen 
 permissions. Do not relay that as a question and do not re-approve to satisfy it — re-brief within
 the existing scope, or do the task yourself.
 
+## What the dispatcher refuses regardless of approval
+
+Some things are not yours to approve, and the dispatcher enforces them before the agent starts:
+
+- a brief naming a never-delegate path, or one that a credential scan flags
+- an allowlist that differs from what was approved — widening after the fact is the escalation the
+  gate exists to stop
+- `bypassPermissions`, in any mode
+- a returned result carrying a credential, which is blocked on the way back rather than reaching
+  this session's transcript, where nothing could remove it
+
+Treat a `status: blocked` naming a secret as a brief-authoring bug, not an obstacle. Rewrite the
+brief to reference the value by name rather than by content.
+
 ## 6. Verify the claim, then report a verdict
 
 **The agent asserting success is not success.** Run the definition-of-done command yourself. A
@@ -119,7 +135,10 @@ failure — that output is what you delegated in order not to read.
 - Relaying the sub-agent's success claim as your own without running the check.
 - Retrying the same brief after a failure. Re-brief once; two failures on one task mean it was
   misrouted, not under-explained.
-- Delegating something confidential to a remote profile because it looked mechanical. Sensitivity
-  is not a function of difficulty.
+- Delegating something confidential to a third-party agent because it looked mechanical.
+  Sensitivity is not a function of difficulty.
+- Pasting a credential into a brief to save a step. The dispatcher scans and will refuse,
+  but the habit is what fails on the day the scanner has a gap — trivy does not flag every
+  secret shape.
 - Sending a task that needs this conversation's context and then spending more turns explaining it
   than the work would have taken.
