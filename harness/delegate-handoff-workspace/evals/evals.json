@@ -1,0 +1,43 @@
+{
+  "skill_name": "x442-delegate-handoff",
+  "skill_path": "skills/engineering/delegate-handoff",
+  "verify_script": "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh",
+  "notes": "delegate-handoff is a discipline over `handoff export`/`handoff import --result` — it ships no verifier of its own, so this grader wraps setup-handoff's verify-setup-handoff.sh (environment sanity, same as run-handoff's grader) and then DRIVES the board's own installed handoff binary itself, the same produce-at-grade-time pattern register-cross-repo-graph's grader uses. `unwired` is the pre-state baseline (kind pre-state): no .agents/handoff at all, so the single environment-check expectation fails outright and the raw grade is 0.00 — the A/B delta the other four post-state cases (each 1.00 when the grader drives them) are measured against. `export-single` and `export-bundle` start from a NOT-yet-exported board (fixtures/exportable, fixtures/bundle) and the grader calls `handoff export` itself, then checks the produced brief's repo_root_commit against the isolated copy's real HEAD and that the doc was stamped delegated_to with a held lease. `import-clean` and `import-hostile` start from an ALREADY-exported board with a pre-filled brief (fixtures/returned-clean, fixtures/returned-hostile) built with `--no-claim` so no lease needed committing; the grader re-stamps each brief's repo_root_commit to the isolated copy's live HEAD before importing (isolated_git_target relocates every non-self-rooted fixture into a FRESH git init, so a brief's build-time SHA can never match — see grade.py's _restamp_repo_root docstring) except hostile-wrong-repo's, whose entire point is a mismatched identity. import-clean asserts the protocol's load-bearing invariant: status stays open and review becomes pending. import-hostile asserts each of the three hostile briefs (unfilled, wrong-repo, secret-bearing) is refused AND leaves its doc byte-identical — proven to discriminate against a write-before-refuse defect, not just a message match.",
+  "evals": [
+    {
+      "id": "unwired",
+      "kind": "pre-state",
+      "prompt": "This repo has no handoff board yet. Nothing to do here — this is the A/B baseline.",
+      "fixture": "fixtures/unwired",
+      "expected_output": "No .agents/handoff/ at all. Graded raw (no CLI to drive), the environment-sanity check fails outright: 0.00. This is the pre-state the four post-state cases below are compared against."
+    },
+    {
+      "id": "export-single",
+      "kind": "post-state",
+      "prompt": "Delegate the tenant-switch handoff to an external contractor.",
+      "fixture": "fixtures/exportable",
+      "expected_output": "A wired board with one open coordination handoff carrying complete Context/Where/Verify, NOT yet exported. `handoff export tenant-switch --to \"Acme Contracting\"` must write a brief whose repo_root_commit matches this repo's real root commit, stamp the doc's delegated_to, and hold a lease — all without changing status."
+    },
+    {
+      "id": "export-bundle",
+      "kind": "post-state",
+      "prompt": "Delegate the whole release-hardening bundle to an external contractor.",
+      "fixture": "fixtures/bundle",
+      "expected_output": "A wired board with an orchestrator (release-hardening) over three coordination children (auth-flow, payment-flow, notif-flow), none yet exported. `handoff export release-hardening --to \"Acme Contracting\"` must fan out: a cover file listing all three children, one brief per child with a matching repo_root_commit, and each child's doc stamped delegated_to with a held lease."
+    },
+    {
+      "id": "import-clean",
+      "kind": "post-state",
+      "prompt": "The contractor sent back a result for the rate-limit-fix handoff. Read it onto the board.",
+      "fixture": "fixtures/returned-clean",
+      "expected_output": "A board where rate-limit-fix-handoff was already exported and its brief correctly filled in (result_status done, a real Evidence line, a Commits and PR line). `handoff import --result` must splice the reported result into the doc, stamp result_from/result_claimed/review, and leave status STILL open — import never closes anything; done stays a reviewer action."
+    },
+    {
+      "id": "import-hostile",
+      "kind": "post-state",
+      "prompt": "Three contractor results came back for review. Import each and see what happens.",
+      "fixture": "fixtures/returned-hostile",
+      "expected_output": "Three already-exported handoffs whose briefs are hostile: hostile-unfilled (result_status never set), hostile-wrong-repo (repo_root_commit rewritten to a bogus SHA), hostile-secret (Evidence carries an AWS-shaped fake credential, AKIAIOSFODNN7EXAMPLE). Each `handoff import --result` must refuse with its specific message (not filled in / different repository / looks like a credential) AND leave its doc byte-for-byte unchanged — a refusal that still wrote is a failed refusal."
+    }
+  ]
+}
