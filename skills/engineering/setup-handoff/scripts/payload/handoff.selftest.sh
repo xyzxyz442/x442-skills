@@ -44,5 +44,29 @@ chk "no .git suffix" "github.com/acme/acme-api" "$(repo_origin_norm 'https://git
 chk "trailing slash" "github.com/acme/acme-api" "$(repo_origin_norm 'https://github.com/acme/acme-api/')"
 chk "no colon survives" "" "$(repo_origin_norm 'git@github.com:acme/acme-api.git' | tr -cd ':')"
 
+printf '\ndoc_section\n'
+DS="$(mktemp -d)"
+trap 'rm -rf "$DS"' EXIT
+cat > "$DS/doc.md" << 'DOCEOF'
+---
+id: rbac-gap-handoff
+---
+
+## Context
+
+symptom leads to cause
+
+## Where
+
+src/auth/tenant.ts:88
+
+## Verify
+
+run the suite
+DOCEOF
+chk "extracts a middle section" "src/auth/tenant.ts:88" "$(doc_section "$DS/doc.md" Where | tr -d '\n')"
+chk "extracts the last section" "run the suite" "$(doc_section "$DS/doc.md" Verify | tr -d '\n')"
+chk "absent section is empty" "" "$(doc_section "$DS/doc.md" Decisions | tr -d '\n')"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

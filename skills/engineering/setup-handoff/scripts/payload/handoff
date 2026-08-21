@@ -312,6 +312,25 @@ meta() { # path key -> value from YAML frontmatter, minus one surrounding quote 
     | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
 }
 
+# Extract one "## Heading" section's body from a doc, heading excluded. Used to lift Context /
+# Where / Verify / Decisions out of a board doc and into a brief. Blank leading and trailing lines
+# are trimmed so the rendered brief has no ragged gaps between sections.
+doc_section() { # path heading -> body lines
+  awk -v h="## $2" '
+    $0 == h { inside = 1; next }
+    inside && /^## / { inside = 0 }
+    inside { print }
+  ' "$1" | awk '
+    { line[NR] = $0 }
+    END {
+      first = 1; last = NR
+      while (first <= NR && line[first] ~ /^[[:space:]]*$/) first++
+      while (last >= first && line[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print line[i]
+    }
+  '
+}
+
 # Update a frontmatter key in place, or insert it before the closing --- if absent.
 # Portable (awk), unlike GNU-only `sed -i 's/a/&\nb/'`.
 set_field() {
