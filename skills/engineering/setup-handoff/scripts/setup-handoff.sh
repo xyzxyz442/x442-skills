@@ -37,19 +37,26 @@ install_file() {
 
 # Writes the board's config as JSON, MERGING with whatever config.json is already there rather
 # than blindly overwriting it: the installer owns WIRING facts (topology, groups, groupLayout,
-# repoName) and always rewrites them from this run's live values — a stale one is a broken
-# board. ttlHours is a POLICY knob the user owns: there is no installer flag for it, so an
-# existing value is preserved across every re-install and the default (4) applies only when the
-# file doesn't exist yet or can't be read. allowVerifyCmd is the deliberate exception to that
-# preservation rule: it is security-relevant (it lets `release --run-verify` execute a command
-# straight out of a doc), so it tracks ONLY this run's --allow-verify-cmd flag — true when
-# passed, false when not — and is never carried forward from a previous install. Do not "fix"
-# this into symmetric preservation; the asymmetry is intentional, not an oversight.
+# repoName). groups/groupLayout are section-routing facts a SHARED board depends on: when
+# --groups/--layout are PASSED (register-cross-repo-handoff's sync always passes both), this run's
+# values OVERRIDE — that is what keeps the sync authoritative. When they are ABSENT (e.g. a
+# hand-typed re-run of setup-handoff.sh against an already-sectioned board), the existing values
+# are PRESERVED rather than wiped, with a warning on stderr — wiping them silently would reroute
+# every member repo's handoffs to the board root and break the sub-indexes. Passing an explicit
+# empty value (--groups "") is a deliberate CLEAR, distinct from not passing the flag at all; see
+# GROUP_LIST_SET/LAYOUT_SET below for how "flag absent" is told apart from "flag passed empty".
+# ttlHours is a POLICY knob the user owns: there is no installer flag for it, so an existing value
+# is preserved across every re-install and the default (4) applies only when the file doesn't
+# exist yet or can't be read. allowVerifyCmd is the deliberate exception to that preservation
+# rule: it is security-relevant (it lets `release --run-verify` execute a command straight out of
+# a doc), so it tracks ONLY this run's --allow-verify-cmd flag — true when passed, false when
+# not — and is never carried forward from a previous install. Do not "fix" this into symmetric
+# preservation; the asymmetry is intentional, not an oversight.
 # REPO_NAME is written ONLY for a single-repo board — a shared board must not bake one repo's
 # name in, or the last installer clobbers every sibling's identity.
 write_board_config() { # dest topology repo_name
   local dest="$1" topo="$2" rn="$3"
-  TOPO="$topo" RN="$rn" GRPS="$GROUP_LIST" LAY="$LAYOUT" ALLOW="$ALLOW_VERIFY" \
+  TOPO="$topo" RN="$rn" GRPS="$GROUP_LIST" GRPS_SET="$GROUP_LIST_SET" LAY="$LAYOUT" LAY_SET="$LAYOUT_SET" ALLOW="$ALLOW_VERIFY" \
     python3 - "$dest" << 'PY'
 import json, os, sys
 
@@ -72,11 +79,33 @@ ttl = existing.get("ttlHours", 4)
 if not isinstance(ttl, int) or isinstance(ttl, bool):
     ttl = 4
 
-groups = [g for g in os.environ.get("GRPS", "").split(",") if g]
+# groups/groupLayout: flags OVERRIDE when passed (even as an explicit empty value, which CLEARS
+# them); when the flag is ABSENT, preserve whatever was already in a parseable existing config
+# and say so on stderr, so wiping a shared board's section routing is never silent.
+def existing_str_list(key):
+    val = existing.get(key)
+    if isinstance(val, list) and all(isinstance(v, str) for v in val):
+        return val
+    return []
+
+if os.environ.get("GRPS_SET") == "1":
+    groups = [g for g in os.environ.get("GRPS", "").split(",") if g]
+else:
+    groups = existing_str_list("groups")
+    print(f"setup-handoff: --groups not passed; preserved existing groups from {dest}: {groups}", file=sys.stderr)
+
+if os.environ.get("LAY_SET") == "1":
+    group_layout = os.environ.get("LAY", "")
+else:
+    group_layout = existing.get("groupLayout", "")
+    if not isinstance(group_layout, str):
+        group_layout = ""
+    print(f"setup-handoff: --layout not passed; preserved existing groupLayout from {dest}: {group_layout!r}", file=sys.stderr)
+
 cfg = {
     "topology": os.environ["TOPO"],
     "groups": groups,
-    "groupLayout": os.environ.get("LAY", ""),
+    "groupLayout": group_layout,
     "ttlHours": ttl,
     "allowVerifyCmd": os.environ.get("ALLOW") == "1",
 }
@@ -92,6 +121,11 @@ REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" HANDOFF_DIR="" MIGRATE=""
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
 GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY=""
+# GROUP_LIST_SET/LAYOUT_SET: whether --groups/--layout were PASSED at all (any value, including
+# an explicit empty string), as distinct from not passed. write_board_config needs this to tell
+# "override with empty" (flag passed as "") apart from "leave alone" (flag absent) — a plain
+# ${VAR:-} check on GROUP_LIST/LAYOUT can't make that distinction since both collapse to "".
+GROUP_LIST_SET="" LAYOUT_SET=""
 [ $# -gt 0 ] || die "usage: setup-handoff.sh <repo> --tools <list> --primary <tool|none> [opts] | --board-only <path> [--groups <csv>] [--layout ...]"
 # --board-only is a distinct mode (no <repo> positional): scaffold a standalone board and exit.
 if [ "$1" = "--board-only" ]; then
@@ -126,10 +160,12 @@ while [ $# -gt 0 ]; do
       ;;
     --groups)
       GROUP_LIST="${2:-}"
+      GROUP_LIST_SET=1
       shift 2
       ;;
     --layout)
       LAYOUT="${2:-}"
+      LAYOUT_SET=1
       shift 2
       ;;
     --migrate)
