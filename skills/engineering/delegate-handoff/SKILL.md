@@ -135,9 +135,9 @@ reproduced the evidence from step 4, you close it the same way you would close a
 handoff release <id> --status done --verified-by "how YOU verified live code"
 ```
 
-If `--verified-by` would be byte-identical to the executor's own reported evidence, the CLI warns
-you — that is closing on their word with extra steps, and the warning exists to catch exactly that
-shortcut.
+If `--verified-by` echoes text already present in the executor's reported Result block — the
+check is scoped to that spliced block, never the rest of the doc — the CLI warns you: that is
+closing on their word with extra steps, and the warning exists to catch exactly that shortcut.
 
 ## Anti-patterns
 

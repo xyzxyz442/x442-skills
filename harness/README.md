@@ -25,7 +25,12 @@ harness/
 ├── setup-graph-hooks-workspace/
 ├── register-cross-repo-graph-workspace/
 ├── repair-graph-hooks-workspace/
+├── setup-handoff-workspace/
+├── run-handoff-workspace/
+├── delegate-handoff-workspace/
 ├── repair-handoff-workspace/
+├── register-cross-repo-handoff-workspace/
+├── setup-delegate-agent-workspace/
 └── release-announcement-workspace/
 ```
 
@@ -115,6 +120,24 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   grader wraps that. Fixtures: `healthy` (repair is a no-op → directly gradeable), `broken-json`
   and `missing-core` (repair TARGETS — drifted inputs that fail the verifier by design until an
   agent runs the skill, then re-graded to 0 failed).
+- **`run-handoff-workspace/`** — behavioral: `run-handoff` ships no scripts of its own, so the
+  grader drives the installed `handoff` CLI directly against fixture `board-wired`, following the
+  claim → work → release discipline. `discipline-done` asserts that claiming, doing the work, and
+  releasing `--status done --verified-by` leaves a schema-valid doc archived with `verified_at`
+  stamped, the lease released, and `INDEX.md` regenerated under Archive; `discipline-blocked`
+  asserts that claiming and releasing `--status blocked --blocked-on` sets `status`/`blocked_on`
+  and releases the lease while keeping the doc on the open board. Grader wraps
+  `verify-setup-handoff.sh` for environment sanity.
+- **`delegate-handoff-workspace/`** — `delegate-handoff` ships no verifier of its own, so the
+  grader wraps `verify-setup-handoff.sh` for environment sanity (same pattern as
+  `run-handoff-workspace`'s grader) and then drives the board's own installed `handoff` binary
+  directly. Fixtures: `unwired` (pre-state baseline, no `.agents/handoff` at all → 0.00),
+  `exportable` and `bundle` (post-state boards the grader exports itself, asserting the produced
+  brief's `repo_root_commit` matches the isolated copy's real HEAD and the doc is stamped
+  `delegated_to` with a held lease), `returned-clean` (an already-exported board with a clean
+  filled-in brief — import must splice the result and leave `status` open, never closing it) and
+  `returned-hostile` (three hostile briefs — unfilled, wrong-repo, secret-bearing — each refused
+  with its own message while leaving the doc byte-for-byte unchanged).
 - **`release-announcement-workspace/`** — the harness's first **text-output** grader: the skill
   ships no scripts and produces prose, so there is no `verify-*.sh` to wrap (`evals.json` omits
   `verify_script`; nothing in `lib/` reads it) and the produced `ANNOUNCEMENT.md` is graded
@@ -126,7 +149,10 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   deterministic controls proving the grader can both pass and fail: `announcement-good`
   (post-state, grades 1.00) and `violations` (breaks each rule, grades well below 1.00 with
   failing expectations naming the rule broken).
-- **All five engineering skills now have a workspace.** Every grader wraps its target with
+- **All ten engineering skills now have a workspace** — every skill in `skills/README.md`'s
+  `engineering/` catalog table (`initial-project`, `setup-project-tooling`, `setup-graph-hooks`,
+  `repair-graph-hooks`, `register-cross-repo-graph`, `setup-handoff`, `run-handoff`,
+  `delegate-handoff`, `repair-handoff`, `register-cross-repo-handoff`). Every grader wraps its target with
   `isolated_git_target` (a fixture nested in this repo is relocated to its own git root, so the
   bundled `verify-*.sh` grades the fixture, not x442-skills) and may emit `skipped()` expectations —
   counted in `summary.skipped` and excluded from `pass_rate` — so a run that covers less (an

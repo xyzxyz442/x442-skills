@@ -230,7 +230,7 @@ here; this section documents the mechanics the CLI enforces.
 ```bash
 ./handoff export rbac-gap --to "a contractor" --branch fix/rbac-gap
 #   ... they pull the branch, do the work, fill in the Result block, open a PR ...
-./handoff import --result briefs/rbac-gap.brief.md
+./handoff import --result briefs/rbac-gap-handoff.brief.md
 ./handoff release rbac-gap --status done --verified-by "reproduced their fix: e2e green"
 ```
 
@@ -259,8 +259,10 @@ git history before that commit.
 unrecognized `brief:` format version; a `repo_root_commit` that does not match this checkout
 (`unverified` requires `--force-repo` and your own manual confirmation); an id that does not
 resolve to a live handoff; a missing or invalid `result_status`; a Result block still holding only
-the template's placeholder comments; and a Result whose text matches the shape of a committed
-credential. Passing all of those, it splices the Result under `## Result (reported)` — replacing
+the template's placeholder comments; a Result whose text matches the shape of a committed
+credential; and a target doc that was never delegated, or whose `brief:` pointer names a different
+file — stops a stray or hand-edited `handoff:` id from stamping a result onto a doc that was never
+exported. Passing all of those, it splices the Result under `## Result (reported)` — replacing
 on re-import rather than duplicating — and stamps `result_from`, `result_at`, `result_claimed`,
 and `review: pending`.
 
