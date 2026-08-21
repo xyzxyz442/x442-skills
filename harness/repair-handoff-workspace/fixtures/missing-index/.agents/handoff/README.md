@@ -113,21 +113,66 @@ content verbatim.
 | `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
 
+## Configuration
+
+Settings resolve through four scopes, **nearest wins**:
+
+```text
+env  >  repo config.json  >  board config.json  >  built-in default
+```
+
+Environment is for **overrides** — a one-off run, debugging, CI. Normal operating configuration
+belongs in a committed file, where it can be reviewed and where the whole team gets it.
+
+**`<board>/config.json`** — board-global. On a shared board this file is read by every member repo,
+so it must never carry any one repo's identity.
+
+| Key              | Default         | Meaning                                                                |
+| ---------------- | --------------- | ---------------------------------------------------------------------- |
+| `topology`       | `"single-repo"` | `single-repo` or `cross-repo`. Structural; the installer owns it.      |
+| `repoName`       | `""`            | This board's repo. Written for a single-repo board **only**.           |
+| `groups`         | `[]`            | Sections a shared board hosts, as a JSON array.                        |
+| `groupLayout`    | `""`            | `subfolder` or `prefix` — how each section is laid out.                |
+| `ttlHours`       | `4`             | Hours a claim holds before it self-reaps.                              |
+| `allowVerifyCmd` | `false`         | `true` lets `release --run-verify` execute a command from a local doc. |
+
+**`<repo>/.agents/handoff.config.json`** — per-consumer, written only for cross-repo installs.
+
+| Key         | Meaning                                                  |
+| ----------- | -------------------------------------------------------- |
+| `repo`      | This repo's identity on the board (its `audience` name). |
+| `group`     | This repo's section, on a grouped board.                 |
+| `boardPath` | Path from this repo to the shared board.                 |
+
+**Environment overrides** keep the `HANDOFF_` prefix, so the two are never confused: a `HANDOFF_`
+name always means "override this run", a camelCase key always means "configured". `HANDOFF_TTL_HOURS`,
+`HANDOFF_ALLOW_VERIFY_CMD`, `HANDOFF_REPO`, `HANDOFF_GROUP`, `HANDOFF_GROUP_LAYOUT`.
+
+Two keys behave differently on re-install, deliberately:
+
+- **`ttlHours` is preserved.** Once you commit a value, re-running the installer keeps it. Lease
+  policy is a team decision, not something an install should quietly revert.
+- **`allowVerifyCmd` follows its `--allow-verify-cmd` flag** and is **not** preserved. It permits
+  `release --run-verify` to execute a command out of a doc, and a security opt-in that nobody
+  re-affirmed is not one worth inheriting.
+
+JSON has no comments, which is why this table exists. The config is **parsed, never sourced** — on a
+shared board it is written by every member's installer, so executing it would let one repo run shell
+in its siblings' sessions.
+
 ## Shared (cross-repo) board: per-repo identity
 
-A cross-repo board is **shared by N repos**, so no single repo's name may live in the committed
-`config` — the last installer to run would clobber every sibling's identity. Instead:
+A cross-repo board is **shared by N repos**, so no single repo's name may live in the board's
+`config.json` — the last installer to run would clobber every sibling's identity. Instead each
+consuming repo commits its own `.agents/handoff.config.json` (table above), and `hooks.sh` finds it
+by resolving the calling repo: the `--project-dir` anchor in the hook command first, then the git
+toplevel. Audience routing, the INDEX label, and `doc_is_local` therefore reflect the **calling**
+repo, not whoever installed last.
 
-- The shared `config` carries only board-global facts (`TOPOLOGY`, `HANDOFF_ALLOW_VERIFY_CMD`), **no
-  `REPO_NAME`**.
-- Each consuming repo's identity is **per-consumer**, supplied via `$HANDOFF_REPO` — baked into that
-  repo's hook command at install time (`HANDOFF_REPO=<repo> HANDOFF_HDPATH=<path> bash …/hooks.sh …`).
-  `hooks.sh` and `handoff` prefer `$HANDOFF_REPO` over the config's `REPO_NAME`, so audience routing,
-  the INDEX label, and `doc_is_local` reflect the **calling** repo, not whoever installed last.
-- On a shared board, `handoff new` **requires** `--audience <repo>` (there is no default identity)
-  unless `$HANDOFF_REPO` is set in the environment.
+On a shared board, `handoff new` **requires** `--audience <repo>` when no identity resolves.
 
-Single-repo boards are unchanged: no `$HANDOFF_REPO`, identity comes from `config` `REPO_NAME`.
+Single-repo boards keep it simple: no repo config file at all, identity comes from the board's own
+`repoName`.
 
 ## Two rules that exist because trackers rot
 
