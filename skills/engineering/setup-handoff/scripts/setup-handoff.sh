@@ -29,6 +29,24 @@ die() {
   exit 1
 }
 
+# Guard for every value-taking flag in the arg loop below: a value that is missing (the flag was
+# the last argument) or that itself looks like another flag (starts with "--") is never accepted
+# silently. Unlike payload/hooks.sh's identically-shaped guard — which warns and keeps going
+# because a hook must never break the caller's tool session — this is an installer, so it fails
+# hard: a half-configured board is worse than a refused install. $1 is the flag being parsed, $2
+# is the caller's remaining arg count ("$#" from before this flag's own shift), $3 is "${2:-}"
+# (the candidate value, or empty when absent). Naming the flag explicitly is the point: the old
+# unguarded code let a swallowed flag get misattributed to some later, unrelated arg.
+require_value() {
+  local flag="$1" argcount="$2" val="$3"
+  if [ "$argcount" -lt 2 ]; then
+    die "$flag needs a value (got nothing — it was the last argument)"
+  fi
+  case "$val" in
+    --*) die "$flag needs a value (got the flag \"$val\")" ;;
+  esac
+}
+
 # Copy a payload file only when changed, keeping the exec bit (defined early so --board-only can use it).
 install_file() {
   local s="$1" d="$2"
@@ -139,36 +157,44 @@ fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --tools)
+      require_value --tools "$#" "${2:-}"
       TOOLS="${2:-}"
       shift 2
       ;;
     --primary)
+      require_value --primary "$#" "${2:-}"
       PRIMARY="${2:-none}"
       shift 2
       ;;
     --topology)
+      require_value --topology "$#" "${2:-}"
       TOPOLOGY="${2:-single-repo}"
       shift 2
       ;;
     --handoff-dir)
+      require_value --handoff-dir "$#" "${2:-}"
       HANDOFF_DIR="${2:-}"
       shift 2
       ;;
     --group)
+      require_value --group "$#" "${2:-}"
       GROUP="${2:-}"
       shift 2
       ;;
     --groups)
+      require_value --groups "$#" "${2:-}"
       GROUP_LIST="${2:-}"
       GROUP_LIST_SET=1
       shift 2
       ;;
     --layout)
+      require_value --layout "$#" "${2:-}"
       LAYOUT="${2:-}"
       LAYOUT_SET=1
       shift 2
       ;;
     --migrate)
+      require_value --migrate "$#" "${2:-}"
       MIGRATE="${2:-}"
       shift 2
       ;;
