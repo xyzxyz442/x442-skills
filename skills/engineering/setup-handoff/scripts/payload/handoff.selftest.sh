@@ -231,13 +231,23 @@ mkdir -p "$R/subdir"
 (cd "$R/subdir" && "$R/.agents/handoff/handoff" export relout-case --out ../relout-here --no-claim) > /dev/null 2>&1 # standalone-ok: a throwaway dir name inside this test's own mktemp board, not a repo path
 RELOUT_DOC="$BOARD/relout-case-handoff.md"
 RELOUT_BRIEF_FIELD="$(sed -n 's/^brief: //p' "$RELOUT_DOC" | head -1)"
-chk "brief: never records a literal .. segment from a relative --out" "no" \
-  "$(case "$RELOUT_BRIEF_FIELD" in (*..*) echo yes ;; (*) echo no ;; esac)"
-chk "the resolved brief: path points at a real file" "yes" \
-  "$(case "$RELOUT_BRIEF_FIELD" in
-    (/*) [ -f "$RELOUT_BRIEF_FIELD" ] && echo yes || echo no ;;
-    (*) [ -f "$R/$RELOUT_BRIEF_FIELD" ] && echo yes || echo no ;;
-  esac)"
+# These two checks deliberately keep `case` OUT of a $( ) substitution. Inside one, an unbalanced
+# `)` closes the substitution early, so the pattern has to be written `(*..*)` to stay balanced --
+# and `prettier --check .` (which covers .sh, though lint-staged does not) insists on stripping
+# that leading paren, silently breaking the test. Assigning first sidesteps the whole conflict.
+RELOUT_HAS_DOTDOT=no
+case "$RELOUT_BRIEF_FIELD" in
+  *..*) RELOUT_HAS_DOTDOT=yes ;;
+esac
+chk "brief: never records a literal .. segment from a relative --out" "no" "$RELOUT_HAS_DOTDOT"
+
+case "$RELOUT_BRIEF_FIELD" in
+  /*) RELOUT_ABS="$RELOUT_BRIEF_FIELD" ;;
+  *) RELOUT_ABS="$R/$RELOUT_BRIEF_FIELD" ;;
+esac
+RELOUT_REAL=no
+[ -f "$RELOUT_ABS" ] && RELOUT_REAL=yes
+chk "the resolved brief: path points at a real file" "yes" "$RELOUT_REAL"
 
 # A standalone shared board (see register-cross-repo-handoff) is owned by no repo, so REPO_DIR is
 # empty for it — no `git init` here, unlike mkboard above.
