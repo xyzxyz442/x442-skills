@@ -1271,8 +1271,16 @@ cmd_list() {
       held) lock="🔒 $owner until $(human "$exp")" ;;
       expired) lock="⚠️  STALE $owner (expired $(human "$exp")) — reclaimable" ;;
     esac
+    # Delegation and review markers. A delegated row is NOT free even though its lease may look
+    # ordinary, and a review-pending row is waiting on the reader rather than on the executor —
+    # both are things a board reader acts on differently.
+    local deleg review_flag extra=""
+    deleg="$(meta "$f" delegated_to)"
+    review_flag="$(meta "$f" review)"
+    [ -n "$deleg" ] && [ "$(meta "$f" review)" != "done" ] && extra="$extra  → $deleg"
+    [ "$review_flag" = "pending" ] && extra="$extra  ⇤ review"
     printf '%-44s %-9s %-14s %-8s %s\n' \
-      "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(meta "$f" severity)" "$lock"
+      "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(meta "$f" severity)" "$lock$extra"
   done < <(each_doc)
   if [ -n "$orchestrators" ]; then
     printf '\nOrchestrators (bundles — progress derived from children, no claim needed):\n'
@@ -1364,6 +1372,16 @@ cmd_touch() {
 # and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
 finish_release() { # id
   clear_lock "$(lock_key "$1")"
+  # A closed handoff is no longer awaiting review; leaving `review: pending` set would make a
+  # reopened doc read as pending against a review that already happened. doc_of searches active
+  # THEN archive, so this reaches the doc whether or not a `done` release above already moved it.
+  # Only an ACTUAL pending review is cleared — a doc with no review field, or mid-delegation with
+  # its result not yet imported, is left untouched. Stamping every release unconditionally would
+  # mark those as reviewed too, silently hiding the delegation marker in `list` for work that was
+  # never looked at.
+  local rf
+  rf="$(doc_of "$1" 2> /dev/null)"
+  [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
   cmd_index
 }
 
@@ -1523,6 +1541,15 @@ cmd_release() {
         echo "      ($vcmd)"
         echo "      Run it yourself, or re-release with --run-verify (needs install opt-in HANDOFF_ALLOW_VERIFY_CMD=1 and a local doc)."
       fi
+    fi
+  fi
+
+  # Closing `done` with the executor's own evidence string is trusting the report with extra steps.
+  # A warning, never a refusal: the reviewer may legitimately have re-run the very same command.
+  if [ "$status" = "done" ] && [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ]; then
+    if grep -Fq -- "$verified_by" "$f" 2> /dev/null; then
+      echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
+      echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
     fi
   fi
 

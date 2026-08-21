@@ -332,5 +332,43 @@ BEFORE="$(cat "$DOC")"
 chk_contains "secret-bearing result_by refused" "$(hb "$R" import --result "$SECRET_BY")" "looks like a credential"
 chk "secret-in-result_by refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
+printf '\nlist and release\n'
+# Reuses $R / rbac-gap-handoff from the export/import sections above: delegated_to=Alice,
+# review=pending, and the doc body carries the executor's literal evidence line
+# ("Ran npm test -- tenant; 14 passing.") spliced in by import --result.
+chk_contains "list shows the delegate" "$(hb "$R" list)" "Alice"
+chk_contains "list shows review pending" "$(hb "$R" list)" "review"
+
+OUT="$(hb "$R" release rbac-gap --status done --verified-by "Ran npm test -- tenant; 14 passing.")"
+chk_contains "warns on copied evidence" "$OUT" "identical to the reported evidence"
+
+hb "$R" new fresh-close --title "Never delegated" > /dev/null
+FRESH_OUT="$(hb "$R" release fresh-close --status done --verified-by "checked src/foo.ts:12 by hand")"
+case "$FRESH_OUT" in
+  *"identical to the reported evidence"*) chk "no false warning on a never-delegated doc" "no" "yes" ;;
+  *) chk "no false warning on a never-delegated doc" "no" "no" ;;
+esac
+
+hb "$R" new no-echo-back --title "Different evidence" > /dev/null
+hb "$R" export no-echo-back --to Eve > /dev/null
+NEB_BRIEF="$BOARD/briefs/no-echo-back-handoff.brief.md"
+fill_brief "$NEB_BRIEF" done
+hb "$R" import --result "$NEB_BRIEF" > /dev/null
+DIFF_OUT="$(hb "$R" release no-echo-back --status done --verified-by "I independently re-ran the suite myself.")"
+case "$DIFF_OUT" in
+  *"identical to the reported evidence"*) chk "no false warning when verified-by differs from the reported evidence" "no" "yes" ;;
+  *) chk "no false warning when verified-by differs from the reported evidence" "no" "no" ;;
+esac
+
+NEB_DOC="$BOARD/archive/no-echo-back-handoff.md"
+[ -f "$NEB_DOC" ] || NEB_DOC="$BOARD/no-echo-back-handoff.md"
+chk "finish_release clears a genuinely pending review to done" "done" \
+  "$(sed -n 's/^review: //p' "$NEB_DOC" | head -1)"
+
+FRESH_DOC="$BOARD/archive/fresh-close-handoff.md"
+[ -f "$FRESH_DOC" ] || FRESH_DOC="$BOARD/fresh-close-handoff.md"
+chk "finish_release leaves a never-set review field alone" "" \
+  "$(sed -n 's/^review: //p' "$FRESH_DOC" | head -1)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
