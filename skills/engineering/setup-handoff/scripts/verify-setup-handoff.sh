@@ -107,6 +107,11 @@ if [ -f "$HD/templates/handoff-doc-template.md" ]; then
 elif [ -f "$HD/handoff-doc-template.md" ]; then
   warn "handoff-doc-template.md is at the board root (flat layout) — re-run setup-handoff to migrate"
 else warn "handoff-doc-template.md missing"; fi
+if [ -f "$HD/templates/handoff-brief-template.md" ]; then
+  ok "templates/handoff-brief-template.md present"
+elif [ -f "$HD/handoff-brief-template.md" ]; then
+  warn "handoff-brief-template.md is at the board root (flat layout) — re-run setup-handoff to migrate"
+else warn "handoff-brief-template.md missing — re-run setup-handoff"; fi
 [ -d "$HD/archive" ] && ok "archive/ present" || warn "archive/ missing (created on first done)"
 check_payload_version "$(awk 'NR==1{print $2}' "$HD/.version" 2> /dev/null)" setup-handoff
 
@@ -242,6 +247,15 @@ echo "6. handoff script runs"
 echo "----------------------"
 if [ -x "$HD/handoff" ]; then
   "$HD/handoff" list > /dev/null 2>&1 && ok "handoff list runs" || bad "handoff list failed"
+  # export must be a recognized subcommand: a nonexistent id should reach id-resolution and fail
+  # with "no such handoff", not fall through to the top-level usage catch-all (which would mean
+  # export isn't wired into the dispatch at all).
+  out=$("$HD/handoff" export __verify-nonexistent__ --no-claim 2>&1)
+  if printf '%s' "$out" | grep -q 'no such handoff'; then
+    ok "handoff export responds (recognized subcommand)"
+  else
+    bad "handoff export did not respond as expected: $out"
+  fi
 else warn "handoff not executable"; fi
 
 echo
