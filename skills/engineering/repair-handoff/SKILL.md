@@ -1,11 +1,11 @@
 ---
 name: x442-repair-handoff
 description: >-
-  Use when a handoff board misbehaves — leases that cannot be claimed or released, a doc the
-  edit gate blocks from its rightful holder, a stale or missing INDEX.md, handoffs that vanish
-  from the session board, a shared cross-repo board whose section does not resolve, or after
-  verify-setup-handoff.sh reports a [FAIL]/[warn]. Smoke-tests the handoff CLI first, then
-  re-checks, validates, and repairs the board wiring and board state idempotently. Chains after
+  Use when a handoff board misbehaves — unclaimable or unreleasable leases, the edit gate
+  blocking a doc's rightful holder, a stale or missing INDEX.md, handoffs vanishing from the
+  session board, a delegated handoff that never came back, a cross-repo board section that
+  won't resolve, or a verify-setup-handoff.sh [FAIL]/[warn]. Smoke-tests the CLI first, then
+  re-checks, validates, and repairs board wiring and state idempotently. Chains after
   setup-handoff.
 ---
 
@@ -32,6 +32,8 @@ directories (`rmdir`, never `rm -rf`).
 - `INDEX.md` is missing, stale, or was hand-edited. It is generated; drift here is a repair, not
   an edit.
 - A handoff doc exists but never appears on the session board, or appears in the wrong section.
+- A handoff you delegated has not come back and you cannot tell whether it is stuck — see
+  [`delegate-handoff`](../delegate-handoff/SKILL.md) for the export/import loop this recovers from.
 - The session-start hook reported `Board needs attention`.
 - `verify-setup-handoff.sh` reported a `[FAIL]`, or a `[warn]` you want resolved.
 - After changing which AI tools the repo uses — a tool dropped from a later install can leave a
