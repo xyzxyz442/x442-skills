@@ -79,6 +79,19 @@ require_value() {
   esac
 }
 
+# An EXISTING file or directory's absolute path, via `cd && pwd` (portable — no `realpath` on
+# stock macOS). A relative path is only ever meaningful next to the cwd it was typed in; stamping
+# one into a doc's frontmatter records a pointer that resolves differently — or not at all — once
+# the reader's cwd is different, which is exactly what happened to `export`'s `--out`.
+abs_path() { # path -> absolute path
+  local p="$1"
+  if [ -d "$p" ]; then
+    (cd "$p" && pwd)
+  else
+    printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+  fi
+}
+
 # --- repo identity ----------------------------------------------------------------------
 # A brief names file:line locations, and those paths plausibly exist in a DIFFERENT repo where they
 # mean something else. Identity therefore travels inside the brief and is checked on both sides.
@@ -331,19 +344,44 @@ doc_section() { # path heading -> body lines
   '
 }
 
+# Extract the spliced Result block from a doc (or a brief), bounded by the same marker pair
+# splice_result writes. Shared by import_result (reading the RETURNED brief's Result) and
+# cmd_release's copied-evidence check (reading the DOC's spliced Result) so both scan exactly the
+# text an executor actually reported — never frontmatter or the rest of the doc.
+result_block() { # path -> lines between the handoff:result markers
+  awk '
+    /<!-- handoff:result:begin -->/ { inside = 1; next }
+    /<!-- handoff:result:end -->/   { inside = 0 }
+    inside { print }
+  ' "$1"
+}
+
 # Update a frontmatter key in place, or insert it before the closing --- if absent.
 # Portable (awk), unlike GNU-only `sed -i 's/a/&\nb/'`.
+#
+# VALUE IS ROUTED THROUGH A FILE, never through `awk -v`. POSIX awk interprets C-style backslash
+# escapes (`\n`, `\072`, ...) in a -v-assigned value, so a value this CLI did not author itself —
+# e.g. `result_by`/`result_at` from a returned brief, in `import_result` — could carry a literal
+# `\n` and `\072` that `fold_colons` never sees (neither is a literal newline or colon in the
+# input) and that awk then decodes into a REAL newline and colon, injecting an arbitrary extra
+# frontmatter key. This is the chokepoint fix for that bug: every caller goes through here, so
+# fixing it here (rather than at each untrusted call site) closes it for good, the same remediation
+# `splice_result` already applies to the Result body. getline reads raw bytes and interprets
+# nothing. `key` is never attacker-controlled (always a fixed literal from this file), so it can
+# stay on `-v`.
 set_field() {
-  local f="$1" key="$2" val="$3" t
+  local f="$1" key="$2" val="$3" t vf
   t="$(mktemp)" || die "mktemp failed"
-  awk -v k="$key" -v v="$val" '
-    BEGIN { infm = 0; seen = 0 }
+  vf="$(mktemp)" || die "mktemp failed"
+  printf '%s' "$val" > "$vf"
+  awk -v k="$key" -v vf="$vf" '
+    BEGIN { infm = 0; seen = 0; v = ""; getline v < vf; close(vf) }
     NR == 1 && $0 == "---" { infm = 1; print; next }
     infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
     infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
     { print }
-  ' "$f" > "$t" && cat "$t" > "$f"
-  rm -f "$t"
+  ' "$f" > "$t" && cat "$t" > "$f" || die "set_field: could not write $key into $f"
+  rm -f "$t" "$vf"
 }
 
 log_activity() { # path message -> append to the doc's Activity log
@@ -837,11 +875,7 @@ import_result() {
   esac
 
   local body
-  body="$(awk '
-    /<!-- handoff:result:begin -->/ { inside = 1; next }
-    /<!-- handoff:result:end -->/   { inside = 0 }
-    inside { print }
-  ' "$src")"
+  body="$(result_block "$src")"
   # A block that still carries only headings and the template comments is not a result.
   local substance
   substance="$(printf '%s\n' "$body" | grep -v '^###' | grep -v '^[[:space:]]*<!--' | tr -d '[:space:]')"
@@ -874,11 +908,62 @@ import_result() {
     echo "⚠️  Brief was rendered at $src_commit; HEAD is $head_commit. The Where anchors may have moved."
   fi
 
+  # `handoff:` above is attacker-controlled (it comes from the returned brief), so id resolution
+  # can be pointed at ANY live doc on the board, not only the one that was actually delegated —
+  # combined with the frontmatter-injection bug this fixes elsewhere, that let a result be stamped
+  # onto a doc nobody sent out. Refuse unless the target doc shows it was genuinely delegated, and
+  # unless its `brief:` pointer names THIS exact file — otherwise a stray or hand-edited `handoff:`
+  # value (or a second, unrelated brief) could stamp a claim onto a doc that was never exported, or
+  # silently overwrite an already-imported result from a different executor. Checked here, right
+  # before the writes, so every refusal above (format, repo, id, result_status, empty result,
+  # secrets) still fires on its own untouched doc first.
+  local want_brief brief_abs src_abs
+  want_brief="$(meta "$f" brief)"
+  [ -n "$want_brief" ] && [ -n "$(meta "$f" delegated_at)" ] \
+    || die "$id was never delegated (no brief:/delegated_at on the board doc) — refusing to import a result onto it. Nothing was written."
+  case "$want_brief" in
+    /*) brief_abs="$want_brief" ;;
+    *) brief_abs="${REPO_DIR:+$REPO_DIR/}$want_brief" ;;
+  esac
+  src_abs="$(abs_path "$src")"
+  [ "$brief_abs" = "$src_abs" ] \
+    || die "$id's brief: does not point at $src — refusing to import a result from a different or unrelated brief file. Nothing was written."
+
+  # Defense in depth, independent of how set_field is implemented: an imported result must never
+  # cause these keys to appear or change. If any did, something upstream broke — restore the doc
+  # immediately rather than leave a compromised frontmatter key on a doc headed for git history.
+  local backup
+  backup="$(mktemp)" || die "mktemp failed"
+  cp "$f" "$backup" || die "could not back up $f before importing"
+  local deny_before_verify deny_before_status deny_before_repos deny_before_audience \
+    deny_before_id deny_before_children deny_before_blocked_on
+  deny_before_verify="$(meta "$f" verify)"
+  deny_before_status="$(meta "$f" status)"
+  deny_before_repos="$(meta "$f" repos)"
+  deny_before_audience="$(meta "$f" audience)"
+  deny_before_id="$(meta "$f" id)"
+  deny_before_children="$(meta "$f" children)"
+  deny_before_blocked_on="$(meta "$f" blocked_on)"
+
   splice_result "$f" "$body"
   set_field "$f" result_from "$(fold_colons "$result_by_raw")"
   set_field "$f" result_at "$(fold_colons "$result_at_raw")"
   set_field "$f" result_claimed "$claimed"
   set_field "$f" review pending
+
+  if [ "$(meta "$f" verify)" != "$deny_before_verify" ] \
+    || [ "$(meta "$f" status)" != "$deny_before_status" ] \
+    || [ "$(meta "$f" repos)" != "$deny_before_repos" ] \
+    || [ "$(meta "$f" audience)" != "$deny_before_audience" ] \
+    || [ "$(meta "$f" id)" != "$deny_before_id" ] \
+    || [ "$(meta "$f" children)" != "$deny_before_children" ] \
+    || [ "$(meta "$f" blocked_on)" != "$deny_before_blocked_on" ]; then
+    cat "$backup" > "$f"
+    rm -f "$backup"
+    die "import --result: the reported values would have altered a protected frontmatter key (verify/status/repos/audience/id/children/blocked_on) on $id — refused and restored the doc. This should never happen; treat it as a bug."
+  fi
+  rm -f "$backup"
+
   log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
 
   echo "Imported the reported result into $f."
@@ -1070,7 +1155,11 @@ cmd_export() {
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to delegate"
 
   if is_orchestrator "$f"; then
-    export_bundle "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
+    # export_one hardcodes an empty branch per child (each gets its own default fix/<child-id>),
+    # so a bundle export silently DISCARDED --branch instead of honoring or rejecting it. Refuse
+    # it outright rather than pretend a single branch name could apply to N independent children.
+    [ -n "$branch" ] && die "--branch is not supported for a bundle export — each child gets its own default branch (fix/<child-id>)"
+    export_bundle "$id" "$f" "$to" "$outdir" "$do_claim"
     return
   fi
   export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
@@ -1087,17 +1176,20 @@ strip_pipes() { printf '%s' "$1" | tr -d '|'; }
 # board the doc's audience names a DIFFERENT repo, and if it is not reachable on disk we record
 # "unverified" rather than fabricate a SHA — a fabricated SHA would make a wrong-repo run look
 # verified, which is worse than no guard at all.
+#
+# This used to GUESS the target by sibling directory name (`${REPO_DIR}/../$aud/.git`) and treat a
+# match as verified. That guess is not authoritative: `register-cross-repo-handoff`'s manifest
+# carries an explicit per-repo `path` and an `audience` that may differ from both, and neither is
+# read here — reading it belongs to that skill and is deferred (see the design spec's cross-repo
+# section). A wrong guess renders as VERIFIED, which is indistinguishable from a fabricated SHA to
+# the executor and is exactly the failure mode the paragraph above says never to create. So a
+# differing `audience` always degrades honestly to "unverified" until real manifest resolution
+# lands — the same outcome as an unreachable target, never a name-matched guess.
 brief_identity() { # doc-path -> "name|origin|rootsha|note"
   local f="$1" target="${REPO_DIR:-}" name origin root note=""
   local aud
   aud="$(strip_pipes "$(meta "$f" audience)")"
-  if [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ]; then
-    if [ -d "${REPO_DIR:-.}/../$aud/.git" ]; then
-      target="$(cd "${REPO_DIR:-.}/../$aud" && pwd)"
-    else
-      target=""
-    fi
-  fi
+  [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ] && target=""
   if [ -z "$target" ]; then
     printf '%s|%s|%s|%s' "${aud:-unknown}" "unverified" "unverified" \
       "> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
@@ -1140,6 +1232,11 @@ export_one() { # id doc to outdir branch do_claim
   local dest_dir dest
   dest_dir="${outdir:-$(briefs_dir)}"
   mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  # Resolved to an absolute path (not left as whatever --out was typed, possibly relative) BEFORE
+  # building dest — a relative --out otherwise gets stamped raw into the doc's `brief:` field
+  # below, recording a pointer that only resolves from the exporter's transient cwd. abs_path needs
+  # the directory to exist first, which mkdir -p above already guarantees.
+  dest_dir="$(abs_path "$dest_dir")" || die "could not resolve $dest_dir"
   dest="$dest_dir/$id.brief.md"
 
   local tmpl
@@ -1191,11 +1288,38 @@ export_one() { # id doc to outdir branch do_claim
   cmd_index
 }
 
-export_bundle() { # id doc to outdir branch do_claim
-  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
+export_bundle() { # id doc to outdir do_claim
+  local id="$1" f="$2" to="$3" outdir="$4" do_claim="$5"
   local dest_dir cover kid kf n=0
+  local kids
+
+  # Pre-flight EVERY child before writing anything — no cover file, no brief, no claim, no stamp.
+  # A live foreign lease used to surface only mid-fan-out: child 1 got claimed and stamped, child 2
+  # died on cmd_claim, `cmd_index` never ran, and the operator was left staring at a lease error
+  # with child 1 out to a contractor who was sent nothing and no reverse operation to undo it
+  # (finding 5, final whole-branch review — re-running just died again until the foreign lease
+  # cleared). Refuse the WHOLE export up front instead. A child with no doc at all is not part of
+  # this check — it was never claimable to begin with, and stays a per-child skip-with-warning
+  # below, same as before.
+  kids="$(children_of "$f")"
+  if [ "$do_claim" -eq 1 ]; then
+    local busy=""
+    while IFS= read -r kid; do
+      [ -n "$kid" ] || continue
+      kf="$(doc_of "$kid" 2> /dev/null || true)"
+      [ -n "$kf" ] && [ -f "$kf" ] || continue
+      local kind owner exp
+      IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$kid")")"
+      [ "$kind" = "held" ] && busy="$busy $kid(held by $owner until $(human "$exp"))"
+    done <<< "$kids"
+    [ -z "$busy" ] \
+      || die "cannot export bundle $id — a child has a live lease and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
+  fi
+
   dest_dir="${outdir:-$(briefs_dir)}"
   mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  # Same absolute-path fix as export_one — see there for why a relative --out cannot be stamped raw.
+  dest_dir="$(abs_path "$dest_dir")" || die "could not resolve $dest_dir"
   cover="$dest_dir/$id.cover.md"
   {
     echo "# Bundle — $(meta "$f" title)"
@@ -1221,10 +1345,23 @@ export_bundle() { # id doc to outdir branch do_claim
       echo "⚠️  child $kid has no doc on this board — skipped" >&2
       continue
     fi
-    export_one "$kid" "$kf" "$to" "$outdir" "" "$do_claim" > /dev/null
+    export_one "$kid" "$kf" "$to" "$dest_dir" "" "$do_claim" > /dev/null
     echo "- \`$kid\` — $(meta "$kf" title) — brief at \`$kid.brief.md\`" >> "$cover"
     n=$((n + 1))
-  done <<< "$(children_of "$f")"
+  done <<< "$kids"
+
+  # The parent used to gain no delegated_to/delegated_at/brief and no Activity entry, so `list`
+  # showed no recipient for the bundle and repair-handoff's orphaned-delegation check (which keys
+  # on delegated_at) was structurally blind to an abandoned bundle export (finding 4). Stamp it
+  # the same way export_one stamps a coordination doc, pointing brief: at the cover.
+  if [ -n "$REPO_DIR" ]; then
+    set_field "$f" brief "${cover#"$REPO_DIR"/}"
+  else
+    set_field "$f" brief "$cover"
+  fi
+  set_field "$f" delegated_to "${to:-unassigned}"
+  set_field "$f" delegated_at "$(today)"
+  log_activity "$f" "exported as a bundle cover for ${to:-an external executor} ($n child brief(s))"
 
   echo "Wrote $cover and $n child brief(s) in $dest_dir"
   echo "🔒 Before committing — redact secrets/keys/PII, then commit the briefs."
@@ -1370,18 +1507,24 @@ cmd_touch() {
 # reclassified into one of those types after being claimed (`claim` refuses both types, so that
 # conversion is the only way a lease gets onto one). The lease then survived until the TTL reap,
 # and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
-finish_release() { # id
+finish_release() { # id status
   clear_lock "$(lock_key "$1")"
   # A closed handoff is no longer awaiting review; leaving `review: pending` set would make a
   # reopened doc read as pending against a review that already happened. doc_of searches active
   # THEN archive, so this reaches the doc whether or not a `done` release above already moved it.
-  # Only an ACTUAL pending review is cleared — a doc with no review field, or mid-delegation with
-  # its result not yet imported, is left untouched. Stamping every release unconditionally would
-  # mark those as reviewed too, silently hiding the delegation marker in `list` for work that was
-  # never looked at.
+  #
+  # Cleared ONLY on a `done` release. `review: pending` means "an outsider's claim is sitting here
+  # unreviewed"; only `done` means a human actually looked at it. `open`/`blocked` release the
+  # lease without reviewing anything — clearing the marker on those releases (the previous
+  # behavior, which checked only that a review WAS pending, not what kind of release this is) let
+  # an orchestrator import a result, then release --status open to hand review to someone else, and
+  # have that very release erase the "needs a reviewer" signal it was trying to hand off. Also
+  # never stamp on an ACTUAL absent field (no review field, or mid-delegation with no result
+  # imported yet) — stamping those as reviewed too would silently hide the delegation marker in
+  # `list` for work that was never looked at.
   local rf
   rf="$(doc_of "$1" 2> /dev/null)"
-  [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
+  [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
   cmd_index
 }
 
@@ -1456,7 +1599,7 @@ cmd_release() {
         ;;
       *) die "orchestrators support --status open|done (a bundle has no lease to block on)" ;;
     esac
-    finish_release "$id"
+    finish_release "$id" "$status"
     return
   fi
 
@@ -1485,7 +1628,7 @@ cmd_release() {
         ;;
       *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
     esac
-    finish_release "$id"
+    finish_release "$id" "$status"
     return
   fi
 
@@ -1546,8 +1689,11 @@ cmd_release() {
 
   # Closing `done` with the executor's own evidence string is trusting the report with extra steps.
   # A warning, never a refusal: the reviewer may legitimately have re-run the very same command.
+  # Scoped to the spliced RESULT BLOCK, not the whole doc — a whole-doc substring search fires on
+  # a reviewer who honestly re-ran the doc's own `## Verify` command and typed the same words to
+  # describe it, which live outside the Result block the executor reported.
   if [ "$status" = "done" ] && [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ]; then
-    if grep -Fq -- "$verified_by" "$f" 2> /dev/null; then
+    if printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
       echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
       echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
     fi
@@ -1570,7 +1716,7 @@ cmd_release() {
     log_activity "$f" "$status — released by $me.${note}"
     echo "Released $id → $status."
   fi
-  finish_release "$id"
+  finish_release "$id" "$status"
 }
 
 # The effective `repos:` list — the inline flow list AND any block-list items on the lines after
