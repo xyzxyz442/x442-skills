@@ -878,6 +878,187 @@ cmd_import() {
   cmd_index
 }
 
+# Render a board doc into a self-contained execution brief for someone who has the repo but not the
+# board — no leases, no hooks, no skills. The brief inlines the executor contract that those would
+# otherwise carry, and it carries repo identity so it cannot be run against the wrong checkout.
+cmd_export() {
+  local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]}"
+  shift
+  local raw_id="$id" to="" outdir="" branch="" do_claim=1
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)
+        require_value --to "$#" "${2:-}"
+        to="$(fold_colons "$2")"
+        shift 2
+        ;;
+      --out)
+        require_value --out "$#" "${2:-}"
+        outdir="$2"
+        shift 2
+        ;;
+      --branch)
+        require_value --branch "$#" "${2:-}"
+        branch="$2"
+        shift 2
+        ;;
+      --no-claim)
+        do_claim=0
+        shift
+        ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  is_standalone "$f" && die "$id is a standalone/reference handoff — it holds no work to delegate. Send the file itself."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to delegate"
+
+  if is_orchestrator "$f"; then
+    export_bundle "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
+    return
+  fi
+  export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
+}
+
+# Resolve identity for the repo a brief targets. On a flat board that is this repo. On a grouped
+# board the doc's audience names a DIFFERENT repo, and if it is not reachable on disk we record
+# "unverified" rather than fabricate a SHA — a fabricated SHA would make a wrong-repo run look
+# verified, which is worse than no guard at all.
+brief_identity() { # doc-path -> "name|origin|rootsha|note"
+  local f="$1" target="${REPO_DIR:-}" name origin root note=""
+  local aud
+  aud="$(meta "$f" audience)"
+  if [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ]; then
+    if [ -d "${REPO_DIR:-.}/../$aud/.git" ]; then
+      target="$(cd "${REPO_DIR:-.}/../$aud" && pwd)"
+    else
+      target=""
+    fi
+  fi
+  if [ -z "$target" ]; then
+    printf '%s|%s|%s|%s' "${aud:-unknown}" "unverified" "unverified" \
+      "> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+    return
+  fi
+  name="$(basename "$target")"
+  origin="$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")"
+  root="$(repo_root_commit "$target")"
+  printf '%s|%s|%s|%s' "$name" "${origin:-unknown}" "${root:-unverified}" "$note"
+}
+
+# Resolve blocked_on and, for a bundle child, its siblings into readable lines. A brief's reader
+# cannot query the board, so a bare id would be meaningless to them.
+brief_dependencies() { # doc-path -> markdown lines
+  local f="$1" b out="" bf
+  b="$(meta "$f" blocked_on)"
+  if [ -n "$b" ]; then
+    case "$b" in
+      external*) out="- Blocked on something off the board — $b" ;;
+      *)
+        bf="$(doc_of "$(resolve_id "$b")" 2> /dev/null || true)"
+        if [ -n "$bf" ] && [ -f "$bf" ]; then
+          out="- Blocked on \`$b\` — $(meta "$bf" title) (status — $(meta "$bf" status))"
+        else
+          out="- Blocked on \`$b\` (not resolvable from this board)"
+        fi
+        ;;
+    esac
+  fi
+  [ -n "$out" ] || out="None. This unit stands alone."
+  printf '%s' "$out"
+}
+
+export_one() { # id doc to outdir branch do_claim
+  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
+  local name origin root note
+  IFS='|' read -r name origin root note <<< "$(brief_identity "$f")"
+  [ -n "$branch" ] || branch="fix/$id"
+
+  local dest_dir dest
+  dest_dir="${outdir:-$(briefs_dir)}"
+  mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  dest="$dest_dir/$id.brief.md"
+
+  local tmpl
+  tmpl="$(tmpl_path handoff-brief-template.md)"
+  [ -f "$tmpl" ] || die "brief template missing from this board — re-run setup-handoff to update it"
+
+  render_tmpl "$tmpl" \
+    "PLACEHOLDER_ID=$id" \
+    "PLACEHOLDER_TITLE=$(meta "$f" title)" \
+    "PLACEHOLDER_SEVERITY=$(meta "$f" severity)" \
+    "PLACEHOLDER_REPO_NAME=$name" \
+    "PLACEHOLDER_REPO_ORIGIN=$origin" \
+    "PLACEHOLDER_ROOT_COMMIT=$root" \
+    "PLACEHOLDER_SOURCE_COMMIT=$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_SOURCE_BRANCH=$(git -C "${REPO_DIR:-.}" rev-parse --abbrev-ref HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_EXPORTED=$(today)" \
+    "PLACEHOLDER_BRANCH=$branch" \
+    "PLACEHOLDER_PREFLIGHT_NOTE=$note" \
+    "PLACEHOLDER_CONTEXT=$(doc_section "$f" Context)" \
+    "PLACEHOLDER_WHERE=$(doc_section "$f" Where)" \
+    "PLACEHOLDER_DECISIONS=$(doc_section "$f" Decisions)" \
+    "PLACEHOLDER_VERIFY=$(doc_section "$f" Verify)" \
+    "PLACEHOLDER_DEPENDENCIES=$(brief_dependencies "$f")" \
+    > "$dest" || die "could not write $dest"
+
+  set_field "$f" delegated_to "${to:-unassigned}"
+  set_field "$f" delegated_at "$(today)"
+  set_field "$f" brief "${dest#"$REPO_DIR"/}"
+  log_activity "$f" "exported as a brief for ${to:-an external executor}"
+
+  if [ "$do_claim" -eq 1 ]; then
+    cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+  fi
+
+  echo "Wrote $dest"
+  echo "🔒 Before committing — redact secrets/keys/PII, then commit the brief so the executor can pull it."
+  cmd_index
+}
+
+export_bundle() { # id doc to outdir branch do_claim
+  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
+  local dest_dir cover kid kf n=0
+  dest_dir="${outdir:-$(briefs_dir)}"
+  mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  cover="$dest_dir/$id.cover.md"
+  {
+    echo "# Bundle — $(meta "$f" title)"
+    echo
+    echo "You have been given a bundle of related units. Each has its own brief; read this first."
+    echo
+    echo "## Bundle"
+    echo
+    doc_section "$f" Bundle
+    echo
+    echo "## Sequencing"
+    echo
+    doc_section "$f" Sequencing
+    echo
+    echo "## Units"
+    echo
+  } > "$cover"
+
+  while IFS= read -r kid; do
+    [ -n "$kid" ] || continue
+    kf="$(doc_of "$kid" 2> /dev/null || true)"
+    if [ -z "$kf" ] || [ ! -f "$kf" ]; then
+      echo "⚠️  child $kid has no doc on this board — skipped" >&2
+      continue
+    fi
+    export_one "$kid" "$kf" "$to" "$outdir" "" "$do_claim" > /dev/null
+    echo "- \`$kid\` — $(meta "$kf" title) — brief at \`$kid.brief.md\`" >> "$cover"
+    n=$((n + 1))
+  done <<< "$(children_of "$f")"
+
+  echo "Wrote $cover and $n child brief(s) in $dest_dir"
+  echo "🔒 Before committing — redact secrets/keys/PII, then commit the briefs."
+  cmd_index
+}
+
 cmd_list() {
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
@@ -1461,6 +1642,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_import "$@"
       ;;
+    export)
+      shift
+      cmd_export "$@"
+      ;;
     claim)
       shift
       cmd_claim "$@"
@@ -1478,6 +1663,6 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       cmd_reap "$@"
       ;;
     index) cmd_index ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
   esac
 fi
