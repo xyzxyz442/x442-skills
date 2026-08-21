@@ -1,0 +1,8 @@
+{
+  "allowVerifyCmd": false,
+  "groupLayout": "",
+  "groups": [],
+  "repoName": "returned-clean",
+  "topology": "single-repo",
+  "ttlHours": 4
+}

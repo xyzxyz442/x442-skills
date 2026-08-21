@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind pretool-edit --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind stop --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -102,16 +102,19 @@ content verbatim.
 
 ## Fields
 
-| Field                     | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                    | `coordination` (default; lease-gated work item), `standalone` (self-contained reference doc, gate-exempt), or `orchestrator` (an index over a bundle of children, gate-exempt). Absent ⇒ `coordination`. See "Three types of handoff".                                                                                                                                                                                                                                                                                 |
-| `children`                | Orchestrators only: the handoff ids in the bundle. Progress is derived from them at read time and never stored here.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `status`                  | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `audience`                | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
-| `repos`                   | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
-| `blocked_on`              | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
-| `updated` / `verified_at` | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                                                                                                                                                                                                                                         |
-| `verify`                  | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
+| Field                                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                                         | `coordination` (default; lease-gated work item), `standalone` (self-contained reference doc, gate-exempt), or `orchestrator` (an index over a bundle of children, gate-exempt). Absent ⇒ `coordination`. See "Three types of handoff".                                                                                                                                                                                                                                                                                 |
+| `children`                                     | Orchestrators only: the handoff ids in the bundle. Progress is derived from them at read time and never stored here.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `status`                                       | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `audience`                                     | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
+| `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
+| `blocked_on`                                   | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
+| `updated` / `verified_at`                      | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `verify`                                       | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
+| `delegated_to` / `delegated_at` / `brief`      | Written by `export`: who it went to, when, and the path to the rendered brief under `briefs/`. See "Delegating off-board".                                                                                                                                                                                                                                                                                                                                                                                             |
+| `result_from` / `result_at` / `result_claimed` | Written by `import --result`: who reported back, when, and what they claimed (`done`/`partial`/`blocked`). A **claim**, not a verdict — `status` is untouched until a reviewer runs `release`.                                                                                                                                                                                                                                                                                                                         |
+| `review`                                       | `pending` once `import --result` lands a report; cleared by `release`. Surfaces the doc as needing a reviewer's eyes rather than an executor's.                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Configuration
 
@@ -216,6 +219,60 @@ Readers strip one surrounding quote pair, so the command still reaches the shell
 unquoted command keeps working, but only for tools that read frontmatter the way this board does;
 a strict parser (markdown preview included) rejects the whole doc.
 
+## Delegating off-board
+
+Every command above assumes the person doing the work has this board — leases, hooks, skills, all
+of it. `export`/`import --result` are for when they do not: a contractor, a junior engineer,
+another team, or an AI tool with no `.agents/handoff/` installed. The judgment for when a handoff
+is ready to leave and how to review what comes back lives in the `delegate-handoff` skill, not
+here; this section documents the mechanics the CLI enforces.
+
+```bash
+./handoff export rbac-gap --to "a contractor" --branch fix/rbac-gap
+#   ... they pull the branch, do the work, fill in the Result block, open a PR ...
+./handoff import --result briefs/rbac-gap-handoff.brief.md
+./handoff release rbac-gap --status done --verified-by "reproduced their fix: e2e green"
+```
+
+**`export <id>`** claims the id (unless `--no-claim`), stamps `delegated_to`/`delegated_at`/
+`brief` on the doc, and renders `briefs/<id>.brief.md` — a single self-contained markdown file
+carrying:
+
+- a **preflight** the executor runs before touching anything, checking their checkout's root
+  commit against the one recorded at export time, so a brief naming `src/auth/tenant.ts:88` can
+  never silently land against the wrong repository's file at that path;
+- the assignment itself — Context, Where, Decisions, Verify — copied from the doc;
+- an **executor contract** inlining the scope discipline, evidence requirements, secret redaction,
+  and no-`rm` rule that the missing hooks and skills would otherwise carry;
+- an empty **Result** block bounded by `<!-- handoff:result:begin/end -->` markers, with
+  `result_status`, `result_by`, `result_at` left blank in the frontmatter for the executor to fill.
+
+Refuses on a `standalone` handoff (send the file — it is already self-contained) and on one
+already `done` (nothing left to delegate). On an `orchestrator` it renders one cover brief with the
+Sequencing section plus one brief per child.
+
+**Commit the brief** before telling the executor — they pull it from the branch, they are not
+attached a file out of band. `export` prints a reminder to redact anything that should not enter
+git history before that commit.
+
+**`import --result <brief>`** reads the executor's filled-in brief back. It refuses, in order: an
+unrecognized `brief:` format version; a `repo_root_commit` that does not match this checkout
+(`unverified` requires `--force-repo` and your own manual confirmation); an id that does not
+resolve to a live handoff; a missing or invalid `result_status`; a Result block still holding only
+the template's placeholder comments; a Result whose text matches the shape of a committed
+credential; and a target doc that was never delegated, or whose `brief:` pointer names a different
+file — stops a stray or hand-edited `handoff:` id from stamping a result onto a doc that was never
+exported. Passing all of those, it splices the Result under `## Result (reported)` — replacing
+on re-import rather than duplicating — and stamps `result_from`, `result_at`, `result_claimed`,
+and `review: pending`.
+
+**It never writes `status`.** Not for `done`, not even for `blocked`, which still needs a reviewer
+to supply a validated `--blocked-on`. `result_claimed` sits in the frontmatter next to a `status`
+field it did not touch, precisely so nobody mistakes an executor's account for a verdict.
+`release --status done --verified-by "..."` remains the only way this handoff closes, same as
+every other handoff on the board — the reviewer runs it after reproducing the evidence themselves,
+not after reading that someone else claims to have done so.
+
 ## Layout
 
 Machinery lives in subfolders; the board root holds only the entry point and the content.
@@ -231,9 +288,11 @@ Machinery lives in subfolders; the board root holds only the entry point and the
 ├── templates/
 │   ├── handoff-doc-template.md          # scaffold for `handoff new`
 │   ├── handoff-standalone-template.md   # scaffold for `handoff new --standalone`
-│   └── handoff-orchestrator-template.md # scaffold for `handoff new --orchestrator`
+│   ├── handoff-orchestrator-template.md # scaffold for `handoff new --orchestrator`
+│   └── handoff-brief-template.md        # scaffold for `handoff export`
 ├── *-handoff.md            # open + blocked handoffs
 ├── archive/*-handoff.md    # done / superseded
+├── briefs/*.brief.md       # rendered by `export`, committed for the executor to pull
 └── .locks/                 # live leases (gitignored)
 ```
 

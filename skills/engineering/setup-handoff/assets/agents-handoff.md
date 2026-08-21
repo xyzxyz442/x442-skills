@@ -50,6 +50,19 @@ PLACEHOLDER_HANDOFF_DIR/handoff release HANDOFF_ID --status blocked --blocked-on
 PLACEHOLDER_HANDOFF_DIR/handoff release HANDOFF_ID --status done --verified-by "how you verified live code"
 ```
 
+Sending work to someone with no board access — a contractor, another team, an AI tool without this
+protocol — goes through `export`/`import --result`, not a pasted doc:
+
+```text
+PLACEHOLDER_HANDOFF_DIR/handoff export HANDOFF_ID --to WHO
+PLACEHOLDER_HANDOFF_DIR/handoff import --result PLACEHOLDER_HANDOFF_DIR/briefs/HANDOFF_ID.brief.md
+```
+
+`export` claims the id and renders a self-contained brief to `PLACEHOLDER_HANDOFF_DIR/briefs/` —
+commit it so the executor can pull it. `import --result` splices their reported result onto the
+doc but **never sets `status`** — `done` stays your call, made after you reproduce their evidence
+yourself, the same as any other release.
+
 Full protocol: [PLACEHOLDER_HANDOFF_DIR/README.md](PLACEHOLDER_HANDOFF_DIR/README.md).
 
 <!-- handoff:end -->

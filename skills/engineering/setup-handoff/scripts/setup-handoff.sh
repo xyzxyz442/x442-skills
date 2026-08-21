@@ -213,7 +213,7 @@ done
 # cross-repo sync stands up before it wires the member repos that point at it. Idempotent.
 if [ -n "$BOARD_ONLY" ]; then
   case "$BOARD_ONLY" in /*) HDEST="$BOARD_ONLY" ;; *) HDEST="$(pwd)/$BOARD_ONLY" ;; esac
-  mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive"
+  mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive" "$HDEST/briefs"
   install_file "$PAYLOAD/handoff" "$HDEST/handoff"
   install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
   install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
@@ -221,6 +221,7 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
   install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
   install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+  install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
   install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
   chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
   write_board_config "$HDEST/config.json" cross-repo ""
@@ -317,6 +318,7 @@ if [ -f "$HDEST/hooks.sh" ] || [ -f "$HDEST/handoff-doc-template.md" ]; then
   migrate_file "$HDEST/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
   migrate_file "$HDEST/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
   migrate_file "$HDEST/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+  migrate_file "$HDEST/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
 fi
 
 # --- migrate a legacy shell config to JSON ---------------------------------------------
@@ -352,7 +354,7 @@ PY
 fi
 
 # --- install the payload --------------------------------------------------------------
-mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates"
+mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"
 install_file "$PAYLOAD/handoff" "$HDEST/handoff"
 install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
 install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
@@ -360,6 +362,7 @@ install_file "$PAYLOAD/README.md" "$HDEST/README.md"
 install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
 install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
 install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
+install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
 # Payload stamp: what version of the board machinery this install carries. Committed with the
 # payload so a teammate's checkout carries it too, and readable with `cat` — the hooks that read
 # it may run on a machine with nothing but bash. An ABSENT .version means a pre-versioning
