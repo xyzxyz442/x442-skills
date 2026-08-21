@@ -114,9 +114,16 @@ echo
 echo "2. Config, gitignore, AGENTS.md block"
 echo "-------------------------------------"
 TOPO=""
+# CONFIG_JSON_BAD tracks whether the "not valid JSON" FAIL below already fired, so the resolver
+# failure a few lines down (same root cause — it re-reads this same file) reports it once, not
+# twice. Two FAILs for one malformed config.json would double-count the same underlying problem.
+CONFIG_JSON_BAD=""
 if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
   if [ -f "$HD/config.json" ]; then
-    if is_json "$HD/config.json"; then ok "config.json present and valid JSON"; else bad "config.json is not valid JSON"; fi
+    if is_json "$HD/config.json"; then ok "config.json present and valid JSON"; else
+      bad "config.json is not valid JSON"
+      CONFIG_JSON_BAD=1
+    fi
     # python3 is not optional once a config.json exists: every read of it needs one.
     command -v python3 > /dev/null 2>&1 || bad "config.json present but python3 missing — the board cannot read its own config"
   else
@@ -136,6 +143,8 @@ if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
       ok "effective config: topology=$HC_TOPOLOGY ttlHours=$HC_TTL_HOURS allowVerifyCmd=$HC_ALLOW_VERIFY_CMD group=${HC_GROUP:-none}"
       case "$HC_TOPOLOGY" in single-repo | cross-repo) ok "topology valid: $HC_TOPOLOGY" ;; *) bad "invalid topology: $HC_TOPOLOGY" ;; esac
       TOPO="$HC_TOPOLOGY"
+    elif [ -n "$CONFIG_JSON_BAD" ]; then
+      : # already reported as "config.json is not valid JSON" above — same root cause, don't double-FAIL
     else bad "config could not be resolved (malformed?): $_hc_out"; fi
   else warn "scripts/config.sh missing — re-run setup-handoff"; fi
 else bad "config missing (no config.json)"; fi
