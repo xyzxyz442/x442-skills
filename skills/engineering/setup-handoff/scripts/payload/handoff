@@ -783,11 +783,137 @@ cmd_new() {
   cmd_index
 }
 
+# Read a returned brief back onto the board. Everything in the file was written OUTSIDE this repo's
+# tooling, so the refusals below are the substance of this command, not defensive padding.
+#
+# The one thing it never does is write `status`. The executor's claim lands in `result_claimed`,
+# beside a `status` it did not change: `done` stays a reviewer action backed by evidence the
+# reviewer reproduced. That is the whole protocol, preserved across a trust boundary.
+import_result() {
+  local src="" force_repo=0
+  src="${1:?usage: handoff import --result <file> [--force-repo]}"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force-repo)
+        force_repo=1
+        shift
+        ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -f "$src" ] || die "no such file: $src"
+
+  local ver
+  ver="$(meta "$src" brief)"
+  [ "$ver" = "1" ] || die "unknown brief format '$ver' — this CLI reads brief format 1. Update the board (re-run setup-handoff) or the brief."
+
+  # Repo guard FIRST. A brief names file:line locations that may exist in another repo and mean
+  # something else there; landing its result on a same-named handoff would be silent corruption.
+  local want_root have_root
+  want_root="$(meta "$src" repo_root_commit)"
+  have_root="$(repo_root_commit)"
+  if [ "$want_root" = "unverified" ]; then
+    [ "$force_repo" -eq 1 ] \
+      || die "this brief was rendered without a verified repo identity — confirm it targets $(basename "${REPO_DIR:-.}") by hand, then re-run with --force-repo"
+    echo "⚠️  Importing a brief with an unverified repo identity because --force-repo was given."
+  elif [ "$want_root" != "$have_root" ]; then
+    die "this brief targets a different repository ($(meta "$src" repo_name) at $(meta "$src" repo_origin)) — refusing to import it here"
+  fi
+
+  local id f
+  id="$(resolve_id "$(meta "$src" handoff)")" || die "brief names an unusable handoff id"
+  if is_archived "$id"; then
+    die "$id is already archived at $(arch_file "$id") — reopen it before importing a result"
+  fi
+  f="$(doc_of "$id")" || no_such "$id"
+
+  local claimed
+  claimed="$(meta "$src" result_status)"
+  case "$claimed" in
+    done | partial | blocked) ;;
+    "") die "the brief's result_status is empty — it was not filled in" ;;
+    *) die "bad result_status '$claimed' (expected done, partial, or blocked)" ;;
+  esac
+
+  local body
+  body="$(awk '
+    /<!-- handoff:result:begin -->/ { inside = 1; next }
+    /<!-- handoff:result:end -->/   { inside = 0 }
+    inside { print }
+  ' "$src")"
+  # A block that still carries only headings and the template comments is not a result.
+  local substance
+  substance="$(printf '%s\n' "$body" | grep -v '^###' | grep -v '^[[:space:]]*<!--' | tr -d '[:space:]')"
+  [ -n "$substance" ] || die "the brief's Result block was not filled in"
+
+  # The returned text is untrusted and about to enter git history permanently.
+  if printf '%s\n' "$body" | grep -Eqi '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'; then
+    die "the Result block looks like a credential was pasted into it — redact the brief and re-run. Nothing was written."
+  fi
+
+  if [ "$claimed" = "done" ] \
+    && [ -z "$(printf '%s\n' "$body" | awk '/^### Commits and PR/{c=1;next} /^###/{c=0} c' | tr -d '[:space:]')" ]; then
+    echo "⚠️  The brief claims done but names no commit or PR. Treat the evidence with extra suspicion."
+  fi
+
+  local src_commit head_commit
+  src_commit="$(meta "$src" source_commit)"
+  head_commit="$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo "")"
+  if [ -n "$src_commit" ] && [ -n "$head_commit" ] && [ "$src_commit" != "$head_commit" ]; then
+    echo "⚠️  Brief was rendered at $src_commit; HEAD is $head_commit. The Where anchors may have moved."
+  fi
+
+  splice_result "$f" "$body"
+  set_field "$f" result_from "$(fold_colons "$(meta "$src" result_by)")"
+  set_field "$f" result_at "$(meta "$src" result_at)"
+  set_field "$f" result_claimed "$claimed"
+  set_field "$f" review pending
+  log_activity "$f" "result reported by $(meta "$src" result_by) claiming $claimed — awaiting review"
+
+  echo "Imported the reported result into $f."
+  echo "Board status is UNCHANGED — the report is a claim, not a verdict."
+  echo "Review the PR, reproduce the evidence, then close it yourself:"
+  echo "  handoff release $id --status done --verified-by \"<how YOU verified live code>\""
+  cmd_index
+}
+
+# Replace (or append) the doc's reported-result block. Bounded by the same marker pair the brief
+# uses, which is what makes a re-import replace rather than stack up a second copy.
+splice_result() { # doc-path body
+  local f="$1" body="$2" t
+  t="$(mktemp)" || die "mktemp failed"
+  if grep -q '<!-- handoff:result:begin -->' "$f"; then
+    awk -v b="$body" '
+      /<!-- handoff:result:begin -->/ { print; print ""; print b; skip = 1; next }
+      /<!-- handoff:result:end -->/   { skip = 0 }
+      !skip { print }
+    ' "$f" > "$t" && cat "$t" > "$f"
+  else
+    {
+      cat "$f"
+      printf '\n## Result (reported)\n\n'
+      printf '<!-- Reported by an external executor and spliced in by `handoff import --result`.\n'
+      printf '     It is a CLAIM about live code, not a verified board status. -->\n\n'
+      printf '<!-- handoff:result:begin -->\n\n%s\n\n<!-- handoff:result:end -->\n' "$body"
+    } > "$t" && cat "$t" > "$f"
+  fi
+  rm -f "$t"
+}
+
 # Bring an existing file onto the board as a handoff (default type: standalone). Used to migrate
 # reference docs. Never moves the source (the caller trashes it); we copy + normalize frontmatter.
 cmd_import() {
+  # Two commands under one verb, with INVERTED preconditions: plain `import` refuses an id that is
+  # already on the board, `--result` refuses one that is not. Routed here rather than as its own
+  # subcommand to keep the export/import pair symmetric for the caller.
+  if [ "${1:-}" = "--result" ]; then
+    shift
+    import_result "$@"
+    return
+  fi
   local src="" id="" title="" type="standalone" severity="" note="" group="${HANDOFF_GROUP:-}"
-  src="${1:?usage: handoff import <file> [--id ID] [--title T] [--type standalone|coordination] [--group G] [--severity S] [--note N]}"
+  src="${1:?usage: handoff import <file> [--id ID] ... | handoff import --result <file> [--force-repo]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in

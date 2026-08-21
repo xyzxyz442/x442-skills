@@ -176,5 +176,76 @@ chk "stored brief path is the absolute path, not a mangled one" "$NG_DEST" \
 chk "the stored brief path resolves to a real file" "yes" \
   "$([ -f "$(sed -n 's/^brief: //p' "$NG_DOC" | head -1)" ] && echo yes || echo no)"
 
+printf '\nimport --result\n'
+fill_brief() { # brief-file status -> fill the frontmatter and Result block
+  local b="$1" st="$2" t
+  t="$(mktemp)"
+  sed -e "s/^result_status:.*/result_status: $st/" \
+    -e "s/^result_by:.*/result_by: Alice/" \
+    -e "s/^result_at:.*/result_at: 2026-08-22/" "$b" > "$t"
+  awk '
+    /<!-- handoff:result:begin -->/ {
+      print
+      print ""
+      print "### Status"
+      print ""
+      print "done"
+      print ""
+      print "### What changed"
+      print ""
+      print "Guarded the tenant switch."
+      print ""
+      print "### Evidence"
+      print ""
+      print "Ran npm test -- tenant; 14 passing."
+      print ""
+      print "### Commits and PR"
+      print ""
+      print "abc1234, PR #42"
+      print ""
+      print "### Open questions and follow-ups"
+      print ""
+      print "None."
+      print ""
+      skip = 1
+      next
+    }
+    /<!-- handoff:result:end -->/ { skip = 0 }
+    !skip { print }
+  ' "$t" > "$b"
+  rm -f "$t"
+}
+
+fill_brief "$BRIEF" done
+hb "$R" import --result "$BRIEF" > /dev/null
+DOC="$BOARD/rbac-gap-handoff.md"
+chk "status still NOT done" "open" "$(sed -n 's/^status: //p' "$DOC" | head -1)"
+chk "claim recorded as a claim" "done" "$(sed -n 's/^result_claimed: //p' "$DOC" | head -1)"
+chk "reporter recorded" "Alice" "$(sed -n 's/^result_from: //p' "$DOC" | head -1)"
+chk "flagged for review" "pending" "$(sed -n 's/^review: //p' "$DOC" | head -1)"
+chk_contains "result spliced into the doc" "$(cat "$DOC")" "Guarded the tenant switch."
+
+hb "$R" import --result "$BRIEF" > /dev/null
+chk "re-import does not duplicate" "1" "$(grep -c 'Guarded the tenant switch.' "$DOC")"
+
+printf '\nimport --result refusals\n'
+WRONG="$(mktemp)"
+sed 's/^repo_root_commit: .*/repo_root_commit: 0000000000000000000000000000000000000000/' "$BRIEF" > "$WRONG"
+chk_contains "wrong repo refused" "$(hb "$R" import --result "$WRONG")" "different repository"
+
+BADV="$(mktemp)"
+sed 's/^brief: 1$/brief: 99/' "$BRIEF" > "$BADV"
+chk_contains "unknown format refused" "$(hb "$R" import --result "$BADV")" "brief format"
+
+R2="$(mkboard)"
+hb "$R2" new other-thing --title "Other" --severity low > /dev/null
+hb "$R2" export other-thing > /dev/null
+UNFILLED="$R2/.agents/handoff/briefs/other-thing-handoff.brief.md"
+chk_contains "unfilled result refused" "$(hb "$R2" import --result "$UNFILLED")" "not filled in"
+
+SECRET="$(mktemp)"
+sed 's/Ran npm test -- tenant; 14 passing./token AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET"
+chk_contains "secret-bearing result refused" "$(hb "$R" import --result "$SECRET")" "looks like a credential"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
