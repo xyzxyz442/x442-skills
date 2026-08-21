@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -63,23 +64,117 @@ def dump(path: Path, data: dict) -> None:
 
 
 def command(hdpath: str, tool: str, kind: str) -> str:
-    # Cross-repo SHARED board: bake this consuming repo's identity into the command so hooks.sh
-    # reads $HANDOFF_REPO instead of the shared config's REPO_NAME (which would be whoever installed
-    # last). Empty (single-repo) => no prefix => byte-identical to the pre-existing command.
-    # HANDOFF_REPO is set only for cross-repo. When it is, also pass HANDOFF_HDPATH so the shared
-    # board's sessionstart hint advertises the real relative path (../.../handoff), not the
-    # single-repo .agents/handoff default. Both empty (single-repo) => byte-identical command.
-    # On a grouped board, HANDOFF_GROUP additionally scopes this repo's hooks to its own section
-    # (its sub-index, its lease namespace). Empty (ungrouped) => not added => command unchanged.
-    repo = os.environ.get("HANDOFF_REPO", "")
-    grp = os.environ.get("HANDOFF_GROUP", "")
-    prefix = f"HANDOFF_REPO={shlex.quote(repo)} HANDOFF_HDPATH={shlex.quote(hdpath)} " if repo else ""
-    if repo and grp:
-        prefix += f"HANDOFF_GROUP={shlex.quote(grp)} "
-    # Claude expands $CLAUDE_PROJECT_DIR; keep the path anchored so cwd never matters.
+    # Identity is NOT baked in here any more. It used to ride as a HANDOFF_REPO=... prefix, which
+    # made normal operating configuration invisible to anyone reading the board and stale the
+    # moment a repo was renamed. It now lives in the consuming repo's .agents/handoff.config.json
+    # and hooks.sh discovers it. What the command still carries is an ANCHOR -- where the repo is,
+    # never what it is configured to do -- so resolution stays deterministic instead of depending
+    # on the tool's working directory.
     if tool == "claude":
-        return f'{prefix}bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" --kind {kind} --tool claude'
-    return f"{prefix}bash {hdpath}/scripts/hooks.sh --kind {kind} --tool {tool}"
+        return (
+            f'bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" '
+            f'--kind {kind} --tool claude --project-dir "$CLAUDE_PROJECT_DIR"'
+        )
+    return f"bash {hdpath}/scripts/hooks.sh --kind {kind} --tool {tool}"
+
+
+LEGACY_PREFIX = re.compile(r'^((?:HANDOFF_[A-Z_]+=(?:"[^"]*"|\'[^\']*\'|\S*)\s+)+)')
+
+
+def parse_legacy_prefix(cmd: str) -> dict:
+    """Pull the HANDOFF_*= assignments off the front of a managed hook command."""
+    m = LEGACY_PREFIX.match(cmd)
+    if not m:
+        return {}
+    out = {}
+    for tok in shlex.split(m.group(1)):
+        if "=" in tok:
+            key, _, val = tok.partition("=")
+            out[key] = val
+    return out
+
+
+def migrate_prefix(commands: list) -> tuple:
+    """Return (repo_config, refusals). Refuses any command whose identity would change.
+
+    A repo silently switching sections would file handoffs where nobody reads them, so a prefix
+    that cannot be proven equivalent is LEFT IN PLACE rather than dropped.
+    """
+    found, refusals = {}, []
+    for cmd in commands:
+        env = parse_legacy_prefix(cmd)
+        if not env:
+            continue
+        for key in ("HANDOFF_REPO", "HANDOFF_GROUP", "HANDOFF_HDPATH"):
+            if key in env and found.setdefault(key, env[key]) != env[key]:
+                refusals.append(
+                    "%s differs across wired tools (%r vs %r) — leaving prefixes in place"
+                    % (key, found[key], env[key])
+                )
+    if refusals:
+        return {}, refusals
+    cfg = {}
+    if "HANDOFF_REPO" in found:
+        cfg["repo"] = found["HANDOFF_REPO"]
+    if found.get("HANDOFF_GROUP"):
+        cfg["group"] = found["HANDOFF_GROUP"]
+    if found.get("HANDOFF_HDPATH"):
+        cfg["boardPath"] = found["HANDOFF_HDPATH"]
+    return cfg, []
+
+
+def write_repo_config(repo_root: str, cfg: dict) -> None:
+    """Write the consuming repo's own identity. Merges, so a hand-added key survives."""
+    path = os.path.join(repo_root, ".agents", "handoff.config.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    existing = {}
+    if os.path.isfile(path):
+        with open(path) as fh:
+            existing = json.load(fh)
+    existing.update(cfg)
+    with open(path, "w") as fh:
+        json.dump(existing, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def env_repo_config() -> dict:
+    """Build repo identity from setup-handoff.sh's live invocation env.
+
+    migrate_prefix only recovers identity that already exists as a legacy prefix somewhere in
+    the file -- a FRESH cross-repo install has no such prefix to recover, so without this it
+    would end up with no identity anywhere (exactly the unscoped-filing failure the refusal
+    guard exists to prevent). setup-handoff.sh always exports HANDOFF_REPO for a cross-repo
+    install (empty for single-repo, which is why this intentionally contributes nothing there),
+    plus HANDOFF_GROUP and HANDOFF_HDPATH (the board path) alongside it.
+    """
+    repo = os.environ.get("HANDOFF_REPO", "")
+    if not repo:
+        return {}
+    cfg = {"repo": repo}
+    grp = os.environ.get("HANDOFF_GROUP", "")
+    if grp:
+        cfg["group"] = grp
+    hdpath_env = os.environ.get("HANDOFF_HDPATH", "")
+    if hdpath_env:
+        cfg["boardPath"] = hdpath_env
+    return cfg
+
+
+def collect_managed_commands(data: dict) -> list:
+    """Every command string from a handoff-managed hook group, across all wired events."""
+    hooks = data.get("hooks")
+    out = []
+    if not isinstance(hooks, dict):
+        return out
+    for groups in hooks.values():
+        for g in groups or []:
+            if not isinstance(g, dict):
+                continue
+            for h in g.get("hooks", []) or []:
+                cmd = h.get("command", "")
+                if is_managed(cmd):
+                    out.append(cmd)
+    return out
 
 
 def strip_managed(groups: list) -> list:
@@ -167,6 +262,39 @@ def main(argv: list[str]) -> int:
     if "--add-dir" in argv:
         add_dir(path, hdpath)
         return 0
+    repo_root = None
+    if "--repo-root" in argv:
+        idx = argv.index("--repo-root")
+        if idx + 1 >= len(argv):
+            raise SystemExit("merge-hooks: --repo-root requires a value")
+        repo_root = argv[idx + 1]
+    # Extraction MUST happen before wire() (below) strips the managed hook groups -- strip_managed
+    # drops the old HANDOFF_*=-prefixed commands entirely, and would take the prefixes with them.
+    #
+    # The refusal is ALL-OR-NOTHING for THIS file: migrate_prefix only ever sees the commands
+    # collected from `path` (one file per invocation, one invocation per tool), so a conflict
+    # here cannot suppress migration of a sibling tool's config, and a sibling's agreeing values
+    # can never dilute a real conflict in this file into a false "no conflict". On a refusal we
+    # return before wire() runs at all: no command rewrite, no prefix stripped, no --project-dir
+    # anchor added, no config write. Half-migrating (anchor added, prefix gone, identity nowhere)
+    # is the one outcome a re-run cannot recover from -- leaving the file exactly as it was,
+    # still running its old working prefix, is what makes a later fix (or re-run once the
+    # conflict is resolved by hand) safe.
+    if repo_root is not None:
+        commands = collect_managed_commands(load(path))
+        migrated, refusals = migrate_prefix(commands)
+        if refusals:
+            for r in refusals:
+                print(f"merge-hooks: refusing to migrate {path}: {r}", file=sys.stderr)
+            print(f"merge-hooks: leaving {path} untouched -- resolve the conflict by hand, then re-run", file=sys.stderr)
+            return 1
+        # Live env (this run's actual installer knowledge) wins over migrated history for the
+        # same key, but a migrated key the live env has no value for must survive the merge --
+        # e.g. a legacy HANDOFF_GROUP recovered from history when this run carries none.
+        live = env_repo_config()
+        cfg = {**migrated, **live}
+        if cfg:
+            write_repo_config(repo_root, cfg)
     tool = os.environ.get("HANDOFF_TOOL", "claude")
     primary = os.environ.get("HANDOFF_PRIMARY", "0") == "1"
     wire(path, hdpath, tool, primary)

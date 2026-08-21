@@ -39,6 +39,13 @@
       "expected_output": "Migration case: a legacy `.claude/handoff/` with the two reference defects. Running the installer with --migrate moves the docs and archive/ to `.agents/handoff/` (history preserved), removes the legacy dir, installs the fixed scripts (the new `handoff` writes `session=`), and passes the verifier."
     },
     {
+      "id": "legacy-config",
+      "kind": "pre-state",
+      "prompt": "This repo's handoff board still uses the old shell config. Bring it up to date.",
+      "fixture": "fixtures/legacy-config",
+      "expected_output": "Repair TARGET (agent-required): the board carries a legacy shell `config` and no `config.json`, so verify-setup-handoff.sh warns that it predates the JSON format. After setup-handoff runs, config.json exists, is valid JSON, and every value carried over - ttlHours in particular, because the fixture's 8 differs from the installer's own default of 4, so a surviving 8 cannot have come from the default path. The legacy file is retained, not deleted: the readers fall back to it, so removing it would strand a board whose migration half-completed. Grading the raw fixture shows the warning by design."
+    },
+    {
       "id": "detect",
       "kind": "post-state",
       "prompt": "Is there already a handoff board here, and where should it live?",

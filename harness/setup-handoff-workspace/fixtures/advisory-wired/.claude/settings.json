@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
           }
         ],
         "matcher": "Edit|Write|MultiEdit"
