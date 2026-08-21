@@ -11,24 +11,51 @@ set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCKS="$DIR/.locks"
-TTL_HOURS="${HANDOFF_TTL_HOURS:-4}"
 
-# config (committed, written by setup-handoff): TOPOLOGY=single-repo|cross-repo, REPO_NAME=<name>.
-# A SHARED (cross-repo) board's config carries NO REPO_NAME — identity is per-consumer, supplied via
-# $HANDOFF_REPO (env). Prefer it over the shared config so audience/labeling/doc_is_local use the
-# calling repo's identity, not whoever installed last. Empty on a single-repo board (uses config).
-TOPOLOGY="single-repo"
-REPO_NAME=""
-# HANDOFF_GROUPS (board-global, config): comma-list of the groups a SHARED board hosts as sub-indexed
-# sections. (NOT `GROUPS` — that is a bash built-in array of the user's gids, e.g. 20, so a config key
-# named GROUPS can never be read back.) HANDOFF_GROUP_LAYOUT (board-global, config): subfolder|prefix
-# — how each section is laid out. Both absent on a plain single-repo board, so every section helper
-# below collapses to the flat layout (docs at $DIR/<id>.md, one INDEX.md), byte-identical.
-HANDOFF_GROUPS=""
-HANDOFF_GROUP_LAYOUT=""
+# Configuration comes from config.sh, the one place precedence is decided:
+#   env > repo config.json > board config.json > legacy config > default
+# TTL_HOURS used to be read HERE, above the config load, which meant a value set in the board's
+# own config file was captured too late to ever apply. Every knob is now read AFTER the load.
+#
+# Two places this file used to trust a chained `||` to fail closed, and both were wrong for the
+# same underlying reason: command substitution swallows the exit status of what ran INSIDE it, so
+# whatever wraps the substitution (a bare `.`, or `eval`) reports its OWN status, never the
+# callee's.
+#   1. Sourcing config.sh: `A 2>/dev/null || B` -- if BOTH are missing, the `.` fails with 127,
+#      but there is no `||` comparison that can catch it (there's no B to try in that shape). An
+#      explicit if/elif/else checks each candidate on its own instead.
+#   2. Loading config: `eval "$(handoff_config_load ...)" || exit 3` -- when the function ITSELF
+#      fails (malformed board or repo config.json, or python3 missing while a config.json exists)
+#      it prints nothing and returns 3, but `eval` reports the status of evaluating that (empty)
+#      string, which is 0 -- so `|| exit 3` never fires and every HC_* stays unset, dying under
+#      `set -u`. Fixed by capturing the function's own output into a plain variable first (a plain
+#      assignment DOES propagate the command substitution's exit status), branching on THAT, and
+#      only then evaluating the captured text.
 # shellcheck disable=SC1091
-[ -f "$DIR/config" ] && . "$DIR/config"
-REPO_NAME="${HANDOFF_REPO:-$REPO_NAME}"
+if [ -f "$DIR/scripts/config.sh" ]; then
+  . "$DIR/scripts/config.sh"
+elif [ -f "$DIR/config.sh" ]; then
+  . "$DIR/config.sh"
+else
+  echo "handoff: config.sh missing from this board — re-run setup-handoff to update it" >&2
+  exit 3
+fi
+REPO_DIR="$(git rev-parse --show-toplevel 2> /dev/null || true)"
+_hc_out=""
+if _hc_out="$(handoff_config_load "$DIR" "$REPO_DIR")"; then
+  eval "$_hc_out"
+else
+  # handoff_config_load already wrote the reason to stderr -- don't print a second, vaguer one.
+  exit 3
+fi
+
+TOPOLOGY="$HC_TOPOLOGY"
+HANDOFF_GROUPS="${HANDOFF_GROUPS:-$HC_GROUPS}"
+HANDOFF_GROUP_LAYOUT="${HANDOFF_GROUP_LAYOUT:-$HC_GROUP_LAYOUT}"
+TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
+# Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
+# board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
+REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
 # --- group sections (multi-group / multi-workspace boards) -----------------------------
 # LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's

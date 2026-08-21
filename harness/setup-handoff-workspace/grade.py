@@ -545,15 +545,16 @@ def grade_layout_migration(target):
 
     _install(target, "--primary", "claude")
 
-    # flatten it back to the old layout
+    # flatten it back to the old layout. config.sh is NOT part of the flat/scripts migration
+    # (it didn't exist pre-restructure and always installs to scripts/), so scripts/ keeps it
+    # and stays non-empty — only hooks.sh moves back to the board root.
     (hd / "scripts/hooks.sh").rename(hd / "hooks.sh")
     for tmpl in sorted((hd / "templates").glob("*.md")):  # every template, not a hardcoded pair
         tmpl.rename(hd / tmpl.name)
-    (hd / "scripts").rmdir()
     (hd / "templates").rmdir()
     settings.write_text(settings.read_text().replace("handoff/scripts/hooks.sh", "handoff/hooks.sh"))
     e.append(gc.expectation("test setup: board is flat again before the migration run",
-                            (hd / "hooks.sh").is_file() and not (hd / "scripts").exists(),
+                            (hd / "hooks.sh").is_file() and not (hd / "scripts/hooks.sh").exists(),
                             f"flat hooks.sh: {(hd / 'hooks.sh').is_file()}"))
 
     # re-install: this is the migration
@@ -636,14 +637,19 @@ def grade_cross_repo(_target):
             e.append(gc.expectation(f"installer succeeds cross-repo in {name}", res.returncode == 0,
                                     f"exit {res.returncode}: {res.stderr.strip()[:120]}"))
 
-        cfg = (board / "config").read_text() if (board / "config").is_file() else ""
-        e.append(gc.expectation("shared config omits REPO_NAME (no last-writer clobber)",
-                                "REPO_NAME=" not in cfg and "TOPOLOGY=cross-repo" in cfg, f"config={cfg!r}"))
+        cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+        e.append(gc.expectation("shared config omits repoName (no last-writer clobber)",
+                                "repoName" not in cfg and cfg.get("topology") == "cross-repo", f"config={cfg!r}"))
 
         for name, r in repos.items():
+            rc_path = r / ".agents/handoff.config.json"
+            rc = json.loads(rc_path.read_text()) if rc_path.is_file() else {}
+            e.append(gc.expectation(f"{name} repo config records its own identity",
+                                    rc.get("repo") == name, f"repo config={rc!r}"))
             s = (r / ".claude/settings.json").read_text()
-            e.append(gc.expectation(f"{name} hook command carries its own HANDOFF_REPO={name}",
-                                    f"HANDOFF_REPO={name} " in s, f"present: {('HANDOFF_REPO=' + name) in s}"))
+            e.append(gc.expectation(f"{name} hook command carries a --project-dir anchor, not a baked identity",
+                                    "--project-dir" in s and f"HANDOFF_REPO={name}" not in s,
+                                    f"--project-dir present: {'--project-dir' in s}; no baked identity: {(f'HANDOFF_REPO={name}') not in s}"))
             a = (r / "AGENTS.md").read_text()
             e.append(gc.expectation(f"{name} AGENTS.md advertises the shared path (../handoff), not .agents/handoff",
                                     "../handoff/handoff" in a and ".agents/handoff" not in a,
@@ -654,11 +660,11 @@ def grade_cross_repo(_target):
 
         # Re-run A: B's identity and the shared config must NOT flip (the exact spec repro).
         install(repos["repo-a"])
-        s_b = (repos["repo-b"] / ".claude/settings.json").read_text()
-        cfg2 = (board / "config").read_text()
+        rc_b = json.loads((repos["repo-b"] / ".agents/handoff.config.json").read_text())
+        cfg2 = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
         e.append(gc.expectation("re-installing repo-a leaves repo-b's identity intact",
-                                "HANDOFF_REPO=repo-b " in s_b and "REPO_NAME=" not in cfg2,
-                                f"b-intact: {'HANDOFF_REPO=repo-b ' in s_b}; cfg-neutral: {'REPO_NAME=' not in cfg2}"))
+                                rc_b.get("repo") == "repo-b" and "repoName" not in cfg2,
+                                f"b-intact repo config: {rc_b!r}; cfg-neutral: {'repoName' not in cfg2}"))
 
         # audience routing: sessionstart in repo-b surfaces only its own docs.
         ho, hk = board / "handoff", board / "scripts/hooks.sh"
@@ -746,9 +752,9 @@ def grade_grouped_board(_target):
                     "--groups", "auth,infra", "--layout", layout], base)
             e.append(gc.expectation(f"{tag} --board-only scaffolds a standalone board", r.returncode == 0,
                                     f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
-            cfg = (board / "config").read_text() if (board / "config").is_file() else ""
+            cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
             e.append(gc.expectation(f"{tag} board config records groups + layout",
-                                    "HANDOFF_GROUPS=auth,infra" in cfg and f"HANDOFF_GROUP_LAYOUT={layout}" in cfg,
+                                    cfg.get("groups") == ["auth", "infra"] and cfg.get("groupLayout") == layout,
                                     f"config={cfg!r}"))
             ho = board / "handoff"
 
