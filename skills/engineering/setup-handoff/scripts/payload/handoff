@@ -923,6 +923,13 @@ cmd_export() {
   export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
 }
 
+# Guard for brief_identity's packed "a|b|c|d" return: `fold_colons` only folds ":", so a
+# user-supplied field (audience, via --audience) can still carry "|" and shift every field after
+# it when the caller's `IFS='|' read -r a b c d` splits the string back apart. Applied to every
+# field before packing, not just audience, so the guard holds even if a future field starts
+# carrying free text too.
+strip_pipes() { printf '%s' "$1" | tr -d '|'; }
+
 # Resolve identity for the repo a brief targets. On a flat board that is this repo. On a grouped
 # board the doc's audience names a DIFFERENT repo, and if it is not reachable on disk we record
 # "unverified" rather than fabricate a SHA — a fabricated SHA would make a wrong-repo run look
@@ -930,7 +937,7 @@ cmd_export() {
 brief_identity() { # doc-path -> "name|origin|rootsha|note"
   local f="$1" target="${REPO_DIR:-}" name origin root note=""
   local aud
-  aud="$(meta "$f" audience)"
+  aud="$(strip_pipes "$(meta "$f" audience)")"
   if [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ]; then
     if [ -d "${REPO_DIR:-.}/../$aud/.git" ]; then
       target="$(cd "${REPO_DIR:-.}/../$aud" && pwd)"
@@ -943,9 +950,9 @@ brief_identity() { # doc-path -> "name|origin|rootsha|note"
       "> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
     return
   fi
-  name="$(basename "$target")"
-  origin="$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")"
-  root="$(repo_root_commit "$target")"
+  name="$(strip_pipes "$(basename "$target")")"
+  origin="$(strip_pipes "$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")")"
+  root="$(strip_pipes "$(repo_root_commit "$target")")"
   printf '%s|%s|%s|%s' "$name" "${origin:-unknown}" "${root:-unverified}" "$note"
 }
 
@@ -986,6 +993,15 @@ export_one() { # id doc to outdir branch do_claim
   tmpl="$(tmpl_path handoff-brief-template.md)"
   [ -f "$tmpl" ] || die "brief template missing from this board — re-run setup-handoff to update it"
 
+  # Claim BEFORE writing the brief or stamping the doc, not after. cmd_claim dies when the id is
+  # already leased by a concurrent agent — precisely the race the lease exists to prevent — and
+  # die exits the whole process. Claiming first means that death leaves the doc and filesystem
+  # untouched; claiming last would leave a doc reading "delegated", an Activity entry saying the
+  # export happened, and a brief on disk, with no lease actually held.
+  if [ "$do_claim" -eq 1 ]; then
+    cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+  fi
+
   render_tmpl "$tmpl" \
     "PLACEHOLDER_ID=$id" \
     "PLACEHOLDER_TITLE=$(meta "$f" title)" \
@@ -1007,12 +1023,15 @@ export_one() { # id doc to outdir branch do_claim
 
   set_field "$f" delegated_to "${to:-unassigned}"
   set_field "$f" delegated_at "$(today)"
-  set_field "$f" brief "${dest#"$REPO_DIR"/}"
-  log_activity "$f" "exported as a brief for ${to:-an external executor}"
-
-  if [ "$do_claim" -eq 1 ]; then
-    cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+  # A standalone shared board (no repo of its own — see register-cross-repo-handoff) runs with
+  # REPO_DIR empty. Without this guard, "${dest#"$REPO_DIR"/}" degrades to "${dest#/}", which only
+  # strips the leading slash off an absolute path — storing something no reader can resolve.
+  if [ -n "$REPO_DIR" ]; then
+    set_field "$f" brief "${dest#"$REPO_DIR"/}"
+  else
+    set_field "$f" brief "$dest"
   fi
+  log_activity "$f" "exported as a brief for ${to:-an external executor}"
 
   echo "Wrote $dest"
   echo "🔒 Before committing — redact secrets/keys/PII, then commit the brief so the executor can pull it."

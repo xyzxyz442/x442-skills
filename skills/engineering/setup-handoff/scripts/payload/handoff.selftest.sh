@@ -124,5 +124,57 @@ chk_contains "flag guard rejects a swallowed flag" "$(hb "$R" export rbac-gap --
 hb "$R" new port-guide --standalone --title "Porting guide" > /dev/null
 chk_contains "standalone refused" "$(hb "$R" export port-guide)" "standalone"
 
+printf '\ncmd_export — claim before stamp\n'
+# A concurrent agent already holds the lease. cmd_export must fail on the claim BEFORE it writes
+# the brief or stamps the doc — a lease taken after stamping would leave the doc reading
+# "delegated" and a brief on disk with no lease actually held.
+hb "$R" new claim-race --title "Claim race" > /dev/null
+hb "$R" claim claim-race "already working it" > /dev/null
+RACE_OUT="$(hb "$R" export claim-race --to Bob)"
+chk_contains "failed claim reports CLAIMED" "$RACE_OUT" "CLAIMED"
+RACE_DOC="$BOARD/claim-race-handoff.md"
+RACE_BRIEF="$BOARD/briefs/claim-race-handoff.brief.md"
+chk "no brief written when the claim fails" "no" "$([ -f "$RACE_BRIEF" ] && echo yes || echo no)"
+chk "doc not stamped delegated_to when the claim fails" "" "$(sed -n 's/^delegated_to: //p' "$RACE_DOC" | head -1)"
+chk "doc not stamped brief when the claim fails" "" "$(sed -n 's/^brief: //p' "$RACE_DOC" | head -1)"
+
+printf '\nbrief_identity — pipe in audience does not shift fields\n'
+# fold_colons only folds ":"; an --audience value carrying "|" must not corrupt the packed
+# "name|origin|root|note" string that brief_identity returns for the caller's IFS='|' read.
+hb "$R" new pipe-aud --title "Pipe audience" --audience "foo|bar" > /dev/null
+hb "$R" export pipe-aud --no-claim > /dev/null
+PIPE_BRIEF="$BOARD/briefs/pipe-aud-handoff.brief.md"
+chk "repo_name field carries the (pipe-stripped) audience, not shifted" "foobar" \
+  "$(sed -n 's/^repo_name: //p' "$PIPE_BRIEF" | head -1)"
+chk "repo_origin field is not shifted by the pipe" "unverified" \
+  "$(sed -n 's/^repo_origin: //p' "$PIPE_BRIEF" | head -1)"
+chk "repo_root_commit field is not shifted by the pipe" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$PIPE_BRIEF" | head -1)"
+
+# A standalone shared board (see register-cross-repo-handoff) is owned by no repo, so REPO_DIR is
+# empty for it — no `git init` here, unlike mkboard above.
+mkboard_nogit() { # -> path to a repo-less board (REPO_DIR is empty for it)
+  local r
+  r="$(mktemp -d)"
+  mkdir -p "$r/.agents/handoff/scripts" "$r/.agents/handoff/templates" "$r/.agents/handoff/archive"
+  cp "$HERE/handoff" "$r/.agents/handoff/handoff"
+  cp "$HERE/config.sh" "$r/.agents/handoff/scripts/config.sh"
+  cp "$ASSETS"/handoff-*-template.md "$r/.agents/handoff/templates/"
+  chmod +x "$r/.agents/handoff/handoff"
+  printf '%s' "$r"
+}
+
+printf '\ncmd_export — REPO_DIR empty (standalone shared board)\n'
+NG="$(mkboard_nogit)"
+NGBOARD="$NG/.agents/handoff"
+hb "$NG" new nogit-case --title "No repo owns this board" > /dev/null
+hb "$NG" export nogit-case --no-claim > /dev/null
+NG_DOC="$NGBOARD/nogit-case-handoff.md"
+NG_DEST="$NGBOARD/briefs/nogit-case-handoff.brief.md"
+chk "stored brief path is the absolute path, not a mangled one" "$NG_DEST" \
+  "$(sed -n 's/^brief: //p' "$NG_DOC" | head -1)"
+chk "the stored brief path resolves to a real file" "yes" \
+  "$([ -f "$(sed -n 's/^brief: //p' "$NG_DOC" | head -1)" ] && echo yes || echo no)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
