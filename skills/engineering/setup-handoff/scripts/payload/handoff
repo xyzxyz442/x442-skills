@@ -847,8 +847,18 @@ import_result() {
   substance="$(printf '%s\n' "$body" | grep -v '^###' | grep -v '^[[:space:]]*<!--' | tr -d '[:space:]')"
   [ -n "$substance" ] || die "the brief's Result block was not filled in"
 
-  # The returned text is untrusted and about to enter git history permanently.
-  if printf '%s\n' "$body" | grep -Eqi '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'; then
+  # result_by/result_at are just as untrusted as the Result body and land in the same
+  # permanently-committed doc — fetched here, once, so the secret scan below and the writes further
+  # down both see the exact same values (nothing is re-read from the file in between).
+  local result_by_raw result_at_raw
+  result_by_raw="$(meta "$src" result_by)"
+  result_at_raw="$(meta "$src" result_at)"
+
+  # The returned text is untrusted and about to enter git history permanently. Scans the Result
+  # body AND the frontmatter fields spliced from this same file — a credential pasted into
+  # `result_by:` instead of the body would otherwise walk straight past a body-only scan.
+  if printf '%s\n%s\n%s\n' "$body" "$result_by_raw" "$result_at_raw" \
+    | grep -Eqi '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'; then
     die "the Result block looks like a credential was pasted into it — redact the brief and re-run. Nothing was written."
   fi
 
@@ -865,11 +875,11 @@ import_result() {
   fi
 
   splice_result "$f" "$body"
-  set_field "$f" result_from "$(fold_colons "$(meta "$src" result_by)")"
-  set_field "$f" result_at "$(meta "$src" result_at)"
+  set_field "$f" result_from "$(fold_colons "$result_by_raw")"
+  set_field "$f" result_at "$(fold_colons "$result_at_raw")"
   set_field "$f" result_claimed "$claimed"
   set_field "$f" review pending
-  log_activity "$f" "result reported by $(meta "$src" result_by) claiming $claimed — awaiting review"
+  log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
 
   echo "Imported the reported result into $f."
   echo "Board status is UNCHANGED — the report is a claim, not a verdict."
@@ -884,11 +894,28 @@ splice_result() { # doc-path body
   local f="$1" body="$2" t
   t="$(mktemp)" || die "mktemp failed"
   if grep -q '<!-- handoff:result:begin -->' "$f"; then
-    awk -v b="$body" '
-      /<!-- handoff:result:begin -->/ { print; print ""; print b; skip = 1; next }
+    # The body is routed through a FILE, never through `awk -v`: POSIX awk interprets C-style
+    # backslash escapes (\f, \b, \t, ...) in a -v-assigned value, so evidence text containing a
+    # Windows path or a regex would be silently mangled here on every RE-import — the fresh-append
+    # branch below uses `printf '%s'` instead, which never interprets escapes, so identical input
+    # used to produce two different on-disk results depending on which branch ran. getline reads
+    # raw bytes and interprets nothing, so this branch now matches that branch byte-for-byte.
+    local bf
+    bf="$(mktemp)" || die "mktemp failed"
+    printf '%s' "$body" > "$bf"
+    awk -v bf="$bf" '
+      /<!-- handoff:result:begin -->/ {
+        print
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        skip = 1
+        next
+      }
       /<!-- handoff:result:end -->/   { skip = 0 }
       !skip { print }
     ' "$f" > "$t" && cat "$t" > "$f"
+    rm -f "$bf"
   else
     {
       cat "$f"

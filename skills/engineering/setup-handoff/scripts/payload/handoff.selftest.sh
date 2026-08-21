@@ -228,24 +228,109 @@ chk_contains "result spliced into the doc" "$(cat "$DOC")" "Guarded the tenant s
 hb "$R" import --result "$BRIEF" > /dev/null
 chk "re-import does not duplicate" "1" "$(grep -c 'Guarded the tenant switch.' "$DOC")"
 
+printf '\nimport --result — frontmatter fields are colon-folded like the body\n'
+# result_at goes through the SAME fold_colons guard as result_by — an executor writing a
+# space-separated date/time (which contains a bare ":") must not corrupt the doc's frontmatter.
+hb "$R" new colon-at-case --title "Colon in result_at" > /dev/null
+hb "$R" export colon-at-case --to Dana > /dev/null
+COLONBRIEF="$BOARD/briefs/colon-at-case-handoff.brief.md"
+fill_brief "$COLONBRIEF" done
+COLON_T="$(mktemp)"
+sed 's/^result_at:.*/result_at: 2026-08-22 14:30/' "$COLONBRIEF" > "$COLON_T"
+cat "$COLON_T" > "$COLONBRIEF"
+rm -f "$COLON_T"
+COLONDOC="$BOARD/colon-at-case-handoff.md"
+hb "$R" import --result "$COLONBRIEF" > /dev/null
+chk "result_at is colon-folded in the doc" "2026-08-22 14 — 30" \
+  "$(sed -n 's/^result_at: //p' "$COLONDOC" | head -1)"
+
+printf '\nimport --result — backslash-bearing evidence survives re-import byte-for-byte\n'
+# Regression test for a POSIX awk footgun: `awk -v x="$val"` interprets C-style backslash escapes
+# (\f, \b, \t, ...) in the assigned value. On some awk builds that silently corrupts a Windows path
+# or a regex; on this repo's own awk (the multi-line body trips a FATAL "newline in string" error)
+# it instead makes the whole splice a SILENT NO-OP — the `awk ... && cat` guard swallows the
+# failure, `import_result` still prints success, and the doc keeps its stale content. Two DISTINCT
+# backslash-bearing strings (not the same text reused) so a no-op fails this test exactly like
+# byte-mangling would: if the second import didn't really replace anything, the doc still reads
+# $evidence1, not $evidence2, and the final `chk` catches that mismatch too.
+#
+# inject_evidence anchors on the "### Evidence" HEADING rather than matching the old content line
+# by equality — an equality match would need its OWN `awk -v old="$old"`, and $old is itself
+# backslash-bearing on the second call (replacing evidence1 with evidence2), which hits the exact
+# same escape-processing bug this test exists to catch, in the test helper instead of the CLI.
+# Only `nf` (a mktemp path, never backslash-bearing) goes through -v here.
+inject_evidence() { # file new-text -> replace the Result block's Evidence content line
+  local f="$1" new="$2" nf t
+  nf="$(mktemp)"
+  printf '%s' "$new" > "$nf"
+  t="$(mktemp)"
+  awk -v nf="$nf" '
+    /^### Evidence$/ {
+      print          # the heading
+      getline; print # the blank line under it
+      getline         # discard the old content line
+      while ((getline line < nf) > 0) print line
+      close(nf)
+      next
+    }
+    { print }
+  ' "$f" > "$t" && cat "$t" > "$f"
+  rm -f "$t" "$nf"
+}
+evidence1='Reproduced at C:\Users\foo\bar and via regex \d+\s*\.'
+evidence2='Reproduced at D:\Other\path\here and via a different regex \w+\S*\,'
+hb "$R" new backslash-case --title "Backslash case" > /dev/null
+hb "$R" export backslash-case --to Carol > /dev/null
+BSBRIEF="$BOARD/briefs/backslash-case-handoff.brief.md"
+fill_brief "$BSBRIEF" done
+inject_evidence "$BSBRIEF" "$evidence1"
+BSDOC="$BOARD/backslash-case-handoff.md"
+
+hb "$R" import --result "$BSBRIEF" > /dev/null
+FIRST="$(sed -n '/^Reproduced at /p' "$BSDOC")"
+chk "backslashes survive first import" "$evidence1" "$FIRST"
+
+inject_evidence "$BSBRIEF" "$evidence2"
+hb "$R" import --result "$BSBRIEF" > /dev/null
+SECOND="$(sed -n '/^Reproduced at /p' "$BSDOC")"
+chk "backslashes survive re-import, and the replace actually ran (not a silent no-op)" "$evidence2" "$SECOND"
+
 printf '\nimport --result refusals\n'
+# Every refusal below asserts the message AND that the doc on disk did not change at all — a
+# refusal that ran the secret scan or repo guard after splicing would otherwise still print the
+# right message while leaving a partial write behind.
 WRONG="$(mktemp)"
 sed 's/^repo_root_commit: .*/repo_root_commit: 0000000000000000000000000000000000000000/' "$BRIEF" > "$WRONG"
+BEFORE="$(cat "$DOC")"
 chk_contains "wrong repo refused" "$(hb "$R" import --result "$WRONG")" "different repository"
+chk "wrong-repo refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
 BADV="$(mktemp)"
 sed 's/^brief: 1$/brief: 99/' "$BRIEF" > "$BADV"
+BEFORE="$(cat "$DOC")"
 chk_contains "unknown format refused" "$(hb "$R" import --result "$BADV")" "brief format"
+chk "unknown-format refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
 R2="$(mkboard)"
 hb "$R2" new other-thing --title "Other" --severity low > /dev/null
 hb "$R2" export other-thing > /dev/null
 UNFILLED="$R2/.agents/handoff/briefs/other-thing-handoff.brief.md"
+UNFILLED_DOC="$R2/.agents/handoff/other-thing-handoff.md"
+BEFORE="$(cat "$UNFILLED_DOC")"
 chk_contains "unfilled result refused" "$(hb "$R2" import --result "$UNFILLED")" "not filled in"
+chk "unfilled-result refusal writes nothing" "$BEFORE" "$(cat "$UNFILLED_DOC")"
 
 SECRET="$(mktemp)"
 sed 's/Ran npm test -- tenant; 14 passing./token AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET"
+BEFORE="$(cat "$DOC")"
 chk_contains "secret-bearing result refused" "$(hb "$R" import --result "$SECRET")" "looks like a credential"
+chk "secret-bearing-body refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
+
+SECRET_BY="$(mktemp)"
+sed 's/^result_by: Alice$/result_by: AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET_BY"
+BEFORE="$(cat "$DOC")"
+chk_contains "secret-bearing result_by refused" "$(hb "$R" import --result "$SECRET_BY")" "looks like a credential"
+chk "secret-in-result_by refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
