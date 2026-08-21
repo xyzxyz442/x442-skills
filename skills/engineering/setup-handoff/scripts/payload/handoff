@@ -65,6 +65,51 @@ REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
 BOARD_GROUPS="${HANDOFF_GROUPS:-}"
 slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
+
+# Guard for every value-taking flag in the subcommand arg loops below. A value that is missing (the
+# flag was the last argument) or that itself looks like a flag is never accepted silently: without
+# this, `export ID --to --no-claim` sets to="--no-claim" and silently skips the claim. Mirrors
+# setup-handoff.sh's guard of the same name and fails hard for the same reason. $2 is the caller's
+# "$#" from before this flag's own shift; $3 is the candidate value.
+require_value() {
+  local flag="$1" argcount="$2" val="$3"
+  [ "$argcount" -lt 2 ] && die "$flag needs a value (got nothing — it was the last argument)"
+  case "$val" in
+    --*) die "$flag needs a value (got the flag \"$val\")" ;;
+  esac
+}
+
+# --- repo identity ----------------------------------------------------------------------
+# A brief names file:line locations, and those paths plausibly exist in a DIFFERENT repo where they
+# mean something else. Identity therefore travels inside the brief and is checked on both sides.
+#
+# The root commit is the key rather than the remote URL: it survives renames, remote moves, and
+# mirror pushes, and a fork matching it is the correct answer because a fork is the same lineage.
+repo_root_commit() { # [dir] -> sha of the first commit, or "" outside a git repo
+  git -C "${1:-${REPO_DIR:-.}}" rev-list --max-parents=0 HEAD 2> /dev/null | tail -1
+}
+
+# Normalize a remote URL to bare host/owner/repo. This is a CORRECTNESS requirement, not cosmetics:
+# the SSH form "git@github.com:acme/acme-api.git" carries a ":" that would break the brief's
+# frontmatter under the board's no-colon rule. Strips scheme, embedded credentials, the ":" that
+# separates host from path in the SSH form, the ".git" suffix, and any trailing slash.
+# Known limitation: an https URL carrying an explicit port renders as host/port/owner/repo. Ports
+# on git remotes are rare enough that special-casing them would cost more than it buys.
+repo_origin_norm() { # url -> host/owner/repo
+  printf '%s' "$1" | sed \
+    -e 's#^[a-zA-Z+][a-zA-Z0-9+.-]*://##' \
+    -e 's#^[^/@]*@##' \
+    -e 's#:#/#' \
+    -e 's#\.git$##' \
+    -e 's#/*$##'
+}
+
+# Briefs live beside the section's archive, so a grouped board keeps each section's briefs separate.
+# briefs_dir forwards "$@" (rather than re-expanding "${1:-...}") because sec_dir deliberately uses
+# `${1-$GROUP}` (bare -, not :-): an explicit empty string means the flat board, while omission means
+# the caller's own section. Re-expanding here would pass an explicit "" and collapse that distinction.
+briefs_dir() { printf '%s/briefs' "$(sec_dir "$@")"; }
+
 GROUP="${HANDOFF_GROUP:-$HC_GROUP}"
 [ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
 grouped() { [ -n "$LAYOUT" ] && [ -n "$GROUP" ]; } # is this invocation acting inside a group section?
@@ -1384,32 +1429,36 @@ cmd_index() {
   echo "Wrote $(sec_index)"
 }
 
-case "${1:-list}" in
-  list) cmd_list ;;
-  new)
-    shift
-    cmd_new "$@"
-    ;;
-  import)
-    shift
-    cmd_import "$@"
-    ;;
-  claim)
-    shift
-    cmd_claim "$@"
-    ;;
-  touch)
-    shift
-    cmd_touch "$@"
-    ;;
-  release)
-    shift
-    cmd_release "$@"
-    ;;
-  reap)
-    shift
-    cmd_reap "$@"
-    ;;
-  index) cmd_index ;;
-  *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
-esac
+# Sourcing this file (the self-test does) must not execute a subcommand. Any other entry point is
+# unaffected: HANDOFF_NO_MAIN is set by nothing but the self-test.
+if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
+  case "${1:-list}" in
+    list) cmd_list ;;
+    new)
+      shift
+      cmd_new "$@"
+      ;;
+    import)
+      shift
+      cmd_import "$@"
+      ;;
+    claim)
+      shift
+      cmd_claim "$@"
+      ;;
+    touch)
+      shift
+      cmd_touch "$@"
+      ;;
+    release)
+      shift
+      cmd_release "$@"
+      ;;
+    reap)
+      shift
+      cmd_reap "$@"
+      ;;
+    index) cmd_index ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
+  esac
+fi
