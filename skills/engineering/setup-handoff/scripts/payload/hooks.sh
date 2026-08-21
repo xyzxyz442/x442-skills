@@ -88,6 +88,7 @@ done
 # in CONFIG_MISSING and, sessionstart only (pretool/posttool/stop stay silent and fast), surfaced
 # to the user.
 CONFIG_MISSING=0
+CONFIG_MISSING_WHY=""
 # shellcheck disable=SC1091
 if [ -f "$DIR/scripts/config.sh" ]; then
   . "$DIR/scripts/config.sh"
@@ -95,6 +96,7 @@ elif [ -f "$DIR/config.sh" ]; then
   . "$DIR/config.sh"
 else
   CONFIG_MISSING=1
+  CONFIG_MISSING_WHY="scripts/config.sh is missing"
 fi
 
 if [ "$CONFIG_MISSING" != "1" ]; then
@@ -104,7 +106,11 @@ if [ "$CONFIG_MISSING" != "1" ]; then
   if _hc_out="$(handoff_config_load "$DIR" "$REPO_DIR")"; then
     eval "$_hc_out"
   else
+    # config.sh loaded fine; the failure is the config it read — a malformed board or repo
+    # config.json, or python3 going missing between install and now. Distinct from the
+    # "config.sh itself is absent" case above, and the message must say which one happened.
     CONFIG_MISSING=1
+    CONFIG_MISSING_WHY="config.json could not be read (malformed JSON, or python3 is missing) — see: $DIR/scripts/config.sh handoff_config_load"
   fi
 fi
 
@@ -371,8 +377,8 @@ $(printf '%s\n' "$health" | sed 's/^/  - /')
   Repair: use the repair-handoff skill (re-running setup-handoff does not fix board state)."
     [ "$CONFIG_MISSING" = "1" ] && ctx="${ctx}
 
-This board is missing scripts/config.sh — identity and settings are running on built-in defaults.
-Re-run setup-handoff to update it."
+This board's configuration could not be loaded (${CONFIG_MISSING_WHY:-scripts/config.sh is missing}) — identity and settings are running on built-in defaults.
+Re-run setup-handoff to update it, or fix config.json if it exists but is malformed."
     emit_context "$ctx"
     ;;
 

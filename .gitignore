@@ -461,6 +461,10 @@ graphify-out/
 .husky
 .tmp
 
+# subagent-driven-development scratch: per-plan ledger, task briefs, implementer reports, and
+# review diffs. Working notes for one execution run — the git history is the durable record.
+.superpowers/
+
 # --- eval harness (harness/) ---
 # Raw per-run artifacts are bulky and regenerable; the committed record is evals.json,
 # fixtures/, grade.py, lib/, and each iteration's benchmark.{json,md} + analyst_notes.md.

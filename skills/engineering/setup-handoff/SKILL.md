@@ -187,6 +187,39 @@ session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer
 the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## Configuration
+
+The board's settings live in JSON and resolve through four scopes, **nearest wins**:
+
+```text
+env  >  <repo>/.agents/handoff.config.json  >  <board>/config.json  >  built-in default
+```
+
+Environment carries **overrides** for a single run; committed files carry normal operation. The two
+never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while
+file keys are camelCase (`ttlHours`).
+
+**`<board>/config.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
+`allowVerifyCmd`, plus `repoName` on a single-repo board only. **`<repo>/.agents/handoff.config.json`**
+is per-consumer and written only for cross-repo installs — `repo`, `group`, `boardPath`. A shared
+board is read by every member repo, so no member's identity may live in the board file; the last
+installer would clobber the rest. The full key table ships in the board's own
+[`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the documentation.
+
+Two behaviours worth knowing before you re-run the installer:
+
+- **`ttlHours` survives a re-install.** Lease policy is a committed team decision; an install must
+  not quietly revert it. The installer owns wiring facts (`topology`, `groups`, `groupLayout`,
+  `repoName`) and rewrites those every time; it leaves policy alone.
+- **`allowVerifyCmd` does not survive.** It follows `--allow-verify-cmd` on each run, because it
+  permits `release --run-verify` to execute a command from a doc — a security opt-in nobody
+  re-affirmed is not one to inherit.
+
+The config is **parsed, never sourced.** A shared board's config file is written by every member's
+installer and read by every member's hooks, so sourcing it would let one repo execute shell in its
+siblings' sessions. Reading it needs `python3`; a board still on the pre-JSON shell `config` keeps
+working and migrates on its next install.
+
 ## Notes
 
 - **Fail-safe, not fail-open.** If the deny gate cannot parse a payload (python3 missing/broken),
