@@ -148,6 +148,12 @@ because each depends on the relationship between the board's parts rather than o
   mismatch is why handoffs "disappear" — they are filed into a section nobody reads.
 - **Enforcement owner drift.** Scan which tool config files actually exist, not just the tools
   currently detected. A tool wired in a past run still carries the pretool gate.
+- **Orphaned delegation.** A doc with `delegated_at` older than the lease TTL, no `result_at`, and
+  either a missing `brief` file or no lease — a handoff that went out via
+  [`delegate-handoff`](../delegate-handoff/SKILL.md)'s `handoff export` and never came back. It is
+  claimed on the board but nobody is actually holding it, so it silently blocks anyone else from
+  claiming that id. The repair is to contact the executor to find out where it stands, or release
+  the lease and re-file the work.
 
 ### 3. Repair — safe and automatic (file, wiring, and index)
 

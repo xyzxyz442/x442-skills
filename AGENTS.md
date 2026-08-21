@@ -76,7 +76,8 @@ Rules:
 | `engineering`  | `register-cross-repo-graph`   | `stable`       | Declare sibling repos in a per-project `.graph-repos.json` cascade (user → repo → subdir), then register/merge their graphs for read-only cross-repo access and record the in-scope list in `AGENTS.md` so agents query it instead of grepping. Chains after `setup-graph-hooks`.                     |
 | `engineering`  | `setup-handoff`               | `experimental` | Install a lease-based handoff coordination protocol (`.agents/handoff/`) so multiple agents/sessions/repos work the same code without clobbering — claim/release leases, per-tool enforcement hooks (user picks a primary), and legacy-install migration. Chains after `initial-project`.             |
 | `engineering`  | `run-handoff`                 | `experimental` | The claim → work → release discipline over an installed handoff board: check the board, claim before editing, and release with an honest status (`done` requires evidence). Chains after `setup-handoff`.                                                                                             |
-| `engineering`  | `repair-handoff`              | `experimental` | Smoke-test the handoff CLI, then re-check, validate, and repair the board wiring and board state (index drift, orphaned leases, doc frontmatter, section resolution). Chains after `setup-handoff`.                                                                                                   |
+| `engineering`  | `delegate-handoff`            | `experimental` | Judgment for handing a handoff to someone outside the board — is it brief-able, how to review what comes back. Drives `handoff export`/`handoff import --result`; import never sets `status`. Ships markdown only. Chains after `run-handoff`.                                                        |
+| `engineering`  | `repair-handoff`              | `experimental` | Smoke-test the handoff CLI, then re-check, validate, and repair the board wiring and board state (index drift, orphaned leases, doc frontmatter, section resolution, orphaned delegations). Chains after `setup-handoff`.                                                                             |
 | `engineering`  | `register-cross-repo-handoff` | `experimental` | Declare groups of peer repos in a per-workspace `.handoff-repos.json` cascade (user → workspace → subdir), then sync to scaffold a standalone shared board owned by no repo and wire every member to its own sub-indexed section (subfolder or prefix layout). No seed. Chains after `setup-handoff`. |
 | `productivity` | `release-announcement`        | `experimental` | Turn a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email), leading with user impact rather than the file diff. Can emit a second language.                                                                                        |
 | `personal`     | `register-delegate-agents`    | `experimental` | Manage the `.agents/delegate.json` cascade that decides which cheaper agents a repo may delegate to — declare agents in an uncommittable layer, narrow per repo, set the primary assistant. Chains before `setup-delegate-agent`.                                                                     |
@@ -244,6 +245,19 @@ not "the doc says resolved" — it requires `--verified-by`. `blocked` requires 
 .agents/handoff/handoff release HANDOFF_ID --status blocked --blocked-on OTHER_ID
 .agents/handoff/handoff release HANDOFF_ID --status done --verified-by "how you verified live code"
 ```
+
+Sending work to someone with no board access — a contractor, another team, an AI tool without this
+protocol — goes through `export`/`import --result`, not a pasted doc:
+
+```text
+.agents/handoff/handoff export HANDOFF_ID --to WHO
+.agents/handoff/handoff import --result .agents/handoff/briefs/HANDOFF_ID.brief.md
+```
+
+`export` claims the id and renders a self-contained brief to `.agents/handoff/briefs/` — commit it
+so the executor can pull it. `import --result` splices their reported result onto the doc but
+**never sets `status`** — `done` stays your call, made after you reproduce their evidence
+yourself, the same as any other release.
 
 Full protocol: [.agents/handoff/README.md](.agents/handoff/README.md).
 
