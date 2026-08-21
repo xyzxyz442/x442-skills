@@ -36,23 +36,33 @@ PROJECT_DIR=""
 # forever and hanging the tool session that invoked the hook). The arithmetic guarantees the loop
 # always advances by at least 1, so a missing value degrades to an empty flag value instead of a
 # hang — consistent with this file's general rule that a hook must never hard-fail the session.
+#
+# A value that itself starts with "--" is rejected too — it is the NEXT flag, not this flag's
+# value. Without this, a command like `--kind --tool sessionstart` would set KIND="--tool", shift
+# past it, and leave "sessionstart" as a stray positional that the `*) shift ;;` arm silently
+# drops — the hook then hits no known --kind case and exits 0 with no output, i.e. the request is
+# dropped with no trace. Reject-and-warn instead: this file's contract is that a malformed hook
+# command is a misconfiguration to surface, never a reason to hard-fail or hang the caller's tool
+# session (see the failure mode above), so on rejection we warn to stderr, leave the flag empty,
+# and shift only 1 — the rejected token stays in $@ to be read again as the next flag.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --kind)
-      KIND="${2:-}"
-      shift $(($# > 1 ? 2 : 1))
-      ;;
-    --repo)
-      REPO="${2:-}"
-      shift $(($# > 1 ? 2 : 1))
-      ;;
-    --tool)
-      TOOL="${2:-}"
-      shift $(($# > 1 ? 2 : 1))
-      ;;
-    --project-dir)
-      PROJECT_DIR="${2:-}"
-      shift $(($# > 1 ? 2 : 1))
+    --kind | --repo | --tool | --project-dir)
+      flag="$1"
+      val=""
+      if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then
+        val="$2"
+        shift 2
+      else
+        [ $# -gt 1 ] && echo "hooks.sh: warning: $flag has no value (next token '$2' looks like a flag); ignoring $flag" >&2
+        shift 1
+      fi
+      case "$flag" in
+        --kind) KIND="$val" ;;
+        --repo) REPO="$val" ;;
+        --tool) TOOL="$val" ;;
+        --project-dir) PROJECT_DIR="$val" ;;
+      esac
       ;;
     *) shift ;;
   esac
