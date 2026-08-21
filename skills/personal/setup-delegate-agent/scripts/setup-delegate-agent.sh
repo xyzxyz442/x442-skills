@@ -85,6 +85,10 @@ install_file "$RESOLVER" "${BIN}/resolve-backends.py"
 for a in "${PAYLOAD}"/adapters/*.sh; do
   install_file "$a" "${BIN}/adapters/$(basename "$a")"
 done
+# Payload stamp: what version of the .agents/bin machinery this install carries. Committed with the
+# payload so a teammate's checkout carries it too, and readable with `cat` — a reader with nothing
+# but bash can still tell an installed payload from what the skill now ships.
+install_file "${SKILL}/scripts/payload.version" "${BIN}/.version"
 chmod +x "${BIN}/delegate-agent" "${BIN}/delegate-run" "${BIN}/consent-gate.sh" "${BIN}"/adapters/*.sh
 install_file "${ASSETS}/delegate-to-agent.md" "${REPO}/.claude/agents/delegate-to-agent.md"
 
