@@ -151,6 +151,94 @@ chk "repo_origin field is not shifted by the pipe" "unverified" \
 chk "repo_root_commit field is not shifted by the pipe" "unverified" \
   "$(sed -n 's/^repo_root_commit: //p' "$PIPE_BRIEF" | head -1)"
 
+printf '\nbrief_identity — a same-named sibling directory is never trusted as identity (finding 6)\n'
+# The OLD implementation guessed the cross-repo target by testing "${REPO_DIR}/../$aud/.git" and,
+# on a match, treated it as VERIFIED — even though register-cross-repo-handoff's manifest (not
+# read here) is the only authoritative source. Prove the guess is gone by constructing exactly the
+# case that used to fool it: a git repo sibling to the board repo, sharing the audience's name.
+SIB_NAME="acme-sibling-$$"
+SIBLING="$(dirname "$R")/$SIB_NAME"
+mkdir -p "$SIBLING"
+git -C "$SIBLING" init -q
+git -C "$SIBLING" config user.email "test@example.com"
+git -C "$SIBLING" config user.name "test"
+printf 'x\n' > "$SIBLING/README.md"
+git -C "$SIBLING" add -A
+git -C "$SIBLING" commit -qm "sibling initial commit"
+SIBLING_ROOT="$(git -C "$SIBLING" rev-list --max-parents=0 HEAD | tail -1)"
+hb "$R" new sibling-aud-case --title "Sibling audience case" --audience "$SIB_NAME" > /dev/null
+hb "$R" export sibling-aud-case --no-claim > /dev/null
+SIB_BRIEF="$BOARD/briefs/sibling-aud-case-handoff.brief.md"
+chk "cross-repo identity degrades to unverified, never guesses a same-named sibling directory" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$SIB_BRIEF" | head -1)"
+chk "the sibling repo's REAL root commit never appears in the brief" "no" \
+  "$(grep -Fq "$SIBLING_ROOT" "$SIB_BRIEF" && echo yes || echo no)"
+[ -n "$SIBLING" ] && [ -d "$SIBLING" ] && trash "$SIBLING" 2> /dev/null
+
+printf '\ncmd_export — bundle (orchestrator) stamps the parent and pre-flights every child\n'
+hb "$R" new bundle-child-1 --title "Bundle child 1" > /dev/null
+hb "$R" new bundle-child-2 --title "Bundle child 2" > /dev/null
+hb "$R" new bundle-parent --orchestrator --children bundle-child-1,bundle-child-2 --title "Bundle parent" > /dev/null
+hb "$R" export bundle-parent --to Zara > /dev/null
+BUNDLE_DOC="$BOARD/bundle-parent-handoff.md"
+BUNDLE_COVER="$BOARD/briefs/bundle-parent-handoff.cover.md"
+# Finding 4: export_bundle used to stamp only the children, leaving the orchestrator doc with no
+# delegated_to/delegated_at/brief and no Activity entry — invisible to `list`'s recipient column
+# and to repair-handoff's orphaned-delegation check, which keys on delegated_at.
+chk "orchestrator doc records the delegate" "Zara" "$(sed -n 's/^delegated_to: //p' "$BUNDLE_DOC" | head -1)"
+chk "orchestrator doc records delegated_at" "yes" "$([ -n "$(sed -n 's/^delegated_at: //p' "$BUNDLE_DOC" | head -1)" ] && echo yes || echo no)"
+chk "orchestrator doc's brief: points at the cover file" "yes" \
+  "$(grep -q '^brief: ' "$BUNDLE_DOC" && echo yes || echo no)"
+chk "the cover file was actually written" "yes" "$([ -f "$BUNDLE_COVER" ] && echo yes || echo no)"
+chk_contains "Activity log records the bundle export" "$(cat "$BUNDLE_DOC")" "bundle cover"
+
+printf '\ncmd_export — bundle pre-flight refuses the WHOLE export on a live foreign lease (finding 5)\n'
+hb "$R" new bundle-child-3 --title "Bundle child 3" > /dev/null
+hb "$R" new bundle-child-4 --title "Bundle child 4" > /dev/null
+hb "$R" new bundle-parent-2 --orchestrator --children bundle-child-3,bundle-child-4 --title "Bundle parent 2" > /dev/null
+hb "$R" claim bundle-child-4 "already working it" > /dev/null
+BUNDLE2_DOC="$BOARD/bundle-parent-2-handoff.md"
+BUNDLE2_COVER="$BOARD/briefs/bundle-parent-2-handoff.cover.md"
+CHILD3_DOC="$BOARD/bundle-child-3-handoff.md"
+BUNDLE2_OUT="$(hb "$R" export bundle-parent-2 --to Yara)"
+chk_contains "refuses the whole export when any child has a live lease" "$BUNDLE2_OUT" "lease"
+chk "no cover file was written by the refused export" "no" "$([ -f "$BUNDLE2_COVER" ] && echo yes || echo no)"
+chk "the untouched child was never claimed" "no" "$([ -d "$BOARD/.locks/bundle-child-3-handoff" ] && echo yes || echo no)"
+chk "the untouched child's doc was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$CHILD3_DOC" | head -1)"
+chk "the orchestrator itself was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$BUNDLE2_DOC" | head -1)"
+
+printf '\ncmd_export — bundle skips a child with no doc on the board (must-fix coverage gap)\n'
+hb "$R" new bundle-child-5 --title "Bundle child 5" > /dev/null
+hb "$R" new bundle-parent-3 --orchestrator --children bundle-child-5,bundle-child-ghost --title "Bundle parent 3" > /dev/null
+BUNDLE3_OUT="$(hb "$R" export bundle-parent-3 --to Wendy --no-claim)"
+BUNDLE3_COVER="$BOARD/briefs/bundle-parent-3-handoff.cover.md"
+CHILD5_BRIEF="$BOARD/briefs/bundle-child-5-handoff.brief.md"
+chk_contains "the missing child is reported as skipped, not fatal" "$BUNDLE3_OUT" "skipped"
+chk "the real child still got its own brief" "yes" "$([ -f "$CHILD5_BRIEF" ] && echo yes || echo no)"
+chk "the ghost child is not listed in the cover" "no" "$(grep -q 'bundle-child-ghost' "$BUNDLE3_COVER" && echo yes || echo no)"
+chk "the orchestrator still gets stamped for the child that DID export" "Wendy" \
+  "$(sed -n 's/^delegated_to: //p' "$BOARD/bundle-parent-3-handoff.md" | head -1)"
+
+printf '\ncmd_export — --branch is refused (not silently discarded) on a bundle export (minor)\n'
+hb "$R" new bundle-child-6 --title "Bundle child 6" > /dev/null
+hb "$R" new bundle-parent-4 --orchestrator --children bundle-child-6 --title "Bundle parent 4" > /dev/null
+chk_contains "bundle export refuses --branch instead of discarding it" \
+  "$(hb "$R" export bundle-parent-4 --branch custom-branch --no-claim)" "not supported for a bundle"
+
+printf '\ncmd_export — a relative --out is resolved to an absolute path before being stamped (minor)\n'
+hb "$R" new relout-case --title "Relative out dir" > /dev/null
+mkdir -p "$R/subdir"
+(cd "$R/subdir" && "$R/.agents/handoff/handoff" export relout-case --out ../relout-here --no-claim) > /dev/null 2>&1 # standalone-ok: a throwaway dir name inside this test's own mktemp board, not a repo path
+RELOUT_DOC="$BOARD/relout-case-handoff.md"
+RELOUT_BRIEF_FIELD="$(sed -n 's/^brief: //p' "$RELOUT_DOC" | head -1)"
+chk "brief: never records a literal .. segment from a relative --out" "no" \
+  "$(case "$RELOUT_BRIEF_FIELD" in (*..*) echo yes ;; (*) echo no ;; esac)"
+chk "the resolved brief: path points at a real file" "yes" \
+  "$(case "$RELOUT_BRIEF_FIELD" in
+    (/*) [ -f "$RELOUT_BRIEF_FIELD" ] && echo yes || echo no ;;
+    (*) [ -f "$R/$RELOUT_BRIEF_FIELD" ] && echo yes || echo no ;;
+  esac)"
+
 # A standalone shared board (see register-cross-repo-handoff) is owned by no repo, so REPO_DIR is
 # empty for it — no `git init` here, unlike mkboard above.
 mkboard_nogit() { # -> path to a repo-less board (REPO_DIR is empty for it)
@@ -295,6 +383,38 @@ hb "$R" import --result "$BSBRIEF" > /dev/null
 SECOND="$(sed -n '/^Reproduced at /p' "$BSDOC")"
 chk "backslashes survive re-import, and the replace actually ran (not a silent no-op)" "$evidence2" "$SECOND"
 
+printf '\nimport --result — result_by cannot inject frontmatter keys via awk -v escapes (CRITICAL)\n'
+# POSIX awk decodes C-style backslash escapes in a -v-assigned value: "\n" becomes a real newline
+# and "\072" becomes a real colon, neither of which fold_colons can see (neither is a literal
+# newline/colon in the input it folds). A brief's result_by is attacker-controlled, so a value like
+# `jdoe\nverify\072 echo INJECTED` used to inject a whole new `verify:` frontmatter key that
+# `release --run-verify` would later eval. The injected key/command here are both harmless (a
+# `verify` key most docs never carry, and a plain `echo`) — the point is that NO extra key appears
+# and the string survives byte-for-byte as one opaque value, not that anything would have run.
+inject_result_by() { # file value -> replace the result_by: line's value with the literal text
+  local f="$1" val="$2" vf t
+  vf="$(mktemp)"
+  printf '%s' "$val" > "$vf"
+  t="$(mktemp)"
+  awk -v vf="$vf" '
+    /^result_by:/ { getline v < vf; close(vf); print "result_by: " v; next }
+    { print }
+  ' "$f" > "$t" && cat "$t" > "$f"
+  rm -f "$vf" "$t"
+}
+hb "$R" new inject-case --title "Injection case" > /dev/null
+hb "$R" export inject-case --to Mallory > /dev/null
+INJ_BRIEF="$BOARD/briefs/inject-case-handoff.brief.md"
+fill_brief "$INJ_BRIEF" done
+inject_result_by "$INJ_BRIEF" 'jdoe\nverify\072 echo INJECTED'
+INJ_DOC="$BOARD/inject-case-handoff.md"
+hb "$R" import --result "$INJ_BRIEF" > /dev/null
+chk "no verify: key was injected into the doc's frontmatter" "" "$(sed -n 's/^verify: //p' "$INJ_DOC" | head -1)"
+chk "result_from preserves the raw escape sequence literally (not decoded into a newline/colon)" \
+  'jdoe\nverify\072 echo INJECTED' "$(sed -n 's/^result_from: //p' "$INJ_DOC" | head -1)"
+chk "the frontmatter has exactly one line naming result_from, not a decoded second line" "1" \
+  "$(sed -n '2,/^---$/p' "$INJ_DOC" | grep -c '^result_from:')"
+
 printf '\nimport --result refusals\n'
 # Every refusal below asserts the message AND that the doc on disk did not change at all — a
 # refusal that ran the secret scan or repo guard after splicing would otherwise still print the
@@ -331,6 +451,35 @@ sed 's/^result_by: Alice$/result_by: AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET_
 BEFORE="$(cat "$DOC")"
 chk_contains "secret-bearing result_by refused" "$(hb "$R" import --result "$SECRET_BY")" "looks like a credential"
 chk "secret-in-result_by refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
+
+printf '\nimport --result refuses a target that was never delegated (finding 3)\n'
+# The brief's `handoff:` field is attacker-controlled. Editing it to name a doc that was never
+# exported used to stamp result_claimed/review straight onto that doc regardless.
+hb "$R" new never-delegated-case --title "Never delegated" > /dev/null
+NODELEG_DOC="$BOARD/never-delegated-case-handoff.md"
+FORGED="$(mktemp)"
+sed 's/^handoff: .*/handoff: never-delegated-case-handoff/' "$BRIEF" > "$FORGED"
+BEFORE="$(cat "$NODELEG_DOC")"
+chk_contains "refuses when the target was never delegated" "$(hb "$R" import --result "$FORGED")" "never delegated"
+chk "refusal writes nothing to the undelegated doc" "$BEFORE" "$(cat "$NODELEG_DOC")"
+
+printf '\nimport --result refuses when handoff: points at a delegated doc but the file is a different brief (finding 3)\n'
+# Two doc, two briefs. Editing brief B's handoff: field to name doc A (which WAS delegated, so it
+# passes the check above) must still be refused: A's own brief: pointer names A's brief file, not
+# B's — importing B onto A would silently overwrite whatever A's real executor already reported.
+hb "$R" new brief-mismatch-a --title "Mismatch A" > /dev/null
+hb "$R" export brief-mismatch-a --to Gina > /dev/null
+hb "$R" new brief-mismatch-b --title "Mismatch B" > /dev/null
+hb "$R" export brief-mismatch-b --to Gina > /dev/null
+MISMATCH_B_BRIEF="$BOARD/briefs/brief-mismatch-b-handoff.brief.md"
+fill_brief "$MISMATCH_B_BRIEF" done
+MISMATCH_A_DOC="$BOARD/brief-mismatch-a-handoff.md"
+FORGED2="$(mktemp)"
+sed 's/^handoff: .*/handoff: brief-mismatch-a-handoff/' "$MISMATCH_B_BRIEF" > "$FORGED2"
+BEFORE="$(cat "$MISMATCH_A_DOC")"
+chk_contains "refuses when the brief file does not match the target's own brief: pointer" \
+  "$(hb "$R" import --result "$FORGED2")" "does not point at"
+chk "mismatch refusal writes nothing to the doc" "$BEFORE" "$(cat "$MISMATCH_A_DOC")"
 
 printf '\nlist and release\n'
 # Reuses $R / rbac-gap-handoff from the export/import sections above: delegated_to=Alice,
@@ -369,6 +518,67 @@ FRESH_DOC="$BOARD/archive/fresh-close-handoff.md"
 [ -f "$FRESH_DOC" ] || FRESH_DOC="$BOARD/fresh-close-handoff.md"
 chk "finish_release leaves a never-set review field alone" "" \
   "$(sed -n 's/^review: //p' "$FRESH_DOC" | head -1)"
+
+printf '\nfinish_release — review: pending SURVIVES a non-done release (finding 2)\n'
+# The old guard checked only that a review WAS pending, not what kind of release this is. The most
+# reachable sequence in the whole feature — orchestrator imports a result, then releases the lease
+# with --status open so someone else can review it — used to have THAT release erase the very
+# "needs a reviewer" marker it was trying to hand off.
+hb "$R" new open-release-marker-case --title "Review survives open release" > /dev/null
+hb "$R" export open-release-marker-case --to Frank > /dev/null
+ROC_BRIEF="$BOARD/briefs/open-release-marker-case-handoff.brief.md"
+fill_brief "$ROC_BRIEF" done
+hb "$R" import --result "$ROC_BRIEF" > /dev/null
+ROC_DOC="$BOARD/open-release-marker-case-handoff.md"
+chk "review is pending after import" "pending" "$(sed -n 's/^review: //p' "$ROC_DOC" | head -1)"
+hb "$R" release open-release-marker-case --status open "parking the lease" > /dev/null
+chk "review: pending survives a --status open release" "pending" "$(sed -n 's/^review: //p' "$ROC_DOC" | head -1)"
+# Scoped to THIS doc's own row and to the exact "⇤ review" marker glyph — other docs on the shared
+# test board can legitimately carry their own pending review, so neither a whole-table search nor
+# an unscoped "review" substring (which could also match harmlessly elsewhere on the row) proves
+# THIS doc's marker specifically survived.
+chk_contains "list shows the review marker on THIS doc's own row after the open release" \
+  "$(hb "$R" list | grep '^open-release-marker-case-handoff ')" "⇤ review"
+
+printf '\ncmd_release — the copied-evidence warning is scoped to the Result block, not the whole doc (minor)\n'
+# A whole-doc substring search fires on a reviewer who honestly re-ran the doc's own "## Verify"
+# instructions and typed the same words to describe it — text that lives OUTSIDE the executor's
+# reported Result block. Put the reviewer's exact words into the Verify section (not the Result
+# block) and confirm they do NOT trip the "identical to the reported evidence" warning.
+insert_into_verify() { # file text -> append a line right after the doc's "## Verify" heading
+  local f="$1" text="$2" tf t
+  tf="$(mktemp)"
+  printf '%s' "$text" > "$tf"
+  t="$(mktemp)"
+  awk -v tf="$tf" '
+    { print }
+    /^## Verify$/ { print ""; while ((getline line < tf) > 0) print line; close(tf) }
+  ' "$f" > "$t" && cat "$t" > "$f"
+  rm -f "$tf" "$t"
+}
+REVIEWER_WORDS="Ran the tenant regression suite by hand; 14 passing."
+hb "$R" new verify-scope-case --title "Verify scope case" > /dev/null
+VS_DOC="$BOARD/verify-scope-case-handoff.md"
+insert_into_verify "$VS_DOC" "$REVIEWER_WORDS"
+hb "$R" export verify-scope-case --to Hank > /dev/null
+VS_BRIEF="$BOARD/briefs/verify-scope-case-handoff.brief.md"
+fill_brief "$VS_BRIEF" done
+hb "$R" import --result "$VS_BRIEF" > /dev/null
+VS_OUT="$(hb "$R" release verify-scope-case --status done --verified-by "$REVIEWER_WORDS")"
+case "$VS_OUT" in
+  *"identical to the reported evidence"*) chk "no false warning when the match is only in the Verify section" "no" "yes" ;;
+  *) chk "no false warning when the match is only in the Verify section" "no" "no" ;;
+esac
+
+printf '\nset_field — a write failure is refused, not a silent no-op (minor)\n'
+hb "$R" new writeprotect-case --title "Write protect case" > /dev/null
+WP_DOC="$BOARD/writeprotect-case-handoff.md"
+chmod 444 "$WP_DOC"
+hb "$R" release writeprotect-case --status open "trying" > /dev/null 2>&1
+WP_STATUS=$?
+chmod 644 "$WP_DOC"
+chk "release fails loudly instead of silently no-opping when the doc cannot be written" "nonzero" \
+  "$([ "$WP_STATUS" -ne 0 ] && echo nonzero || echo zero)"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

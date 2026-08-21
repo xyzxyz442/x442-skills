@@ -180,11 +180,17 @@ earlier and cheaper.
 anchors may have moved since export.
 
 **Cross-repo boards.** On a grouped board from `register-cross-repo-handoff`, the board is owned by
-no repo and a handoff's `audience` names a different repo than the one export runs in. Identity
-resolves from the **target** repo via the group manifest. When that repo is not reachable on disk
-at export time, export writes `repo_root_commit: unverified` and downgrades the preflight to a
-name-and-origin check with a visible warning. It never fabricates a SHA, because a fabricated SHA
-would make a wrong-repo run look verified.
+no repo and a handoff's `audience` names a different repo than the one export runs in. Identity is
+supposed to resolve from the **target** repo via the group manifest — `register-cross-repo-handoff`
+carries an explicit per-repo `path` and an `audience` that may differ from both, and manifest
+reading is not implemented here; it belongs to that skill and is deferred future work. Until it
+lands, any `audience` that differs from the exporting repo degrades honestly straight to
+`repo_root_commit: unverified`, downgrading the preflight to a name-and-origin check with a visible
+warning. An earlier version of this CLI guessed the target by sibling directory name
+(`../$audience`) and treated a match as verified; that guess is deleted, because a wrong guess
+renders as VERIFIED — indistinguishable from a fabricated SHA to the executor, and worse than
+declining to guess. It never fabricates a SHA, because a fabricated SHA would make a wrong-repo run
+look verified.
 
 ## CLI — `handoff export`
 
@@ -246,11 +252,11 @@ open choice rather than silently accepted.
 
 All new fields are optional. Absent means today's behavior, so existing boards need no migration.
 
-| Field                                        | Written by                                         | Meaning                                         |
-| -------------------------------------------- | -------------------------------------------------- | ----------------------------------------------- |
-| `delegated_to`, `delegated_at`, `brief`      | `export`                                           | Out for work, with whom, and where the brief is |
-| `result_from`, `result_at`, `result_claimed` | `import --result`                                  | Who reported, when, and what they claimed       |
-| `review`                                     | `import --result` sets `pending`; `release` clears | Needs the reviewer's eyes                       |
+| Field                                        | Written by                                                   | Meaning                                         |
+| -------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------- |
+| `delegated_to`, `delegated_at`, `brief`      | `export`                                                     | Out for work, with whom, and where the brief is |
+| `result_from`, `result_at`, `result_claimed` | `import --result`                                            | Who reported, when, and what they claimed       |
+| `review`                                     | `import --result` sets `pending`; a `done` release clears it | Needs the reviewer's eyes                       |
 
 `list` gains two markers — the recipient for a delegated row, and a review marker for
 `review: pending`. Review-pending rows surface as actionable, because they are waiting on the
