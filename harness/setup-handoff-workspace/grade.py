@@ -35,6 +35,38 @@ HD = ".agents/handoff"
 NO_SUCH = "no such handoff"
 CLAUDE_CFG = ".claude/settings.json"
 
+# Legacy shell key -> camelCase JSON key. Mirrors the installer's own migration map; kept here
+# rather than imported because the grader must be able to disagree with the code under test.
+_LEGACY_KEYS = {"TOPOLOGY": "topology", "REPO_NAME": "repoName", "HANDOFF_GROUPS": "groups",
+                "HANDOFF_GROUP_LAYOUT": "groupLayout", "HANDOFF_TTL_HOURS": "ttlHours",
+                "HANDOFF_ALLOW_VERIFY_CMD": "allowVerifyCmd"}
+
+
+def _read_shell_config(target):
+    """Parse a legacy shell config into camelCase keys. Parsed, never sourced -- the grader must
+    not execute a fixture's config any more than the shipped readers do."""
+    path = Path(target) / HD / "config"
+    out = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        if key.strip() in _LEGACY_KEYS:
+            out[_LEGACY_KEYS[key.strip()]] = val.strip().strip('"').strip("'")
+    return out
+
+
+def _read_json_config(target):
+    """The board's config.json, or {} when absent/unparseable -- the caller asserts on the values."""
+    path = Path(target) / HD / "config.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
 
 def _run(args, cwd, env_extra=None):
     import os
@@ -207,8 +239,14 @@ def grade_script_behavior(target):
     # The doc is left exactly as `new` writes it, `repos: []` included: that empty list is what
     # doc_is_local() used to read as "belongs to another repo", making --run-verify unreachable
     # for every doc the CLI creates.
-    (Path(target) / ".agents/handoff/config").write_text(
-        (Path(target) / ".agents/handoff/config").read_text() + "HANDOFF_ALLOW_VERIFY_CMD=1\n")
+    # The opt-in moved from an appended shell line to a JSON key when the board's config became
+    # config.json. Written through json so the file stays parseable — the readers now REFUSE a
+    # malformed config rather than silently falling back, so a hand-appended line would not just
+    # be ignored here, it would fail the whole board.
+    _cfg_path = Path(target) / ".agents/handoff/config.json"
+    _cfg = json.loads(_cfg_path.read_text())
+    _cfg["allowVerifyCmd"] = True
+    _cfg_path.write_text(json.dumps(_cfg, indent=2, sort_keys=True) + "\n")
     _handoff(target, "new", "vr", "--title", "Verify runs")
     vr = doc / "vr-handoff.md"
     marker2 = Path(target) / "VERIFY_RAN_OPTIN"
@@ -873,6 +911,32 @@ def _grade(target, eval_id):
         exps = [gc.run_verify_script(VERIFY, target)]
         exps.append(gc.not_contains(target, CLAUDE_CFG, "pretool-edit",
                                     label="advisory config has NO pretool deny gate"))
+        return exps
+
+    if eval_id == "legacy-config":
+        # A board still on the sourced shell `config`, with no config.json. The installer must
+        # migrate it, and every value must survive: the migration is worthless if it produces a
+        # well-formed file with the wrong numbers in it. ttlHours is the one that proves it,
+        # because the installer's own default (4) differs from the fixture's (8) -- so a value
+        # that survives cannot have come from the default path.
+        before = _read_shell_config(target)
+        r = _install(target, "--primary", "claude")
+        exps = [gc.expectation("installer succeeds on a legacy-config board", r.returncode == 0,
+                               f"exit {r.returncode}: {r.stderr.strip()[:120]}")]
+        exps.append(gc.run_verify_script(VERIFY, target))
+        exps.append(gc.file_exists(target, f"{HD}/config.json"))
+        exps.append(gc.json_roundtrip(target, f"{HD}/config.json"))
+        after = _read_json_config(target)
+        for key, want in (("ttlHours", before.get("ttlHours")), ("topology", before.get("topology"))):
+            if want is None:
+                continue
+            exps.append(gc.expectation(
+                f"{key} survived the shell-to-JSON migration",
+                str(after.get(key)) == str(want),
+                f"legacy {key}={want!r} -> json {key}={after.get(key)!r}"))
+        # The readers deliberately fall back to the legacy file, so removing it would strand any
+        # board whose migration half-completed.
+        exps.append(gc.file_exists(target, f"{HD}/config"))
         return exps
 
     if eval_id == "legacy-install":
