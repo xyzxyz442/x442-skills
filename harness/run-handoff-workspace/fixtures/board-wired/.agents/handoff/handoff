@@ -65,7 +65,7 @@ REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
 BOARD_GROUPS="${HANDOFF_GROUPS:-}"
 slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
-GROUP="${HANDOFF_GROUP:-}"
+GROUP="${HANDOFF_GROUP:-$HC_GROUP}"
 [ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
 grouped() { [ -n "$LAYOUT" ] && [ -n "$GROUP" ]; } # is this invocation acting inside a group section?
 
