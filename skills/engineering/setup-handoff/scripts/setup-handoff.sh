@@ -439,10 +439,13 @@ fi
 # The asset carries a PLACEHOLDER_HANDOFF_DIR token (prettier-safe, unlike a __x__ markdown token);
 # substitute the real board path so the block advertises the correct commands (e.g. ../.claude/handoff
 # for a shared board, not .agents/handoff).
-if ! grep -q 'handoff:begin' "$REPO/AGENTS.md" 2> /dev/null; then
-  printf '\n' >> "$REPO/AGENTS.md"
-  sed "s|PLACEHOLDER_HANDOFF_DIR|$HDPATH|g" "$ASSETS/agents-handoff.md" >> "$REPO/AGENTS.md"
-  echo "  injected AGENTS.md routing block"
-fi
+# The block declares itself "managed by setup-handoff", so refresh it on every run rather than
+# only injecting when absent — an insert-only guard let the block drift from the asset forever
+# (agents-block-drift-handoff). The splice replaces only the span between the markers and refuses
+# on duplicated/unbalanced ones instead of clobbering the file.
+python3 "$SKILL_DIR/scripts/splice-agents-block.py" \
+  --file "$REPO/AGENTS.md" \
+  --template "$ASSETS/agents-handoff.md" \
+  --handoff-dir "$HDPATH" || exit 1
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

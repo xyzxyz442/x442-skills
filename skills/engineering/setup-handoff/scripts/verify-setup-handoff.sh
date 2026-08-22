@@ -186,9 +186,24 @@ if [ "$TOPO" = "cross-repo" ]; then
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok ".gitignore excludes .locks/" || warn ".gitignore missing a .locks/ entry — leases could get committed"
 fi
-if grep -q 'handoff:begin' AGENTS.md 2> /dev/null && grep -q 'handoff:end' AGENTS.md 2> /dev/null; then
-  ok "AGENTS.md routing block present (handoff:begin/end)"
-else bad "AGENTS.md routing block missing"; fi
+# Content-aware, not presence-only: a block that exists but predates an asset change still reads
+# as installed while advertising commands the CLI no longer documents (agents-block-drift-handoff).
+# Delegated to splice-agents-block.py --check so the marker/render semantics live in one place.
+# Drift is a WARNING, not a FAIL, on the same principle as the payload stamp above: the block still
+# works, it is just behind, and re-running the installer now refreshes it.
+# Markers carry their `<!-- ` opener: bare `handoff:begin` is a substring of `cross-repo-handoff:begin`,
+# so the old check passed on a repo that had only the sibling skill's block.
+HDREL="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$HD" "$ROOT" 2> /dev/null || echo ".agents/handoff")"
+python3 "$(dirname "$0")/splice-agents-block.py" --check \
+  --file "$ROOT/AGENTS.md" \
+  --template "$(dirname "$0")/../assets/agents-handoff.md" \
+  --handoff-dir "$HDREL" 2> /dev/null
+case $? in
+  0) ok "AGENTS.md routing block present and matches the asset" ;;
+  2) warn "AGENTS.md routing block has drifted from the asset — re-run setup-handoff to refresh it" ;;
+  3) bad "AGENTS.md routing block missing" ;;
+  *) bad "AGENTS.md routing block malformed (duplicated/unbalanced markers) — fix by hand" ;;
+esac
 
 echo
 echo "3. Wired tools + hard-enforcement primary"
