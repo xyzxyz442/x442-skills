@@ -16,7 +16,7 @@
       "kind": "pre-state",
       "prompt": "This repo was wired a while ago and the handoff board may be out of date. Check it and bring it current.",
       "fixture": "fixtures/stale-stamp",
-      "expected_output": "Repair TARGET (agent-required): .agents/handoff/.version records payload v0 while the skill ships v1, so verify-setup-handoff.sh reports a payload-drift [warn]. After repair-handoff re-runs the installer, the stamp matches what the skill ships and the drift warning is gone. Grading the raw fixture shows the warning by design."
+      "expected_output": "Repair TARGET (agent-required): .agents/handoff/.version records payload v0 while the skill ships a much later version, so verify-setup-handoff.sh reports a payload-drift [warn]. The version is deliberately not named here -- an earlier revision of this text hardcoded one and rotted eight releases behind. The fixture's whole payload is old, not just the stamp: its handoff CLI predates `handoff export`, so a raw grade also shows one [FAIL] for that missing subcommand. Both are by design -- grading the raw fixture is expected to fail or warn. After repair-handoff re-runs the installer, the stamp matches what the skill ships, the CLI regains export, and both findings are gone."
     },
     {
       "id": "orphaned-lease",

@@ -7,6 +7,14 @@
 # Usage: ./verify-setup-handoff.sh [/path/to/repo]      (defaults to current dir)
 set -uo pipefail
 
+# Resolve this script's own directory to an ABSOLUTE path BEFORE the cd below. Everything the
+# verifier reads from its own skill (payload.version, merge-hooks.py, splice-agents-block.py, the
+# assets) must be reachable after we cd into the target repo. A bare `dirname "$0"` is relative to
+# the ORIGINAL cwd, so invoking this script by a relative path silently broke every one of those
+# reads once we moved -- and a missing file makes python3 exit 2, which the drift checks below
+# would otherwise report as real drift.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 TARGET="${1:-$PWD}"
 cd "$TARGET" 2> /dev/null || {
   echo "no such path: $TARGET" >&2
@@ -41,7 +49,7 @@ warn() {
 # somewhere detached from its skill directory: unknown is not the same as behind.
 check_payload_version() { # installed-version skill-name   (caller reads the stamp; shapes differ)
   local installed="$1" skill="$2" shipped
-  shipped="$(awk 'NR==1{print $2}' "$(dirname "$0")/payload.version" 2> /dev/null)"
+  shipped="$(awk 'NR==1{print $2}' "$SCRIPT_DIR/payload.version" 2> /dev/null)"
   [ -n "$shipped" ] || return 0
   if [ -z "$installed" ]; then
     warn "payload version unknown (pre-versioning install) — re-run $skill"
@@ -186,9 +194,28 @@ if [ "$TOPO" = "cross-repo" ]; then
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok ".gitignore excludes .locks/" || warn ".gitignore missing a .locks/ entry — leases could get committed"
 fi
-if grep -q 'handoff:begin' AGENTS.md 2> /dev/null && grep -q 'handoff:end' AGENTS.md 2> /dev/null; then
-  ok "AGENTS.md routing block present (handoff:begin/end)"
-else bad "AGENTS.md routing block missing"; fi
+# Content-aware, not presence-only: a block that exists but predates an asset change still reads
+# as installed while advertising commands the CLI no longer documents (agents-block-drift-handoff).
+# Delegated to splice-agents-block.py --check so the marker/render semantics live in one place.
+# Drift is a WARNING, not a FAIL, on the same principle as the payload stamp above: the block still
+# works, it is just behind, and re-running the installer now refreshes it.
+# Markers carry their `<!-- ` opener: bare `handoff:begin` is a substring of `cross-repo-handoff:begin`,
+# so the old check passed on a repo that had only the sibling skill's block.
+HDREL="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$HD" "$ROOT" 2> /dev/null || echo ".agents/handoff")"
+if [ ! -f "$SCRIPT_DIR/splice-agents-block.py" ]; then
+  warn "cannot check the AGENTS.md block: splice-agents-block.py not found beside this verifier"
+else
+python3 "$SCRIPT_DIR/splice-agents-block.py" --check \
+  --file "$ROOT/AGENTS.md" \
+  --template "$SCRIPT_DIR/../assets/agents-handoff.md" \
+  --handoff-dir "$HDREL" 2> /dev/null
+case $? in
+  0) ok "AGENTS.md routing block present and matches the asset" ;;
+  2) warn "AGENTS.md routing block has drifted from the asset — re-run setup-handoff to refresh it" ;;
+  3) bad "AGENTS.md routing block missing" ;;
+  *) bad "AGENTS.md routing block malformed (duplicated/unbalanced markers) — fix by hand" ;;
+esac
+fi
 
 echo
 echo "3. Wired tools + hard-enforcement primary"
@@ -203,7 +230,25 @@ check_tool() { # name file marker_event
       ok "$name wired + valid JSON: ${file#$ROOT/}"
       WIRED="${WIRED:+$WIRED }$name"
       # hard enforcement = a pretool-edit (deny) hook is wired for this tool
-      grep -q 'pretool-edit' "$file" 2> /dev/null && HARD="${HARD:+$HARD }$name"
+      local is_primary=0
+      grep -q 'pretool-edit' "$file" 2> /dev/null && { HARD="${HARD:+$HARD }$name"; is_primary=1; }
+      # Content, not presence: the installer rewrites these on every run, so they only go stale
+      # when nobody re-runs it — and the payload stamp cannot see that, because it covers the
+      # payload FILES, not the wiring written around them. Compare against what the skill would
+      # write now, checking against this file's OWN primary/advisory shape so an advisory tool is
+      # not reported as missing the hard-enforcement hooks it is not supposed to have.
+      if [ ! -f "$SCRIPT_DIR/merge-hooks.py" ]; then
+        rc=99
+      else
+        HANDOFF_HDPATH="$HDREL" HANDOFF_TOOL="$name" HANDOFF_PRIMARY="$is_primary" \
+          python3 "$SCRIPT_DIR/merge-hooks.py" "$file" --check 2> /dev/null
+        rc=$?
+      fi
+      case $rc in
+        0) ok "$name hook commands match what setup-handoff writes now" ;;
+        2) warn "$name hook commands have drifted — re-run setup-handoff to refresh them" ;;
+        *) : ;;   # 3 (not wired) is unreachable here; 99 = helper absent, stay silent
+      esac
     else bad "$name config invalid JSON: ${file#$ROOT/}"; fi
   fi
 }

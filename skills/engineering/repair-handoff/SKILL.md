@@ -164,8 +164,42 @@ because each depends on the relationship between the board's parts rather than o
   `.handoff-repos.json`, so a missing or drifted one is not visible at export time — every
   cross-repo brief just quietly renders `repo_root_commit: unverified`. Detect it with
   `verify-cross-repo-handoff.sh`; the repair is a re-sync (step 5 below), never a hand-edit.
+- **AGENTS.md block drift.** The routing block between `<!-- handoff:begin` and
+  `<!-- handoff:end -->` is generated from the skill's `assets/agents-handoff.md`, so it drifts the
+  same way the payload does — and a block that merely _exists_ still reads as installed while
+  advertising commands the CLI no longer documents. Presence is not the check; content is:
+
+  ```bash
+  python3 "$HANDOFF_SKILL/scripts/splice-agents-block.py" --check \
+    --file "$REPO/AGENTS.md" \
+    --template "$HANDOFF_SKILL/assets/agents-handoff.md" \
+    --handoff-dir "$HDREL" # 0 current  2 drifted  3 missing  1 malformed
+  ```
+
+  `verify-setup-handoff.sh` runs exactly this, so a `[warn]` there is the finding; the standalone
+  form is for a board whose verifier predates the check. The repair is step 3's installer re-run,
+  which rewrites the block — never a hand-edit, which just re-drifts on the next asset change.
+  Malformed markers (duplicated or unbalanced) are the one case the installer refuses rather than
+  clobbers: fix those by hand first, then re-run.
+
 - **Enforcement owner drift.** Scan which tool config files actually exist, not just the tools
   currently detected. A tool wired in a past run still carries the pretool gate.
+- **Hook command drift.** The wired hook commands go stale the same way, and for a subtler
+  reason: the installer rewrites them on every run, so they only drift when nobody re-runs it —
+  and the payload stamp cannot see that, because it covers the payload **files**, not the wiring
+  written around them. A board can read `payload vN matches` while its hooks still run a command
+  shape the skill stopped writing. Compare content per wired tool:
+
+  ```bash
+  HANDOFF_HDPATH="$HDREL" HANDOFF_TOOL=claude HANDOFF_PRIMARY=0 \
+    python3 "$HANDOFF_SKILL/scripts/merge-hooks.py" TOOL_CONFIG --check
+  # 0 current  2 drifted  3 not wired
+  ```
+
+  Pass `HANDOFF_PRIMARY=1` for the tool that owns the pretool deny gate, or an advisory tool is
+  reported as missing hard-enforcement hooks it should not have. `verify-setup-handoff.sh` runs
+  this per wired tool, so a `[warn]` there is the finding. The repair is step 3's installer re-run.
+
 - **Orphaned delegation.** A doc with `delegated_at` older than the lease TTL, no `result_at`, and
   either a missing `brief` file or no lease — a handoff that went out via
   [`delegate-handoff`](../delegate-handoff/SKILL.md)'s `handoff export` and never came back. It is

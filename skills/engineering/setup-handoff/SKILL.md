@@ -206,7 +206,7 @@ board is read by every member repo, so no member's identity may live in the boar
 installer would clobber the rest. The full key table ships in the board's own
 [`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the documentation.
 
-Two behaviours worth knowing before you re-run the installer:
+Three behaviours worth knowing before you re-run the installer:
 
 - **`ttlHours` survives a re-install.** Lease policy is a committed team decision; an install must
   not quietly revert it. The installer owns wiring facts (`topology`, `groups`, `groupLayout`,
@@ -214,6 +214,13 @@ Two behaviours worth knowing before you re-run the installer:
 - **`allowVerifyCmd` does not survive.** It follows `--allow-verify-cmd` on each run, because it
   permits `release --run-verify` to execute a command from a doc — a security opt-in nobody
   re-affirmed is not one to inherit.
+- **The `AGENTS.md` routing block is rewritten, not just injected.** The block declares itself
+  `managed by setup-handoff — do not edit between markers`, so every run splices the current
+  `assets/agents-handoff.md` over the span between the markers. Hand edits inside the markers are
+  discarded, which is what the marker promises; edit the asset instead. Before payload v9 the
+  installer only injected the block when it was absent, so an installed block drifted from the
+  asset forever and re-running fixed nothing. Duplicated or unbalanced markers are refused rather
+  than clobbered — fix those by hand.
 
 The config is **parsed, never sourced.** A shared board's config file is written by every member's
 installer and read by every member's hooks, so sourcing it would let one repo execute shell in its
@@ -267,7 +274,10 @@ working and migrates on its next install.
   reads as `MISSING` rather than done, and `release --status done` refuses while any child is
   outstanding.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
-  (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
+  (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge,
+  plus `--check` to compare a wired config against what the installer would write now),
+  `scripts/splice-agents-block.py` (AGENTS.md block render + splice, shared by the installer and
+  the verifier's drift check),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the
   `.agents/handoff/` payload: `handoff` → board root, `hooks.sh` → board `scripts/`, `README.md`),
   `assets/handoff-doc-template.md`
