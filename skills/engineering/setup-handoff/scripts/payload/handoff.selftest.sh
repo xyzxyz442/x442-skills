@@ -140,8 +140,16 @@ printf '\ncmd_export — claim before stamp\n'
 # A concurrent agent already holds the lease. cmd_export must fail on the claim BEFORE it writes
 # the brief or stamps the doc — a lease taken after stamping would leave the doc reading
 # "delegated" and a brief on disk with no lease actually held.
+#
+# The holder is a CONCURRENT agent, so it claims under an explicit foreign session id. Left to the
+# ambient environment this claimed and exported as one session, which is now the allowed self-held
+# case — the test would then be asserting the opposite of what its name says, and passing or failing
+# on whether the machine running it happens to expose a session id at all.
 hb "$R" new claim-race --title "Claim race" > /dev/null
-hb "$R" claim claim-race "already working it" > /dev/null
+(
+  export HANDOFF_SESSION_ID="foreign-session-$$"
+  hb "$R" claim claim-race "already working it"
+) > /dev/null
 RACE_OUT="$(hb "$R" export claim-race --to Bob)"
 chk_contains "failed claim reports CLAIMED" "$RACE_OUT" "CLAIMED"
 RACE_DOC="$BOARD/claim-race-handoff.md"
@@ -165,18 +173,25 @@ chk "repo_root_commit field is not shifted by the pipe" "unverified" \
 
 printf '\nbrief_identity — a same-named sibling directory is never trusted as identity (finding 6)\n'
 # The OLD implementation guessed the cross-repo target by testing "${REPO_DIR}/../$aud/.git" and,
-# on a match, treated it as VERIFIED — even though register-cross-repo-handoff's manifest (not
-# read here) is the only authoritative source. Prove the guess is gone by constructing exactly the
-# case that used to fool it: a git repo sibling to the board repo, sharing the audience's name.
+# on a match, treated it as VERIFIED. Prove the guess is gone by constructing exactly the case that
+# used to fool it: a git repo sibling to the board repo, sharing the audience's name, on a board
+# that carries no cross-repo registry at all.
 SIB_NAME="acme-sibling-$$"
 SIBLING="$(dirname "$R")/$SIB_NAME"
-mkdir -p "$SIBLING"
-git -C "$SIBLING" init -q
-git -C "$SIBLING" config user.email "test@example.com"
-git -C "$SIBLING" config user.name "test"
-printf 'x\n' > "$SIBLING/README.md"
-git -C "$SIBLING" add -A
-git -C "$SIBLING" commit -qm "sibling initial commit"
+mkrepo() { # dir remote -> creates a git repo with one commit
+  mkdir -p "$1"
+  git -C "$1" init -q
+  git -C "$1" config user.email "test@example.com"
+  git -C "$1" config user.name "test"
+  [ -n "${2:-}" ] && git -C "$1" remote add origin "$2"
+  # Content and message vary by directory name ON PURPOSE. Two repos built from identical trees in
+  # the same second get identical author/committer timestamps and therefore the SAME root commit —
+  # which silently turns "the decoy's sha must not appear" into a test that cannot fail.
+  printf '%s\n' "$(basename "$1")" > "$1/README.md"
+  git -C "$1" add -A
+  git -C "$1" commit -qm "initial commit for $(basename "$1")"
+}
+mkrepo "$SIBLING" ""
 SIBLING_ROOT="$(git -C "$SIBLING" rev-list --max-parents=0 HEAD | tail -1)"
 hb "$R" new sibling-aud-case --title "Sibling audience case" --audience "$SIB_NAME" > /dev/null
 hb "$R" export sibling-aud-case --no-claim > /dev/null
@@ -185,7 +200,135 @@ chk "cross-repo identity degrades to unverified, never guesses a same-named sibl
   "$(sed -n 's/^repo_root_commit: //p' "$SIB_BRIEF" | head -1)"
 chk "the sibling repo's REAL root commit never appears in the brief" "no" \
   "$(grep -Fq "$SIBLING_ROOT" "$SIB_BRIEF" && echo yes || echo no)"
-[ -n "$SIBLING" ] && [ -d "$SIBLING" ] && trash "$SIBLING" 2> /dev/null
+chk_contains "a registry-less board says so, rather than blaming an unreachable repo" \
+  "$(cat "$SIB_BRIEF")" "carries no cross-repo registry"
+
+printf '\nbrief_identity — cross-repo identity resolves from the board registry, not the name\n'
+# The grouped-board topology the guard was built for: the target's DIRECTORY NAME deliberately does
+# not match its `audience`, and an unrelated repo standing at the audience's name sits right beside
+# the board. Only the registry (register-cross-repo-handoff's projection of .handoff-repos.json)
+# knows which is which.
+TARGET="$(dirname "$R")/checkout-not-named-like-audience-$$"
+mkrepo "$TARGET" "git@github.com:acme/acme-web.git"
+TARGET_ROOT="$(git -C "$TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+DECOY="$(dirname "$R")/acme-web-$$"
+mkrepo "$DECOY" "git@github.com:evil/decoy.git"
+DECOY_ROOT="$(git -C "$DECOY" rev-list --max-parents=0 HEAD | tail -1)"
+
+write_registry() { # json-body -> $BOARD/repos.json
+  printf '%s\n' "$1" > "$BOARD/repos.json"
+}
+# Paths are stored RELATIVE TO THE BOARD DIR, which is what makes a committed board portable.
+TARGET_REL="../../../$(basename "$TARGET")"
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" }
+  ]
+}"
+hb "$R" new manifest-aud-case --title "Manifest audience case" --audience "acme-web-$$" > /dev/null
+hb "$R" export manifest-aud-case --no-claim > /dev/null
+MAN_BRIEF="$BOARD/briefs/manifest-aud-case-handoff.brief.md"
+chk "the brief carries the DECLARED repo's real root commit" "$TARGET_ROOT" \
+  "$(sed -n 's/^repo_root_commit: //p' "$MAN_BRIEF" | head -1)"
+chk "identity comes from the declared path, never the same-named decoy" "no" \
+  "$(grep -Fq "$DECOY_ROOT" "$MAN_BRIEF" && echo yes || echo no)"
+chk "the brief records the target's own origin, not the exporting repo's" "acme/acme-web" \
+  "$(sed -n 's/^repo_origin: //p' "$MAN_BRIEF" | head -1)"
+chk "a resolved cross-repo brief carries no degradation warning" "" \
+  "$(sed -n 's/^.*\(\*\*Warning\*\*\).*$/\1/p' "$MAN_BRIEF" | head -1)"
+
+printf '\nbrief_identity — an unattested or unresolvable registry entry degrades, never guesses\n'
+# The declared path still exists but now holds a DIFFERENT repo (a moved checkout, a hand-edited
+# manifest, a registry never re-synced). The attestation is what catches it.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$DECOY_ROOT\" }
+  ]
+}"
+hb "$R" new stale-registry-case --title "Stale registry case" --audience "acme-web-$$" > /dev/null
+hb "$R" export stale-registry-case --no-claim > /dev/null
+STALE_BRIEF="$BOARD/briefs/stale-registry-case-handoff.brief.md"
+chk "a root-commit mismatch fails closed to unverified" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$STALE_BRIEF" | head -1)"
+chk "the repo standing at the stale path is never stamped into the brief" "no" \
+  "$(grep -Fq "$TARGET_ROOT" "$STALE_BRIEF" && echo yes || echo no)"
+chk_contains "the warning names the re-sync as the fix" "$(cat "$STALE_BRIEF")" "Re-run the cross-repo sync"
+
+# Two entries claiming one audience is a manifest the operator must fix, not a tie to break.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"a\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" },
+    { \"group\": \"b\", \"alias\": \"web2\", \"audience\": \"acme-web-$$\",
+      \"path\": \"../../../$(basename "$DECOY")\", \"rootCommit\": \"$DECOY_ROOT\" }
+  ]
+}"
+hb "$R" new ambiguous-aud-case --title "Ambiguous audience case" --audience "acme-web-$$" > /dev/null
+hb "$R" export ambiguous-aud-case --no-claim > /dev/null
+AMB_BRIEF="$BOARD/briefs/ambiguous-aud-case-handoff.brief.md"
+chk "an audience claimed twice resolves to nothing rather than a coin flip" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$AMB_BRIEF" | head -1)"
+chk "neither candidate's root commit leaks into the brief" "no" \
+  "$({ grep -Fq "$TARGET_ROOT" "$AMB_BRIEF" || grep -Fq "$DECOY_ROOT" "$AMB_BRIEF"; } && echo yes || echo no)"
+
+# An audience the registry simply does not declare.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" }
+  ]
+}"
+hb "$R" new undeclared-aud-case --title "Undeclared audience case" --audience "acme-nowhere" > /dev/null
+hb "$R" export undeclared-aud-case --no-claim > /dev/null
+UND_BRIEF="$BOARD/briefs/undeclared-aud-case-handoff.brief.md"
+chk "an audience absent from the registry degrades to unverified" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$UND_BRIEF" | head -1)"
+chk "an undeclared audience never resolves to the one repo that IS declared" "no" \
+  "$(grep -Fq "$TARGET_ROOT" "$UND_BRIEF" && echo yes || echo no)"
+
+# A malformed registry is not trusted even partially.
+write_registry "{ this is not json"
+hb "$R" new bad-registry-case --title "Bad registry case" --audience "acme-web-$$" > /dev/null
+hb "$R" export bad-registry-case --no-claim > /dev/null
+BAD_BRIEF="$BOARD/briefs/bad-registry-case-handoff.brief.md"
+chk "an unreadable registry degrades to unverified rather than erroring out" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$BAD_BRIEF" | head -1)"
+chk_contains "an unreadable registry says so, rather than reporting an undeclared audience" \
+  "$(cat "$BAD_BRIEF")" "could not be read"
+
+printf '\nboard_repo_entry — an audience resolves inside the CALLING section only\n'
+# Two groups sharing one board may each declare their own "api"; the manifest is the fence, so each
+# caller must see only its own. Exercised against the resolver directly (DIR/GROUP are the globals
+# the CLI reads) because a sectioned board is otherwise a whole install to stand up.
+# -P: board paths come back through realpath, so the expectation must be the physical
+# path too (macOS /var -> /private/var would otherwise fail every comparison).
+SECDIR="$(cd "$(mktemp -d)" && pwd -P)"
+cat > "$SECDIR/repos.json" << 'REGEOF'
+{
+  "version": 1,
+  "repos": [
+    { "group": "alpha", "alias": "api", "audience": "api", "path": "./alpha-api", "rootCommit": "aaaa1111" },
+    { "group": "beta",  "alias": "api", "audience": "api", "path": "./beta-api",  "rootCommit": "bbbb2222" }
+  ]
+}
+REGEOF
+sec_entry() { (DIR="$SECDIR" GROUP="$1" && board_repo_entry api); }
+chk "the alpha section resolves alpha's api" "ok|$SECDIR/alpha-api|aaaa1111" "$(sec_entry alpha)"
+chk "the beta section resolves beta's api" "ok|$SECDIR/beta-api|bbbb2222" "$(sec_entry beta)"
+chk "a section that declares no api gets nothing, not someone else's" "no-entry||" "$(sec_entry gamma)"
+chk "with no section set, an audience claimed twice stays ambiguous" "ambiguous||" "$(sec_entry '')"
+trash "$SECDIR" 2> /dev/null
+
+rm -f "$BOARD/repos.json"
+for d in "$SIBLING" "$TARGET" "$DECOY"; do
+  [ -n "$d" ] && [ -d "$d" ] && trash "$d" 2> /dev/null
+done
 
 printf '\ncmd_export — bundle (orchestrator) stamps the parent and pre-flights every child\n'
 hb "$R" new bundle-child-1 --title "Bundle child 1" > /dev/null
@@ -208,7 +351,14 @@ printf '\ncmd_export — bundle pre-flight refuses the WHOLE export on a live fo
 hb "$R" new bundle-child-3 --title "Bundle child 3" > /dev/null
 hb "$R" new bundle-child-4 --title "Bundle child 4" > /dev/null
 hb "$R" new bundle-parent-2 --orchestrator --children bundle-child-3,bundle-child-4 --title "Bundle parent 2" > /dev/null
-hb "$R" claim bundle-child-4 "already working it" > /dev/null
+# The lease has to be FOREIGN for this to be the finding-5 case at all: a lease the acting session
+# holds is deliberately allowed through (the next block). Claiming under an explicit foreign session
+# id — rather than whatever the ambient environment happens to expose — is what keeps the two cases
+# from collapsing into each other depending on where the suite runs.
+(
+  export HANDOFF_SESSION_ID="foreign-session-$$"
+  hb "$R" claim bundle-child-4 "already working it"
+) > /dev/null
 BUNDLE2_DOC="$BOARD/bundle-parent-2-handoff.md"
 BUNDLE2_COVER="$BOARD/briefs/bundle-parent-2-handoff.cover.md"
 CHILD3_DOC="$BOARD/bundle-child-3-handoff.md"
@@ -218,6 +368,65 @@ chk "no cover file was written by the refused export" "no" "$([ -f "$BUNDLE2_COV
 chk "the untouched child was never claimed" "no" "$([ -d "$BOARD/.locks/bundle-child-3-handoff" ] && echo yes || echo no)"
 chk "the untouched child's doc was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$CHILD3_DOC" | head -1)"
 chk "the orchestrator itself was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$BUNDLE2_DOC" | head -1)"
+
+printf '\ncmd_export — a child leased by THIS session is extended, not refused\n'
+# The pre-flight treated ANY held lease as blocking, including the caller's own, so an orchestrator
+# that had claimed a child to investigate it could not then delegate the bundle: it had to release
+# its own lease first, or pass --no-claim, which drops leasing for EVERY child in the run.
+SELF_SESS="self-session-$$"
+hb "$R" new bundle-child-7 --title "Bundle child 7" > /dev/null
+hb "$R" new bundle-child-8 --title "Bundle child 8" > /dev/null
+hb "$R" new bundle-parent-5 --orchestrator --children bundle-child-7,bundle-child-8 --title "Bundle parent 5" > /dev/null
+(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" claim bundle-child-7 "investigating"
+) > /dev/null
+SELF_LOCK="$BOARD/.locks/bundle-child-7-handoff/owner"
+# Shorten the held lease to a minute so "was it extended?" is answerable. Re-claiming inside the
+# same second would otherwise stamp the same expiry a fresh claim would, and the check could not
+# tell the two paths apart. Still live, so it is a self-held lease and not an expired one.
+SELF_T="$(mktemp)"
+grep -v '^expires=' "$SELF_LOCK" > "$SELF_T"
+echo "expires=$(($(now) + 60))" >> "$SELF_T"
+cat "$SELF_T" > "$SELF_LOCK"
+rm -f "$SELF_T"
+B5_OUT="$(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" export bundle-parent-5 --to Vic
+)"
+B5_COVER="$BOARD/briefs/bundle-parent-5-handoff.cover.md"
+chk "the export is not refused over the caller's own lease" "yes" \
+  "$([ -f "$B5_COVER" ] && echo yes || echo no)"
+chk "the self-held child still got its brief" "yes" \
+  "$([ -f "$BOARD/briefs/bundle-child-7-handoff.brief.md" ] && echo yes || echo no)"
+chk "the free child got its brief too" "yes" \
+  "$([ -f "$BOARD/briefs/bundle-child-8-handoff.brief.md" ] && echo yes || echo no)"
+chk "the free child WAS claimed" "yes" \
+  "$([ -d "$BOARD/.locks/bundle-child-8-handoff" ] && echo yes || echo no)"
+chk "the self-held lease survives the export" "yes" "$([ -f "$SELF_LOCK" ] && echo yes || echo no)"
+chk "it is still the SAME lease, not a re-claim (the original note is intact)" "investigating" \
+  "$(sed -n 's/^note=//p' "$SELF_LOCK" | head -1)"
+chk "the self-held lease was extended to a full TTL" "yes" \
+  "$([ "$(sed -n 's/^expires=//p' "$SELF_LOCK" | head -1)" -gt "$(($(now) + 3600))" ] && echo yes || echo no)"
+chk_contains "the export says it kept the lease rather than re-claiming" "$B5_OUT" "lease extended"
+
+printf '\ncmd_export — a single export on a doc THIS session already holds is not refused\n'
+# Same carve-out, reached through export_one directly: `claim X` then `export X` is the obvious
+# order — investigate, then decide to delegate — and it used to die on the caller's own lease.
+hb "$R" new self-single-case --title "Self single case" > /dev/null
+(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" claim self-single-case "looking at it"
+) > /dev/null
+SS_OUT="$(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" export self-single-case --to Uma
+)"
+chk "the brief was written despite the caller holding the lease" "yes" \
+  "$([ -f "$BOARD/briefs/self-single-case-handoff.brief.md" ] && echo yes || echo no)"
+chk "the doc is stamped with the delegate" "Uma" \
+  "$(sed -n 's/^delegated_to: //p' "$BOARD/self-single-case-handoff.md" | head -1)"
+chk_contains "and it reports the lease was extended" "$SS_OUT" "lease extended"
 
 printf '\ncmd_export — bundle skips a child with no doc on the board (must-fix coverage gap)\n'
 hb "$R" new bundle-child-5 --title "Bundle child 5" > /dev/null
@@ -595,12 +804,23 @@ esac
 printf '\nset_field — a write failure is refused, not a silent no-op (minor)\n'
 hb "$R" new writeprotect-case --title "Write protect case" > /dev/null
 WP_DOC="$BOARD/writeprotect-case-handoff.md"
+# A private TMPDIR so "did the failed write leak its scratch files?" is answerable at all — counting
+# files in the shared temp dir would be counting every other process on the machine.
+WP_TMP="$(mktemp -d)"
 chmod 444 "$WP_DOC"
-hb "$R" release writeprotect-case --status open "trying" > /dev/null 2>&1
+(
+  export TMPDIR="$WP_TMP"
+  hb "$R" release writeprotect-case --status open "trying"
+) > /dev/null 2>&1
 WP_STATUS=$?
 chmod 644 "$WP_DOC"
 chk "release fails loudly instead of silently no-opping when the doc cannot be written" "nonzero" \
   "$([ "$WP_STATUS" -ne 0 ] && echo nonzero || echo zero)"
+# set_field's cleanup used to sit AFTER its `|| die`, so the reporting fix leaked both mktemp files
+# on every genuine write failure. Reporting the failure and cleaning up after it are not a trade.
+chk "the failed write leaves no temp files behind" "0" \
+  "$(find "$WP_TMP" -type f | wc -l | tr -d ' ')"
+trash "$WP_TMP" 2> /dev/null
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

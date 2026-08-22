@@ -251,6 +251,20 @@ Refuses on a `standalone` handoff (send the file — it is already self-containe
 already `done` (nothing left to delegate). On an `orchestrator` it renders one cover brief with the
 Sequencing section plus one brief per child.
 
+A lease **this session already holds** is extended rather than re-claimed, so `claim X` then
+`export X` works and ends with the full TTL a fresh claim would have given. A lease held by
+**another** session still refuses — and on a bundle it refuses the whole export before anything is
+written, rather than stranding half the children claimed and stamped.
+
+**Repo identity on a grouped board.** When a handoff's `audience` names a repo other than the one
+`export` runs in, the target is resolved through `<board>/repos.json` — the projection of the
+group manifest that `register-cross-repo-handoff`'s sync writes, where each member carries its path
+(relative to the board) and its root commit as an attestation. `export` reads the live root commit
+at that path and records identity only when the two agree; a stale entry, a missing registry, an
+undeclared or doubly-claimed audience, or an unreachable checkout each degrade to
+`repo_root_commit: unverified` with a warning naming the cause. It never matches an audience
+against a directory name. `repos.json` is generated — fix the manifest and re-sync, do not edit it.
+
 **Commit the brief** before telling the executor — they pull it from the branch, they are not
 attached a file out of band. `export` prints a reminder to redact anything that should not enter
 git history before that commit.

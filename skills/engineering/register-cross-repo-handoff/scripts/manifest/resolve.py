@@ -73,6 +73,29 @@ def head_commit_time(repo: str) -> "int | None":
         return None
 
 
+def root_commit(repo: str) -> "str | None":
+    """The repo's first commit — its durable identity.
+
+    This is what a delegation brief's preflight checks, and what the board's repos.json records so
+    the payload CLI can tell "the declared path still holds the declared repo" from "the declared
+    path now holds something else". Unlike a remote URL it survives renames, remote moves, and
+    mirror pushes, and a fork matching it is the correct answer because a fork is the same lineage.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if out.returncode != 0:
+            return None
+        # A repo with multiple root commits (grafted/subtree history) lists them newest first;
+        # take the last for the same reason repo_root_commit() in the payload CLI does.
+        lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        return lines[-1] if lines else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | None, str | None]":
     """Return (groups, default_board_raw, layout) from one manifest, or ({}, None, None) if absent/bad.
 
@@ -218,6 +241,7 @@ def main() -> int:
                 "has_agents_md": os.path.isfile(os.path.join(p, "AGENTS.md")),
                 "writable": os.access(p, os.W_OK) if exists else None,
                 "head_ct": head_commit_time(p) if exists and is_git else None,
+                "root_commit": root_commit(p) if exists and is_git else None,
             })
             if not exists:
                 errors.append(f"{g['manifest']}: {gname}/{r['alias']} -> {p} does not exist — excluded")

@@ -394,7 +394,7 @@ result_block() { # path -> lines between the handoff:result markers
 # nothing. `key` is never attacker-controlled (always a fixed literal from this file), so it can
 # stay on `-v`.
 set_field() {
-  local f="$1" key="$2" val="$3" t vf
+  local f="$1" key="$2" val="$3" t vf rc=0
   t="$(mktemp)" || die "mktemp failed"
   vf="$(mktemp)" || die "mktemp failed"
   printf '%s' "$val" > "$vf"
@@ -404,8 +404,12 @@ set_field() {
     infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
     infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
     { print }
-  ' "$f" > "$t" && cat "$t" > "$f" || die "set_field: could not write $key into $f"
+  ' "$f" > "$t" && cat "$t" > "$f" || rc=1
+  # Cleanup runs on BOTH paths. It used to sit after a `|| die`, so a genuine write failure
+  # (read-only doc, full disk) exited straight past it and leaked both mktemp files. Reporting the
+  # failure and cleaning up after it are not a trade — do both.
   rm -f "$t" "$vf"
+  [ "$rc" -eq 0 ] || die "set_field: could not write $key into $f"
 }
 
 log_activity() { # path message -> append to the doc's Activity log
@@ -426,6 +430,25 @@ lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|ex
   owner="$(sed -n 's/^owner=//p' "$d/owner" 2> /dev/null || echo unknown)"
   exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
   if [ "$(now)" -ge "${exp:-0}" ]; then echo "expired|$owner|$exp"; else echo "held|$owner|$exp"; fi
+}
+
+# Does THIS session hold a LIVE lease on <id>? Ownership is proven by the raw session id the tool
+# exposes, never by the display name: two concurrent sessions of one user share a user name, and
+# treating those as the same session would walk a bundle export straight into the foreign lease its
+# pre-flight exists to catch. When no session id is available at all (advisory mode, no tool)
+# nothing can be proven and the answer is no — a false "yes" is the dangerous direction here.
+#
+# `expired` deliberately answers no as well: an expired lease of one's own is taken over by a normal
+# claim, which is what refreshes it. Only a live self-held lease needs the carve-out.
+lease_is_mine() { # id -> 0 when this session holds a live lease on it
+  local key kind owner exp mine held
+  mine="$(session_id)"
+  [ -n "$mine" ] || return 1
+  key="$(lock_key "$1")"
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+  [ "$kind" = "held" ] || return 1
+  held="$(sed -n 's/^session=//p' "$LOCKS/$key/owner" 2> /dev/null)"
+  [ -n "$held" ] && [ "$held" = "$mine" ]
 }
 
 is_archived() { [ -f "$(arch_file "$1")" ]; }
@@ -1196,27 +1219,125 @@ cmd_export() {
 # carrying free text too.
 strip_pipes() { printf '%s' "$1" | tr -d '|'; }
 
-# Resolve identity for the repo a brief targets. On a flat board that is this repo. On a grouped
-# board the doc's audience names a DIFFERENT repo, and if it is not reachable on disk we record
-# "unverified" rather than fabricate a SHA — a fabricated SHA would make a wrong-repo run look
-# verified, which is worse than no guard at all.
+# --- cross-repo target resolution ---------------------------------------------------------
+# On a grouped board (register-cross-repo-handoff) the board is owned by NO repo and a handoff's
+# `audience` names a repo other than the one export runs in. The target is resolved from
+# `<board>/repos.json` — the projection of the `.handoff-repos.json` cascade that the cross-repo
+# sync writes, because this CLI ships inside the target repos and can neither reach that skill's
+# resolver nor know the cascade's --scope.
 #
-# This used to GUESS the target by sibling directory name (`${REPO_DIR}/../$aud/.git`) and treat a
-# match as verified. That guess is not authoritative: `register-cross-repo-handoff`'s manifest
-# carries an explicit per-repo `path` and an `audience` that may differ from both, and neither is
-# read here — reading it belongs to that skill and is deferred (see the design spec's cross-repo
-# section). A wrong guess renders as VERIFIED, which is indistinguishable from a fabricated SHA to
-# the executor and is exactly the failure mode the paragraph above says never to create. So a
-# differing `audience` always degrades honestly to "unverified" until real manifest resolution
-# lands — the same outcome as an unreachable target, never a name-matched guess.
+# It is NEVER resolved by name. An earlier version guessed `${REPO_DIR}/../$audience/.git` and
+# treated a hit as verified; a same-named but unrelated sibling then put that unrelated repo's REAL
+# root commit into the brief and rendered a fully confident preflight, which is indistinguishable
+# from a fabricated SHA to the executor.
+#
+# Each registry entry is ATTESTED with the target's root commit as of the last sync, and that
+# attestation is re-checked against the live repo here. A declared path that now holds something
+# else — a moved checkout, a hand-edited manifest, a stale registry — fails closed to "unverified"
+# instead of stamping a confident SHA for the wrong repo. Every failure mode degrades; none guesses.
+#
+# Prints "reason|abs-path|attested-root". reason is one of:
+#   ok           the audience resolved to exactly one attested entry
+#   no-python    python3 is unavailable, so the registry cannot be read
+#   no-registry  this board has no repos.json (never synced, or a flat board)
+#   bad-registry repos.json is unreadable or malformed
+#   no-entry     the registry declares no repo with this audience in the caller's section
+#   ambiguous    two entries in one section claim this audience, so there is no single answer
+board_repo_entry() { # audience -> "reason|abs-path|attested-root"
+  local aud="$1"
+  command -v python3 > /dev/null 2>&1 || {
+    printf 'no-python||'
+    return
+  }
+  [ -f "$DIR/repos.json" ] || {
+    printf 'no-registry||'
+    return
+  }
+  python3 - "$DIR/repos.json" "$DIR" "$aud" "$GROUP" << 'PY'
+import json, os, sys
+
+reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    with open(reg) as fh:
+        data = json.load(fh)
+    repos = data["repos"]
+    if not isinstance(repos, list):
+        raise ValueError("repos is not a list")
+except Exception:  # noqa: BLE001 - any unreadable registry is one failure mode: do not trust it
+    sys.stdout.write("bad-registry||")
+    raise SystemExit(0)
+
+hits = [r for r in repos
+        if isinstance(r, dict) and r.get("audience") == aud and r.get("path") and r.get("rootCommit")]
+# The manifest is the fence: a repo coordinates only with the peers ITS OWN group lists, and a
+# handoff only ever acts within its caller's section. Restricting to that section is not a
+# tiebreak — it is the same scoping every other command already applies, and it lets two groups
+# sharing one board each have their own "api" without either becoming ambiguous. With no section
+# set (a flat board, or a board-level invocation) there is nothing to scope by, so uniqueness
+# across the whole registry is the requirement.
+if group:
+    hits = [r for r in hits if r.get("group") == group]
+if not hits:
+    sys.stdout.write("no-entry||")
+elif len(hits) > 1:
+    # Two repos answering to one audience within one section is not a tie to break by heuristic —
+    # it is a manifest the operator has to fix. Resolving either would be a coin flip rendered as
+    # verified.
+    sys.stdout.write("ambiguous||")
+else:
+    r = hits[0]
+    # The stored path is relative to the BOARD dir (portable across machines), never to a cwd.
+    sys.stdout.write("ok|%s|%s" % (
+        os.path.realpath(os.path.join(board, r["path"])), r["rootCommit"]))
+PY
+}
+
+# Resolve identity for the repo a brief targets. On a flat board that is this repo; on a grouped
+# board it is the audience's repo, resolved through board_repo_entry above. Anything that cannot be
+# resolved AND attested records "unverified" rather than fabricate a SHA — a fabricated SHA would
+# make a wrong-repo run look verified, which is worse than no guard at all.
 brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
   local f="$1" target="${REPO_DIR:-}" name provider origin root note=""
-  local aud raw
+  local aud raw reason="" attested="" live=""
   aud="$(strip_pipes "$(meta "$f" audience)")"
-  [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ] && target=""
+  if [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ]; then
+    IFS='|' read -r reason target attested <<< "$(board_repo_entry "$aud")"
+    case "$reason" in
+      ok)
+        live="$(repo_root_commit "$target")"
+        if [ -z "$live" ]; then
+          target=""
+          note="> **Warning** — \`$aud\` is declared in this board's cross-repo registry, but its checkout was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        elif [ "$live" != "$attested" ]; then
+          target=""
+          note="> **Warning** — the path this board records for \`$aud\` no longer holds that repository (its root commit does not match the one recorded at the last cross-repo sync), so identity was not resolved. Re-run the cross-repo sync and re-export rather than trusting this brief's location."
+        fi
+        ;;
+      no-python)
+        target=""
+        note="> **Warning** — resolving \`$aud\` needs python3, which was not available when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        ;;
+      no-registry)
+        target=""
+        note="> **Warning** — this board carries no cross-repo registry, so \`$aud\` could not be resolved to a repository and the root-commit check above cannot pass. Re-run register-cross-repo-handoff's sync on the workspace, or confirm by name and remote and ask the sender before proceeding."
+        ;;
+      ambiguous)
+        target=""
+        note="> **Warning** — more than one repository on this board claims the audience \`$aud\`, so there is no single target and identity was not resolved. Fix the group manifest, re-sync, then re-export."
+        ;;
+      bad-registry)
+        target=""
+        note="> **Warning** — this board's cross-repo registry could not be read (invalid JSON, or not the expected shape), so \`$aud\` was not resolved and the root-commit check above cannot pass. Re-run register-cross-repo-handoff's sync to regenerate it — the file is generated, so a hand-edit is the usual cause."
+        ;;
+      *)
+        target=""
+        note="> **Warning** — this board's cross-repo registry does not declare a repository named \`$aud\`${GROUP:+ in the \`$GROUP\` section}, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        ;;
+    esac
+  fi
   if [ -z "$target" ]; then
-    printf '%s|%s|%s|%s|%s' "${aud:-unknown}" "unknown" "unverified" "unverified" \
-      "> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+    [ -n "$note" ] || note="> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+    printf '%s|%s|%s|%s|%s' "${aud:-unknown}" "unknown" "unverified" "unverified" "$(strip_pipes "$note")"
     return
   fi
   name="$(strip_pipes "$(basename "$target")")"
@@ -1274,8 +1395,23 @@ export_one() { # id doc to outdir branch do_claim
   # die exits the whole process. Claiming first means that death leaves the doc and filesystem
   # untouched; claiming last would leave a doc reading "delegated", an Activity entry saying the
   # export happened, and a brief on disk, with no lease actually held.
+  #
+  # A lease THIS session already holds is the one case that must not die: cmd_claim does not
+  # special-case self-ownership, so `claim X` then `export X` — the obvious order, investigate then
+  # delegate — refused on the caller's own lease, and inside a bundle it aborted the whole export.
+  # Extending is what a claim would have achieved anyway: the point of claiming at export time is
+  # "a live lease I own for as long as this is out", and renewing the held one reaches exactly that,
+  # with a full TTL, rather than leaving a lease that may expire while the brief is with an
+  # executor. Foreign and expired leases keep going through cmd_claim untouched.
   if [ "$do_claim" -eq 1 ]; then
-    cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+    if lease_is_mine "$id"; then
+      cmd_touch "$id" > /dev/null
+      # stderr, not stdout: export_bundle sends export_one's stdout to /dev/null, and "I kept your
+      # lease instead of taking a new one" is exactly the kind of thing that must not vanish there.
+      echo "🔒 $id was already leased by this session — lease extended, not re-claimed." >&2
+    else
+      cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+    fi
   fi
 
   render_tmpl "$tmpl" \
@@ -1328,6 +1464,11 @@ export_bundle() { # id doc to outdir do_claim
   # cleared). Refuse the WHOLE export up front instead. A child with no doc at all is not part of
   # this check — it was never claimable to begin with, and stays a per-child skip-with-warning
   # below, same as before.
+  #
+  # A child leased by THIS session is not a blocker. Refusing there was a dead end: the orchestrator
+  # would have to release its own lease first, or pass --no-claim, which drops leasing for every
+  # child in the run. export_one extends a self-held lease instead of re-claiming it, so the export
+  # is still fully leased when it completes.
   kids="$(children_of "$f")"
   if [ "$do_claim" -eq 1 ]; then
     local busy=""
@@ -1337,10 +1478,12 @@ export_bundle() { # id doc to outdir do_claim
       [ -n "$kf" ] && [ -f "$kf" ] || continue
       local kind owner exp
       IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$kid")")"
-      [ "$kind" = "held" ] && busy="$busy $kid(held by $owner until $(human "$exp"))"
+      if [ "$kind" = "held" ] && ! lease_is_mine "$kid"; then
+        busy="$busy $kid(held by $owner until $(human "$exp"))"
+      fi
     done <<< "$kids"
     [ -z "$busy" ] \
-      || die "cannot export bundle $id — a child has a live lease and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
+      || die "cannot export bundle $id — a child has a live lease held by another session and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
   fi
 
   dest_dir="${outdir:-$(briefs_dir)}"

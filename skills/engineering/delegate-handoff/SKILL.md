@@ -71,6 +71,13 @@ handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]
   this id while it is out for delegation; normally you want the claim, because it is what stops a
   second agent from claiming the same work while the executor has it.
 
+**Already holding the lease is fine.** Claiming a handoff, investigating it, and then deciding to
+delegate is the normal order, so export extends a lease this session already holds instead of
+refusing on it — you end up with the same thing a fresh claim would have given you, a lease you own
+with a full TTL, and it says so. A lease held by **another** session still refuses, and on a bundle
+it refuses the whole export before anything is written. That is the point: reach for `--no-claim`
+only for the case it is actually for, not to get around your own lease.
+
 Export refuses a `standalone` handoff (send the file) and a handoff already `done` (nothing to
 delegate). For an `orchestrator`, it renders one cover brief carrying the Sequencing section plus
 one brief per child — the whole bundle goes out together.
@@ -162,7 +169,13 @@ closing on their word with extra steps, and the warning exists to catch exactly 
   [`repair-handoff`](../repair-handoff/SKILL.md), not here.
 - **No payload version stamp of its own.** `export` and `import --result` ship as part of
   `setup-handoff`'s payload; this skill just drives them.
-- **Cross-repo boards.** When the target repo is not reachable on disk at export time, the brief
-  carries `repo_root_commit: unverified` and the preflight downgrades to a name-and-origin check.
-  Importing that result requires `--force-repo` and an extra manual confirmation that it targets
-  the right repo — treat an unverified brief's evidence with the same extra scrutiny.
+- **Cross-repo boards.** A handoff whose `audience` names another repo gets its identity from the
+  board's `repos.json` — the manifest projection that
+  [`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md) writes and attests with
+  each member's root commit. Resolution never falls back to matching the audience against a
+  directory name. When it cannot resolve and attest a target — the registry is missing or stale,
+  the checkout moved, two members claim the audience — the brief carries
+  `repo_root_commit: unverified`, the preflight downgrades to a name-and-origin check, and the
+  brief says which of those happened. Importing that result requires `--force-repo` and an extra
+  manual confirmation that it targets the right repo — treat an unverified brief's evidence with
+  the same extra scrutiny, and prefer re-running the cross-repo sync and re-exporting.
