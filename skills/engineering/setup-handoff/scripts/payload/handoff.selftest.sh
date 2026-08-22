@@ -47,6 +47,16 @@ chk "no .git suffix" "github.com/acme/acme-api" "$(repo_origin_norm 'https://git
 chk "trailing slash" "github.com/acme/acme-api" "$(repo_origin_norm 'https://github.com/acme/acme-api/')"
 chk "no colon survives" "" "$(repo_origin_norm 'git@github.com:acme/acme-api.git' | tr -cd ':')"
 
+printf '\nrepo_provider_of and repo_path_of\n'
+chk "github" "github" "$(repo_provider_of 'github.com/acme/acme-api')"
+chk "gitlab" "gitlab" "$(repo_provider_of 'gitlab.com/acme/acme-api')"
+chk "bitbucket" "bitbucket" "$(repo_provider_of 'bitbucket.org/acme/acme-api')"
+chk "self-hosted is other" "other" "$(repo_provider_of 'git.acme-corp.internal/acme/acme-api')"
+chk "empty is other" "other" "$(repo_provider_of '')"
+chk "known host is dropped from the path" "acme/acme-api" "$(repo_path_of 'github.com/acme/acme-api')"
+chk "gitlab host is dropped too" "acme/acme-api" "$(repo_path_of 'gitlab.com/acme/acme-api')"
+chk "self-hosted keeps its host" "git.acme-corp.internal/acme/acme-api" "$(repo_path_of 'git.acme-corp.internal/acme/acme-api')"
+
 printf '\ndoc_section\n'
 DS="$(mktemp -d)"
 trap 'rm -rf "$DS"' EXIT
@@ -106,7 +116,8 @@ chk "brief was written" "yes" "$([ -f "$BRIEF" ] && echo yes || echo no)"
 chk "brief names the handoff" "rbac-gap-handoff" "$(sed -n 's/^handoff: //p' "$BRIEF" | head -1)"
 chk "brief carries root commit" "$(git -C "$R" rev-list --max-parents=0 HEAD | tail -1)" \
   "$(sed -n 's/^repo_root_commit: //p' "$BRIEF" | head -1)"
-chk "origin normalized" "github.com/acme/acme-api" "$(sed -n 's/^repo_origin: //p' "$BRIEF" | head -1)"
+chk "origin drops the known host" "acme/acme-api" "$(sed -n 's/^repo_origin: //p' "$BRIEF" | head -1)"
+chk "brief records the provider" "github" "$(sed -n 's/^repo_provider: //p' "$BRIEF" | head -1)"
 chk "no colon in frontmatter values" "" "$(sed -n '2,/^---$/p' "$BRIEF" | sed 's/^[a-z_]*://' | tr -cd ':')"
 chk "default branch" "fix/rbac-gap-handoff" "$(sed -n 's/^branch: //p' "$BRIEF" | head -1)"
 chk "result_status ships empty" "" "$(sed -n 's/^result_status:[[:space:]]*//p' "$BRIEF" | head -1)"
