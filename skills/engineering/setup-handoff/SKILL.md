@@ -274,7 +274,8 @@ working and migrates on its next install.
   reads as `MISSING` rather than done, and `release --status done` refuses while any child is
   outstanding.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
-  (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge),
+  (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge,
+  plus `--check` to compare a wired config against what the installer would write now),
   `scripts/splice-agents-block.py` (AGENTS.md block render + splice, shared by the installer and
   the verifier's drift check),
   `scripts/verify-setup-handoff.sh` (verifier), `scripts/payload/` (the

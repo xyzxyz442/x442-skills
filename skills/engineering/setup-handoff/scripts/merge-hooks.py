@@ -14,6 +14,7 @@ Env (set by setup-handoff.sh):
 Usage:
   merge-hooks.py <settings.json>            # wire hooks for HANDOFF_TOOL
   merge-hooks.py <settings.json> --add-dir  # add the handoff dir to additionalDirectories (claude)
+  merge-hooks.py <settings.json> --check    # 0 current, 2 drifted, 3 not wired; writes nothing
 
 No eval, no network — reads/writes one JSON file. Claude's schema is wired precisely;
 Gemini/Copilot use their documented event names on a best-effort basis (the AGENTS.md
@@ -217,17 +218,41 @@ def group(hdpath: str, tool: str, kind: str, matcher: str | None) -> dict:
     return g
 
 
-def wire(path: Path, hdpath: str, tool: str, primary: bool) -> None:
-    data = load(path)
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
-        hooks = {}
+def events_for(tool: str, primary: bool) -> list:
+    """The (event, kind, matcher) triples this tool gets — soft always, hard only for the primary."""
     schema = SCHEMAS.get(tool)
     if not schema:
         raise SystemExit(f"merge-hooks: unknown tool {tool}")
     events = list(schema["soft"])
     if primary:
         events += schema["hard"]
+    return events
+
+
+def check(path: Path, hdpath: str, tool: str, primary: bool) -> int:
+    """Compare the hook commands actually wired against the ones this skill would write now.
+
+    A config is rewritten on every install, so it only goes stale when nobody re-runs the
+    installer -- and nothing noticed, because the payload stamp covers the payload FILES, not
+    the wiring written around them. That is how this repo ended up running hook commands with no
+    `--project-dir` while the stamp read current. Same failure as the AGENTS.md routing block,
+    same fix: compare content, not presence.
+
+      0 current   2 drifted   3 not wired
+    """
+    actual = sorted(collect_managed_commands(load(path)))
+    if not actual:
+        return 3
+    wanted = sorted(command(hdpath, tool, kind) for _ev, kind, _m in events_for(tool, primary))
+    return 0 if actual == wanted else 2
+
+
+def wire(path: Path, hdpath: str, tool: str, primary: bool) -> None:
+    data = load(path)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    events = events_for(tool, primary)
     # first strip ALL handoff-managed groups from every event (so dropping to advisory,
     # or switching primary, removes the old deny/stop entries)
     for ev in list(hooks.keys()):
@@ -262,6 +287,9 @@ def main(argv: list[str]) -> int:
     if "--add-dir" in argv:
         add_dir(path, hdpath)
         return 0
+    if "--check" in argv:
+        return check(path, hdpath, os.environ.get("HANDOFF_TOOL", "claude"),
+                     os.environ.get("HANDOFF_PRIMARY", "0") == "1")
     repo_root = None
     if "--repo-root" in argv:
         idx = argv.index("--repo-root")

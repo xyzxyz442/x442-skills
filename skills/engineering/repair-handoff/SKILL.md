@@ -184,6 +184,22 @@ because each depends on the relationship between the board's parts rather than o
 
 - **Enforcement owner drift.** Scan which tool config files actually exist, not just the tools
   currently detected. A tool wired in a past run still carries the pretool gate.
+- **Hook command drift.** The wired hook commands go stale the same way, and for a subtler
+  reason: the installer rewrites them on every run, so they only drift when nobody re-runs it —
+  and the payload stamp cannot see that, because it covers the payload **files**, not the wiring
+  written around them. A board can read `payload vN matches` while its hooks still run a command
+  shape the skill stopped writing. Compare content per wired tool:
+
+  ```bash
+  HANDOFF_HDPATH="$HDREL" HANDOFF_TOOL=claude HANDOFF_PRIMARY=0 \
+    python3 "$HANDOFF_SKILL/scripts/merge-hooks.py" TOOL_CONFIG --check
+  # 0 current  2 drifted  3 not wired
+  ```
+
+  Pass `HANDOFF_PRIMARY=1` for the tool that owns the pretool deny gate, or an advisory tool is
+  reported as missing hard-enforcement hooks it should not have. `verify-setup-handoff.sh` runs
+  this per wired tool, so a `[warn]` there is the finding. The repair is step 3's installer re-run.
+
 - **Orphaned delegation.** A doc with `delegated_at` older than the lease TTL, no `result_at`, and
   either a missing `brief` file or no lease — a handoff that went out via
   [`delegate-handoff`](../delegate-handoff/SKILL.md)'s `handoff export` and never came back. It is
