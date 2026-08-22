@@ -159,8 +159,11 @@ lineage. `repo_provider` and `repo_origin` are human-readable confirmation, not 
 
 **The brief records a provider, not a host.** A host is a deployment detail — a repo that moves from
 `github.com` to an enterprise install is still the same repo, and the root commit proves that.
-`repo_provider` is one of `github`, `gitlab`, `bitbucket`, or `other`, and for a recognized provider
-the host is dropped from `repo_origin` because the provider implies it.
+`repo_provider` is one of `github`, `gitlab`, `bitbucket`, `other`, or `unknown`, and for a
+recognized provider the host is dropped from `repo_origin` because the provider implies it.
+`unknown` is distinct from `other` on purpose — `other` means the repo resolved and its host is not
+one we recognize, while `unknown` means nothing was learned at all, because the target was
+unreachable or the repo has no configured remote.
 
 `other` covers self-hosted git and any provider not yet listed, and there the host is **kept** in
 `repo_origin`. "acme/api on other" would not let a reader confirm which repo they are standing in,
