@@ -103,8 +103,10 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 - Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …`
   — a standalone board owned by no repo.
 - Wires each member via `setup-handoff.sh <repo> --topology cross-repo --handoff-dir <board>
---group <group> …`, which installs the hooks (with `HANDOFF_GROUP` baked in), Claude
-  `additionalDirectories`, and the standard handoff block.
+--group <group> …`, which installs the hooks, Claude `additionalDirectories`, and the standard
+  handoff block. The section itself is written to the member's own `.agents/handoff.config.json`,
+  **not** baked into the hook command — so renaming a group cannot strand a stale literal inside a
+  tool config where nobody reading the board would see it.
 - Splices the peer-listing block with `scripts/manifest/render.py`.
 - Projects the resolved manifest into each board as `<board>/repos.json`, via
   `scripts/manifest/registry.py` — see **Brief repo identity** below.

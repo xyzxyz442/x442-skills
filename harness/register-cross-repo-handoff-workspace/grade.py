@@ -45,6 +45,62 @@ SYNC = SKILL / "scripts/sync-cross-repo-handoff.sh"
 
 MEMBERS = ("api", "web", "kubernetes", "monolith")
 
+# Legacy KEY=value board config -> the config.json key each name became. Only the keys a board ever
+# wrote are mapped, matching the payload's own resolver (payload/config.sh).
+_LEGACY_BOARD_KEYS = {
+    "TOPOLOGY": "topology", "REPO_NAME": "repoName",
+    "HANDOFF_GROUPS": "groups", "HANDOFF_GROUP_LAYOUT": "groupLayout",
+}
+
+
+def _board_config(board: Path) -> dict:
+    """One board's effective config, resolved the way the payload resolves it.
+
+    A board written by the current installer carries `config.json`; an older one carries the legacy
+    KEY=value `config`, and config.json wins where both exist. This grader used to assert against
+    the legacy filename alone, so a correctly scaffolded board read as "missing" — the same defect
+    the verifier had. Keep this agreeing with skills/engineering/setup-handoff/scripts/payload/config.sh.
+    """
+    cfg: dict = {}
+    legacy = board / "config"
+    if legacy.is_file():
+        for line in legacy.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key in _LEGACY_BOARD_KEYS:
+                cfg[_LEGACY_BOARD_KEYS[key]] = val.strip().strip('"').strip("'")
+    js = board / "config.json"
+    if js.is_file():
+        try:
+            cfg.update(json.loads(js.read_text(encoding="utf-8")))
+        except ValueError:
+            return {}
+    return cfg
+
+
+def _groups_csv(cfg: dict) -> str:
+    """`groups` as a sorted csv — config.json stores a list, the legacy file a csv string."""
+    groups = cfg.get("groups") or []
+    if isinstance(groups, str):
+        groups = [g for g in groups.split(",") if g]
+    return ",".join(sorted(str(g) for g in groups))
+
+
+def _member_group(repo: Path) -> str:
+    """The section a member repo resolves to. It lives in the repo's own .agents/handoff.config.json
+    (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
+    literal was deliberately removed so a rename cannot strand a stale copy inside a tool config."""
+    js = repo / ".agents/handoff.config.json"
+    if not js.is_file():
+        return ""
+    try:
+        return str(json.loads(js.read_text(encoding="utf-8")).get("group") or "")
+    except ValueError:
+        return ""
+
 
 def _sandbox_home(base: Path) -> dict:
     """Env with a redirected $HOME so the user-layer manifest (~/.agents/handoff-repos.json) and any
@@ -116,19 +172,18 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         exps.append(summary_exp)
 
         # boards scaffolded with the right group facts
-        shared_cfg = work / ".agents/handoff/config"
-        legacy_cfg = work / ".agents/handoff-legacy/config"
+        shared_cfg = _board_config(work / ".agents/handoff")
+        legacy_cfg = _board_config(work / ".agents/handoff-legacy")
         exps.append(gc.expectation(
             f"{tag} shared board config records both co-located groups + layout",
-            shared_cfg.is_file()
-            and "HANDOFF_GROUPS=auth-suite,infra" in shared_cfg.read_text()
-            and f"HANDOFF_GROUP_LAYOUT={layout}" in shared_cfg.read_text(),
-            shared_cfg.read_text().strip().replace("\n", " | ") if shared_cfg.is_file() else "missing",
+            _groups_csv(shared_cfg) == "auth-suite,infra" and shared_cfg.get("groupLayout") == layout,
+            f"groups={_groups_csv(shared_cfg) or 'unset'} layout={shared_cfg.get('groupLayout') or 'unset'}"
+            if shared_cfg else "missing",
         ))
         exps.append(gc.expectation(
             f"{tag} legacy group is on its own separate board",
-            legacy_cfg.is_file() and "HANDOFF_GROUPS=legacy" in legacy_cfg.read_text(),
-            legacy_cfg.read_text().strip().replace("\n", " | ") if legacy_cfg.is_file() else "missing",
+            _groups_csv(legacy_cfg) == "legacy",
+            f"groups={_groups_csv(legacy_cfg) or 'unset'}" if legacy_cfg else "missing",
         ))
 
         # each member wired to its own section (AGENTS.md block + HANDOFF_GROUP in the hook command)
@@ -139,11 +194,18 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
                 f"{tag} {name} AGENTS.md block scoped to {group}", block_ok,
                 f"block present + names {group}: {block_ok}",
             ))
+            # Wired and scoped are separate facts: the hook command invokes the board, and the
+            # member's own config names its section.
             settings = work / name / ".claude/settings.json"
-            hook_ok = settings.is_file() and f"HANDOFF_GROUP={group}" in settings.read_text()
+            hook_ok = settings.is_file() and "/scripts/hooks.sh" in settings.read_text()
             exps.append(gc.expectation(
-                f"{tag} {name} hooks wired to section {group}", hook_ok,
-                f"HANDOFF_GROUP={group} in settings.json: {hook_ok}",
+                f"{tag} {name} hooks invoke the board", hook_ok,
+                f"handoff hook in settings.json: {hook_ok}",
+            ))
+            got_group = _member_group(work / name)
+            exps.append(gc.expectation(
+                f"{tag} {name} resolves to section {group}", got_group == group,
+                f".agents/handoff.config.json group={got_group or 'unset'}",
             ))
 
         # ledger recorded

@@ -99,9 +99,16 @@ for f in handoff scripts/hooks.sh; do
     warn "$(basename "$f") is at the board root (flat layout) — re-run setup-handoff to migrate to $f"
   else bad "$f missing"; fi
 done
-for f in README.md config; do
-  [ -f "$HD/$f" ] && ok "$f present" || warn "$f missing"
-done
+[ -f "$HD/README.md" ] && ok "README.md present" || warn "README.md missing"
+# EITHER config file counts. The installer writes config.json; only a board predating that carries
+# the legacy KEY=value `config`, so requiring the legacy name printed "config missing" on every
+# freshly installed board — a warning that is always wrong trains readers to ignore the ones that
+# are not. Which file is present, and whether it parses, is graded in section 2.
+if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
+  ok "board config present"
+else
+  warn "no board config (config.json or legacy config) — re-run setup-handoff"
+fi
 if [ -f "$HD/templates/handoff-doc-template.md" ]; then
   ok "templates/handoff-doc-template.md present"
 elif [ -f "$HD/handoff-doc-template.md" ]; then
