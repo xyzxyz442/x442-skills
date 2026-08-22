@@ -4,6 +4,7 @@ handoff: PLACEHOLDER_ID
 title: PLACEHOLDER_TITLE
 severity: PLACEHOLDER_SEVERITY
 repo_name: PLACEHOLDER_REPO_NAME
+repo_provider: PLACEHOLDER_REPO_PROVIDER
 repo_origin: PLACEHOLDER_REPO_ORIGIN
 repo_root_commit: PLACEHOLDER_ROOT_COMMIT
 source_commit: PLACEHOLDER_SOURCE_COMMIT
@@ -32,7 +33,7 @@ they mean something else. Run this before making a single edit:
 ```
 
 If it prints `WRONG REPO`, stop and return this brief unexecuted. Expected repository —
-`PLACEHOLDER_REPO_NAME` at `PLACEHOLDER_REPO_ORIGIN`.
+`PLACEHOLDER_REPO_NAME` at `PLACEHOLDER_REPO_ORIGIN` (provider — PLACEHOLDER_REPO_PROVIDER).
 
 PLACEHOLDER_PREFLIGHT_NOTE
 

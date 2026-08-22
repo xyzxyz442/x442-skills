@@ -117,6 +117,29 @@ repo_origin_norm() { # url -> host/owner/repo
     -e 's#/*$##'
 }
 
+# Classify a normalized origin by its git host. The brief shows a PROVIDER rather than a host
+# because the host is a deployment detail — a repo that moves from github.com to an enterprise
+# install is still the same repo, and `repo_root_commit` is what actually proves identity.
+# "other" covers self-hosted git and any provider not listed here.
+repo_provider_of() { # host/owner/repo -> github|gitlab|bitbucket|other
+  case "${1%%/*}" in
+    github.com) printf 'github' ;;
+    gitlab.com) printf 'gitlab' ;;
+    bitbucket.org) printf 'bitbucket' ;;
+    *) printf 'other' ;;
+  esac
+}
+
+# The repo path shown beside the provider. A recognized public host is implied by the provider, so
+# it is dropped. An unrecognized host is KEPT: "acme/api on other" would not let a reader confirm
+# which repo they are standing in, and confirming exactly that is the whole job of the line.
+repo_path_of() { # host/owner/repo -> owner/repo, or the full string when the provider is "other"
+  case "$(repo_provider_of "$1")" in
+    other) printf '%s' "$1" ;;
+    *) printf '%s' "${1#*/}" ;;
+  esac
+}
+
 # Briefs live beside the section's archive, so a grouped board keeps each section's briefs separate.
 # briefs_dir forwards "$@" (rather than re-expanding "${1:-...}") because sec_dir deliberately uses
 # `${1-$GROUP}` (bare -, not :-): an explicit empty string means the flat board, while omission means
@@ -856,7 +879,7 @@ import_result() {
       || die "this brief was rendered without a verified repo identity — confirm it targets $(basename "${REPO_DIR:-.}") by hand, then re-run with --force-repo"
     echo "⚠️  Importing a brief with an unverified repo identity because --force-repo was given."
   elif [ "$want_root" != "$have_root" ]; then
-    die "this brief targets a different repository ($(meta "$src" repo_name) at $(meta "$src" repo_origin)) — refusing to import it here"
+    die "this brief targets a different repository ($(meta "$src" repo_name) at $(meta "$src" repo_origin), provider $(meta "$src" repo_provider)) — refusing to import it here"
   fi
 
   local id f
@@ -1185,20 +1208,22 @@ strip_pipes() { printf '%s' "$1" | tr -d '|'; }
 # the executor and is exactly the failure mode the paragraph above says never to create. So a
 # differing `audience` always degrades honestly to "unverified" until real manifest resolution
 # lands — the same outcome as an unreachable target, never a name-matched guess.
-brief_identity() { # doc-path -> "name|origin|rootsha|note"
-  local f="$1" target="${REPO_DIR:-}" name origin root note=""
-  local aud
+brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
+  local f="$1" target="${REPO_DIR:-}" name provider origin root note=""
+  local aud raw
   aud="$(strip_pipes "$(meta "$f" audience)")"
   [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ] && target=""
   if [ -z "$target" ]; then
-    printf '%s|%s|%s|%s' "${aud:-unknown}" "unverified" "unverified" \
+    printf '%s|%s|%s|%s|%s' "${aud:-unknown}" "unknown" "unverified" "unverified" \
       "> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
     return
   fi
   name="$(strip_pipes "$(basename "$target")")"
-  origin="$(strip_pipes "$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")")"
+  raw="$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")"
+  provider="$(strip_pipes "$(repo_provider_of "$raw")")"
+  origin="$(strip_pipes "$(repo_path_of "$raw")")"
   root="$(strip_pipes "$(repo_root_commit "$target")")"
-  printf '%s|%s|%s|%s' "$name" "${origin:-unknown}" "${root:-unverified}" "$note"
+  printf '%s|%s|%s|%s|%s' "$name" "$provider" "${origin:-unknown}" "${root:-unverified}" "$note"
 }
 
 # Resolve blocked_on and, for a bundle child, its siblings into readable lines. A brief's reader
@@ -1225,8 +1250,8 @@ brief_dependencies() { # doc-path -> markdown lines
 
 export_one() { # id doc to outdir branch do_claim
   local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
-  local name origin root note
-  IFS='|' read -r name origin root note <<< "$(brief_identity "$f")"
+  local name provider origin root note
+  IFS='|' read -r name provider origin root note <<< "$(brief_identity "$f")"
   [ -n "$branch" ] || branch="fix/$id"
 
   local dest_dir dest
@@ -1257,6 +1282,7 @@ export_one() { # id doc to outdir branch do_claim
     "PLACEHOLDER_TITLE=$(meta "$f" title)" \
     "PLACEHOLDER_SEVERITY=$(meta "$f" severity)" \
     "PLACEHOLDER_REPO_NAME=$name" \
+    "PLACEHOLDER_REPO_PROVIDER=$provider" \
     "PLACEHOLDER_REPO_ORIGIN=$origin" \
     "PLACEHOLDER_ROOT_COMMIT=$root" \
     "PLACEHOLDER_SOURCE_COMMIT=$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo unknown)" \

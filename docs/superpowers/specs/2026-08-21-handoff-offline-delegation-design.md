@@ -76,7 +76,8 @@ handoff: rbac-gap
 title: Handoff — RBAC gap on tenant switch
 severity: high
 repo_name: acme-api
-repo_origin: github.com/acme/acme-api
+repo_provider: github
+repo_origin: acme/acme-api
 repo_root_commit: 4f2a1c9e...
 source_commit: 927b762
 source_branch: main
@@ -154,7 +155,17 @@ a different repo. Identity must travel with the brief and be checked on both sid
 
 `repo_root_commit` is the primary key — the SHA of the first commit. It survives renames, remote
 moves, and mirror pushes, and a fork matching it is the correct answer, because a fork is the same
-lineage. `repo_origin` is human-readable confirmation, not the check.
+lineage. `repo_provider` and `repo_origin` are human-readable confirmation, not the check.
+
+**The brief records a provider, not a host.** A host is a deployment detail — a repo that moves from
+`github.com` to an enterprise install is still the same repo, and the root commit proves that.
+`repo_provider` is one of `github`, `gitlab`, `bitbucket`, or `other`, and for a recognized provider
+the host is dropped from `repo_origin` because the provider implies it.
+
+`other` covers self-hosted git and any provider not yet listed, and there the host is **kept** in
+`repo_origin`. "acme/api on other" would not let a reader confirm which repo they are standing in,
+and confirming exactly that is the whole job of the line — the same honest-degradation principle as
+`unverified`.
 
 **Normalization matters.** The SSH remote form `git@github.com:owner/repo.git` contains a colon,
 which would break the frontmatter under the no-colon rule. Export normalizes both SSH and HTTPS
