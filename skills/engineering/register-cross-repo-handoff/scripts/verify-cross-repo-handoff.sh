@@ -4,12 +4,15 @@
 #   verify-cross-repo-handoff.sh --scope <dir> [--from <dir>]
 #
 # Confirms the manifest cascade parses, each board is scaffolded with the expected group facts, each
-# member repo is wired to its board + section, and the AGENTS.md block matches the resolved set.
+# member repo is wired to its board + section, the AGENTS.md block matches the resolved set, and
+# each board's repos.json still projects the manifest (the file `handoff export` resolves a
+# cross-repo brief's target repo from — drift there is what silently degrades every brief).
 # Distinguishes "not configured" (no manifest -> exit 0) from "broken" (-> exit 1). Writes nothing.
 set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESOLVE="$SKILL_DIR/scripts/manifest/resolve.py"
+REGISTRY="$SKILL_DIR/scripts/manifest/registry.py"
 
 SCOPE="" FROM=""
 while [ $# -gt 0 ]; do
@@ -163,6 +166,36 @@ for g in d["groups"]:
     for m in g["members"]:
         print("\t".join([g["group"], g["board"], m["alias"], m["path"],
                          "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0"]))
+PY
+)
+
+echo
+echo "4. board repo registries"
+echo "------------------------"
+# `handoff export` resolves a handoff's `audience` to a real repo through <board>/repos.json. It is
+# generated, never hand-edited, so ANY difference from the manifest is drift — and drift here is
+# invisible at export time: every affected brief just quietly renders repo_root_commit: unverified.
+# registry.py builds the expected bytes, the same call the sync writes with, so the two cannot
+# disagree about what "correct" means.
+while IFS= read -r bpath; do
+  [ -n "$bpath" ] || continue
+  # stdout carries the verdict; stderr carries registry.py's advisories (an unattestable member, an
+  # audience claimed twice). Both are folded into one stream so neither is lost, then classified —
+  # an advisory is a warn, because a correctly projected file can legitimately carry one.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *"matches the manifest"*) pass "$line" ;;
+      *"missing"* | *"drift"*) fail "$line" ;;
+      *) warn "$line" ;;
+    esac
+  done <<< "$(python3 "$REGISTRY" --resolved "$RESOLVED" --board "$bpath" --check 2>&1)"
+done < <(
+  python3 - "$RESOLVED" << 'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for b in d["boards"]:
+    print(b["path"])
 PY
 )
 

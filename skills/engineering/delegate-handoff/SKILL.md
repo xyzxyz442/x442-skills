@@ -162,7 +162,13 @@ closing on their word with extra steps, and the warning exists to catch exactly 
   [`repair-handoff`](../repair-handoff/SKILL.md), not here.
 - **No payload version stamp of its own.** `export` and `import --result` ship as part of
   `setup-handoff`'s payload; this skill just drives them.
-- **Cross-repo boards.** When the target repo is not reachable on disk at export time, the brief
-  carries `repo_root_commit: unverified` and the preflight downgrades to a name-and-origin check.
-  Importing that result requires `--force-repo` and an extra manual confirmation that it targets
-  the right repo — treat an unverified brief's evidence with the same extra scrutiny.
+- **Cross-repo boards.** A handoff whose `audience` names another repo gets its identity from the
+  board's `repos.json` — the manifest projection that
+  [`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md) writes and attests with
+  each member's root commit. Resolution never falls back to matching the audience against a
+  directory name. When it cannot resolve and attest a target — the registry is missing or stale,
+  the checkout moved, two members claim the audience — the brief carries
+  `repo_root_commit: unverified`, the preflight downgrades to a name-and-origin check, and the
+  brief says which of those happened. Importing that result requires `--force-repo` and an extra
+  manual confirmation that it targets the right repo — treat an unverified brief's evidence with
+  the same extra scrutiny, and prefer re-running the cross-repo sync and re-exporting.

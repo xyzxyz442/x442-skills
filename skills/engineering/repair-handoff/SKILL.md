@@ -148,6 +148,11 @@ because each depends on the relationship between the board's parts rather than o
   resolves, that `HANDOFF_GROUPS` and `HANDOFF_GROUP_LAYOUT` in `$BOARD/config` match what
   `.handoff-repos.json` declares, and that this repo's section directory or prefix exists. A
   mismatch is why handoffs "disappear" — they are filed into a section nobody reads.
+- **Brief repo identity (shared boards only).** `$BOARD/repos.json` is what `handoff export`
+  resolves a handoff's `audience` to a real repo through. It is generated from
+  `.handoff-repos.json`, so a missing or drifted one is not visible at export time — every
+  cross-repo brief just quietly renders `repo_root_commit: unverified`. Detect it with
+  `verify-cross-repo-handoff.sh`; the repair is a re-sync (step 5 below), never a hand-edit.
 - **Enforcement owner drift.** Scan which tool config files actually exist, not just the tools
   currently detected. A tool wired in a past run still carries the pretool gate.
 - **Orphaned delegation.** A doc with `delegated_at` older than the lease TTL, no `result_at`, and
@@ -177,9 +182,12 @@ because each depends on the relationship between the board's parts rather than o
    ```bash
    "$BOARD/handoff" index
    ```
-5. **Re-run the cross-repo sync** when the board is shared and step 2 found a section mismatch, so
-   the wiring, the sub-indexes, and the `AGENTS.md` block agree again. See
-   [`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md).
+5. **Re-run the cross-repo sync** when the board is shared and step 2 found a section mismatch or
+   `repos.json` drift, so the wiring, the sub-indexes, the `AGENTS.md` block, and the brief-identity
+   registry agree again. See
+   [`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md). Re-export any brief
+   that went out carrying `repo_root_commit: unverified` while the registry was stale — the fixed
+   registry does not repair a brief already in an executor's hands.
 
 ### 4. Repair — leases — DETECT and OFFER (never auto-clear)
 

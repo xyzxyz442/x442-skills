@@ -194,17 +194,36 @@ earlier and cheaper.
 anchors may have moved since export.
 
 **Cross-repo boards.** On a grouped board from `register-cross-repo-handoff`, the board is owned by
-no repo and a handoff's `audience` names a different repo than the one export runs in. Identity is
-supposed to resolve from the **target** repo via the group manifest — `register-cross-repo-handoff`
-carries an explicit per-repo `path` and an `audience` that may differ from both, and manifest
-reading is not implemented here; it belongs to that skill and is deferred future work. Until it
-lands, any `audience` that differs from the exporting repo degrades honestly straight to
-`repo_root_commit: unverified`, downgrading the preflight to a name-and-origin check with a visible
-warning. An earlier version of this CLI guessed the target by sibling directory name
-(`../$audience`) and treated a match as verified; that guess is deleted, because a wrong guess
-renders as VERIFIED — indistinguishable from a fabricated SHA to the executor, and worse than
-declining to guess. It never fabricates a SHA, because a fabricated SHA would make a wrong-repo run
-look verified.
+no repo and a handoff's `audience` names a different repo than the one export runs in. Identity
+resolves from the **target** repo, through the group manifest — never from the audience's name.
+
+The manifest itself is not readable from here. The payload CLI ships _inside_ the member repos (and
+inside a repo-less shared board), so it can reach neither that skill's `resolve.py` nor the
+cascade's `--scope`, and re-implementing the user → scope → subdir merge in the payload would be a
+second copy of merge semantics free to drift from the first. So the manifest's owner writes the
+answer down instead: the cross-repo sync projects the resolved cascade into `<board>/repos.json`,
+one entry per member with its `audience`, its path **relative to the board**, and that repo's root
+commit as of the sync. `registry.py` builds those bytes for both the sync (which writes them) and
+`verify-cross-repo-handoff.sh` (which fails on any drift), so the two cannot disagree.
+
+**The recorded root commit is an attestation, not a value to copy.** Export resolves the audience to
+exactly one entry — within the caller's own section, the same fence every other command applies, so
+two groups sharing a board may each have their own `api` — reads the _live_ root commit at that
+path, and trusts the location only when the two agree. A checkout that moved, a manifest edited without a re-sync, a directory that now holds
+something else — each fails closed to `unverified` rather than stamping a confident SHA for the
+wrong repo. So does an audience the registry does not declare, an audience claimed twice inside one group
+(a manifest bug for the operator to fix, not a tie to break by heuristic), an unreadable registry,
+a board with no registry at all, and a machine with no `python3`. Each carries its own warning, so
+the reader learns _which_ thing degraded.
+
+A member that has no attestable root commit at sync time — not on disk, not a git repo, no commits —
+gets **no entry at all**, and the sync says so. An unattestable entry would be exactly the guess
+this replaces.
+
+An earlier version of this CLI guessed the target by sibling directory name (`../$audience`) and
+treated a match as verified. A same-named but unrelated sibling then put that unrelated repo's
+**real** root commit into the brief under a fully confident preflight — indistinguishable from a
+fabricated SHA to the executor. That guess is gone, and no failure path reintroduces it.
 
 ## CLI — `handoff export`
 
@@ -357,6 +376,8 @@ Recorded so implementation does not silently decide them:
 1. **`import --result` versus `handoff result`** — symmetry against the precondition inversion.
 2. **`--branch` default** — `fix/<id>` as a default, or required with no default.
 3. **Unreachable cross-repo target** — degrade to `unverified` with a warning, or hard-fail.
+   _Settled: degrade, and likewise for every other way resolution can fail. See **Cross-repo
+   boards** above._
 
 ## Non-goals
 

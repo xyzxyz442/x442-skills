@@ -106,6 +106,8 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 --group <group> …`, which installs the hooks (with `HANDOFF_GROUP` baked in), Claude
   `additionalDirectories`, and the standard handoff block.
 - Splices the peer-listing block with `scripts/manifest/render.py`.
+- Projects the resolved manifest into each board as `<board>/repos.json`, via
+  `scripts/manifest/registry.py` — see **Brief repo identity** below.
 - Records `<scope>/.agents/cross-repo-handoff-state.json` so a later `--prune` can report members
   that have left scope.
 
@@ -130,6 +132,52 @@ The board root `INDEX.md` is a **roll-up** across every section; each group also
 sub-index. The session board and edit gate a repo sees are filtered to its own group, so groups on
 a shared board never collide, and ids may repeat across groups without clashing.
 
+## Brief repo identity — `<board>/repos.json`
+
+A delegation brief (`handoff export`) names `file:line` locations that plausibly exist in a
+different repo and mean something else there, so the brief carries the target repo's **root commit**
+and both the executor's preflight and `import --result` check it. On a grouped board the target is
+whatever the handoff's `audience` names — a different repo from the one export runs in.
+
+The board's CLI cannot resolve the cascade for itself: it ships inside the member repos, so it can
+reach neither `resolve.py` nor `--scope`. The sync therefore writes the answer down where the CLI
+can read it — `<board>/repos.json`, generated, never hand-edited:
+
+```json
+{
+  "version": 1,
+  "repos": [
+    {
+      "group": "auth-suite",
+      "alias": "api",
+      "audience": "api",
+      "path": "../../api",
+      "rootCommit": "4f2a1c9e…"
+    }
+  ]
+}
+```
+
+`path` is relative to the **board** directory, so a committed board stays portable. `rootCommit` is
+an **attestation, not a value to copy**: export reads the live root commit at that path and trusts
+the location only when the two agree. Everything that can go wrong degrades to
+`repo_root_commit: unverified` with its own warning, and `import --result` then demands
+`--force-repo` plus a human check — a moved checkout, a manifest edited without a re-sync, an
+audience the registry does not declare, an audience claimed twice inside one group, an unreadable
+or absent registry. Nothing falls back to matching the audience against a directory name.
+
+Lookup is scoped to the **caller's own section**, the same fence every other command applies: two
+groups sharing one board may each declare their own `api` without either becoming ambiguous, and a
+group can never resolve a peer it does not list.
+
+**Re-sync after any manifest change**, and after moving or re-cloning a member. Until you do, that
+member's briefs render `unverified` — honest, but degraded.
+`verify-cross-repo-handoff.sh` fails on registry drift, so it is what tells you.
+
+A member with no attestable root commit at sync time (not on disk, not a git repo, no commits) gets
+**no entry**, and the sync warns. An unattestable entry would be a guess, which is the thing this
+file exists to eliminate.
+
 ## Caveats
 
 - **No seed, no fusion.** Each board is a plain shared directory; a member only reads/writes the
@@ -137,6 +185,10 @@ a shared board never collide, and ids may repeat across groups without clashing.
   leases, sub-indexes) — not merged.
 - **The manifest is the fence.** A repo coordinates only with the peers its group lists. To add a
   peer, edit the manifest and re-sync — do not point a repo at a board by hand.
+- **Give peers distinct `audience` values within a group.** Two members of the _same_ group
+  answering to one audience make a handoff's target ambiguous, and `export` refuses to pick between
+  them rather than flipping a coin — every brief aimed at that audience renders `unverified` until
+  the manifest is fixed. Across groups the same audience is fine; lookup is section-scoped.
 - **`--prune` is advisory.** The sync reports members that left scope but does not unwire them (that
   is a `merge-hooks` strip in the member repo); remove their hooks by hand if they should stop
   coordinating.

@@ -6,6 +6,8 @@
 #
 # Resolves the .handoff-repos.json cascade (resolve.py), then, reusing setup-handoff.sh:
 #   1. scaffolds each distinct board as a STANDALONE board (--board-only), owned by no repo;
+#  1b. projects the manifest into each board as repos.json, so the board's own CLI can resolve a
+#      handoff's `audience` to a real repo (attested by that repo's root commit) instead of guessing;
 #   2. wires each member repo to its board + section (cross-repo topology, --group);
 #   3. splices the cross-repo-handoff AGENTS.md block into each member (render.py);
 #   4. records a state ledger so --prune can report members that have left scope.
@@ -17,6 +19,7 @@ set -uo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESOLVE="$SKILL_DIR/scripts/manifest/resolve.py"
 RENDER="$SKILL_DIR/scripts/manifest/render.py"
+REGISTRY="$SKILL_DIR/scripts/manifest/registry.py"
 BLOCK_TMPL="$SKILL_DIR/assets/agents-cross-repo-handoff.md"
 SETUP_HANDOFF="$(cd "$SKILL_DIR/../setup-handoff" 2> /dev/null && pwd)/scripts/setup-handoff.sh"
 
@@ -109,6 +112,7 @@ for g in d["groups"]:
 PY
 )"
 
+RC=0
 run() { # echo + run, or just echo under --dry-run
   if [ "$DRYRUN" = 1 ]; then
     note "  would: $*"
@@ -125,9 +129,29 @@ while IFS=$'\t' read -r kind path groups layout; do
   run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
 done <<< "$PLAN"
 
+# --- 1b. project the manifest into each board as repos.json --------------------------------------
+# The board's `handoff` CLI cannot resolve the cascade for itself: it ships inside the member repos
+# (and inside a repo-less shared board), so it can reach neither this skill's resolver nor --scope.
+# The manifest's owner therefore writes the ANSWER down where the CLI can read it, and `handoff
+# export` resolves a cross-repo brief's target repo from that file instead of guessing a sibling
+# directory by name. registry.py owns the projection so this and the verifier cannot disagree.
+note "== board repo registries =="
+while IFS=$'\t' read -r kind path groups layout; do
+  [ "$kind" = "BOARD" ] || continue
+  if [ "$DRYRUN" = 1 ]; then
+    note "  would: write $path/repos.json"
+    continue
+  fi
+  if python3 "$REGISTRY" --resolved "$RESOLVED" --board "$path" --write; then
+    :
+  else
+    note "  [error] could not write $path/repos.json"
+    RC=1
+  fi
+done <<< "$PLAN"
+
 # --- 2. wire each member repo + 3. render its AGENTS.md block ------------------------------------
 note "== members =="
-RC=0
 while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exists has_agents; do
   [ "$kind" = "MEMBER" ] || continue
   if [ "$exists" != 1 ]; then

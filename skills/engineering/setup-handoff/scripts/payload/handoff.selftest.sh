@@ -165,18 +165,25 @@ chk "repo_root_commit field is not shifted by the pipe" "unverified" \
 
 printf '\nbrief_identity — a same-named sibling directory is never trusted as identity (finding 6)\n'
 # The OLD implementation guessed the cross-repo target by testing "${REPO_DIR}/../$aud/.git" and,
-# on a match, treated it as VERIFIED — even though register-cross-repo-handoff's manifest (not
-# read here) is the only authoritative source. Prove the guess is gone by constructing exactly the
-# case that used to fool it: a git repo sibling to the board repo, sharing the audience's name.
+# on a match, treated it as VERIFIED. Prove the guess is gone by constructing exactly the case that
+# used to fool it: a git repo sibling to the board repo, sharing the audience's name, on a board
+# that carries no cross-repo registry at all.
 SIB_NAME="acme-sibling-$$"
 SIBLING="$(dirname "$R")/$SIB_NAME"
-mkdir -p "$SIBLING"
-git -C "$SIBLING" init -q
-git -C "$SIBLING" config user.email "test@example.com"
-git -C "$SIBLING" config user.name "test"
-printf 'x\n' > "$SIBLING/README.md"
-git -C "$SIBLING" add -A
-git -C "$SIBLING" commit -qm "sibling initial commit"
+mkrepo() { # dir remote -> creates a git repo with one commit
+  mkdir -p "$1"
+  git -C "$1" init -q
+  git -C "$1" config user.email "test@example.com"
+  git -C "$1" config user.name "test"
+  [ -n "${2:-}" ] && git -C "$1" remote add origin "$2"
+  # Content and message vary by directory name ON PURPOSE. Two repos built from identical trees in
+  # the same second get identical author/committer timestamps and therefore the SAME root commit —
+  # which silently turns "the decoy's sha must not appear" into a test that cannot fail.
+  printf '%s\n' "$(basename "$1")" > "$1/README.md"
+  git -C "$1" add -A
+  git -C "$1" commit -qm "initial commit for $(basename "$1")"
+}
+mkrepo "$SIBLING" ""
 SIBLING_ROOT="$(git -C "$SIBLING" rev-list --max-parents=0 HEAD | tail -1)"
 hb "$R" new sibling-aud-case --title "Sibling audience case" --audience "$SIB_NAME" > /dev/null
 hb "$R" export sibling-aud-case --no-claim > /dev/null
@@ -185,7 +192,135 @@ chk "cross-repo identity degrades to unverified, never guesses a same-named sibl
   "$(sed -n 's/^repo_root_commit: //p' "$SIB_BRIEF" | head -1)"
 chk "the sibling repo's REAL root commit never appears in the brief" "no" \
   "$(grep -Fq "$SIBLING_ROOT" "$SIB_BRIEF" && echo yes || echo no)"
-[ -n "$SIBLING" ] && [ -d "$SIBLING" ] && trash "$SIBLING" 2> /dev/null
+chk_contains "a registry-less board says so, rather than blaming an unreachable repo" \
+  "$(cat "$SIB_BRIEF")" "carries no cross-repo registry"
+
+printf '\nbrief_identity — cross-repo identity resolves from the board registry, not the name\n'
+# The grouped-board topology the guard was built for: the target's DIRECTORY NAME deliberately does
+# not match its `audience`, and an unrelated repo standing at the audience's name sits right beside
+# the board. Only the registry (register-cross-repo-handoff's projection of .handoff-repos.json)
+# knows which is which.
+TARGET="$(dirname "$R")/checkout-not-named-like-audience-$$"
+mkrepo "$TARGET" "git@github.com:acme/acme-web.git"
+TARGET_ROOT="$(git -C "$TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+DECOY="$(dirname "$R")/acme-web-$$"
+mkrepo "$DECOY" "git@github.com:evil/decoy.git"
+DECOY_ROOT="$(git -C "$DECOY" rev-list --max-parents=0 HEAD | tail -1)"
+
+write_registry() { # json-body -> $BOARD/repos.json
+  printf '%s\n' "$1" > "$BOARD/repos.json"
+}
+# Paths are stored RELATIVE TO THE BOARD DIR, which is what makes a committed board portable.
+TARGET_REL="../../../$(basename "$TARGET")"
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" }
+  ]
+}"
+hb "$R" new manifest-aud-case --title "Manifest audience case" --audience "acme-web-$$" > /dev/null
+hb "$R" export manifest-aud-case --no-claim > /dev/null
+MAN_BRIEF="$BOARD/briefs/manifest-aud-case-handoff.brief.md"
+chk "the brief carries the DECLARED repo's real root commit" "$TARGET_ROOT" \
+  "$(sed -n 's/^repo_root_commit: //p' "$MAN_BRIEF" | head -1)"
+chk "identity comes from the declared path, never the same-named decoy" "no" \
+  "$(grep -Fq "$DECOY_ROOT" "$MAN_BRIEF" && echo yes || echo no)"
+chk "the brief records the target's own origin, not the exporting repo's" "acme/acme-web" \
+  "$(sed -n 's/^repo_origin: //p' "$MAN_BRIEF" | head -1)"
+chk "a resolved cross-repo brief carries no degradation warning" "" \
+  "$(sed -n 's/^.*\(\*\*Warning\*\*\).*$/\1/p' "$MAN_BRIEF" | head -1)"
+
+printf '\nbrief_identity — an unattested or unresolvable registry entry degrades, never guesses\n'
+# The declared path still exists but now holds a DIFFERENT repo (a moved checkout, a hand-edited
+# manifest, a registry never re-synced). The attestation is what catches it.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$DECOY_ROOT\" }
+  ]
+}"
+hb "$R" new stale-registry-case --title "Stale registry case" --audience "acme-web-$$" > /dev/null
+hb "$R" export stale-registry-case --no-claim > /dev/null
+STALE_BRIEF="$BOARD/briefs/stale-registry-case-handoff.brief.md"
+chk "a root-commit mismatch fails closed to unverified" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$STALE_BRIEF" | head -1)"
+chk "the repo standing at the stale path is never stamped into the brief" "no" \
+  "$(grep -Fq "$TARGET_ROOT" "$STALE_BRIEF" && echo yes || echo no)"
+chk_contains "the warning names the re-sync as the fix" "$(cat "$STALE_BRIEF")" "Re-run the cross-repo sync"
+
+# Two entries claiming one audience is a manifest the operator must fix, not a tie to break.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"a\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" },
+    { \"group\": \"b\", \"alias\": \"web2\", \"audience\": \"acme-web-$$\",
+      \"path\": \"../../../$(basename "$DECOY")\", \"rootCommit\": \"$DECOY_ROOT\" }
+  ]
+}"
+hb "$R" new ambiguous-aud-case --title "Ambiguous audience case" --audience "acme-web-$$" > /dev/null
+hb "$R" export ambiguous-aud-case --no-claim > /dev/null
+AMB_BRIEF="$BOARD/briefs/ambiguous-aud-case-handoff.brief.md"
+chk "an audience claimed twice resolves to nothing rather than a coin flip" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$AMB_BRIEF" | head -1)"
+chk "neither candidate's root commit leaks into the brief" "no" \
+  "$({ grep -Fq "$TARGET_ROOT" "$AMB_BRIEF" || grep -Fq "$DECOY_ROOT" "$AMB_BRIEF"; } && echo yes || echo no)"
+
+# An audience the registry simply does not declare.
+write_registry "{
+  \"version\": 1,
+  \"repos\": [
+    { \"group\": \"acme\", \"alias\": \"web\", \"audience\": \"acme-web-$$\",
+      \"path\": \"$TARGET_REL\", \"rootCommit\": \"$TARGET_ROOT\" }
+  ]
+}"
+hb "$R" new undeclared-aud-case --title "Undeclared audience case" --audience "acme-nowhere" > /dev/null
+hb "$R" export undeclared-aud-case --no-claim > /dev/null
+UND_BRIEF="$BOARD/briefs/undeclared-aud-case-handoff.brief.md"
+chk "an audience absent from the registry degrades to unverified" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$UND_BRIEF" | head -1)"
+chk "an undeclared audience never resolves to the one repo that IS declared" "no" \
+  "$(grep -Fq "$TARGET_ROOT" "$UND_BRIEF" && echo yes || echo no)"
+
+# A malformed registry is not trusted even partially.
+write_registry "{ this is not json"
+hb "$R" new bad-registry-case --title "Bad registry case" --audience "acme-web-$$" > /dev/null
+hb "$R" export bad-registry-case --no-claim > /dev/null
+BAD_BRIEF="$BOARD/briefs/bad-registry-case-handoff.brief.md"
+chk "an unreadable registry degrades to unverified rather than erroring out" "unverified" \
+  "$(sed -n 's/^repo_root_commit: //p' "$BAD_BRIEF" | head -1)"
+chk_contains "an unreadable registry says so, rather than reporting an undeclared audience" \
+  "$(cat "$BAD_BRIEF")" "could not be read"
+
+printf '\nboard_repo_entry — an audience resolves inside the CALLING section only\n'
+# Two groups sharing one board may each declare their own "api"; the manifest is the fence, so each
+# caller must see only its own. Exercised against the resolver directly (DIR/GROUP are the globals
+# the CLI reads) because a sectioned board is otherwise a whole install to stand up.
+# -P: board paths come back through realpath, so the expectation must be the physical
+# path too (macOS /var -> /private/var would otherwise fail every comparison).
+SECDIR="$(cd "$(mktemp -d)" && pwd -P)"
+cat > "$SECDIR/repos.json" << 'REGEOF'
+{
+  "version": 1,
+  "repos": [
+    { "group": "alpha", "alias": "api", "audience": "api", "path": "./alpha-api", "rootCommit": "aaaa1111" },
+    { "group": "beta",  "alias": "api", "audience": "api", "path": "./beta-api",  "rootCommit": "bbbb2222" }
+  ]
+}
+REGEOF
+sec_entry() { (DIR="$SECDIR" GROUP="$1" && board_repo_entry api); }
+chk "the alpha section resolves alpha's api" "ok|$SECDIR/alpha-api|aaaa1111" "$(sec_entry alpha)"
+chk "the beta section resolves beta's api" "ok|$SECDIR/beta-api|bbbb2222" "$(sec_entry beta)"
+chk "a section that declares no api gets nothing, not someone else's" "no-entry||" "$(sec_entry gamma)"
+chk "with no section set, an audience claimed twice stays ambiguous" "ambiguous||" "$(sec_entry '')"
+trash "$SECDIR" 2> /dev/null
+
+rm -f "$BOARD/repos.json"
+for d in "$SIBLING" "$TARGET" "$DECOY"; do
+  [ -n "$d" ] && [ -d "$d" ] && trash "$d" 2> /dev/null
+done
 
 printf '\ncmd_export — bundle (orchestrator) stamps the parent and pre-flights every child\n'
 hb "$R" new bundle-child-1 --title "Bundle child 1" > /dev/null
@@ -208,7 +343,14 @@ printf '\ncmd_export — bundle pre-flight refuses the WHOLE export on a live fo
 hb "$R" new bundle-child-3 --title "Bundle child 3" > /dev/null
 hb "$R" new bundle-child-4 --title "Bundle child 4" > /dev/null
 hb "$R" new bundle-parent-2 --orchestrator --children bundle-child-3,bundle-child-4 --title "Bundle parent 2" > /dev/null
-hb "$R" claim bundle-child-4 "already working it" > /dev/null
+# The lease has to be FOREIGN for this to be the finding-5 case at all: a lease the acting session
+# holds is deliberately allowed through (the next block). Claiming under an explicit foreign session
+# id — rather than whatever the ambient environment happens to expose — is what keeps the two cases
+# from collapsing into each other depending on where the suite runs.
+(
+  export HANDOFF_SESSION_ID="foreign-session-$$"
+  hb "$R" claim bundle-child-4 "already working it"
+) > /dev/null
 BUNDLE2_DOC="$BOARD/bundle-parent-2-handoff.md"
 BUNDLE2_COVER="$BOARD/briefs/bundle-parent-2-handoff.cover.md"
 CHILD3_DOC="$BOARD/bundle-child-3-handoff.md"
