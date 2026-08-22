@@ -8,7 +8,6 @@ Claim before you work: `./handoff claim <id>`. Protocol: [README.md](./README.md
 
 | Handoff | Status | Acts next | Severity | Updated | Blocked on | Lease |
 | --- | --- | --- | --- | --- | --- | --- |
-| [Handoff — setup-handoff never rewrites its AGENTS.md block](./agents-block-drift-handoff.md) | `open` |  | medium | 2026-08-23 | — | 🔒 Gunn Bhatrakarn (010ceebc) |
 
 ## Standalone / reference (no claim needed)
 
@@ -20,6 +19,7 @@ Claim before you work: `./handoff claim <id>`. Protocol: [README.md](./README.md
 
 | Handoff | Status | Verified |
 | --- | --- | --- |
+| [Handoff — setup-handoff never rewrites its AGENTS.md block](./archive/agents-block-drift-handoff.md) | `done` | 2026-08-23 |
 | [--blocked-on accepts dangling, self, and standalone blockers](./archive/blocked-on-validation-handoff.md) | `done` | 2026-07-21 |
 | [Restructure the handoff board from flat to scripts/ + templates/](./archive/board-layout-handoff.md) | `done` | 2026-07-21 |
 | [children_of silently dropped a bundle's last child](./archive/children-last-child-drop-handoff.md) | `done` | 2026-07-21 |

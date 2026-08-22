@@ -2,13 +2,14 @@
 id: agents-block-drift-handoff
 title: Handoff — setup-handoff never rewrites its AGENTS.md block
 type: coordination
-status: open
+status: done
 audience:
 repos: []
 severity: medium
 created: 2026-08-23
 updated: 2026-08-23
 note:
+verified_at: 2026-08-23
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -89,3 +90,7 @@ cross-repo verifiers already do content-aware block checks.
 
 - `x442-repair-handoff` — to re-verify the board and confirm the block check now catches drift.
 - `x442-setup-handoff` — the installer being changed; its `verify-setup-handoff.sh` is the harness.
+
+## Activity
+
+- 2026-08-23 — done — verified against live code by Gunn Bhatrakarn (010ceebc): installer rewrite path exercised on scratch copies for all five marker cases (missing/malformed-refuses-untouched/inject/idempotent/rewrite); re-ran the real installer here and the doc-types paragraph returned with content outside the markers unchanged; verify-setup-handoff.sh 24 passed/0 warnings/0 failed with the new content-aware check reporting 'matches the asset'; second install left the tree byte-identical; repair-handoff healthy fixture grades 3/3 at v9; setup-handoff fresh-install eval 5/5 and the no-AGENTS.md precondition still refuses without fabricating.
