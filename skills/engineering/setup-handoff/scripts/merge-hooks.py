@@ -60,7 +60,21 @@ def load(path: Path) -> dict:
 
 
 def dump(path: Path, data: dict) -> None:
+    """Write only when the DATA changed, comparing parsed JSON rather than bytes.
+
+    The installer re-runs on every repair, and it used to rewrite each tool config
+    unconditionally. In a repo that formats JSON (prettier collapses short arrays; we emit them
+    expanded) that meant every single run dirtied the working tree with a diff carrying no
+    semantic change -- which buries a real wiring change in noise and makes "re-run the installer"
+    an unpleasant remedy. Comparing the parsed data instead of the text keeps the repo's own
+    formatting and makes the install genuinely idempotent rather than idempotent-by-coincidence.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if json.loads(path.read_text(encoding="utf-8")) == data:
+            return
+    except (OSError, ValueError):
+        pass  # missing, unreadable, or not JSON -- fall through and write
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
