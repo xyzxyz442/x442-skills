@@ -4,7 +4,8 @@ handoff: rate-limit-fix-handoff
 title: Rate limiter drops burst requests
 severity: medium
 repo_name: returned-clean
-repo_origin: github.com/acme/acme-api
+repo_provider: github
+repo_origin: acme/acme-api
 repo_root_commit: e06d53b95cffa6b52b5d67aabb6a2d83bec66410
 source_commit: e06d53b
 source_branch: master

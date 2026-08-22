@@ -4,7 +4,8 @@ handoff: hostile-wrong-repo-handoff
 title: Cache invalidation misses nested keys
 severity: medium
 repo_name: returned-hostile
-repo_origin: github.com/acme/acme-api
+repo_provider: github
+repo_origin: acme/acme-api
 repo_root_commit: 0000000000000000000000000000000000000000
 source_commit: 9fdff9b
 source_branch: master

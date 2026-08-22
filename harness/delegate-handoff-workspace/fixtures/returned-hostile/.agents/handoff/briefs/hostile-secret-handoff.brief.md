@@ -4,7 +4,8 @@ handoff: hostile-secret-handoff
 title: Webhook retries duplicate side effects
 severity: medium
 repo_name: returned-hostile
-repo_origin: github.com/acme/acme-api
+repo_provider: github
+repo_origin: acme/acme-api
 repo_root_commit: 9fdff9bd1e9dbcdc5ef2b07520b8ebf47959af92
 source_commit: 9fdff9b
 source_branch: master
