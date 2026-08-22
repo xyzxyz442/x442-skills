@@ -71,6 +71,13 @@ handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]
   this id while it is out for delegation; normally you want the claim, because it is what stops a
   second agent from claiming the same work while the executor has it.
 
+**Already holding the lease is fine.** Claiming a handoff, investigating it, and then deciding to
+delegate is the normal order, so export extends a lease this session already holds instead of
+refusing on it — you end up with the same thing a fresh claim would have given you, a lease you own
+with a full TTL, and it says so. A lease held by **another** session still refuses, and on a bundle
+it refuses the whole export before anything is written. That is the point: reach for `--no-claim`
+only for the case it is actually for, not to get around your own lease.
+
 Export refuses a `standalone` handoff (send the file) and a handoff already `done` (nothing to
 delegate). For an `orchestrator`, it renders one cover brief carrying the Sequencing section plus
 one brief per child — the whole bundle goes out together.

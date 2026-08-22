@@ -251,6 +251,11 @@ Refuses on a `standalone` handoff (send the file — it is already self-containe
 already `done` (nothing left to delegate). On an `orchestrator` it renders one cover brief with the
 Sequencing section plus one brief per child.
 
+A lease **this session already holds** is extended rather than re-claimed, so `claim X` then
+`export X` works and ends with the full TTL a fresh claim would have given. A lease held by
+**another** session still refuses — and on a bundle it refuses the whole export before anything is
+written, rather than stranding half the children claimed and stamped.
+
 **Repo identity on a grouped board.** When a handoff's `audience` names a repo other than the one
 `export` runs in, the target is resolved through `<board>/repos.json` — the projection of the
 group manifest that `register-cross-repo-handoff`'s sync writes, where each member carries its path

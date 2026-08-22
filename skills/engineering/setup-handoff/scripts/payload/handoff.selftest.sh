@@ -140,8 +140,16 @@ printf '\ncmd_export — claim before stamp\n'
 # A concurrent agent already holds the lease. cmd_export must fail on the claim BEFORE it writes
 # the brief or stamps the doc — a lease taken after stamping would leave the doc reading
 # "delegated" and a brief on disk with no lease actually held.
+#
+# The holder is a CONCURRENT agent, so it claims under an explicit foreign session id. Left to the
+# ambient environment this claimed and exported as one session, which is now the allowed self-held
+# case — the test would then be asserting the opposite of what its name says, and passing or failing
+# on whether the machine running it happens to expose a session id at all.
 hb "$R" new claim-race --title "Claim race" > /dev/null
-hb "$R" claim claim-race "already working it" > /dev/null
+(
+  export HANDOFF_SESSION_ID="foreign-session-$$"
+  hb "$R" claim claim-race "already working it"
+) > /dev/null
 RACE_OUT="$(hb "$R" export claim-race --to Bob)"
 chk_contains "failed claim reports CLAIMED" "$RACE_OUT" "CLAIMED"
 RACE_DOC="$BOARD/claim-race-handoff.md"
@@ -360,6 +368,65 @@ chk "no cover file was written by the refused export" "no" "$([ -f "$BUNDLE2_COV
 chk "the untouched child was never claimed" "no" "$([ -d "$BOARD/.locks/bundle-child-3-handoff" ] && echo yes || echo no)"
 chk "the untouched child's doc was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$CHILD3_DOC" | head -1)"
 chk "the orchestrator itself was never stamped delegated_to" "" "$(sed -n 's/^delegated_to: //p' "$BUNDLE2_DOC" | head -1)"
+
+printf '\ncmd_export — a child leased by THIS session is extended, not refused\n'
+# The pre-flight treated ANY held lease as blocking, including the caller's own, so an orchestrator
+# that had claimed a child to investigate it could not then delegate the bundle: it had to release
+# its own lease first, or pass --no-claim, which drops leasing for EVERY child in the run.
+SELF_SESS="self-session-$$"
+hb "$R" new bundle-child-7 --title "Bundle child 7" > /dev/null
+hb "$R" new bundle-child-8 --title "Bundle child 8" > /dev/null
+hb "$R" new bundle-parent-5 --orchestrator --children bundle-child-7,bundle-child-8 --title "Bundle parent 5" > /dev/null
+(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" claim bundle-child-7 "investigating"
+) > /dev/null
+SELF_LOCK="$BOARD/.locks/bundle-child-7-handoff/owner"
+# Shorten the held lease to a minute so "was it extended?" is answerable. Re-claiming inside the
+# same second would otherwise stamp the same expiry a fresh claim would, and the check could not
+# tell the two paths apart. Still live, so it is a self-held lease and not an expired one.
+SELF_T="$(mktemp)"
+grep -v '^expires=' "$SELF_LOCK" > "$SELF_T"
+echo "expires=$(($(now) + 60))" >> "$SELF_T"
+cat "$SELF_T" > "$SELF_LOCK"
+rm -f "$SELF_T"
+B5_OUT="$(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" export bundle-parent-5 --to Vic
+)"
+B5_COVER="$BOARD/briefs/bundle-parent-5-handoff.cover.md"
+chk "the export is not refused over the caller's own lease" "yes" \
+  "$([ -f "$B5_COVER" ] && echo yes || echo no)"
+chk "the self-held child still got its brief" "yes" \
+  "$([ -f "$BOARD/briefs/bundle-child-7-handoff.brief.md" ] && echo yes || echo no)"
+chk "the free child got its brief too" "yes" \
+  "$([ -f "$BOARD/briefs/bundle-child-8-handoff.brief.md" ] && echo yes || echo no)"
+chk "the free child WAS claimed" "yes" \
+  "$([ -d "$BOARD/.locks/bundle-child-8-handoff" ] && echo yes || echo no)"
+chk "the self-held lease survives the export" "yes" "$([ -f "$SELF_LOCK" ] && echo yes || echo no)"
+chk "it is still the SAME lease, not a re-claim (the original note is intact)" "investigating" \
+  "$(sed -n 's/^note=//p' "$SELF_LOCK" | head -1)"
+chk "the self-held lease was extended to a full TTL" "yes" \
+  "$([ "$(sed -n 's/^expires=//p' "$SELF_LOCK" | head -1)" -gt "$(($(now) + 3600))" ] && echo yes || echo no)"
+chk_contains "the export says it kept the lease rather than re-claiming" "$B5_OUT" "lease extended"
+
+printf '\ncmd_export — a single export on a doc THIS session already holds is not refused\n'
+# Same carve-out, reached through export_one directly: `claim X` then `export X` is the obvious
+# order — investigate, then decide to delegate — and it used to die on the caller's own lease.
+hb "$R" new self-single-case --title "Self single case" > /dev/null
+(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" claim self-single-case "looking at it"
+) > /dev/null
+SS_OUT="$(
+  export HANDOFF_SESSION_ID="$SELF_SESS"
+  hb "$R" export self-single-case --to Uma
+)"
+chk "the brief was written despite the caller holding the lease" "yes" \
+  "$([ -f "$BOARD/briefs/self-single-case-handoff.brief.md" ] && echo yes || echo no)"
+chk "the doc is stamped with the delegate" "Uma" \
+  "$(sed -n 's/^delegated_to: //p' "$BOARD/self-single-case-handoff.md" | head -1)"
+chk_contains "and it reports the lease was extended" "$SS_OUT" "lease extended"
 
 printf '\ncmd_export — bundle skips a child with no doc on the board (must-fix coverage gap)\n'
 hb "$R" new bundle-child-5 --title "Bundle child 5" > /dev/null
@@ -737,12 +804,23 @@ esac
 printf '\nset_field — a write failure is refused, not a silent no-op (minor)\n'
 hb "$R" new writeprotect-case --title "Write protect case" > /dev/null
 WP_DOC="$BOARD/writeprotect-case-handoff.md"
+# A private TMPDIR so "did the failed write leak its scratch files?" is answerable at all — counting
+# files in the shared temp dir would be counting every other process on the machine.
+WP_TMP="$(mktemp -d)"
 chmod 444 "$WP_DOC"
-hb "$R" release writeprotect-case --status open "trying" > /dev/null 2>&1
+(
+  export TMPDIR="$WP_TMP"
+  hb "$R" release writeprotect-case --status open "trying"
+) > /dev/null 2>&1
 WP_STATUS=$?
 chmod 644 "$WP_DOC"
 chk "release fails loudly instead of silently no-opping when the doc cannot be written" "nonzero" \
   "$([ "$WP_STATUS" -ne 0 ] && echo nonzero || echo zero)"
+# set_field's cleanup used to sit AFTER its `|| die`, so the reporting fix leaked both mktemp files
+# on every genuine write failure. Reporting the failure and cleaning up after it are not a trade.
+chk "the failed write leaves no temp files behind" "0" \
+  "$(find "$WP_TMP" -type f | wc -l | tr -d ' ')"
+trash "$WP_TMP" 2> /dev/null
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

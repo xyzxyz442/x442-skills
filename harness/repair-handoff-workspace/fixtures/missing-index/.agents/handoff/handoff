@@ -394,7 +394,7 @@ result_block() { # path -> lines between the handoff:result markers
 # nothing. `key` is never attacker-controlled (always a fixed literal from this file), so it can
 # stay on `-v`.
 set_field() {
-  local f="$1" key="$2" val="$3" t vf
+  local f="$1" key="$2" val="$3" t vf rc=0
   t="$(mktemp)" || die "mktemp failed"
   vf="$(mktemp)" || die "mktemp failed"
   printf '%s' "$val" > "$vf"
@@ -404,8 +404,12 @@ set_field() {
     infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
     infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
     { print }
-  ' "$f" > "$t" && cat "$t" > "$f" || die "set_field: could not write $key into $f"
+  ' "$f" > "$t" && cat "$t" > "$f" || rc=1
+  # Cleanup runs on BOTH paths. It used to sit after a `|| die`, so a genuine write failure
+  # (read-only doc, full disk) exited straight past it and leaked both mktemp files. Reporting the
+  # failure and cleaning up after it are not a trade — do both.
   rm -f "$t" "$vf"
+  [ "$rc" -eq 0 ] || die "set_field: could not write $key into $f"
 }
 
 log_activity() { # path message -> append to the doc's Activity log
@@ -426,6 +430,25 @@ lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|ex
   owner="$(sed -n 's/^owner=//p' "$d/owner" 2> /dev/null || echo unknown)"
   exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
   if [ "$(now)" -ge "${exp:-0}" ]; then echo "expired|$owner|$exp"; else echo "held|$owner|$exp"; fi
+}
+
+# Does THIS session hold a LIVE lease on <id>? Ownership is proven by the raw session id the tool
+# exposes, never by the display name: two concurrent sessions of one user share a user name, and
+# treating those as the same session would walk a bundle export straight into the foreign lease its
+# pre-flight exists to catch. When no session id is available at all (advisory mode, no tool)
+# nothing can be proven and the answer is no — a false "yes" is the dangerous direction here.
+#
+# `expired` deliberately answers no as well: an expired lease of one's own is taken over by a normal
+# claim, which is what refreshes it. Only a live self-held lease needs the carve-out.
+lease_is_mine() { # id -> 0 when this session holds a live lease on it
+  local key kind owner exp mine held
+  mine="$(session_id)"
+  [ -n "$mine" ] || return 1
+  key="$(lock_key "$1")"
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+  [ "$kind" = "held" ] || return 1
+  held="$(sed -n 's/^session=//p' "$LOCKS/$key/owner" 2> /dev/null)"
+  [ -n "$held" ] && [ "$held" = "$mine" ]
 }
 
 is_archived() { [ -f "$(arch_file "$1")" ]; }
@@ -1372,8 +1395,23 @@ export_one() { # id doc to outdir branch do_claim
   # die exits the whole process. Claiming first means that death leaves the doc and filesystem
   # untouched; claiming last would leave a doc reading "delegated", an Activity entry saying the
   # export happened, and a brief on disk, with no lease actually held.
+  #
+  # A lease THIS session already holds is the one case that must not die: cmd_claim does not
+  # special-case self-ownership, so `claim X` then `export X` — the obvious order, investigate then
+  # delegate — refused on the caller's own lease, and inside a bundle it aborted the whole export.
+  # Extending is what a claim would have achieved anyway: the point of claiming at export time is
+  # "a live lease I own for as long as this is out", and renewing the held one reaches exactly that,
+  # with a full TTL, rather than leaving a lease that may expire while the brief is with an
+  # executor. Foreign and expired leases keep going through cmd_claim untouched.
   if [ "$do_claim" -eq 1 ]; then
-    cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+    if lease_is_mine "$id"; then
+      cmd_touch "$id" > /dev/null
+      # stderr, not stdout: export_bundle sends export_one's stdout to /dev/null, and "I kept your
+      # lease instead of taking a new one" is exactly the kind of thing that must not vanish there.
+      echo "🔒 $id was already leased by this session — lease extended, not re-claimed." >&2
+    else
+      cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+    fi
   fi
 
   render_tmpl "$tmpl" \
@@ -1426,6 +1464,11 @@ export_bundle() { # id doc to outdir do_claim
   # cleared). Refuse the WHOLE export up front instead. A child with no doc at all is not part of
   # this check — it was never claimable to begin with, and stays a per-child skip-with-warning
   # below, same as before.
+  #
+  # A child leased by THIS session is not a blocker. Refusing there was a dead end: the orchestrator
+  # would have to release its own lease first, or pass --no-claim, which drops leasing for every
+  # child in the run. export_one extends a self-held lease instead of re-claiming it, so the export
+  # is still fully leased when it completes.
   kids="$(children_of "$f")"
   if [ "$do_claim" -eq 1 ]; then
     local busy=""
@@ -1435,10 +1478,12 @@ export_bundle() { # id doc to outdir do_claim
       [ -n "$kf" ] && [ -f "$kf" ] || continue
       local kind owner exp
       IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$kid")")"
-      [ "$kind" = "held" ] && busy="$busy $kid(held by $owner until $(human "$exp"))"
+      if [ "$kind" = "held" ] && ! lease_is_mine "$kid"; then
+        busy="$busy $kid(held by $owner until $(human "$exp"))"
+      fi
     done <<< "$kids"
     [ -z "$busy" ] \
-      || die "cannot export bundle $id — a child has a live lease and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
+      || die "cannot export bundle $id — a child has a live lease held by another session and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
   fi
 
   dest_dir="${outdir:-$(briefs_dir)}"
