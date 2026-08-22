@@ -121,8 +121,9 @@ repo_origin_norm() { # url -> host/owner/repo
 # because the host is a deployment detail — a repo that moves from github.com to an enterprise
 # install is still the same repo, and `repo_root_commit` is what actually proves identity.
 # "other" covers self-hosted git and any provider not listed here.
-repo_provider_of() { # host/owner/repo -> github|gitlab|bitbucket|other
+repo_provider_of() { # host/owner/repo -> github|gitlab|bitbucket|other|unknown
   case "${1%%/*}" in
+    "") printf 'unknown' ;;
     github.com) printf 'github' ;;
     gitlab.com) printf 'gitlab' ;;
     bitbucket.org) printf 'bitbucket' ;;
@@ -1188,7 +1189,7 @@ cmd_export() {
   export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
 }
 
-# Guard for brief_identity's packed "a|b|c|d" return: `fold_colons` only folds ":", so a
+# Guard for brief_identity's packed "a|b|c|d|e" return: `fold_colons` only folds ":", so a
 # user-supplied field (audience, via --audience) can still carry "|" and shift every field after
 # it when the caller's `IFS='|' read -r a b c d` splits the string back apart. Applied to every
 # field before packing, not just audience, so the guard holds even if a future field starts
