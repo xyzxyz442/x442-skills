@@ -78,7 +78,7 @@ are visually distinct: a `HANDOFF_` prefix always means "override", a camelCase 
 {
   "topology": "single-repo",
   "repoName": "x442-skills",
-  "groups": ["esbm"],
+  "groups": ["acme-svcs"],
   "groupLayout": "subfolder",
   "ttlHours": 4,
   "allowVerifyCmd": false
@@ -88,7 +88,7 @@ are visually distinct: a `HANDOFF_` prefix always means "override", a camelCase 
 **Repo** — `$REPO/.agents/handoff.config.json`:
 
 ```json
-{ "repo": "x442-skills", "group": "esbm", "boardPath": "../ais/src/.agents/handoff" }
+{ "repo": "x442-skills", "group": "acme-svcs", "boardPath": "../workspace/src/.agents/handoff" }
 ```
 
 ### Cost — python3 becomes a runtime requirement
@@ -180,7 +180,7 @@ the identity triple both ways — from the existing prefix, and from the repo co
 and aborts that tool's rewrite unless they are identical. A repo silently switching sections would
 mean filing handoffs where nobody reads them, which is worse than leaving a working prefix in place.
 
-**C. Nothing breaks in the field.** Real boards exist — this repo's, and the shared `ais` one. Every
+**C. Nothing breaks in the field.** Real boards exist — this repo's, and a shared cross-repo one. Every
 reader accepts `config.json`, then legacy `config`, then defaults, so an un-migrated board keeps
 working untouched.
 

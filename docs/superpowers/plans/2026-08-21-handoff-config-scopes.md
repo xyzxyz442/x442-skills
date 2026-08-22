@@ -604,7 +604,7 @@ import importlib.util as u, os
 spec = u.spec_from_file_location("mh", "skills/engineering/setup-handoff/scripts/merge-hooks.py")
 mh = u.module_from_spec(spec); spec.loader.exec_module(mh)
 os.environ["HANDOFF_REPO"] = "acme"; os.environ["HANDOFF_GROUP"] = "team1"
-cmd = mh.command("../board/.agents/handoff", "claude", "sessionstart")
+cmd = mh.command("../workspace/.agents/handoff", "claude", "sessionstart")
 print(cmd)
 assert "HANDOFF_REPO=" not in cmd, "env prefix still present"
 assert "--project-dir" in cmd, "no project-dir anchor"
