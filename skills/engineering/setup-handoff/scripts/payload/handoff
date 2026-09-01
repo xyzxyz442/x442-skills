@@ -540,6 +540,148 @@ child_progress() { # path -> "done|total|outstanding-csv"
   printf '%s|%s|%s' "$done" "$total" "$out"
 }
 
+# The same derivation, rendered as a table INTO the orchestrator doc itself.
+#
+# `list` and INDEX.md already derive bundle progress, but neither is what a fresh session reads when
+# it opens the bundle doc: that session saw `children: [a, b, c]` and prose, and had to open every
+# child to learn which one to pick up and who holds it. This closes that gap WITHOUT reintroducing
+# the rot the type exists to prevent — the table is GENERATED between markers and rebuilt from the
+# children's own frontmatter on every `index`, so it can no more desync than INDEX.md can. Nothing
+# here is a stored fact, and a hand-edit inside the markers is overwritten on the next run.
+children_table() { # orchestrator-path -> the generated block's body
+  local f="$1" c cf link kind owner exp lease bo st
+  local prog kdone ktotal out
+  prog="$(child_progress "$f")"
+  kdone="${prog%%|*}"
+  ktotal="$(printf '%s' "$prog" | cut -d'|' -f2)"
+  out="${prog#*|*|}"
+  if [ "$ktotal" -eq 0 ]; then
+    printf 'No children yet. Add them with `./handoff children add %s <child-id>`.\n' "$(basename "$f" .md)"
+    return
+  fi
+  if [ -n "$out" ]; then
+    printf '**%s/%s done.** Outstanding — %s\n\n' "$kdone" "$ktotal" "$out"
+  else
+    printf '**%s/%s done** — every child is closed.\n\n' "$kdone" "$ktotal"
+  fi
+  printf '| Child | Status | Acts next | Severity | Updated | Blocked on | Lease |\n'
+  printf '| --- | --- | --- | --- | --- | --- | --- |\n'
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    cf=""
+    link=""
+    # The link is built from the basename, not from $DIR, because in all three layouts an active
+    # sibling sits beside the orchestrator and an archived one sits under its section's archive/.
+    if [ -f "$(doc_file "$c")" ]; then
+      cf="$(doc_file "$c")"
+      link="./$(basename "$cf")"
+    elif [ -f "$(arch_file "$c")" ]; then
+      cf="$(arch_file "$c")"
+      link="./archive/$(basename "$cf")"
+    fi
+    if [ -z "$cf" ]; then
+      # Planned but not filed. Rendered as a row rather than omitted: a bundle is routinely drafted
+      # before its children exist, and the missing row IS the next action.
+      printf '| `%s` | `MISSING` | — | — | — | — | not filed yet |\n' "$c"
+      continue
+    fi
+    st="$(meta "$cf" status)"
+    lease='—'
+    if [ "$st" != "done" ]; then
+      IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$c")")"
+      case "$kind" in
+        held) lease="🔒 $owner" ;;
+        expired) lease="⚠️ stale ($owner) — reclaimable" ;;
+      esac
+    fi
+    bo="$(meta "$cf" blocked_on)"
+    [ -n "$bo" ] && is_archived "${bo%% *}" && bo="$bo ✅ resolved"
+    # Pipes are stripped from every free-text cell: a title carrying one would shift the whole row
+    # and silently misreport the column after it. Empty cells render as an em dash rather than
+    # blank, so a missing audience reads as "nobody named" instead of a rendering glitch.
+    local title aud sev
+    title="$(strip_pipes "$(meta "$cf" title)")"
+    aud="$(strip_pipes "$(meta "$cf" audience)")"
+    sev="$(strip_pipes "$(meta "$cf" severity)")"
+    printf '| [%s](%s) | `%s` | %s | %s | %s | %s | %s |\n' \
+      "${title:-$c}" "$link" "$st" "${aud:-—}" "${sev:-—}" \
+      "$(meta "$cf" updated)" "$(strip_pipes "${bo:-—}")" "$lease"
+  done <<< "$(children_of "$f")"
+}
+
+# Rewrite one orchestrator's generated children block in place, adding the section if the doc
+# predates it. Writes ONLY when the rendered block differs from what is on disk: `index` runs after
+# every mutating command, so an unconditional write would touch every bundle doc on the board on
+# every claim anywhere — git churn that says a bundle changed when nothing about it did.
+write_children_block() { # orchestrator-path
+  local f="$1" t bf
+  t="$(mktemp)" || die "mktemp failed"
+  bf="$(mktemp)" || die "mktemp failed"
+  children_table "$f" > "$bf"
+  # The body is routed through a FILE, never `awk -v`: POSIX awk decodes C-style escapes in a
+  # -v-assigned value, so a child title carrying a Windows path would be mangled on the way in.
+  # Same remediation splice_result and set_field already apply.
+  if grep -q '<!-- handoff:children:begin -->' "$f"; then
+    awk -v bf="$bf" '
+      /<!-- handoff:children:begin -->/ {
+        print
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        print ""
+        skip = 1
+        next
+      }
+      /<!-- handoff:children:end -->/ { skip = 0 }
+      !skip { print }
+    ' "$f" > "$t"
+  else
+    # Inserted BEFORE "## Activity" rather than appended, because log_activity appends to the end
+    # of the file and would otherwise write its next entry underneath the table, outside its own
+    # section. Apostrophes are avoided in the emitted text — the awk program is single-quoted.
+    awk -v bf="$bf" '
+      function emit(   line) {
+        print "## Children"
+        print ""
+        print "<!-- GENERATED by ./handoff index - do not edit by hand. Rebuilt from the child docs"
+        print "     themselves on every index run, so it cannot drift from their real state."
+        print "     Change the roster with: ./handoff children add|rm <parent> <child> -->"
+        print ""
+        # prettier-ignore-start/end: the generated table is UNALIGNED markdown, and a repo that
+        # runs prettier over its docs would re-align it on every commit while the next index run
+        # un-aligns it again — the file would churn forever on a bundle nobody touched. Same
+        # reason INDEX.md is prettier-ignored. Inert in a repo that does not use prettier.
+        print "<!-- prettier-ignore-start -->"
+        print "<!-- handoff:children:begin -->"
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        print ""
+        print "<!-- handoff:children:end -->"
+        print "<!-- prettier-ignore-end -->"
+        print ""
+      }
+      !placed && /^## Activity/ { emit(); placed = 1 }
+      { print }
+      END { if (!placed) { print ""; emit() } }
+    ' "$f" > "$t"
+  fi
+  cmp -s "$t" "$f" || cat "$t" > "$f" || die "could not write the children block into $f"
+  rm -f "$t" "$bf"
+}
+
+# Refresh every orchestrator in the CALLER's section. Deliberately not applied across sections on a
+# grouped board: the roll-up is read-only across groups because each section is maintained by its
+# own repo, and a bundle's table is that section's generated state, not the board root's.
+refresh_children_blocks() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    is_orchestrator "$f" || continue
+    write_children_block "$f"
+  done < <(each_doc)
+}
+
 # Every handoff doc file is named "<id>-handoff.md" and the id IS the filename stem. norm_id
 # canonicalizes any user-supplied id to that form (idempotent — never doubles the suffix), so
 # `new rbac-gap`, `claim rbac-gap`, and `claim rbac-gap-handoff` all resolve to rbac-gap-handoff.
@@ -779,6 +921,13 @@ cmd_new() {
         redaction_comment
         echo
         echo "## Bundle"
+        echo
+        echo "## Children"
+        echo
+        echo "<!-- prettier-ignore-start -->"
+        echo "<!-- handoff:children:begin -->"
+        echo "<!-- handoff:children:end -->"
+        echo "<!-- prettier-ignore-end -->"
         echo
         echo "## Sequencing"
         echo
@@ -1754,7 +1903,7 @@ cmd_release() {
         echo "Updated orchestrator $id — $pdone/$ptotal children done.${pout:+ Outstanding: $pout}"
         ;;
       done)
-        [ "$ptotal" -gt 0 ] || die "$id has no children — add children: [...] before closing the bundle"
+        [ "$ptotal" -gt 0 ] || die "$id has no children — add them with 'handoff children add $id <child>' before closing the bundle"
         [ "$pdone" -eq "$ptotal" ] || die "$id still has outstanding children: $pout"
         set_field "$f" status done
         set_field "$f" updated "$(today)"
@@ -2129,6 +2278,88 @@ rollup_index() {
   } > "$out"
 }
 
+# Grow, prune, or just read a bundle's roster.
+#
+# Until this existed the only way to change `children:` was to hand-edit the frontmatter — a key
+# `import --result` explicitly refuses to let an external result touch, and one `release --status
+# done` told you to edit by hand in its own error text. A hand-edit also skipped children_csv, so a
+# child written under a spelling that named no file reported MISSING for the bundle's whole life.
+#
+# `add`/`rm` are reserved in the first position; `handoff children <parent>` with no verb prints the
+# same table the doc carries, without writing anything.
+cmd_children() {
+  local usage="usage: handoff children <parent> | handoff children add|rm <parent> <child> [child...]"
+  local action="${1:?$usage}"
+  local parent
+  case "$action" in
+    add | rm)
+      shift
+      parent="${1:?usage: handoff children $action <parent> <child> [child...]}"
+      shift
+      [ $# -gt 0 ] || die "usage: handoff children $action <parent> <child> [child...]"
+      ;;
+    *)
+      parent="$action"
+      action="show"
+      shift
+      [ $# -eq 0 ] || die "$usage"
+      ;;
+  esac
+
+  local raw="$parent" f
+  parent="$(resolve_id "$parent")" || die "unusable id: '$raw' (needs at least one letter or digit)"
+  f="$(doc_of "$parent")" || no_such "$parent"
+  is_orchestrator "$f" || die "$parent is not an orchestrator — only a bundle has children. Create one with: handoff new <id> --orchestrator --children a,b,c"
+
+  if [ "$action" = "show" ]; then
+    children_table "$f"
+    return
+  fi
+
+  # The roster is re-read from the doc rather than taken from anything the caller holds: another
+  # session may have added a child since, and a read-modify-write over a stale copy drops it.
+  local cur want raw_want changed=0
+  cur="$(children_of "$f")"
+  for raw_want in "$@"; do
+    want="$(resolve_id "$raw_want")" || die "unusable child id: '$raw_want' (needs at least one letter or digit)"
+    [ "$want" = "$parent" ] && die "a bundle cannot be its own child"
+    if [ "$action" = "add" ]; then
+      if printf '%s\n' "$cur" | grep -qxF "$want"; then
+        echo "= $want is already a child of $parent"
+        continue
+      fi
+      # A child that does not exist yet is allowed, exactly as `new --children` allows it: bundles
+      # are routinely planned before they are filed, and the table reports the gap as MISSING.
+      [ -f "$(doc_file "$want")" ] || [ -f "$(arch_file "$want")" ] \
+        || echo "  (note: $want is not on the board yet — it will read MISSING until you file it)"
+      cur="${cur:+$cur$'\n'}$want"
+      echo "+ $want"
+    else
+      printf '%s\n' "$cur" | grep -qxF "$want" || die "$want is not a child of $parent"
+      # `|| true`: grep -v exits non-zero when it removes the only line, and an empty roster is a
+      # legitimate result here (the bundle is being emptied, not failing).
+      cur="$(printf '%s\n' "$cur" | grep -vxF "$want" || true)"
+      echo "- $want"
+    fi
+    changed=$((changed + 1))
+  done
+  [ "$changed" -gt 0 ] || {
+    echo "No change to $parent."
+    return
+  }
+
+  local clist="" c
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    clist="${clist:+$clist, }$c"
+  done <<< "$cur"
+  set_field "$f" children "[$clist]"
+  set_field "$f" updated "$(today)"
+  log_activity "$f" "bundle roster updated by $(whoami_id) — now [${clist:-empty}]"
+  cmd_index
+  echo "Bundle $parent now covers ${clist:-no children}."
+}
+
 cmd_index() {
   # A board-level invocation on a grouped board (no HANDOFF_GROUP in scope) owns only the roll-up —
   # writing a section index would clobber $DIR/INDEX.md with a flat listing of nothing.
@@ -2137,6 +2368,10 @@ cmd_index() {
     echo "Wrote $DIR/INDEX.md"
     return
   fi
+  # Bundle children tables are generated board state too, and they read the same derivation the
+  # sub-index does — so they are refreshed here, in the one pass every mutating command already
+  # triggers, rather than from each of those commands.
+  refresh_children_blocks
   write_section_index
   # A grouped board also gets a board-root roll-up across every section; a flat board's sub-index IS
   # the board root, so there is nothing extra to write.
@@ -2177,7 +2412,11 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_reap "$@"
       ;;
+    children)
+      shift
+      cmd_children "$@"
+      ;;
     index) cmd_index ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add|rm <parent> <child> | reap [--force] | index]" ;;
   esac
 fi

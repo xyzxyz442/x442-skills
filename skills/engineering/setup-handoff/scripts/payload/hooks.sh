@@ -139,6 +139,11 @@ TOPOLOGY="$HC_TOPOLOGY"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
+# Relative board path used in every hint/deny message. HANDOFF_HDPATH (baked into older
+# hook commands) wins; otherwise the consumer's own handoff.config.json boardPath, which is
+# what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
+hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
+
 # group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
 # this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
 # the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
@@ -366,9 +371,6 @@ case "$KIND" in
       out="${out}${line}"$'\n'
     done < <(each_doc)
     [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && exit 0
-    # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
-    # into the hook command; single-repo uses the default in-repo location.
-    hd="${HANDOFF_HDPATH:-.agents/handoff}"
     ctx="Handoffs for \`${REPO:-this repo}\` (from ${hd}/):"
     [ -n "$out" ] && ctx="${ctx}
 
@@ -406,7 +408,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     fi
     id="$(doc_id_of "$path")" || exit 0
 
-    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: .agents/handoff/handoff index"
+    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: ${hd}/handoff index"
 
     # Read the doc by its canonical path (the id alone can't be turned back into a path on a grouped
     # board — the stem may carry a group prefix, or the file may sit in a group subdir).
@@ -428,9 +430,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
       deny "'$id' is CLAIMED by $(lock_owner "$id"). Do not work on it and do not edit its doc — pick another handoff, or tell the user who holds it."
     fi
     if [ -d "$LOCKS/$id" ]; then
-      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: .agents/handoff/handoff claim $id \"note\" — the takeover gets logged."
+      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: ${hd}/handoff claim $id \"note\" — the takeover gets logged."
     fi
-    deny "You do not hold the lease on '$id'. Claim it before editing: .agents/handoff/handoff claim $id \"what you're doing\" — then re-try this edit."
+    deny "You do not hold the lease on '$id'. Claim it before editing: ${hd}/handoff claim $id \"what you're doing\" — then re-try this edit."
     ;;
 
   posttool-edit)
@@ -453,7 +455,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     [ -z "$held" ] && exit 0
     held="${held% }"
     _emit stop "⚠️  You still hold handoff lease(s): ${held}
-Release so others are not blocked: .agents/handoff/handoff release <id> --status open|blocked|done"
+Release so others are not blocked: ${hd}/handoff release <id> --status open|blocked|done"
     ;;
 esac
 exit 0

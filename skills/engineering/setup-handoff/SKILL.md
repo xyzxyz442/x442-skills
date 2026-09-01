@@ -272,7 +272,12 @@ working and migrates on its next install.
   and never claimed. Its progress is **derived** from the children's own frontmatter at read time
   and never stored — a written count is stale the moment a child closes — a child naming no doc
   reads as `MISSING` rather than done, and `release --status done` refuses while any child is
-  outstanding.
+  outstanding. The bundle doc carries that derivation as a **generated `## Children` table** (one
+  row per child: status, acts-next, severity, blocked-on, lease) so a fresh session can continue a
+  bundle from the doc alone; it is rebuilt between `handoff:children` markers on every `index` run,
+  and an existing bundle doc gains the section on the next run. `handoff children add|rm <parent>
+<child>` changes the roster — the canonicalizing path, so a child cannot be recorded under a
+  spelling that names no file.
 - **Bundled files:** `scripts/setup-handoff.sh` (installer), `scripts/detect-handoff.sh`
   (read-only existing-install detector), `scripts/merge-hooks.py` (per-tool JSON merge,
   plus `--check` to compare a wired config against what the installer would write now),

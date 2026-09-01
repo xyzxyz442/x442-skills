@@ -822,5 +822,100 @@ chk "the failed write leaves no temp files behind" "0" \
   "$(find "$WP_TMP" -type f | wc -l | tr -d ' ')"
 trash "$WP_TMP" 2> /dev/null
 
+# --- orchestrator children table -------------------------------------------------------------
+# The generated block that lets a fresh session pick up a bundle from the bundle doc alone. Every
+# check here is about the ONE property that makes the table safe to add at all: it is derived, not
+# stored. A table that could be edited into a lie would be the exact rot the type forbids.
+printf '\ncmd_index — the orchestrator children table\n'
+CT="$(mkboard)"
+CTB="$CT/.agents/handoff"
+hb "$CT" new kid-one --title "Kid one" --severity high --audience acme-api > /dev/null
+hb "$CT" new kid-two --title "Kid two" > /dev/null
+hb "$CT" new ct-bundle --orchestrator --children kid-one,kid-two,never-filed --title "CT bundle" > /dev/null
+CTDOC="$CTB/ct-bundle-handoff.md"
+ctblock() { sed -n '/handoff:children:begin/,/handoff:children:end/p' "$CTDOC"; }
+
+chk_contains "a fresh bundle renders a row per child" "$(ctblock)" "[Kid one](./kid-one-handoff.md)"
+chk_contains "the table carries the child's own audience and severity" "$(ctblock)" "| acme-api | high |"
+chk_contains "a child that is not on the board yet reads MISSING, not done" "$(ctblock)" '`never-filed-handoff` | `MISSING`'
+chk_contains "progress is stated above the table" "$(ctblock)" "**0/3 done.**"
+
+hb "$CT" claim kid-one "picking it up" > /dev/null
+chk_contains "claiming a child surfaces the lease holder in the parent's table" "$(ctblock)" "🔒"
+hb "$CT" release kid-one --status done --verified-by "ran the suite" > /dev/null
+chk_contains "an archived child relinks into archive/" "$(ctblock)" "](./archive/kid-one-handoff.md)"
+chk_contains "closing a child moves the derived count without anyone editing the parent" "$(ctblock)" "**1/3 done.**"
+
+# The no-churn property. `index` runs after EVERY mutating command, so an unconditional rewrite
+# would touch every bundle doc on the board on every claim anywhere in it — a git diff that says a
+# bundle changed when nothing about it did.
+cp "$CTDOC" "$CT/ct-before.md"
+hb "$CT" index > /dev/null
+chk "re-indexing an unchanged bundle does not rewrite its doc" "same" \
+  "$(cmp -s "$CT/ct-before.md" "$CTDOC" && echo same || echo rewritten)"
+
+# The rot guarantee, stated as a test: whatever a session writes between the markers is derived
+# state, and the next index run replaces it. This is why the table may exist at all.
+awk '/handoff:children:begin/ { print; print ""; print "**3/3 done.** all finished, trust me"; next } { print }' \
+  "$CTDOC" > "$CT/ct-lied.md" && cat "$CT/ct-lied.md" > "$CTDOC"
+hb "$CT" index > /dev/null
+chk "a hand-edited count inside the markers is overwritten, not preserved" "0" \
+  "$(grep -c 'trust me' "$CTDOC" | tr -d ' ')"
+
+printf '\ncmd_children\n'
+chk_contains "add records the canonical id" "$(hb "$CT" children add ct-bundle kid-three)" "+ kid-three-handoff"
+chk_contains "add warns when the child is not on the board yet" "$(hb "$CT" children add ct-bundle kid-four)" "not on the board yet"
+chk_contains "an added child appears in the table" "$(ctblock)" '`kid-three-handoff` | `MISSING`'
+chk_contains "adding the same child twice is a no-op, not a duplicate row" \
+  "$(hb "$CT" children add ct-bundle kid-three)" "already a child"
+chk "the roster records each child once" "1" \
+  "$(sed -n 's/^children: //p' "$CTDOC" | head -1 | grep -o 'kid-three-handoff' | wc -l | tr -d ' ')"
+chk_contains "rm drops a child" "$(hb "$CT" children rm ct-bundle kid-four)" "- kid-four-handoff"
+chk "a removed child leaves the roster" "0" \
+  "$(sed -n 's/^children: //p' "$CTDOC" | head -1 | grep -c 'kid-four-handoff' | tr -d ' ')"
+chk_contains "rm refuses an id that is not in the bundle" "$(hb "$CT" children rm ct-bundle kid-four)" "is not a child of"
+chk_contains "a bundle cannot be made its own child" "$(hb "$CT" children add ct-bundle ct-bundle)" "cannot be its own child"
+chk_contains "children refuses a non-orchestrator" "$(hb "$CT" children add kid-two kid-one)" "is not an orchestrator"
+chk_contains "the bare form prints the table" "$(hb "$CT" children ct-bundle)" "| Child | Status |"
+cp "$CTDOC" "$CT/ct-before-show.md"
+hb "$CT" children ct-bundle > /dev/null
+chk "the bare form writes nothing" "same" \
+  "$(cmp -s "$CT/ct-before-show.md" "$CTDOC" && echo same || echo rewritten)"
+
+# Boards created before this block existed must gain it, and must gain it ABOVE the activity log:
+# log_activity appends to the end of the file, so a table appended there would swallow every
+# subsequent entry into the generated section.
+printf '\nwrite_children_block — a bundle doc that predates the table\n'
+cat > "$CTB/legacy-bundle-handoff.md" << 'LEGACY'
+---
+id: legacy-bundle-handoff
+title: Legacy bundle
+type: orchestrator
+status: open
+children: [kid-two-handoff]
+created: 2026-01-01
+updated: 2026-01-01
+---
+
+## Bundle
+
+Filed before the children table existed.
+
+## Activity
+
+- 2026-01-01 — created
+LEGACY
+hb "$CT" index > /dev/null
+chk_contains "the section is added to a doc that has no markers" \
+  "$(cat "$CTB/legacy-bundle-handoff.md")" "## Children"
+# Without the prettier-ignore pair, a repo that formats its markdown re-aligns the generated table
+# on every commit and the next index run un-aligns it again — a bundle nobody touched churning in
+# every diff. Asserted here so the pair cannot be dropped as decoration.
+chk_contains "the generated block is wrapped in prettier-ignore markers" \
+  "$(cat "$CTB/legacy-bundle-handoff.md")" "<!-- prettier-ignore-start -->"
+chk "the table is inserted ABOVE the activity log, not appended under it" "before" \
+  "$([ "$(grep -n '## Children' "$CTB/legacy-bundle-handoff.md" | cut -d: -f1)" -lt \
+    "$(grep -n '## Activity' "$CTB/legacy-bundle-handoff.md" | cut -d: -f1)" ] && echo before || echo after)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
