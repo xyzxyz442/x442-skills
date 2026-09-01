@@ -27,6 +27,8 @@ The repo contains **no application code**. Everything ships as markdown plus the
 ├── GEMINI.md                       # Gemini-only overrides (deprecating — see GEMINI.md)
 ├── .github/copilot-instructions.md # Copilot-only overrides
 ├── README.md                       # human-facing project docs
+├── CONTEXT.md                      # domain glossary (terms only, no implementation)
+├── docs/adr/                       # architecture decision records
 └── skills/
     └── <skill-name>/
         ├── SKILL.md                # frontmatter + body
@@ -108,6 +110,14 @@ so the default install stays safe to run on any checkout.
   `acme-lib`, `svc-a`, `../workspace/src`). Enforced by
   [`scripts/verify-standalone.sh`](scripts/verify-standalone.sh), which runs on `pre-commit`
   and in CI — see [docs/standalone-rule.md](docs/standalone-rule.md) for the escape hatch.
+
+## Domain language
+
+[CONTEXT.md](CONTEXT.md) is the glossary — the canonical term for each concept these skills
+install into other repos, with the near-synonyms to avoid. Use its terms in skill content,
+commit messages, and handoff docs; when a term is missing or wrong, fix the glossary rather
+than inventing a local synonym. It is a glossary and nothing else — no schema listings, no
+implementation detail. Decisions live in [docs/adr/](docs/adr/).
 
 ## Coding guidelines
 
