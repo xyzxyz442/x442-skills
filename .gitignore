@@ -455,7 +455,6 @@ $RECYCLE.BIN/
 graphify-out/
 .claude/settings.local.json
 .claude/handoff/.locks/
-.agents/handoff/.locks/
 
 # user-specific
 .husky
