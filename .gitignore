@@ -490,3 +490,6 @@ harness/**/iterations/**/run-*/transcript.md
 # git cannot re-include a file whose parent directory is excluded. That lock is tracked via
 # `git add -f` instead, which keeps working because .gitignore only governs UNtracked files.
 # If you ever regenerate that fixture, force-add its .locks/ again or the eval passes vacuously.
+
+# Per-machine handoff board wiring — install output, never committed
+.agents/handoff.config.json
