@@ -167,6 +167,63 @@ def _fm_colon_offenders(path):
     return bad
 
 
+def grade_schema_forward(target):
+    """Read a NEWER document, refuse to WRITE it (ADR 0003).
+
+    These are one decision, so they are asserted together. Warn-and-proceed covers reading and
+    says nothing about writing, which means an older CLI could read a schema-99 doc, release it,
+    and silently drop every field it did not understand — shipping only the read half is worse
+    than shipping neither. The doc here is stamped by hand at a schema no CLI will ever reach,
+    which is what a member repo sees the day a teammate's board upgrades first.
+    """
+    e = []
+    doc = Path(target) / HD
+
+    _handoff(target, "new", "future", "--title", "Written by a newer CLI")
+    _handoff(target, "new", "ordinary", "--title", "An ordinary doc")
+    fut = doc / "future-handoff.md"
+    text = fut.read_text(encoding="utf-8").replace("schema: 1", "schema: 99", 1)
+    # A key this CLI has never heard of, to prove nothing quietly eats it on the way through.
+    fut.write_text(text.replace("status: open", "status: open\nquantum_flux: 7", 1), encoding="utf-8")
+
+    listing = _handoff(target, "list")
+    out = listing.stdout + listing.stderr
+    e.append(gc.expectation("a newer doc is still LISTED, not hidden",
+                            "future-handoff" in out, f"listed: {'future-handoff' in out}"))
+    e.append(gc.expectation("with one warning naming BOTH versions",
+                            "is schema 99" in out and "understands 1" in out,
+                            f"warning: {'is schema 99' in out}"))
+    e.append(gc.expectation("printed once, not once per doc — a wall of them teaches people to scroll",
+                            out.count("this CLI understands") == 1,
+                            f"occurrences: {out.count('this CLI understands')}"))
+
+    # Every mutating command. `export` is the one that used to slip through: it stamps the doc,
+    # so a missing gate there is a silent write to a document this CLI cannot represent.
+    for cmd, args in (("claim", ("future", "try")),
+                      ("release", ("future", "--status", "open")),
+                      ("export", ("future", "--to", "Someone"))):
+        r = _handoff(target, cmd, *args)
+        e.append(gc.expectation(
+            f"{cmd} on a newer doc is REFUSED",
+            r.returncode != 0 and "refusing to write it" in (r.stdout + r.stderr),
+            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-120:]}"))
+
+    e.append(gc.expectation("the unknown field was never touched",
+                            "quantum_flux: 7" in fut.read_text(encoding="utf-8"),
+                            "quantum_flux survived"))
+    # The blast radius has to stop at the newer doc. One doc from the future must not take the
+    # board down for everyone on it.
+    r = _handoff(target, "claim", "ordinary", "fine")
+    e.append(gc.expectation("an ordinary doc on the same board is completely unaffected",
+                            r.returncode == 0 and (doc / ".locks/ordinary-handoff").exists(),
+                            f"exit {r.returncode}"))
+
+    findings = gc.verify_findings(VERIFY, target)
+    e.append(gc.finding(findings, "doc.schema.ahead", "warn",
+                        label="verify reports the doc as ahead — a warn, since reading still works"))
+    return e
+
+
 def grade_script_behavior(target):
     e = []
     doc = Path(target) / HD
@@ -1016,6 +1073,9 @@ def _grade(target, eval_id):
 
     if eval_id == "script-behavior":
         return grade_script_behavior(target)
+
+    if eval_id == "schema-forward":
+        return grade_schema_forward(target)
 
     if eval_id == "layout-migration":
         return grade_layout_migration(target)

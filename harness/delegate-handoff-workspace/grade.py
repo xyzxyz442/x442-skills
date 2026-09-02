@@ -13,7 +13,8 @@ LLM-free; all mutation happens in an isolated temp copy (see isolated_git_target
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
-eval_id in {export-single | export-bundle | import-clean | import-hostile | unwired}.
+eval_id in {export-single | export-bundle | export-restricted | import-clean |
+            import-hostile | unwired}.
 Default (no eval_id, or an unrecognized one) is export-single.
 """
 
@@ -129,6 +130,65 @@ def _grade(target: Path, eval_id):
             exps.append(gc.expectation(f"{cid}: doc holds a lease", _lease_held(doc_dir, cid),
                                         f"lock dir present: {_lease_held(doc_dir, cid)}"))
             exps.append(gc.contains(target, cover_rel, cid, label=f"cover lists {cid}"))
+        return exps
+
+    if eval_id == "export-restricted":
+        # The negative of export-bundle. Everything here asserts that a refusal left NOTHING
+        # behind: a gate that refuses loudly but still stamps the doc, takes the lease, or writes
+        # half a bundle has not refused, it has failed halfway — and on this path the artifact it
+        # would leave behind is a brief that was about to be handed to somebody outside the board.
+        before = (doc_dir / "key-rotation-handoff.md").read_text(encoding="utf-8")
+        r = _handoff(target, "export", "key-rotation", "--to", TO)
+        out = r.stdout + r.stderr
+        exps.append(gc.expectation(
+            "export refuses a restricted unit", r.returncode != 0 and "restricted" in out,
+            f"exit {r.returncode}: {out.strip()[-160:]}"))
+        exps.append(gc.expectation(
+            "no brief was written",
+            not (doc_dir / "briefs" / "key-rotation-handoff.brief.md").exists(),
+            "briefs/key-rotation-handoff.brief.md absent"))
+        exps.append(gc.expectation(
+            "no lease was taken", not _lease_held(doc_dir, "key-rotation-handoff"),
+            f"lock dir present: {_lease_held(doc_dir, 'key-rotation-handoff')}"))
+        # Byte-identical, the same sharp assertion the hostile-import cases use: a refusal that
+        # printed the right words and still mutated the doc is a failed refusal.
+        exps.append(gc.expectation(
+            "the refusal leaves the doc byte-identical",
+            before == (doc_dir / "key-rotation-handoff.md").read_text(encoding="utf-8"),
+            "doc unchanged"))
+        # There is no --force for this one. --force-secret overrides the SCANNER; nothing
+        # overrides the sensitivity gate, and an override that quietly worked would unmake a
+        # stated decision about the work by accident.
+        rf = _handoff(target, "export", "key-rotation", "--to", TO, "--force-secret", "I am sure")
+        exps.append(gc.expectation(
+            "--force-secret does not unlock it", rf.returncode != 0,
+            f"exit {rf.returncode}: {(rf.stdout + rf.stderr).strip()[-120:]}"))
+
+        # WHOLE-bundle refusal. Shipping the ordinary sibling would hand an executor a cover
+        # naming a unit they were never sent.
+        rb = _handoff(target, "export", "auth-hardening", "--to", TO)
+        exps.append(gc.expectation(
+            "a bundle with a restricted child is refused whole",
+            rb.returncode != 0 and "restricted" in (rb.stdout + rb.stderr),
+            f"exit {rb.returncode}: {(rb.stdout + rb.stderr).strip()[-160:]}"))
+        for absent in ("briefs/auth-hardening-handoff.cover.md",
+                       "briefs/rate-limit-handoff.brief.md"):
+            exps.append(gc.expectation(
+                f"{absent} was not written", not (doc_dir / absent).exists(), f"{absent} absent"))
+
+        # The gate is SCOPED. A restricted unit on the board must not make the board
+        # undelegatable — that would be the fastest route to the flag being removed entirely.
+        ro = _handoff(target, "export", "rate-limit", "--to", TO)
+        exps.append(gc.expectation(
+            "the ordinary unit on the same board still exports",
+            ro.returncode == 0 and (doc_dir / "briefs" / "rate-limit-handoff.brief.md").is_file(),
+            f"exit {ro.returncode}: {(ro.stdout + ro.stderr).strip()[-160:]}"))
+
+        # And the index still names it. Redacting restricted titles makes the board useless for
+        # exactly the work that most needs coordination, and the id discloses as much anyway.
+        _handoff(target, "index")
+        exps.append(gc.contains(target, f"{HD}/INDEX.md", "Rotate the signing keys",
+                                 label="the index still lists the restricted unit by title"))
         return exps
 
     if eval_id == "import-clean":

@@ -26,6 +26,13 @@
       "expected_output": "A wired board with an orchestrator (release-hardening) over three coordination children (auth-flow, payment-flow, notif-flow), none yet exported. `handoff export release-hardening --to \"Acme Contracting\"` must fan out: a cover file listing all three children, one brief per child with a matching repo_root_commit, and each child's doc stamped delegated_to with a held lease."
     },
     {
+      "id": "export-restricted",
+      "kind": "post-state",
+      "prompt": "Delegate the auth-hardening work to an external contractor.",
+      "fixture": "fixtures/restricted",
+      "expected_output": "A wired board carrying one `sensitivity: restricted` unit (key-rotation), one ordinary unit (rate-limit), and a bundle over both. `handoff export key-rotation` must be refused outright with nothing written — no brief, no lease, no delegated_at stamp — and the bundle export must be refused WHOLE rather than shipping the ordinary sibling. The ordinary unit must still export normally, and the restricted unit must still appear in INDEX.md by title. sensitivity is a handling flag, not an access boundary."
+    },
+    {
       "id": "import-clean",
       "kind": "post-state",
       "prompt": "The contractor sent back a result for the rate-limit-fix handoff. Read it onto the board.",

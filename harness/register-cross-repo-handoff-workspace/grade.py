@@ -147,6 +147,10 @@ def grade_not_configured(fixture: Path) -> list:
         env = _sandbox_home(sandbox)  # guarantees no user-layer manifest makes it "configured"
         proc, summary_exp = _run_verify(work, env)
         not_configured = "not configured" in proc.stdout and proc.returncode == 0
+        # Asserted on the FINDING, not on the exit code. "Not configured" and "the verifier
+        # produced nothing at all" both exit 0 with an all-zero summary; only the finding tells
+        # them apart, which is the whole reason --json exists.
+        findings = gc.verify_findings(VERIFY, work, env=env)
         return [
             summary_exp,
             gc.expectation(
@@ -154,6 +158,8 @@ def grade_not_configured(fixture: Path) -> list:
                 not_configured,
                 f"exit {proc.returncode}; 'not configured' in output: {'not configured' in proc.stdout}",
             ),
+            gc.finding(findings, "manifest.not_configured", "pass",
+                       label="the verifier SAYS it is unconfigured, rather than merely exiting 0"),
         ]
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -186,6 +192,24 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         _, summary_exp = _run_verify(work, env)
         summary_exp["text"] = f"{tag} {summary_exp['text']}"
         exps.append(summary_exp)
+
+        # The advisory half. None of these change the exit code, so a grader reading only the
+        # status is blind to exactly the checks most likely to rot — a board that stopped
+        # projecting the manifest still exits 0 all the way to the first mis-targeted brief.
+        findings = gc.verify_findings(VERIFY, work, env=env)
+        for fid, label in (
+            ("manifest.cascade.resolves", "the cascade resolves"),
+            ("board.groups", "each board records its groups"),
+            ("board.layout", "each board records its layout"),
+            ("member.section", "each member resolves to its section"),
+            ("registry.projection", "each board's registry still projects the manifest"),
+        ):
+            e = gc.finding(findings, fid, "pass")
+            e["text"] = f"{tag} {label}"
+            exps.append(e)
+        e = gc.no_findings_at(findings, "fail")
+        e["text"] = f"{tag} no fail findings"
+        exps.append(e)
 
         # boards scaffolded with the right group facts
         shared_cfg = _board_config(work / ".agents/handoff")

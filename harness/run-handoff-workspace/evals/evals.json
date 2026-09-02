@@ -16,6 +16,20 @@
       "prompt": "You are blocked on another handoff; record that and release.",
       "fixture": "fixtures/board-wired",
       "expected_output": "Following the discipline (claim -> release --status blocked --blocked-on) must set status blocked and blocked_on in the doc, release the lease, and keep the doc on the open board."
+    },
+    {
+      "id": "discipline-secrets",
+      "kind": "post-state",
+      "prompt": "File and close work on this board. Some of the material you are pasting came out of a terminal.",
+      "fixture": "fixtures/board-wired",
+      "expected_output": "The write-path scanner refuses `new` and `release` when a credential is pasted into a flag, names the RULE that matched without echoing the value, and leaves the board untouched — no doc, no status change, no archive. `--force-secret \"<reason>\"` gets past it and records the override, with its reason and the rule that fired, on the doc's activity log."
+    },
+    {
+      "id": "discipline-restricted",
+      "kind": "post-state",
+      "prompt": "Pick up the signing-key rotation on this board.",
+      "fixture": "fixtures/board-wired",
+      "expected_output": "A `sensitivity: restricted` unit is still claimable — the flag governs handling, not access. Claiming it prints a banner that says both what the rule is and that it is NOT an access control, and the session-start board marks the row as restricted while still naming it. Export refusal is graded by delegate-handoff's export-restricted case."
     }
   ]
 }
