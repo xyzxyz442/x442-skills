@@ -917,5 +917,145 @@ chk "the table is inserted ABOVE the activity log, not appended under it" "befor
   "$([ "$(grep -n '## Children' "$CTB/legacy-bundle-handoff.md" | cut -d: -f1)" -lt \
     "$(grep -n '## Activity' "$CTB/legacy-bundle-handoff.md" | cut -d: -f1)" ] && echo before || echo after)"
 
+# --- a SHARED board: its own git repo, with a remote (ADR 0002) ------------------------
+# Every case above runs on a board nested inside a member repo, where the repo's remote is not the
+# board's — leases_shared is false there and the CLI must behave exactly as it always has. These
+# cases build the other shape: a standalone board that owns its repository and has a remote of its
+# own, which is the only shape push-CAS applies to.
+mkshared() { # -> board dir (its own repo, pushed to a bare remote beside it)
+  local base bare b
+  base="$(mktemp -d)"
+  bare="$base/origin.git"
+  git init -q --bare "$bare"
+  b="$base/board"
+  mkdir -p "$b/scripts" "$b/templates" "$b/archive" "$b/briefs"
+  cp "$HERE/handoff" "$b/handoff"
+  cp "$HERE/config.sh" "$b/scripts/config.sh"
+  cp "$ASSETS"/handoff-*-template.md "$b/templates/"
+  chmod +x "$b/handoff"
+  printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4\n}\n' > "$b/config.json"
+  # The stale rule a board carries from before it had a remote. The CLI must repair it, because
+  # leaving it turns every push-CAS into a commit of nothing.
+  printf '.locks/\n' > "$b/.gitignore"
+  git -C "$b" init -q
+  git -C "$b" config user.email "test@example.com"
+  git -C "$b" config user.name "test"
+  git -C "$b" remote add origin "$bare"
+  git -C "$b" add -A
+  git -C "$b" commit -qm "board"
+  git -C "$b" push -q -u origin HEAD
+  printf '%s' "$b"
+}
+
+printf '\nshared board — lease visibility and push-CAS\n'
+SB="$(mkshared)"
+"$SB/handoff" new cas-case --title "CAS case" --audience acme-api > /dev/null
+CLAIM_OUT="$("$SB/handoff" claim cas-case "first" 2>&1)"
+chk_contains "the claim reports repairing the stale .locks/ ignore rule" "$CLAIM_OUT" "removed '.locks/'"
+chk ".locks/ is no longer ignored on a remote-backed board" "" \
+  "$(grep -xF '.locks/' "$SB/.gitignore" 2> /dev/null)"
+chk "the lease is committed, not left in the worktree" "yes" \
+  "$(git -C "$SB" ls-files --error-unmatch .locks/cas-case-handoff/owner > /dev/null 2>&1 && echo yes || echo no)"
+chk "the claim commit was pushed" "" "$(git -C "$SB" status -sb | grep -o 'ahead')"
+chk "the doc travels with its lease" "yes" \
+  "$(git -C "$SB" ls-files --error-unmatch cas-case-handoff.md > /dev/null 2>&1 && echo yes || echo no)"
+chk "the generated index travels too, so the next fast-forward is not blocked" "yes" \
+  "$(git -C "$SB" ls-files --error-unmatch INDEX.md > /dev/null 2>&1 && echo yes || echo no)"
+
+printf '\nshared board — expiry is stamped from the commit, not the claiming clock\n'
+# Rewrite the recorded expiry into the deep past and commit it. On a shared board the reader
+# recomputes from the COMMIT time, so the lease is still live; trusting the field would report it
+# expired and hand the work to a second machine while the first is still holding it.
+grep -v '^expires=' "$SB/.locks/cas-case-handoff/owner" > "$SB/.locks/cas-case-handoff/owner.t"
+printf 'expires=1\n' >> "$SB/.locks/cas-case-handoff/owner.t"
+mv "$SB/.locks/cas-case-handoff/owner.t" "$SB/.locks/cas-case-handoff/owner"
+git -C "$SB" commit -qam "tamper"
+chk "a hand-edited expires= does not expire a committed lease" "held" \
+  "$(cd "$SB" && HANDOFF_NO_MAIN=1 . ./handoff && lock_state cas-case-handoff | cut -d'|' -f1)"
+
+printf '\nshared board — a second machine loses the race it did not win\n'
+SB2="$(mktemp -d)/clone"
+git clone -q "$(git -C "$SB" remote get-url origin)" "$SB2"
+git -C "$SB2" config user.email "other@example.com"
+git -C "$SB2" config user.name "other"
+"$SB/handoff" new race-case --title "Race case" --audience acme-api > /dev/null
+"$SB/handoff" claim race-case "machine one" > /dev/null
+git -C "$SB2" fetch -q && git -C "$SB2" merge -q --ff-only '@{upstream}'
+RACE_OUT="$("$SB2/handoff" claim race-case "machine two" 2>&1)"
+chk "the second machine's claim fails" "1" "$([ -n "$RACE_OUT" ] && echo 1 || echo 0)"
+chk_contains "and it says the lease is already held" "$RACE_OUT" "CLAIMED by"
+
+printf '\nshared board — claim is strict offline, release is optimistic\n'
+SB3="$(mkshared)"
+"$SB3/handoff" new offline-case --title "Offline case" --audience acme-api > /dev/null
+"$SB3/handoff" claim offline-case "before the network went" > /dev/null
+git -C "$SB3" remote set-url origin "/nonexistent/gone.git"
+OFF_CLAIM="$("$SB3/handoff" new second-case --title "Second case" --audience acme-api > /dev/null && "$SB3/handoff" claim second-case "offline" 2>&1)"
+chk_contains "claim refuses when the remote is unreachable" "$OFF_CLAIM" "cannot reach the board's remote"
+chk "nothing was claimed" "free" \
+  "$(cd "$SB3" && HANDOFF_NO_MAIN=1 . ./handoff && lock_state second-case-handoff | cut -d'|' -f1)"
+OFF_REL="$("$SB3/handoff" release offline-case --status open "stopping" 2>&1)"
+chk_contains "release still succeeds offline" "$OFF_REL" "Released offline-case-handoff"
+chk_contains "and says the push is still owed" "$OFF_REL" "push did not land"
+chk "the lease is gone locally either way" "free" \
+  "$(cd "$SB3" && HANDOFF_NO_MAIN=1 . ./handoff && lock_state offline-case-handoff | cut -d'|' -f1)"
+
+printf '\nshared board — a lost CAS leaves nothing behind\n'
+# Losing the race is the normal outcome of one, so the undo has to be complete: no lease, no
+# commit, and nothing that would make the NEXT fetch refuse. A remote that rejects the push is the
+# faithful simulation — it is precisely what a non-fast-forward rejection looks like to the client.
+SB4="$(mkshared)"
+SB4_REMOTE="$(git -C "$SB4" remote get-url origin)"
+cat > "$SB4_REMOTE/hooks/pre-receive" << 'HOOK'
+#!/bin/sh
+exit 1
+HOOK
+chmod +x "$SB4_REMOTE/hooks/pre-receive"
+"$SB4/handoff" new lost-case --title "Lost case" --audience acme-api > /dev/null
+LOST_OUT="$("$SB4/handoff" claim lost-case "will lose the race" 2>&1)"
+chk_contains "a rejected push refuses the claim rather than keeping it locally" "$LOST_OUT" "nothing was claimed"
+chk "no lease is left behind" "free" \
+  "$(cd "$SB4" && HANDOFF_NO_MAIN=1 . ./handoff && lock_state lost-case-handoff | cut -d'|' -f1)"
+chk "the losing commit is rolled back, so the next fetch still fast-forwards" "" \
+  "$(git -C "$SB4" log --oneline | grep -c 'claim lost-case' | grep -v '^0$')"
+chk "and the rollback used no hard reset — the doc it wrote is still on disk" "yes" \
+  "$([ -f "$SB4/lost-case-handoff.md" ] && echo yes || echo no)"
+
+
+printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
+# The registry carries no path at all. Resolution goes through the per-machine location map, which
+# is what lets one committed board resolve on a machine whose checkout layout differs from the
+# machine that wrote it.
+S2="$(mkboard)"
+S2_TARGET="$(mktemp -d)/acme-lib"
+mkdir -p "$S2_TARGET"
+git -C "$S2_TARGET" init -q
+git -C "$S2_TARGET" config user.email "test@example.com"
+git -C "$S2_TARGET" config user.name "test"
+printf 'x\n' > "$S2_TARGET/README.md"
+git -C "$S2_TARGET" add -A
+git -C "$S2_TARGET" commit -qm "initial commit"
+S2_ROOT="$(git -C "$S2_TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+cat > "$S2/.agents/handoff/repos.json" << JSON
+{
+  "version": 2,
+  "repos": [
+    { "group": "acme", "alias": "lib", "audience": "acme-lib-$$", "rootCommit": "$S2_ROOT" }
+  ]
+}
+JSON
+HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+mkdir -p "$HOME/.agents"
+printf '{ "version": 1, "locations": { "%s": "%s" } }\n' "$S2_ROOT" "$S2_TARGET" > "$HOME/.agents/handoff-locations.json"
+S2_OUT="$(cd "$S2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$S2/.agents/handoff" board_repo_entry "acme-lib-$$")"
+chk "a path-less entry resolves through the per-machine location map" \
+  "ok|$(cd "$S2_TARGET" && pwd -P)|$S2_ROOT" "$S2_OUT"
+printf '{ "version": 1, "locations": {} }\n' > "$HOME/.agents/handoff-locations.json"
+S2_MISS="$(cd "$S2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$S2/.agents/handoff" WORKSPACE_ROOT="/nonexistent" board_repo_entry "acme-lib-$$")"
+chk "an identified but unlocatable repo says so, rather than claiming it is undeclared" \
+  "no-location||$S2_ROOT" "$S2_MISS"
+export HOME="$HOME_SAVE"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

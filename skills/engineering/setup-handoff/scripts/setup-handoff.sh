@@ -11,7 +11,7 @@
 #       [--group <section>] [--groups <csv>] [--layout subfolder|prefix] \
 #       [--migrate <legacy-dir>] [--allow-verify-cmd]
 #
-#   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix]
+#   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
 #       no per-tool wiring, no AGENTS.md edit, no git/AGENTS.md precondition. This is what
 #       lets the cross-repo sync stand up a board without seeding it from a member project.
@@ -138,13 +138,13 @@ PY
 REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" HANDOFF_DIR="" MIGRATE="" ALLOW_VERIFY=0
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
-GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY=""
+GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE=""
 # GROUP_LIST_SET/LAYOUT_SET: whether --groups/--layout were PASSED at all (any value, including
 # an explicit empty string), as distinct from not passed. write_board_config needs this to tell
 # "override with empty" (flag passed as "") apart from "leave alone" (flag absent) — a plain
 # ${VAR:-} check on GROUP_LIST/LAYOUT can't make that distinction since both collapse to "".
 GROUP_LIST_SET="" LAYOUT_SET=""
-[ $# -gt 0 ] || die "usage: setup-handoff.sh <repo> --tools <list> --primary <tool|none> [opts] | --board-only <path> [--groups <csv>] [--layout ...]"
+[ $# -gt 0 ] || die "usage: setup-handoff.sh <repo> --tools <list> --primary <tool|none> [opts] | --board-only <path> [--groups <csv>] [--layout ...] [--remote <url>]"
 # --board-only is a distinct mode (no <repo> positional): scaffold a standalone board and exit.
 if [ "$1" = "--board-only" ]; then
   BOARD_ONLY="${2:-}"
@@ -198,6 +198,11 @@ while [ $# -gt 0 ]; do
       MIGRATE="${2:-}"
       shift 2
       ;;
+    --remote)
+      require_value --remote "$#" "${2:-}"
+      BOARD_REMOTE="${2:-}"
+      shift 2
+      ;;
     --allow-verify-cmd)
       ALLOW_VERIFY=1
       shift
@@ -207,12 +212,118 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$LAYOUT" ] && { case "$LAYOUT" in subfolder | prefix) ;; *) die "bad --layout: $LAYOUT (use subfolder|prefix)" ;; esac }
 
+# --- the board's own git substrate (ADR 0002) -------------------------------------------
+# A STANDALONE shared board is git-initialised non-optionally. It is the board of record: it holds
+# documents that exist nowhere else, and one that was never a repository has no history, no blame,
+# and no recovery — a board in exactly that state was found holding 193 irreplaceable documents.
+# A nested board is left alone; its history belongs to the repo that contains it.
+#
+# The remote is what makes it SHARED rather than merely versioned, and the two are worth telling
+# apart out loud: a versioned board still coordinates exactly one machine.
+board_write_gitignore() { # board-dir
+  local b="$1" gi="$b/.gitignore" t
+  t="$(mktemp)" || return 0
+  # `.locks/` is ephemeral machine state on a local-only board and shared state of record on a
+  # remote-backed one, so the rule is derived from the remote rather than assumed. Rewritten on
+  # every run, because a board that gains a remote later must stop ignoring its leases — the CLI
+  # repairs the same file on the claim path for a board that gains one between installs.
+  [ -f "$gi" ] && grep -vxF '.locks/' "$gi" > "$t"
+  if [ -z "$(git -C "$b" remote 2> /dev/null)" ]; then
+    printf '.locks/\n' >> "$t"
+  fi
+  if [ -s "$t" ] || [ -f "$gi" ]; then
+    cmp -s "$t" "$gi" 2> /dev/null || cat "$t" > "$gi"
+  fi
+  rm -f "$t"
+}
+
+# Clone-if-absent, so a teammate who runs the sync ends up on the SAME board rather than a fresh
+# empty one. That second board is not merely redundant: its history is unrelated to the real one, so
+# its first push is rejected as a non-fast-forward, and the obvious "fix" — forcing it — erases the
+# board everyone else is using. Bootstrapping is what stops that from ever being the situation.
+board_bootstrap() { # board-dir remote-url
+  local b="$1" url="$2" top
+  [ -n "$url" ] || return 0
+  top="$(git -C "$b" rev-parse --show-toplevel 2> /dev/null || true)"
+  if [ -n "$top" ] && [ "$(cd "$top" 2> /dev/null && pwd -P)" = "$(cd "$b" 2> /dev/null && pwd -P)" ]; then
+    return 0 # the board is already here and already a repository
+  fi
+  # Only into an absent or empty directory. Cloning over an existing board is a merge decision, and
+  # a merge decision is a repair job — not something an installer gets to make on its own.
+  if [ -d "$b" ] && [ -n "$(ls -A "$b" 2> /dev/null)" ]; then
+    echo "setup-handoff: $b already holds files but is not a git repository — not cloning $url over it."
+    echo "  Move it aside, or clone the board yourself and re-run."
+    return 0
+  fi
+  mkdir -p "$(dirname "$b")"
+  if git clone --quiet "$url" "$b" 2> /dev/null; then
+    echo "setup-handoff: cloned the board from $url into $b"
+  else
+    echo "setup-handoff: could not clone $url — scaffolding a new board at $b instead."
+    echo "  If that remote already holds a board, sort this out BEFORE pushing: two unrelated"
+    echo "  histories cannot merge, and forcing one over the other erases the board."
+  fi
+}
+
+# The board's own machinery has to be IN the board's history, or it is not really there. A board
+# scaffolded and left uncommitted looks fine locally and is empty to everyone who clones it; worse,
+# it has no commits at all, so its branch is unborn and the first `claim` reports something
+# confusing about HEAD instead of doing its job.
+#
+# Only the files this installer just wrote. Documents are not swept in: someone may have one open,
+# and committing it under an install's message would be both a lie and a surprise.
+board_commit_payload() { # board-dir
+  local b="$1" f
+  for f in handoff README.md config.json .gitignore .version scripts templates; do
+    [ -e "$b/$f" ] && git -C "$b" add -- "$b/$f" 2> /dev/null
+  done
+  git -C "$b" diff --cached --quiet 2> /dev/null && return 0 # nothing of ours changed
+  git -C "$b" commit --quiet -m "handoff: install board machinery" 2> /dev/null || {
+    echo "setup-handoff: could not commit the board machinery in $b (is git identity configured?)"
+    return 0
+  }
+  echo "setup-handoff: committed the board machinery"
+  [ -n "$(git -C "$b" remote 2> /dev/null)" ] || return 0
+  # Best effort. An unreachable remote at install time is normal (offline, or the remote is not
+  # created yet); the board is committed either way and the next claim pushes.
+  git -C "$b" push --quiet -u "$(git -C "$b" remote | head -1)" HEAD 2> /dev/null \
+    && echo "setup-handoff: pushed the board to its remote" \
+    || echo "setup-handoff: the board is committed but not pushed — push it when the remote is reachable."
+}
+
+board_ensure_git() { # board-dir [remote-url]
+  local b="$1" url="${2:-}" top
+  top="$(git -C "$b" rev-parse --show-toplevel 2> /dev/null || true)"
+  # Physical paths on both sides: git reports the physical toplevel (see the CLI's board_is_repo).
+  if [ -z "$top" ] || [ "$(cd "$top" 2> /dev/null && pwd -P)" != "$(cd "$b" && pwd -P)" ]; then
+    # Either nothing above it is a repository, or the repository above it is somebody else's —
+    # a board owned by no repo must own itself, not borrow a parent's history and remote.
+    git -C "$b" init --quiet || die "could not git init the board at $b"
+    echo "setup-handoff: git-initialised the board at $b (the board of record needs history)"
+  fi
+  if [ -n "$url" ] && [ -z "$(git -C "$b" remote 2> /dev/null)" ]; then
+    git -C "$b" remote add origin "$url" \
+      && echo "setup-handoff: added remote origin $url"
+  fi
+  board_write_gitignore "$b"
+  board_commit_payload "$b"
+  if [ -z "$(git -C "$b" remote 2> /dev/null)" ]; then
+    echo "setup-handoff: this board has NO REMOTE — it is versioned, but still reaches one machine."
+    echo "  Leases stay machine-local until it has one:"
+    echo "    git -C $b remote add origin <url> && git -C $b push -u origin HEAD"
+  fi
+}
+
 # --- --board-only: scaffold a standalone shared board, owned by no repo -----------------
 # Copies the payload + writes a cross-repo config (with any group facts), then exits. No per-tool
 # wiring, no AGENTS.md edit, no git/AGENTS.md precondition — the board is a plain directory the
 # cross-repo sync stands up before it wires the member repos that point at it. Idempotent.
 if [ -n "$BOARD_ONLY" ]; then
   case "$BOARD_ONLY" in /*) HDEST="$BOARD_ONLY" ;; *) HDEST="$(pwd)/$BOARD_ONLY" ;; esac
+  # Before anything is written: if a remote is declared and no board is here yet, this machine is
+  # JOINING an existing board, not creating one. The payload install below is byte-comparing and
+  # idempotent, so it lands cleanly on top of whatever the clone brought.
+  board_bootstrap "$HDEST" "$BOARD_REMOTE"
   mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive" "$HDEST/briefs"
   install_file "$PAYLOAD/handoff" "$HDEST/handoff"
   install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
@@ -225,6 +336,7 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
   chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
   write_board_config "$HDEST/config.json" cross-repo ""
+  board_ensure_git "$HDEST" "$BOARD_REMOTE"
   echo "setup-handoff: scaffolded standalone board at $HDEST (topology=cross-repo${GROUP_LIST:+, groups=$GROUP_LIST}${LAYOUT:+, layout=$LAYOUT})"
   exit 0
 fi

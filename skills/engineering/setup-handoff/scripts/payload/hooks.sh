@@ -193,7 +193,22 @@ meta() {
 }
 lock_session() { sed -n 's/^session=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_owner() { sed -n 's/^owner=//p' "$LOCKS/$1/owner" 2> /dev/null; }
-lock_expires() { sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null || echo 0; }
+# Expiry goes through config.sh's shared rule, exactly as the CLI's does. On a board with a remote
+# the deadline comes from the lease's COMMIT time rather than the writing machine's clock — and if
+# the gate applied a different rule than the CLI, it would deny edits to the rightful holder or
+# admit them to everyone else, with neither side reporting anything wrong.
+LEASES_SHARED=""
+leases_shared() {
+  if [ -z "$LEASES_SHARED" ]; then
+    if handoff_leases_shared "$DIR"; then LEASES_SHARED=1; else LEASES_SHARED=0; fi
+  fi
+  [ "$LEASES_SHARED" = 1 ]
+}
+lock_expires() {
+  local raw
+  raw="$(sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null)"
+  handoff_lease_expiry "$DIR" "$LOCKS/$1/owner" "${raw:-0}" "$TTL_HOURS"
+}
 lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]; }
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
@@ -265,7 +280,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
     local exp
-    exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+    exp="$(handoff_lease_expiry "$DIR" "$d/owner" "$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)" "$TTL_HOURS")"
     if [ "$(date +%s)" -ge "${exp:-0}" ]; then
       # remove the lease files then the now-empty dir (rmdir only removes empty dirs — no `rm -rf`)
       rm -f "$d"/owner 2> /dev/null
@@ -275,7 +290,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   return 0
 }
 touch_my_leases() { # auto-touch: extend every lease held by THIS session so active work never expires
-  local sess="$1"
+  local sess="$1" committed=0 exp d
   [ -n "$sess" ] || return 0
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
@@ -286,7 +301,25 @@ touch_my_leases() { # auto-touch: extend every lease held by THIS session so act
     echo "expires=$(($(date +%s) + TTL_HOURS * 3600))" >> "$t"
     cat "$t" > "$d/owner"
     rm -f "$t"
+    committed=1
   done
+  # On a shared board the deadline every other machine reads is the lease's COMMIT time, so the
+  # rewrite above extends nothing outside this checkout. Committing on every edit is not an option
+  # either — this is the post-edit hook, and a push per keystroke-sized change would make the board
+  # the slowest thing in the session. So the touch becomes a commit only in the last quarter of the
+  # TTL: one commit per lease per stretch of work, and an active session still never lapses
+  # mid-flight. Best effort throughout — a hook must never fail the session it runs in.
+  if [ "$committed" = 1 ] && leases_shared; then
+    for d in "$LOCKS"/*/; do
+      [ -d "$d" ] || continue
+      [ "$(sed -n 's/^session=//p' "$d/owner" 2> /dev/null)" = "$sess" ] || continue
+      exp="$(handoff_lease_expiry "$DIR" "$d/owner" 0 "$TTL_HOURS")"
+      [ "$(($(date +%s) + TTL_HOURS * 3600 / 4))" -lt "${exp:-0}" ] && continue
+      handoff_board_git "$DIR" add -- "$d/owner" \
+        && handoff_board_git "$DIR" commit --quiet -m "handoff: extend lease on $(basename "$d")" \
+        && handoff_board_git "$DIR" push --quiet "$(handoff_board_remote "$DIR")" HEAD
+    done
+  fi
   return 0
 }
 

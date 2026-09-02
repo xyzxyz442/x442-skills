@@ -1,6 +1,7 @@
 {
   "version": 1,
   "board": "./.agents/handoff",
+  "boardRemote": "git@github.com:acme/acme-handoff-board.git",
   "layout": "subfolder",
   "groups": {
     "auth-suite": {
@@ -27,6 +28,7 @@
     },
     "legacy": {
       "board": "./.agents/handoff-legacy",
+      "boardRemote": "git@github.com:acme/acme-handoff-legacy.git",
       "repos": [{ "alias": "monolith", "path": "./monolith" }]
     }
   }

@@ -24,7 +24,8 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
 
 1. **Universal payload (tool-agnostic, always installed)** under `.agents/handoff/`: the
    `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
-   `templates/` (the doc scaffolds), `.locks/` (gitignored), a committed `config` (topology + repo
+   `templates/` (the doc scaffolds), `.locks/` (gitignored on a board with no remote, committed on
+   one that has it — see **A shared board is a git repo**), a committed `config` (topology + repo
    name), and the `<!-- handoff -->` routing block appended to `AGENTS.md`. Because every tool's
    entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds
@@ -233,14 +234,22 @@ working and migrates on its next install.
   it **denies handoff-doc edits** with an actionable reason and never blocks ordinary files — the
   opposite of the reference's silent no-op. Combined with the install-time preflight, a broken
   enforcement surfaces instead of vanishing.
+- **A shared board is a git repo (ADR 0002).** `--board-only` git-initialises the board it
+  scaffolds — non-optionally, because the board of record holds documents that exist nowhere else,
+  and one that was never a repository has no history, no blame, and no recovery. `--remote <url>`
+  gives it a remote; without one it says plainly that it is versioned but still reaches one
+  machine. A board with a remote commits its `.locks/` and `claim` becomes a compare-and-swap over
+  `git push` — real mutual exclusion across machines, no server. A board without one keeps
+  ignoring `.locks/` and touches the network on no path at all. A nested (in-repo) board is left
+  alone: its history belongs to the repo containing it.
 - **Self-maintaining leases.** `sessionstart` auto-reaps expired leases; `posttool-edit`
   auto-touches the current session's leases so active work never expires mid-flight. `touch`/`reap`
   remain manual escape hatches.
 - **`done` is evidence-gated.** `release --status done` requires `--verified-by "<how>"` and
   refuses to trust-close. An optional `verify:` command is **never auto-run** (a cross-repo doc is
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
-- **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
-  only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+- **Two invariants, ported intact.** Ownership lives only in `.locks/`; durable state only in
+  frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
   If the repo formats markdown (prettier, dprint, a markdown linter), exclude
   `.agents/handoff/INDEX.md` from it — the generated tables are unaligned, a formatter rewrites them,
   and the next `claim`/`release` regenerates them unaligned again, so the file churns on every

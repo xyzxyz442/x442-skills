@@ -64,6 +64,43 @@ REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 # sections. Both empty => flat board, and every helper returns exactly today's paths.
 LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
 BOARD_GROUPS="${HANDOFF_GROUPS:-}"
+# --- board git substrate (ADR 0002) ----------------------------------------------------
+# The predicates themselves live in config.sh, which `hooks.sh` also sources: the CLI and the edit
+# gate must never disagree about whether a board is shared or when a lease lapses. What lives here
+# is only the $DIR-bound convenience wrapper and the per-invocation cache — `list` and `index` walk
+# every doc on the board and must not pay for a git process each time they ask.
+#
+# A board with no remote is not a broken shared board. It is the local-only board every existing
+# install already is, and it must keep behaving exactly as it did: leases ignored, no network on
+# any path, no git process on the read paths.
+board_git() { handoff_board_git "$DIR" "$@"; }
+board_remote() { handoff_board_remote "$DIR"; }
+
+_LEASES_SHARED=""
+leases_shared() {
+  if [ -z "$_LEASES_SHARED" ]; then
+    if handoff_leases_shared "$DIR"; then _LEASES_SHARED=1; else _LEASES_SHARED=0; fi
+  fi
+  [ "$_LEASES_SHARED" = 1 ]
+}
+
+# `.locks/` is gitignored on a local-only board (ephemeral machine state) and must NOT be on a
+# remote-backed one (shared state of record). A stale ignore rule does not fail loudly: it turns
+# push-CAS into a no-op, which is mutual exclusion that excludes nobody. Repair it on the claim
+# path rather than refusing — a board that just gained a remote would otherwise block every claim
+# until someone hand-edited a file, and the correct edit is not in question. Never silently.
+ensure_lease_visibility() {
+  leases_shared || return 0
+  local gi="$DIR/.gitignore" t
+  [ -f "$gi" ] || return 0
+  grep -qxF '.locks/' "$gi" 2> /dev/null || return 0
+  t="$(mktemp)" || return 0
+  grep -vxF '.locks/' "$gi" > "$t"
+  cat "$t" > "$gi"
+  rm -f "$t"
+  echo "This board has a remote, so leases are shared state — removed '.locks/' from its .gitignore."
+}
+
 slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
 
 # Guard for every value-taking flag in the subcommand arg loops below. A value that is missing (the
@@ -420,6 +457,12 @@ log_activity() { # path message -> append to the doc's Activity log
   printf -- '- %s — %s\n' "$(today)" "$msg" >> "$f"
 }
 
+# Bound to this board and this install's TTL default; the rule itself is in config.sh so the edit
+# gate applies exactly the same one.
+lease_expiry() { # owner-file fallback-expires -> epoch seconds
+  handoff_lease_expiry "$DIR" "$1" "${2:-0}" "$TTL_HOURS"
+}
+
 lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|exp"
   local id="$1" d="${2:-$LOCKS}/$1"
   [ -d "$d" ] || {
@@ -429,6 +472,7 @@ lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|ex
   local owner exp
   owner="$(sed -n 's/^owner=//p' "$d/owner" 2> /dev/null || echo unknown)"
   exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+  exp="$(lease_expiry "$d/owner" "${exp:-0}")"
   if [ "$(now)" -ge "${exp:-0}" ]; then echo "expired|$owner|$exp"; else echo "held|$owner|$exp"; fi
 }
 
@@ -1403,9 +1447,105 @@ board_repo_entry() { # audience -> "reason|abs-path|attested-root"
     return
   }
   python3 - "$DIR/repos.json" "$DIR" "$aud" "$GROUP" << 'PY'
-import json, os, sys
+import json, os, subprocess, sys
 
 reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+HOME = os.path.expanduser("~")
+# The per-machine layer. It sits beside ~/.agents/handoff-repos.json — the cascade's user layer —
+# because it answers the same kind of question ("where on THIS disk") and must never be committed
+# for the same reason. A gitignored file inside the board was rejected: a board is cloned by every
+# member, and a location map is true for exactly one of them.
+LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
+
+
+def out(s):
+    sys.stdout.write(s)
+    raise SystemExit(0)
+
+
+def root_commit(path):
+    """The repo's first commit — the identity that survives being moved, renamed, or re-cloned."""
+    if not os.path.isdir(path):
+        return ""
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-list", "--max-parents=0", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = [ln for ln in r.stdout.split() if ln]
+    return lines[-1] if lines else ""
+
+
+def load_locations():
+    try:
+        with open(LOCATIONS) as fh:
+            data = json.load(fh)
+        locs = data.get("locations")
+        return locs if isinstance(locs, dict) else {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def remember(sha, path):
+    """Cache a discovered location. Best-effort: a machine that cannot write $HOME still resolves,
+    it just pays for the scan again next time."""
+    try:
+        os.makedirs(os.path.dirname(LOCATIONS), exist_ok=True)
+        try:
+            with open(LOCATIONS) as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault("version", 1)
+        data.setdefault("locations", {})
+        if not isinstance(data["locations"], dict):
+            data["locations"] = {}
+        data["locations"][sha] = path
+        tmp = LOCATIONS + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, LOCATIONS)
+    except OSError:
+        pass
+
+
+def scan_roots():
+    """Where to look for a checkout whose root commit matches. $WORKSPACE_ROOT is the declared
+    answer; the board's own parent directories are the fallback, because a board scaffolded by the
+    cross-repo sync sits beside the repos it coordinates. One level deep only — a full-disk walk on
+    every unresolved audience is not a lookup, it is a hang."""
+    roots = []
+    for raw in (os.environ.get("WORKSPACE_ROOT", ""), os.path.dirname(board),
+                os.path.dirname(os.path.dirname(board))):
+        if not raw:
+            continue
+        p = os.path.realpath(os.path.expanduser(raw))
+        if os.path.isdir(p) and p not in roots:
+            roots.append(p)
+    return roots
+
+
+def discover(sha):
+    for root in scan_roots():
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for name in names:
+            if name.startswith("."):
+                continue
+            cand = os.path.join(root, name)
+            if not os.path.isdir(os.path.join(cand, ".git")):
+                continue
+            if root_commit(cand) == sha:
+                remember(sha, cand)
+                return cand
+    return ""
+
+
 try:
     with open(reg) as fh:
         data = json.load(fh)
@@ -1413,11 +1553,13 @@ try:
     if not isinstance(repos, list):
         raise ValueError("repos is not a list")
 except Exception:  # noqa: BLE001 - any unreadable registry is one failure mode: do not trust it
-    sys.stdout.write("bad-registry||")
-    raise SystemExit(0)
+    out("bad-registry||")
 
+# `path` is no longer required for an entry to be usable — rootCommit alone identifies the repo,
+# which is the whole point of schema 2. A v1 entry still carries a path and it is still honoured
+# below, as a hint that has to prove itself.
 hits = [r for r in repos
-        if isinstance(r, dict) and r.get("audience") == aud and r.get("path") and r.get("rootCommit")]
+        if isinstance(r, dict) and r.get("audience") == aud and r.get("rootCommit")]
 # The manifest is the fence: a repo coordinates only with the peers ITS OWN group lists, and a
 # handoff only ever acts within its caller's section. Restricting to that section is not a
 # tiebreak — it is the same scoping every other command already applies, and it lets two groups
@@ -1427,17 +1569,41 @@ hits = [r for r in repos
 if group:
     hits = [r for r in hits if r.get("group") == group]
 if not hits:
-    sys.stdout.write("no-entry||")
-elif len(hits) > 1:
+    out("no-entry||")
+if len(hits) > 1:
     # Two repos answering to one audience within one section is not a tie to break by heuristic —
     # it is a manifest the operator has to fix. Resolving either would be a coin flip rendered as
     # verified.
-    sys.stdout.write("ambiguous||")
-else:
-    r = hits[0]
-    # The stored path is relative to the BOARD dir (portable across machines), never to a cwd.
-    sys.stdout.write("ok|%s|%s" % (
-        os.path.realpath(os.path.join(board, r["path"])), r["rootCommit"]))
+    out("ambiguous||")
+
+entry = hits[0]
+sha = entry["rootCommit"]
+
+# Resolution order, all of it keyed on the committed identity and none of it on a committed
+# location: the per-machine map, then the v1 path (accepted only if that checkout really is this
+# repo), then a bounded discovery scan whose answer is cached back into the map.
+cached = load_locations().get(sha)
+if cached and root_commit(cached) == sha:
+    out("ok|%s|%s" % (os.path.realpath(cached), sha))
+
+# A schema-1 entry's path is honoured UNVERIFIED, exactly as before. Attestation is the caller's
+# job — brief_identity compares the live root commit against the attested one and degrades to
+# "unverified" with a re-sync instruction when they disagree. Verifying here instead would collapse
+# "the recorded path now holds a different repo" (a stale registry, fix by re-syncing) into "no
+# checkout of this repo was found" (a missing clone, fix by cloning), and the operator would be
+# told to do the wrong thing.
+legacy = entry.get("path")
+if legacy:
+    out("ok|%s|%s" % (os.path.realpath(os.path.join(board, legacy)), sha))
+
+found = discover(sha)
+if found:
+    out("ok|%s|%s" % (os.path.realpath(found), sha))
+
+# Identified but not located. Distinct from "not declared": the board knows exactly which repo is
+# meant and this machine simply does not have it where anything can see it, which is a different
+# thing to tell the operator and a different thing to fix.
+out("no-location||%s" % sha)
 PY
 }
 
@@ -1473,6 +1639,13 @@ brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
       ambiguous)
         target=""
         note="> **Warning** — more than one repository on this board claims the audience \`$aud\`, so there is no single target and identity was not resolved. Fix the group manifest, re-sync, then re-export."
+        ;;
+      no-location)
+        # Identified but not located: the board knows which repo is meant, this machine just does
+        # not have it anywhere the resolver looks. That is a per-machine problem with a per-machine
+        # fix, and saying so is more useful than the generic "not declared" warning.
+        target=""
+        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in \`~/.agents/handoff-locations.json\`, then re-export."
         ;;
       bad-registry)
         target=""
@@ -1750,6 +1923,118 @@ cmd_list() {
   fi
 }
 
+# --- push-CAS lease transport (ADR 0002) -----------------------------------------------
+# `claim` is STRICT and `release` is OPTIMISTIC, and the asymmetry is the design, not an
+# inconsistency. A claim asserts something about the FUTURE ("nobody else may work this"), and an
+# assertion made without seeing the other machines' leases is not mutual exclusion — it is a local
+# file. A release records something that ALREADY HAPPENED, so refusing it offline would strand a
+# lease that its holder has already stopped working, which is the one failure the board exists to
+# prevent. Reads never touch the network at all.
+
+# Fetch and fast-forward so the local view of the leases is current. Never merge, never rebase: a
+# board whose history has genuinely diverged is a repair job, and papering over it on the claim
+# path is how two machines end up both believing they hold the same lease.
+board_sync_or_die() {
+  local br
+  board_git fetch --quiet || die "cannot reach the board's remote, so this claim cannot be safe.
+       'claim' needs the network to see other machines' leases (ADR 0002).
+       Reconnect and retry — 'release' still works offline."
+  board_git rev-parse --verify --quiet HEAD > /dev/null \
+    || die "the board has no commits yet, so there is nothing to claim against.
+       Re-run setup-handoff on it — the installer commits the board's machinery."
+  br="$(board_git rev-parse --abbrev-ref HEAD)"
+  [ -n "$br" ] && [ "$br" != "HEAD" ] || die "the board is in detached HEAD — check out its branch before claiming."
+  board_git rev-parse --verify --quiet '@{upstream}' > /dev/null || return 0 # no upstream yet; the first push sets it
+  board_git merge --ff-only --quiet '@{upstream}' && return 0
+  die "the board's local history has diverged from its remote, or an uncommitted change is in the way.
+       A claim will not merge that for you — sort it out in $DIR, then retry."
+}
+
+# What `cmd_index` regenerates and therefore what a lease commit must carry with it. These are
+# DERIVED files: committing them alongside the lease is safe, and leaving them behind is not —
+# an uncommitted generated file makes the next fast-forward refuse, so the board's own bookkeeping
+# would take the claim path down. Orchestrator docs are included because a claim changes the Lease
+# column of every bundle table the claimed doc appears in.
+board_generated_dirty() { # -> board-relative paths, one per line
+  local line rel
+  # `status --porcelain` rather than `diff`, because a freshly generated INDEX.md on a board whose
+  # first claim has not landed yet is UNTRACKED, and `diff` cannot see an untracked file. That was
+  # the whole failure mode: the index would never enter history, and every fast-forward afterwards
+  # would be fighting a file git had never been told about.
+  while IFS= read -r line; do
+    rel="${line:3}"
+    rel="${rel##* -> }" # a rename (a `done` release archives its doc through git mv)
+    rel="${rel%\"}"
+    rel="${rel#\"}"
+    [ -n "$rel" ] || continue
+    case "$rel" in
+      INDEX.md | */INDEX.md)
+        printf '%s\n' "$rel"
+        continue
+        ;;
+    esac
+    [ -f "$DIR/$rel" ] && is_orchestrator "$DIR/$rel" && printf '%s\n' "$rel"
+  done < <(board_git status --porcelain --untracked-files=all)
+}
+
+# The compare-and-swap itself. Commit the lease, push it, and let the REMOTE decide who won: a
+# rejected non-fast-forward push means another machine committed a lease against the same parent
+# first. There is no race window left to close by hand — this is the primitive git already gives
+# every branch, applied to a file whose whole purpose is to be claimed exactly once.
+lease_commit_push() { # key subject [doc-path] -> 0 won, non-zero lost or could not record
+  local key="$1" subject="$2" doc="${3:-}" rel
+  board_git add -- "$LOCKS/$key" || return 1
+  [ -n "$doc" ] && [ -e "$doc" ] && board_git add -- "$doc"
+  # ensure_lease_visibility may have just rewritten this; leaving it behind means the repair is
+  # re-announced on every claim and the board goes on ignoring leases for everyone else.
+  [ -f "$DIR/.gitignore" ] && board_git add -- "$DIR/.gitignore"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git commit --quiet -m "$subject" || return 1
+  board_git push --quiet "$(board_remote)" HEAD || return 1
+  return 0
+}
+
+# Losing the CAS is the NORMAL outcome of a race, not an error state, so the undo has to be
+# narrow and safe. `reset --soft` keeps the worktree; clear_lock removes the owner file we just
+# wrote; re-staging that one path brings the index back in line with HEAD. There is no
+# `reset --hard` and no recursive delete anywhere on this path — a board holds irreplaceable
+# documents, and the generated files swept into the commit are regenerated by the next index run.
+lease_rollback() { # key
+  board_git reset --soft --quiet HEAD~1
+  clear_lock "$1"
+  board_git add --all -- "$LOCKS/$1"
+}
+
+# Release's transport. Every failure here is a WARNING: the release already happened in the
+# frontmatter, and the lease is already gone locally. Saying "release failed" would be false and
+# would invite a retry that has nothing left to do.
+release_commit_push() { # subject [doc-path]
+  leases_shared || return 0
+  local rel doc="${2:-}"
+  board_git add --all -- "$LOCKS" 2> /dev/null
+  [ -f "$DIR/.gitignore" ] && board_git add -- "$DIR/.gitignore"
+  # `done` archives the doc through `git mv`, which is already staged; an open/blocked release only
+  # rewrote its frontmatter, which is not. Stage whichever happened — the doc's status IS the state
+  # other machines came here to read.
+  [ -n "$doc" ] && [ -e "$doc" ] && board_git add -- "$doc"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git diff --cached --quiet && return 0 # nothing of ours to record
+  if ! board_git commit --quiet -m "$1"; then
+    echo "⚠️  The release is recorded in the doc, but it could not be committed to the board."
+    echo "    Commit and push $DIR yourself so other machines see the lease is free."
+    return 0
+  fi
+  if ! board_git push --quiet "$(board_remote)" HEAD; then
+    echo "⚠️  Released locally and committed, but the push did not land (offline?)."
+    echo "    Other machines still see this lease as held until you push $DIR."
+  fi
+  return 0
+}
+
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
@@ -1759,13 +2044,21 @@ cmd_claim() {
   local note="${*:-}"
   # Resolve the doc BEFORE deriving the lock key. The key is a pure function of the id, so an
   # unresolvable id would otherwise mint a lease for a doc that does not exist.
-  local f
+  local f doc_path
   f="$(doc_of "$id")" || no_such "$id"
+  doc_path="$f" # survives cmd_index, which walks every doc on the board
   local key
   key="$(lock_key "$id")" # the lock is keyed on the doc's stem, unique board-wide across sections
   is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
+
+  # On a shared board the lease state worth checking is the REMOTE's, so fetch before reading it.
+  # Both of these are no-ops on a local-only board and cost it nothing.
+  if leases_shared; then
+    board_sync_or_die
+    ensure_lease_visibility
+  fi
 
   local kind owner exp
   IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
@@ -1791,6 +2084,9 @@ cmd_claim() {
     echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
     echo "claimed=$(now)"
     echo "expires=$exp_new"
+    # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
+    # claimer's TTL rather than its own — two members may configure different ttlHours.
+    echo "ttl_hours=$TTL_HOURS"
     echo "note=$note"
   } > "$LOCKS/$key/owner"
 
@@ -1798,8 +2094,22 @@ cmd_claim() {
     echo "⚠️  Took over an EXPIRED lease from $owner (expired $(human "$exp"))."
     log_activity "$f" "lease taken over from $owner (expired $(human "$exp")) by $me"
   fi
-  echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
   cmd_index
+
+  # The compare-and-swap. The local `mkdir` above already excluded every other process on THIS
+  # machine; the push is what excludes the other machines. Run it after cmd_index so the generated
+  # files travel in the same commit — see board_generated_dirty for why they cannot be left behind.
+  if leases_shared && ! lease_commit_push "$key" "handoff: claim $id" "$doc_path"; then
+    lease_rollback "$key"
+    board_git fetch --quiet
+    board_git merge --ff-only --quiet '@{upstream}'
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+    [ "$kind" = "held" ] \
+      && die "$id was claimed by $owner first — their push landed before yours. Nothing was claimed here. Pick another handoff, or ask $owner."
+    die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
+  fi
+
+  echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
 }
 
 cmd_touch() {
@@ -1817,6 +2127,10 @@ cmd_touch() {
   echo "expires=$(($(now) + TTL_HOURS * 3600))" >> "$t"
   cat "$t" > "$LOCKS/$key/owner"
   rm -f "$t"
+  # On a shared board the deadline other machines read is the lease's COMMIT time, so an extension
+  # that is not committed extends nothing outside this checkout. Optimistic, like a release: if the
+  # push cannot land, the extension is still real locally and saying "touch failed" would be false.
+  release_commit_push "handoff: extend lease on $id" "$(doc_of "$id" 2> /dev/null)"
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
@@ -1828,6 +2142,7 @@ cmd_touch() {
 # and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
 finish_release() { # id status
   clear_lock "$(lock_key "$1")"
+  _release_subject="handoff: release $1 ($2)"
   # A closed handoff is no longer awaiting review; leaving `review: pending` set would make a
   # reopened doc read as pending against a review that already happened. doc_of searches active
   # THEN archive, so this reaches the doc whether or not a `done` release above already moved it.
@@ -1845,6 +2160,9 @@ finish_release() { # id status
   rf="$(doc_of "$1" 2> /dev/null)"
   [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
   cmd_index
+  # Optimistic by design: this records something that already happened, so a failure to reach the
+  # remote is a warning and the release still stands. See release_commit_push.
+  release_commit_push "$_release_subject" "$rf"
 }
 
 cmd_release() {
@@ -2119,6 +2437,11 @@ cmd_reap() { # show (and with --force, clear) expired leases
     fi
   done
   [ "$found" = 0 ] && echo "No expired leases."
+  # A reap on a shared board deletes TRACKED files. Left uncommitted, those deletions are exactly
+  # the local modification that makes the next claim's fast-forward refuse — so the board's own
+  # self-healing would take the claim path down. Optimistic like a release: this records a lease
+  # that had already lapsed, so a failed push is a warning, not a reason to keep the lease.
+  [ "$force" = "--force" ] && release_commit_push "handoff: reap expired leases"
   return 0
 }
 
@@ -2127,7 +2450,10 @@ cmd_reap() { # show (and with --force, clear) expired leases
 # because a sub-index always sits in the same directory as its docs (the group subdir for subfolder,
 # $DIR for prefix/flat), and archive links `./archive/$base.md` for the same reason.
 write_section_index() {
-  local out
+  # `f` is local because it is a LOOP variable here and a doc path in every caller. Without this
+  # declaration, cmd_index quietly overwrites its caller's `$f` with whichever doc happened to be
+  # iterated last — which is exactly what made the claim path commit its lease without the doc.
+  local out f
   out="$(sec_index)"
   mkdir -p "$(dirname "$out")"
   {

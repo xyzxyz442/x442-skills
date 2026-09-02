@@ -188,9 +188,28 @@ print(",".join(sorted(set(d)-known)))' "$HD/config.json" 2> /dev/null)"
   fi
 fi
 if [ "$TOPO" = "cross-repo" ]; then
-  # Shared board lives outside the worktree and owns its own .gitignore; a consumer .locks/ entry
-  # would be inert, so its absence is correct — not a warning.
-  ok ".gitignore .locks/ check skipped (cross-repo: shared board self-ignores its .locks/)"
+  # A shared board lives outside the worktree and owns its own .gitignore, so a consumer `.locks/`
+  # entry would be inert. What matters instead is the board's own substrate (ADR 0002): is it a
+  # repository, does it have a remote, and does its lease rule match the answer? A board that
+  # ignores `.locks/` while having a remote is the quiet failure — push-CAS still runs, still
+  # commits nothing, and still reports success, so every machine believes it holds every lease.
+  BOARD_TOP="$(git -C "$HD" rev-parse --show-toplevel 2> /dev/null || true)"
+  if [ -z "$BOARD_TOP" ] || [ "$(cd "$BOARD_TOP" 2> /dev/null && pwd -P)" != "$(cd "$HD" && pwd -P)" ]; then
+    warn "the board at $HD is not its own git repository — it has no history and cannot be shared. Re-run setup-handoff --board-only on it."
+  else
+    ok "the board is its own git repository"
+    if [ -n "$(git -C "$HD" remote 2> /dev/null)" ]; then
+      ok "the board has a remote — leases are shared state"
+      grep -qxF '.locks/' "$HD/.gitignore" 2> /dev/null \
+        && warn "the board has a remote but still gitignores .locks/ — leases never travel, so push-CAS excludes nobody. Remove that line (the CLI also repairs it on the next claim)." \
+        || ok "the board's .locks/ is tracked, as a remote-backed board requires"
+    else
+      warn "the board at $HD has NO REMOTE — versioned, but it still reaches exactly one machine. Add one: git -C $HD remote add origin <url>"
+      grep -qxF '.locks/' "$HD/.gitignore" 2> /dev/null \
+        && ok "the board gitignores .locks/, as a local-only board should" \
+        || warn "a local-only board should gitignore .locks/ (leases are machine state until the board has a remote)"
+    fi
+  fi
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok ".gitignore excludes .locks/" || warn ".gitignore missing a .locks/ entry — leases could get committed"
 fi

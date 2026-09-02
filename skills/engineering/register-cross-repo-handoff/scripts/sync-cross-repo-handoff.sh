@@ -93,7 +93,7 @@ for t in d.get("tombstones", []):
 PY
 
 # --- emit a shell-parseable plan (bash never parses JSON) -----------------------------------------
-# BOARD<TAB>path<TAB>groups_csv<TAB>layout
+# BOARD<TAB>path<TAB>groups_csv<TAB>layout<TAB>remote
 # MEMBER<TAB>group<TAB>board<TAB>board_groups_csv<TAB>layout<TAB>alias<TAB>audience<TAB>repo<TAB>exists<TAB>has_agents
 PLAN="$(
   python3 - "$RESOLVED" << 'PY'
@@ -101,7 +101,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 boards = {b["path"]: b for b in d["boards"]}
 for b in d["boards"]:
-    print("\t".join(["BOARD", b["path"], ",".join(sorted(b["groups"])), d["layout"]]))
+    print("\t".join(["BOARD", b["path"], ",".join(sorted(b["groups"])), d["layout"], b.get("remote", "")]))
 for g in d["groups"]:
     bg = ",".join(sorted(boards[g["board"]]["groups"]))
     for m in g["members"]:
@@ -123,10 +123,17 @@ run() { # echo + run, or just echo under --dry-run
 
 # --- 1. scaffold each distinct board (standalone) ------------------------------------------------
 note "== boards =="
-while IFS=$'\t' read -r kind path groups layout; do
+while IFS=$'\t' read -r kind path groups layout remote; do
   [ "$kind" = "BOARD" ] || continue
-  note "board $path (groups: $groups, layout: $layout)"
-  run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
+  note "board $path (groups: $groups, layout: $layout${remote:+, remote: $remote})"
+  # --remote is passed through, not applied here: setup-handoff owns the board's git substrate, so
+  # the init/remote/.gitignore decisions live in ONE place rather than being re-derived per caller.
+  # A board with no declared remote is still git-initialised; it just says so.
+  if [ -n "$remote" ]; then
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout" --remote "$remote"
+  else
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
+  fi
 done <<< "$PLAN"
 
 # --- 1b. project the manifest into each board as repos.json --------------------------------------
@@ -136,7 +143,7 @@ done <<< "$PLAN"
 # export` resolves a cross-repo brief's target repo from that file instead of guessing a sibling
 # directory by name. registry.py owns the projection so this and the verifier cannot disagree.
 note "== board repo registries =="
-while IFS=$'\t' read -r kind path groups layout; do
+while IFS=$'\t' read -r kind path groups layout remote; do
   [ "$kind" = "BOARD" ] || continue
   if [ "$DRYRUN" = 1 ]; then
     note "  would: write $path/repos.json"

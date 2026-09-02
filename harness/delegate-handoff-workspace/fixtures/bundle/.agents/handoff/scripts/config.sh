@@ -12,6 +12,59 @@
 # repo's installer and read by every member's hooks, so executing it would let one repo run shell
 # in its siblings' sessions. The legacy KEY=value file is PARSED for the same reason.
 
+# --- board git substrate (ADR 0002) ----------------------------------------------------
+# Lives here, beside the config resolver, for the reason stated above: `handoff` and `hooks.sh` are
+# two readers of one board, and anything they each re-derive is something they can each get wrong
+# differently. Lease expiry is the sharp case — if the CLI and the edit gate disagree about when a
+# lease lapses, the gate denies edits to the holder or admits them to everyone else, and neither
+# side reports a problem.
+#
+# A board is SHARED when it is the root of its own git worktree AND has a remote. Merely sitting
+# inside some repository is not enough: a nested board's remote belongs to the repo containing it,
+# so committing a lease there would push that repo's source alongside it.
+handoff_board_git() { # board-dir git-args...
+  local b="$1"
+  shift
+  git -C "$b" "$@" 2> /dev/null
+}
+handoff_board_remote() { handoff_board_git "$1" remote | head -1; }
+
+handoff_leases_shared() { # board-dir -> 0 when leases are shared state of record
+  local b="$1" top
+  top="$(handoff_board_git "$b" rev-parse --show-toplevel)" || return 1
+  [ -n "$top" ] || return 1
+  # `pwd -P` on both sides: git always reports the PHYSICAL toplevel, while `pwd` reports the
+  # logical path the caller arrived by. On macOS a board under $TMPDIR is reached through /var and
+  # lives at /private/var, so a logical comparison decides no board is ever its own repo — and
+  # every shared-board behavior switches itself off without a word.
+  [ "$(cd "$top" && pwd -P)" = "$(cd "$b" && pwd -P)" ] || return 1
+  [ -n "$(handoff_board_remote "$b")" ]
+}
+
+# Expiry of a COMMITTED lease is stamped from the commit that recorded it, never from the wall
+# clock of the machine that wrote the file. Two machines' clocks do not agree, and the whole point
+# of a shared lease is that both of them read the same deadline out of it: a claimer running an
+# hour fast would otherwise hand every peer a lease that already looks expired. `ttl_hours=` travels
+# inside the owner file so the reader applies the CLAIMER's TTL rather than its own.
+#
+# Falls back to the recorded `expires=` whenever git cannot answer — a local-only board, a lease
+# not yet committed, no git at all — so a board without a remote is unchanged in behavior.
+handoff_lease_expiry() { # board-dir owner-file fallback-expires default-ttl-hours -> epoch seconds
+  local b="$1" f="$2" fallback="${3:-0}" ttl_default="${4:-4}" ct ttl
+  handoff_leases_shared "$b" || {
+    printf '%s' "$fallback"
+    return
+  }
+  ct="$(handoff_board_git "$b" log -1 --format=%ct -- "$f")"
+  [ -n "$ct" ] || {
+    printf '%s' "$fallback"
+    return
+  }
+  ttl="$(sed -n 's/^ttl_hours=//p' "$f" 2> /dev/null)"
+  case "$ttl" in '' | *[!0-9]*) ttl="$ttl_default" ;; esac
+  printf '%s' "$((ct + ttl * 3600))"
+}
+
 # handoff_config_load BOARD_DIR [REPO_DIR] -> prints shell assignments; non-zero on bad config.
 handoff_config_load() {
   local board="$1" repo="${2:-}"

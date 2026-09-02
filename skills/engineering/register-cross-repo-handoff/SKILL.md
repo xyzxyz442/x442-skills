@@ -100,8 +100,12 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 
 - Resolves the cascade with `scripts/manifest/resolve.py` (read-only; the same brain the verifier
   uses, so they cannot disagree).
-- Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …`
-  — a standalone board owned by no repo.
+- Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …
+[--remote <url>]` — a standalone board owned by no repo. The board is **git-initialised
+  non-optionally**: it is the board of record, and one that was never a repository has no history,
+  no blame, and no recovery for documents that exist nowhere else. Declare its remote as
+  `boardRemote` in the manifest and the sync passes it through; without one the board is versioned
+  but still reaches exactly one machine, and the sync says so.
 - Wires each member via `setup-handoff.sh <repo> --topology cross-repo --handoff-dir <board>
 --group <group> …`, which installs the hooks, Claude `additionalDirectories`, and the standard
   handoff block. The section itself is written to the member's own `.agents/handoff.config.json`,
@@ -147,22 +151,33 @@ can read it — `<board>/repos.json`, generated, never hand-edited:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "repos": [
     {
       "group": "auth-suite",
       "alias": "api",
       "audience": "api",
-      "path": "../../api",
       "rootCommit": "4f2a1c9e…"
     }
   ]
 }
 ```
 
-`path` is relative to the **board** directory, so a committed board stays portable. `rootCommit` is
-an **attestation, not a value to copy**: export reads the live root commit at that path and trusts
-the location only when the two agree. Everything that can go wrong degrades to
+**Schema 2 records identity and nothing else.** A repo's root commit is what it is on every
+machine; a path is what it is on one. Schema 1 stored both, and that one `path` field is what
+pinned a board to a single disk — `"../../../../acme-lib"` resolves nowhere else, so a board could
+be committed, cloned, and still useless to the person who cloned it (ADR 0002).
+
+Location is now a per-machine concern, resolved by the CLI in this order:
+
+1. `~/.agents/handoff-locations.json` — the uncommitted map, beside the cascade's own user layer.
+2. A schema-1 entry's `path`, if the file still has one. Still honoured, still unverified.
+3. A bounded scan of `$WORKSPACE_ROOT` and the board's parent directories, one level deep, whose
+   answer is cached back into the map.
+
+`rootCommit` remains an **attestation, not a value to copy**: export reads the live root commit at
+whatever location resolved and trusts it only when the two agree. Everything that can go wrong
+degrades to
 `repo_root_commit: unverified` with its own warning, and `import --result` then demands
 `--force-repo` plus a human check — a moved checkout, a manifest edited without a re-sync, an
 audience the registry does not declare, an audience claimed twice inside one group, an unreadable
@@ -179,6 +194,30 @@ member's briefs render `unverified` — honest, but degraded.
 A member with no attestable root commit at sync time (not on disk, not a git repo, no commits) gets
 **no entry**, and the sync warns. An unattestable entry would be a guess, which is the thing this
 file exists to eliminate.
+
+A repo the registry identifies but this machine cannot locate reports `no-location` rather than
+"not declared". The two look alike and are fixed differently: the first wants a clone (or an entry
+in the location map), the second wants a manifest change and a re-sync.
+
+## The board's remote
+
+A board with a remote is **shared**; a board without one is merely **versioned**. The difference is
+not cosmetic — it is what decides whether `claim` can exclude another machine at all, because the
+lease primitive is `git push` acting as a compare-and-swap (ADR 0002).
+
+```json
+{
+  "board": "./.agents/handoff",
+  "boardRemote": "git@github.com:acme/acme-handoff-board.git"
+}
+```
+
+Declarable per group as well as at the top level; two groups sharing one board must not declare
+different remotes, and the resolver refuses rather than picking a winner. Put no credentials in the
+URL — use an SSH remote or a credential helper.
+
+One board per **trust boundary**, not per group: groups are sections inside a board. A board's
+readers are everyone who can clone it, so the line worth drawing is the one an ACL already draws.
 
 ## Caveats
 

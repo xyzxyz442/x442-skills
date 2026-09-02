@@ -96,22 +96,22 @@ def root_commit(repo: str) -> "str | None":
         return None
 
 
-def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | None, str | None]":
-    """Return (groups, default_board_raw, layout) from one manifest, or ({}, None, None) if absent/bad.
+def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | None, str | None, str | None]":
+    """Return (groups, default_board_raw, default_remote, layout), or empties if absent/bad.
 
     groups maps name -> either {"remove": True} or {"board_raw": str|None, "repos": [entry, ...]}.
     """
     if not os.path.exists(path):
-        return {}, None, None
+        return {}, None, None, None
     try:
         with open(path) as f:
             data = json.load(f)
     except Exception as e:  # noqa: BLE001
         errors.append(f"{path}: invalid JSON ({e})")
-        return {}, None, None
+        return {}, None, None, None
     if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
         errors.append(f'{path}: expected an object with a "groups" map')
-        return {}, None, None
+        return {}, None, None, None
     if data.get("version", 1) != 1:
         warnings.append(f"{path}: unknown version {data.get('version')!r} — parsing as version 1")
 
@@ -120,6 +120,12 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
         errors.append(f"{path}: layout must be one of {list(VALID_LAYOUTS)} (got {layout!r})")
         layout = None
     default_board = data.get("board") if isinstance(data.get("board"), str) else None
+    # A board's remote is what makes it SHARED rather than merely versioned (ADR 0002). It is
+    # declared here rather than discovered because the scaffold has to create the board before
+    # anything could be discovered from it. Committed on purpose: a remote URL is the same for
+    # every member, unlike a checkout path, which is exactly the distinction schema 2 of repos.json
+    # draws. Never put credentials in it — use an SSH remote or a credential helper.
+    default_remote = data.get("boardRemote") if isinstance(data.get("boardRemote"), str) else None
 
     groups: dict = {}
     for gname, gval in data["groups"].items():
@@ -134,6 +140,7 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
             errors.append(f'{where}: expected an object with a "repos" array (or "remove": true)')
             continue
         board_raw = gval.get("board") if isinstance(gval.get("board"), str) else None
+        remote_raw = gval.get("boardRemote") if isinstance(gval.get("boardRemote"), str) else None
         repos, seen = [], set()
         for i, e in enumerate(gval["repos"]):
             rwhere = f"{where}.repos[{i}]"
@@ -158,8 +165,8 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
                 "alias": alias, "raw_path": raw, "audience": audience,
                 "notes": e.get("notes", "") if isinstance(e.get("notes"), str) else "",
             })
-        groups[gname] = {"board_raw": board_raw, "repos": repos}
-    return groups, default_board, layout
+        groups[gname] = {"board_raw": board_raw, "remote_raw": remote_raw, "repos": repos}
+    return groups, default_board, default_remote, layout
 
 
 def main() -> int:
@@ -187,7 +194,7 @@ def main() -> int:
         if not present:
             continue
         mdir = os.path.dirname(file)
-        groups, default_board_raw, lay = load_layer(file, errors, warnings)
+        groups, default_board_raw, default_remote_raw, lay = load_layer(file, errors, warnings)
         if lay is not None:
             layout, layout_from = lay, file  # nearest layer that sets layout wins
         for gname, gval in groups.items():
@@ -203,6 +210,7 @@ def main() -> int:
             effective[gname] = {
                 "layer": name, "manifest": file, "manifest_dir": mdir,
                 "board_raw": gval["board_raw"], "default_board_raw": default_board_raw,
+                "remote_raw": gval.get("remote_raw"), "default_remote_raw": default_remote_raw,
                 "repos": gval["repos"],
             }
             for r in gval["repos"]:
@@ -249,11 +257,20 @@ def main() -> int:
             "group": gname, "layer": g["layer"], "manifest": g["manifest"],
             "board": board, "layout": layout, "members": members,
         })
-        b = boards.setdefault(board, {"path": board, "groups": [],
+        b = boards.setdefault(board, {"path": board, "groups": [], "remote": "",
                                       "exists": os.path.isdir(board),
                                       "has_payload": os.path.isfile(os.path.join(board, "handoff"))
                                       and os.path.isfile(os.path.join(board, "scripts", "hooks.sh"))})
         b["groups"].append(gname)
+        # One board, one remote. Two groups sharing a board and declaring different remotes is a
+        # manifest error, not something to pick a winner for: the loser's members would be wired to
+        # a board that never receives their leases.
+        remote = g.get("remote_raw") or g.get("default_remote_raw") or ""
+        if remote and b["remote"] and remote != b["remote"]:
+            errors.append(f"board {board}: groups declare conflicting boardRemote values "
+                          f"({b['remote']!r} vs {remote!r}) — one board has one remote")
+        elif remote:
+            b["remote"] = remote
 
     json.dump({
         "scope": scope,

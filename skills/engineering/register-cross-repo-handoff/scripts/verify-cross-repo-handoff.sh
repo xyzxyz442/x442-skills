@@ -257,6 +257,43 @@ PY
 )
 
 echo
+echo "5. board substrate (git, remote, lease visibility)"
+echo "--------------------------------------------------"
+# A standalone board is the board of record: it holds documents that exist nowhere else, and it is
+# the thing every member repo coordinates through. Three properties decide whether it can actually
+# do that job, and each one fails silently on its own (ADR 0002).
+while IFS= read -r bpath; do
+  [ -n "$bpath" ] || continue
+  [ -d "$bpath" ] || continue
+  btop="$(git -C "$bpath" rev-parse --show-toplevel 2> /dev/null || true)"
+  if [ -z "$btop" ] || [ "$(cd "$btop" 2> /dev/null && pwd -P)" != "$(cd "$bpath" && pwd -P)" ]; then
+    fail "$bpath is not its own git repository — no history, no blame, no recovery for the documents on it. Re-run the sync."
+    continue
+  fi
+  pass "$bpath is its own git repository"
+  if [ -n "$(git -C "$bpath" remote 2> /dev/null)" ]; then
+    pass "$bpath has a remote — the board is shared, not merely versioned"
+    # The quiet one. With `.locks/` ignored, every claim still commits, still pushes, and still
+    # reports success — while carrying no lease, so push-CAS excludes nobody and two machines can
+    # hold the same handoff without either being told.
+    if grep -qxF '.locks/' "$bpath/.gitignore" 2> /dev/null; then
+      warn "$bpath has a remote but still gitignores .locks/ — leases never travel. Remove that line (the CLI repairs it on the next claim)."
+    else
+      pass "$bpath tracks .locks/, as a remote-backed board requires"
+    fi
+  else
+    warn "$bpath has NO REMOTE — versioned, but it still reaches exactly one machine. Declare one as \"boardRemote\" in the manifest, or: git -C $bpath remote add origin <url>"
+  fi
+done < <(
+  python3 - "$RESOLVED" << 'BOARDS'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for b in d["boards"]:
+    print(b["path"])
+BOARDS
+)
+
+echo
 echo "Summary: $PASS passed, $WARN warnings, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0

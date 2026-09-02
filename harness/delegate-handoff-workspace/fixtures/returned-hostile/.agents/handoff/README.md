@@ -129,14 +129,44 @@ content verbatim.
 - A lease is an atomic `mkdir` of `.locks/<id>/` — two agents racing cannot both win. (This is
   why ownership is _not_ stored in the doc's frontmatter: a frontmatter edit is read-modify-write
   and would let both claimants think they won.)
-- Ownership lives **only** in `.locks/` (gitignored, machine-local). Durable state lives **only**
-  in the doc's frontmatter. They cannot desync because neither duplicates the other.
+- Ownership lives **only** in `.locks/`. Durable state lives **only** in the doc's frontmatter.
+  They cannot desync because neither duplicates the other.
 - The lease records `session=<raw session id>` — the same id the tool puts in its hook payload.
   That equality is the whole basis of the enforcement gate.
 - A lease expires after **4 hours** (`HANDOFF_TTL_HOURS`). Expired leases are **auto-reaped** at
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+
+### On a board with a remote, the lock crosses machines
+
+`mkdir` excludes every other process on **one** machine. What excludes the other machines is
+`git push`, which is a compare-and-swap: `claim` writes the lease, commits it, and pushes, and a
+rejected non-fast-forward push means somebody claimed first. That is real mutual exclusion with no
+server, and the losing claim is undone rather than kept locally.
+
+A board earns this by being **its own git repository with a remote**. Nothing changes on a board
+without one: leases stay gitignored machine state, and no command touches the network.
+
+|                                             | Board with a remote                                                                       | Local-only board                          |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `.locks/`                                   | committed — shared state of record                                                        | gitignored — ephemeral machine state      |
+| `claim`                                     | **strict**: fetches first, and refuses outright if the remote is unreachable              | offline, as always                        |
+| `release`                                   | **optimistic**: commits and pushes, but a failed push is a warning and the release stands | offline, as always                        |
+| every read (`list`, `index`, the edit gate) | offline and free                                                                          | offline and free                          |
+| lease expiry                                | stamped from the lease's **commit time**                                                  | stamped from the claiming machine's clock |
+
+The asymmetry between `claim` and `release` is the design. A claim asserts something about the
+future ("nobody else may work this"), and asserting that without seeing the other machines' leases
+is not exclusion — it is a local file. A release records something that already happened, so
+refusing it offline would strand a lease whose holder has already stopped.
+
+Expiry is read from the commit rather than the file because two machines' clocks do not agree: a
+claimer running an hour fast would otherwise hand every peer a lease that already looks expired.
+
+One thing to watch: a board that gains a remote later is still gitignoring `.locks/`, and that
+combination is silent — every claim commits, pushes, and reports success while carrying no lease.
+The next `claim` removes the rule and says so; `verify-setup-handoff.sh` reports it too.
 
 ## Fields
 

@@ -11,10 +11,11 @@
 # guessed the target by sibling directory name and a same-named-but-unrelated sibling made a brief
 # record that unrelated repo's REAL root commit under a fully confident preflight.
 #
-# Every entry is ATTESTED with the target's root commit as of this projection, and the CLI
-# re-checks that attestation against the live repo. A path that no longer holds the repo it was
-# declared for — a moved checkout, a hand-edited manifest, a registry never re-synced — fails closed
-# to "unverified" instead of stamping a confident SHA for the wrong repo.
+# Every entry IS its target's root commit: identity is committed, location never is (ADR 0002).
+# The CLI resolves that commit to a checkout on the machine it happens to be running on and
+# re-checks the attestation there. A candidate that no longer holds the repo it was declared for —
+# a moved checkout, a hand-edited manifest, a registry never re-synced — fails closed to
+# "unverified" instead of stamping a confident SHA for the wrong repo.
 #
 # A member with no attestable root commit (not on disk, not a git repo, no commits) gets NO entry:
 # an unattestable entry would be exactly the guess this replaces.
@@ -54,13 +55,18 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
             # within its caller's section, so two groups sharing one board may each have their own
             # "api" without either becoming ambiguous. A clash INSIDE one group is the real defect.
             by_audience.setdefault((g["group"], m["audience"]), []).append(where)
+            # Schema 2 records IDENTITY and nothing else. A path — even one relative to the
+            # board — encodes the authoring machine's checkout layout, and that single field is
+            # what pinned a board to one disk: "../../../../acme-lib" resolves nowhere else. The
+            # root commit already sat in every entry as the attestation; it is now the whole
+            # answer, and location moved to an uncommitted per-machine map (see the CLI's
+            # board_repo_entry, which reads ~/.agents/handoff-locations.json and, failing that,
+            # discovers the checkout and caches it). Schema 1 files still READ — their path is
+            # accepted as a hint that has to prove itself against this root commit.
             entries.append({
                 "group": g["group"],
                 "alias": m["alias"],
                 "audience": m["audience"],
-                # Relative to the BOARD dir, so a committed board stays portable across machines.
-                # The reader joins it back onto its own location, never onto a cwd.
-                "path": os.path.relpath(m["path"], board),
                 "rootCommit": m["root_commit"],
             })
 
@@ -73,7 +79,7 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
 
     # No timestamp and no scope path anywhere in the payload: a re-projection that changes nothing
     # must be byte-identical, or every board with a registry shows up dirty on each run.
-    body = {"version": 1, "repos": sorted(entries, key=lambda e: (e["group"], e["alias"]))}
+    body = {"version": 2, "repos": sorted(entries, key=lambda e: (e["group"], e["alias"]))}
     return json.dumps(body, indent=2) + "\n", warnings
 
 
