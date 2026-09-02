@@ -107,6 +107,24 @@ un-align it again, churning forever on a bundle nobody touched. Only the doc's p
 sections (Bundle, Sequencing, Notes) are yours to write. An existing bundle doc gains the section
 automatically on the next `index`, above its Activity log.
 
+**Rosters are bounded where they are read constantly.** The session banner shows a bundle as one
+line with a count; `handoff list` shows the first few outstanding children and `… and N more`;
+`list --verbose` restores the full roster. The generated table inside the bundle doc always carries
+every child, one row each — nothing is lost, it is just not reprinted into every agent's context on
+every session. One live board carries a bundle declaring 100 children of which 97 were never filed.
+
+**A child that names no doc is reported, not silently tolerated.** `verify-setup-handoff.sh` flags
+it as `bundle.children.dangling`: such a bundle can never close, because `release --status done`
+refuses while anything is outstanding. Declaring a roster before authoring its docs is legitimate
+planning, so this is detect-only — and `children add --stub` is the cheap fix, filing each missing
+id as a real, claimable handoff rather than a thinner second kind of document:
+
+```text
+./handoff children add --stub <parent> <child> [child...]
+```
+
+It files a child that is ALREADY on the roster, which is the case it exists for.
+
 Change the roster with `children`, never by hand-editing `children:`: the command canonicalizes each
 id the same way `--children` does, so a child recorded under a spelling that names no file — and
 therefore reads `MISSING` for the bundle's whole life — is not a failure mode you can reach.

@@ -2525,20 +2525,29 @@ cmd_release() {
   fi
 
   if [ "$status" = "done" ]; then
-    # Work carried out by a delegate cannot be closed on the delegate's own say-so. The executor
-    # is outside the board and never runs `release` — so the thing to refuse is not a person, it is
-    # the executor's WORDS being used as the review. `--verified-by` identical to the claim the
-    # delegate reported is trust-closing with extra steps, and for delegated work that is a refusal
-    # rather than the warning it stays elsewhere: nobody checked anything, and the doc would carry
-    # a verification date implying somebody did.
+    # Is the evidence just the executor's own words handed back? Asked ONCE here, and answered
+    # against the spliced RESULT BLOCK — the executor's report — rather than the whole doc: a
+    # reviewer who honestly re-ran the doc's own `## Verify` command and described it in the same
+    # words is not copying anything, and that text lives outside the result block.
+    #
+    # This used to compare `--verified-by` against `result_claimed`, which holds the executor's
+    # STATUS word (done/partial/blocked), not their evidence — so the check could only fire if
+    # somebody typed `--verified-by "done"`. It was inert, and it read as though it were not.
+    local copied=0
+    if [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ] \
+      && printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
+      copied=1
+    fi
+    # For DELEGATED work that is a refusal, not a warning. The executor is outside the board and
+    # never runs `release`, so the thing to refuse is not a person — it is the executor's words
+    # being used as the review. Closing on them stamps a verification date asserting somebody
+    # checked, when nobody did.
+    if [ "$copied" = 1 ] && [ "$(meta "$f" executed_by)" = "delegate" ]; then
+      die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
+       That is the delegate reviewing itself. Re-run the check and say what YOU observed, or
+       release --status open and hand it to a reviewer."
+    fi
     if [ "$(meta "$f" executed_by)" = "delegate" ] && [ "$(meta "$f" review)" = "pending" ]; then
-      local claimed
-      claimed="$(meta "$f" result_claimed)"
-      if [ -n "$verified_by" ] && [ -n "$claimed" ] && [ "$verified_by" = "$claimed" ]; then
-        die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
-       That is the delegate reviewing itself. Re-run the check yourself and say what YOU observed,
-       or release --status open and hand it to a reviewer."
-      fi
       echo "NOTE: this handoff was executed by a delegate and is awaiting review."
       echo "      Closing it records YOU as the reviewer — --verified-by must be what you checked yourself."
     fi
@@ -2575,16 +2584,12 @@ cmd_release() {
     fi
   fi
 
-  # Closing `done` with the executor's own evidence string is trusting the report with extra steps.
-  # A warning, never a refusal: the reviewer may legitimately have re-run the very same command.
-  # Scoped to the spliced RESULT BLOCK, not the whole doc — a whole-doc substring search fires on
-  # a reviewer who honestly re-ran the doc's own `## Verify` command and typed the same words to
-  # describe it, which live outside the Result block the executor reported.
-  if [ "$status" = "done" ] && [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ]; then
-    if printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
-      echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
-      echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
-    fi
+  # The non-delegated arm of the same question (`copied`, computed above). A warning rather than a
+  # refusal here: without a delegate there is no second party whose words these are, so the
+  # reviewer may legitimately have re-run the very same command and written it the same way.
+  if [ "$status" = "done" ] && [ "${copied:-0}" = 1 ]; then
+    echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
+    echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
   fi
 
   set_field "$f" status "$status"
