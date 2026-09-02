@@ -28,15 +28,28 @@ import subprocess
 import sys
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # group names and repo aliases
-MANIFEST = ".handoff-repos.json"
-USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff-repos.json")
+# ONE filename at every layer. `.agents/handoff.json` is the same file the board and each member
+# repo use — the layers are told apart by WHERE they sit, not by what they are called. The old
+# `.handoff-repos.json` is still read, at LOWER precedence than the file that replaced it in the
+# same directory, so an existing workspace keeps resolving until its manifest is moved.
+MANIFEST = os.path.join(".agents", "handoff.json")
+LEGACY_MANIFEST = ".handoff-repos.json"
+USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff.json")
+LEGACY_USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff-repos.json")
 DEFAULT_LAYOUT = "subfolder"
 VALID_LAYOUTS = ("subfolder", "prefix")
 
 
 def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
-    """(layer-name, manifest-path, committed?) lowest precedence first."""
-    out: list[tuple[str, str, bool]] = [("user", USER_MANIFEST, False)]
+    """(layer-name, manifest-path, committed?) lowest precedence first.
+
+    Each directory contributes its legacy name first and its current one second, so a directory
+    holding both resolves to the current file while a directory holding only the old one keeps
+    working exactly as it did.
+    """
+    out: list[tuple[str, str, bool]] = [("user", LEGACY_USER_MANIFEST, False),
+                                        ("user", USER_MANIFEST, False)]
+    out.append(("scope", os.path.join(scope, LEGACY_MANIFEST), True))
     out.append(("scope", os.path.join(scope, MANIFEST), True))
     # every directory strictly between scope and `from`, scope -> leaf (deepest wins)
     rel = os.path.relpath(frm, scope)
@@ -46,7 +59,9 @@ def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
             if part in ("", os.pardir):
                 continue
             cur = os.path.join(cur, part)
-            out.append((os.path.relpath(cur, scope), os.path.join(cur, MANIFEST), True))
+            name = os.path.relpath(cur, scope)
+            out.append((name, os.path.join(cur, LEGACY_MANIFEST), True))
+            out.append((name, os.path.join(cur, MANIFEST), True))
     return out
 
 
@@ -109,8 +124,16 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
     except Exception as e:  # noqa: BLE001
         errors.append(f"{path}: invalid JSON ({e})")
         return {}, None, None, None
-    if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
-        errors.append(f'{path}: expected an object with a "groups" map')
+    if not isinstance(data, dict):
+        errors.append(f"{path}: expected a JSON object")
+        return {}, None, None, None
+    groups_val = data.get("groups")
+    if not isinstance(groups_val, dict):
+        # `groups` is shared with the board layer, where it is a bare LIST of section names — the
+        # same fact at lower fidelity. A list here means "this file configures a board, it does not
+        # declare a fleet", which is not an error: it simply contributes no groups.
+        if groups_val is not None and not isinstance(groups_val, list):
+            errors.append(f'{path}: "groups" must be a map of group name -> definition')
         return {}, None, None, None
     if data.get("version", 1) != 1:
         warnings.append(f"{path}: unknown version {data.get('version')!r} — parsing as version 1")

@@ -1,8 +1,11 @@
 {
+  "_generated": {
+    "payloadVersion": "setup-handoff 14"
+  },
   "allowVerifyCmd": false,
   "groupLayout": "",
   "groups": [],
-  "repoName": "claude-wired",
+  "repoName": "exportable",
   "topology": "single-repo",
   "ttlHours": 4
 }

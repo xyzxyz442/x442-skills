@@ -108,14 +108,19 @@ for f in handoff scripts/hooks.sh; do
   else bad "$f missing"; fi
 done
 [ -f "$HD/README.md" ] && ok "README.md present" || warn "README.md missing"
-# EITHER config file counts. The installer writes config.json; only a board predating that carries
-# the legacy KEY=value `config`, so requiring the legacy name printed "config missing" on every
-# freshly installed board — a warning that is always wrong trains readers to ignore the ones that
+# ANY of the three config names counts, newest first. The installer writes `handoff.json`; a board
+# installed before the consolidation carries `config.json`, and one older still carries the KEY=value
+# `config`. Requiring only the newest name would print "config missing" on every board that simply
+# has not been re-installed — a warning that is always wrong trains readers to ignore the ones that
 # are not. Which file is present, and whether it parses, is graded in section 2.
-if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
-  ok "board config present"
+BOARD_CFG=""
+for c in "$HD/handoff.json" "$HD/config.json" "$HD/config"; do
+  [ -f "$c" ] && [ -z "$BOARD_CFG" ] && BOARD_CFG="$c"
+done
+if [ -n "$BOARD_CFG" ]; then
+  ok "board config present ($(basename "$BOARD_CFG"))"
 else
-  warn "no board config (config.json or legacy config) — re-run setup-handoff"
+  warn "no board config (handoff.json, or the legacy config.json / config) — re-run setup-handoff"
 fi
 if [ -f "$HD/templates/handoff-doc-template.md" ]; then
   ok "templates/handoff-doc-template.md present"
@@ -128,7 +133,22 @@ elif [ -f "$HD/handoff-brief-template.md" ]; then
   warn "handoff-brief-template.md is at the board root (flat layout) — re-run setup-handoff to migrate"
 else warn "handoff-brief-template.md missing — re-run setup-handoff"; fi
 [ -d "$HD/archive" ] && ok "archive/ present" || warn "archive/ missing (created on first done)"
-check_payload_version "$(awk 'NR==1{print $2}' "$HD/.version" 2> /dev/null)" setup-handoff
+# The stamp now rides inside the board's own config rather than in a file of its own. Read from
+# there first, then from the standalone `.version` that a board written before the consolidation
+# still carries, so a stale board reports as behind rather than as unstamped.
+installed_payload_version() {
+  local v=""
+  if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+    v="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+g = d.get("_generated") or {}
+print(str(g.get("payloadVersion") or "").split(" ")[-1])' "$HD/handoff.json" 2> /dev/null)"
+  fi
+  [ -n "$v" ] || v="$(awk 'NR==1{print $2}' "$HD/.version" 2> /dev/null)"
+  printf '%s' "$v"
+}
+check_payload_version "$(installed_payload_version)" setup-handoff
 
 echo
 echo "2. Config, gitignore, AGENTS.md block"
@@ -138,16 +158,19 @@ TOPO=""
 # failure a few lines down (same root cause — it re-reads this same file) reports it once, not
 # twice. Two FAILs for one malformed config.json would double-count the same underlying problem.
 CONFIG_JSON_BAD=""
-if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
-  if [ -f "$HD/config.json" ]; then
-    if is_json "$HD/config.json"; then ok "config.json present and valid JSON"; else
-      bad "config.json is not valid JSON"
+if [ -n "$BOARD_CFG" ]; then
+  BOARD_CFG_NAME="$(basename "$BOARD_CFG")"
+  if [ "$BOARD_CFG_NAME" != "config" ]; then
+    if is_json "$BOARD_CFG"; then ok "$BOARD_CFG_NAME present and valid JSON"; else
+      bad "$BOARD_CFG_NAME is not valid JSON"
       CONFIG_JSON_BAD=1
     fi
-    # python3 is not optional once a config.json exists: every read of it needs one.
-    command -v python3 > /dev/null 2>&1 || bad "config.json present but python3 missing — the board cannot read its own config"
+    # python3 is not optional once a JSON config exists: every read of it needs one.
+    command -v python3 > /dev/null 2>&1 || bad "$BOARD_CFG_NAME present but python3 missing — the board cannot read its own config"
+    [ "$BOARD_CFG_NAME" = "config.json" ] \
+      && warn "board config is still config.json — re-run setup-handoff to consolidate it into handoff.json"
   else
-    warn "legacy shell config (no config.json) — re-run setup-handoff to migrate"
+    warn "legacy shell config (no handoff.json) — re-run setup-handoff to migrate"
   fi
   # Report what the board will ACTUALLY use, resolved through the same code the CLI uses. A
   # verifier that only checks the file exists cannot catch a key that is silently ignored.
@@ -164,27 +187,28 @@ if [ -f "$HD/config.json" ] || [ -f "$HD/config" ]; then
       case "$HC_TOPOLOGY" in single-repo | cross-repo) ok "topology valid: $HC_TOPOLOGY" ;; *) bad "invalid topology: $HC_TOPOLOGY" ;; esac
       TOPO="$HC_TOPOLOGY"
     elif [ -n "$CONFIG_JSON_BAD" ]; then
-      : # already reported as "config.json is not valid JSON" above — same root cause, don't double-FAIL
+      : # already reported as invalid JSON above — same root cause, don't double-FAIL
     else bad "config could not be resolved (malformed?): $_hc_out"; fi
   else warn "scripts/config.sh missing — re-run setup-handoff"; fi
-else bad "config missing (no config.json)"; fi
+else bad "config missing (no handoff.json)"; fi
 # A typo'd key is inert and silent today; name it. Unknown keys are a warning, not a failure —
 # a future payload may add keys this verifier predates. A file that fails to parse must NOT
 # report either PASS or WARN here: exit 2 (distinct from the "found unknown keys" success path)
 # is how the python side tells the shell "could not check" from "checked, found nothing" — the
 # malformed-JSON FAIL above already covers that condition, so this check stays silent rather
 # than printing a false PASS for a check it never actually performed.
-if [ -f "$HD/config.json" ] && command -v python3 > /dev/null 2>&1; then
+if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command -v python3 > /dev/null 2>&1; then
   UNKNOWN="$(python3 -c '
 import json,sys
-known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd","boardPath","environments"}
+known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
+       "board","boardPath","environments","layout","boardRemote","locations","repo","_generated"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
-print(",".join(sorted(set(d)-known)))' "$HD/config.json" 2> /dev/null)"
+print(",".join(sorted(set(d)-known)))' "$BOARD_CFG" 2> /dev/null)"
   RC=$?
   if [ "$RC" -eq 0 ]; then
-    [ -n "$UNKNOWN" ] && warn "config.json has unknown key(s): $UNKNOWN" || ok "config.json keys all recognised"
+    [ -n "$UNKNOWN" ] && warn "$BOARD_CFG_NAME has unknown key(s): $UNKNOWN" || ok "$BOARD_CFG_NAME keys all recognised"
   fi
 fi
 if [ "$TOPO" = "cross-repo" ]; then

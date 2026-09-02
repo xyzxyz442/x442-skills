@@ -75,21 +75,28 @@ install_file() {
 write_board_config() { # dest topology repo_name
   local dest="$1" topo="$2" rn="$3"
   TOPO="$topo" RN="$rn" GRPS="$GROUP_LIST" GRPS_SET="$GROUP_LIST_SET" LAY="$LAYOUT" LAY_SET="$LAYOUT_SET" ALLOW="$ALLOW_VERIFY" \
+    PAYLOAD_VERSION="$(cat "$SKILL_DIR/scripts/payload.version" 2> /dev/null | head -1)" \
     python3 - "$dest" << 'PY'
 import json, os, sys
 
 dest = sys.argv[1]
 existing = {}
-if os.path.exists(dest):
+# Seed from the file this one REPLACES before reading the destination itself, oldest name first.
+# On the run that MIGRATES a board, `dest` does not exist yet — reading only `dest` meant every
+# preserved-by-design value (ttlHours, groups, groupLayout) was silently reset to its default at
+# the exact moment the operator was being told the config was carried forward.
+for src in (os.path.join(os.path.dirname(dest), "config.json"), dest):
+    if not os.path.exists(src):
+        continue
     try:
-        with open(dest) as fh:
+        with open(src) as fh:
             loaded = json.load(fh)
         if isinstance(loaded, dict):
-            existing = loaded
+            existing.update(loaded)
         else:
-            print(f"setup-handoff: warning: {dest} is not a JSON object; discarding its contents", file=sys.stderr)
+            print(f"setup-handoff: warning: {src} is not a JSON object; discarding its contents", file=sys.stderr)
     except (json.JSONDecodeError, OSError) as exc:
-        print(f"setup-handoff: warning: {dest} is not valid JSON ({exc}); discarding its contents", file=sys.stderr)
+        print(f"setup-handoff: warning: {src} is not valid JSON ({exc}); discarding its contents", file=sys.stderr)
 
 # ttlHours: policy, preserved from an existing (parseable) config; allowVerifyCmd: security,
 # NEVER preserved — see the comment on write_board_config above for why these differ.
@@ -110,7 +117,8 @@ if os.environ.get("GRPS_SET") == "1":
     groups = [g for g in os.environ.get("GRPS", "").split(",") if g]
 else:
     groups = existing_str_list("groups")
-    print(f"setup-handoff: --groups not passed; preserved existing groups from {dest}: {groups}", file=sys.stderr)
+    if groups:
+        print(f"setup-handoff: --groups not passed; preserved existing groups: {groups}", file=sys.stderr)
 
 if os.environ.get("LAY_SET") == "1":
     group_layout = os.environ.get("LAY", "")
@@ -118,7 +126,8 @@ else:
     group_layout = existing.get("groupLayout", "")
     if not isinstance(group_layout, str):
         group_layout = ""
-    print(f"setup-handoff: --layout not passed; preserved existing groupLayout from {dest}: {group_layout!r}", file=sys.stderr)
+    if group_layout:
+        print(f"setup-handoff: --layout not passed; preserved existing groupLayout: {group_layout!r}", file=sys.stderr)
 
 cfg = {
     "topology": os.environ["TOPO"],
@@ -127,6 +136,18 @@ cfg = {
     "ttlHours": ttl,
     "allowVerifyCmd": os.environ.get("ALLOW") == "1",
 }
+
+# `_generated` belongs to the cross-repo sync (the repo registry) and to this installer (the
+# payload stamp). It is preserved wholesale rather than rebuilt, because this installer does not
+# know the fleet — clobbering it here would silently un-resolve every cross-repo brief on the
+# board until somebody happened to re-run the sync.
+gen = existing.get("_generated")
+gen = dict(gen) if isinstance(gen, dict) else {}
+pv = os.environ.get("PAYLOAD_VERSION", "").strip()
+if pv:
+    gen["payloadVersion"] = pv
+if gen:
+    cfg["_generated"] = gen
 if os.environ["TOPO"] != "cross-repo":
     cfg["repoName"] = os.environ.get("RN", "")
 with open(dest, "w") as fh:
@@ -212,6 +233,16 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$LAYOUT" ] && { case "$LAYOUT" in subfolder | prefix) ;; *) die "bad --layout: $LAYOUT (use subfolder|prefix)" ;; esac }
 
+# Legacy config names are READ (see config.sh) but no longer WRITTEN. Once the consolidated file
+# exists, the old one is renamed aside rather than deleted: nothing here removes a file a user may
+# have hand-edited, and a `.superseded` suffix is both obvious and reversible. Readers ignore it.
+supersede_legacy() { # path reason
+  local f="$1" why="$2"
+  [ -f "$f" ] || return 0
+  mv "$f" "$f.superseded" 2> /dev/null || return 0
+  echo "setup-handoff: $why — renamed $(basename "$f") to $(basename "$f").superseded (safe to delete)"
+}
+
 # --- the board's own git substrate (ADR 0002) -------------------------------------------
 # A STANDALONE shared board is git-initialised non-optionally. It is the board of record: it holds
 # documents that exist nowhere else, and one that was never a repository has no history, no blame,
@@ -274,7 +305,7 @@ board_bootstrap() { # board-dir remote-url
 # and committing it under an install's message would be both a lie and a surprise.
 board_commit_payload() { # board-dir
   local b="$1" f
-  for f in handoff README.md config.json .gitignore .version scripts templates; do
+  for f in handoff README.md handoff.json .gitignore scripts templates; do
     [ -e "$b/$f" ] && git -C "$b" add -- "$b/$f" 2> /dev/null
   done
   git -C "$b" diff --cached --quiet 2> /dev/null && return 0 # nothing of ours changed
@@ -333,9 +364,10 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
   install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
   install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
-  install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
   chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
-  write_board_config "$HDEST/config.json" cross-repo ""
+  write_board_config "$HDEST/handoff.json" cross-repo ""
+  supersede_legacy "$HDEST/config.json" "board config now lives in handoff.json"
+  supersede_legacy "$HDEST/.version" "the payload stamp now lives in handoff.json"
   board_ensure_git "$HDEST" "$BOARD_REMOTE"
   echo "setup-handoff: scaffolded standalone board at $HDEST (topology=cross-repo${GROUP_LIST:+, groups=$GROUP_LIST}${LAYOUT:+, layout=$LAYOUT})"
   exit 0
@@ -437,9 +469,9 @@ fi
 # The old file is RETAINED, not deleted: the readers prefer config.json and fall back to it, so
 # keeping it means a half-finished install cannot strand a board with no config at all. A later
 # install overwrites config.json from live facts anyway.
-if [ -f "$HDEST/config" ] && [ ! -f "$HDEST/config.json" ]; then
-  echo "Migrating legacy shell config -> config.json in $HDEST"
-  python3 - "$HDEST/config" "$HDEST/config.json" << 'PY'
+if [ -f "$HDEST/config" ] && [ ! -f "$HDEST/handoff.json" ] && [ ! -f "$HDEST/config.json" ]; then
+  echo "Migrating legacy shell config -> handoff.json in $HDEST"
+  python3 - "$HDEST/config" "$HDEST/handoff.json" << 'PY'
 import json, sys
 MAP = {"TOPOLOGY": "topology", "REPO_NAME": "repoName", "HANDOFF_GROUPS": "groups",
        "HANDOFF_GROUP_LAYOUT": "groupLayout", "HANDOFF_TTL_HOURS": "ttlHours",
@@ -479,13 +511,16 @@ install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief
 # payload so a teammate's checkout carries it too, and readable with `cat` — the hooks that read
 # it may run on a machine with nothing but bash. An ABSENT .version means a pre-versioning
 # install, not a corrupt one; readers treat the two the same and report "behind".
-install_file "$SKILL_DIR/scripts/payload.version" "$HDEST/.version"
+
 chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
 
 # config (committed): board-global facts only. See write_board_config (top) for why REPO_NAME is
 # single-repo-only and how the group facts are recorded, and allowVerifyCmd is written as a JSON key.
 REPO_NAME="$(basename "$REPO")"
-write_board_config "$HDEST/config.json" "$TOPOLOGY" "$REPO_NAME"
+write_board_config "$HDEST/handoff.json" "$TOPOLOGY" "$REPO_NAME"
+supersede_legacy "$HDEST/config.json" "board config now lives in handoff.json"
+supersede_legacy "$HDEST/.version" "the payload stamp now lives in handoff.json"
+supersede_legacy "$HDEST/config" "the legacy shell config was folded into handoff.json"
 
 # .locks is machine-local — never commit it. Only meaningful for a single-repo (in-repo) board;
 # a cross-repo board is a SHARED dir outside the worktree (git ignore can't act on a ../ path) that

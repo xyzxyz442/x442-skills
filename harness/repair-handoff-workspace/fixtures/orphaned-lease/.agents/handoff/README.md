@@ -190,7 +190,7 @@ is always current, one that is always append-only, and neither has to do the oth
 | `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
 | `depends_on`                                   | **Board ids only**, as a list. Means _this cannot start before that lands_. `claim` **warns** when a target is still open and proceeds anyway — `depends_on` is about starting, and work legitimately starts out of order; `release --status done` is never gated on it. Set it with `new --after <id>`. If your blocker is a board id it belongs here, not in `blocked_on`.                                                                                                                                           |
 | `superseded_by`                                | The handoff id that replaced this one. First-class because it already occurred in the wild.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `environment`                                  | Which stage the work targets. An **open string**, not an enum — every fleet names its stages differently — but the common spellings are normalized (`prd`/`production`/`live` ⇒ `prod`; `stg`/`uat`/`qa` ⇒ `staging`). **Absent reads as `dev`**, so no existing doc changes meaning by gaining the field. Order them for your board with `environments` in `config.json`.                                                                                                                                             |
+| `environment`                                  | Which stage the work targets. An **open string**, not an enum — every fleet names its stages differently — but the common spellings are normalized (`prd`/`production`/`live` ⇒ `prod`; `stg`/`uat`/`qa` ⇒ `staging`). **Absent reads as `dev`**, so no existing doc changes meaning by gaining the field. Order them for your board with `environments` in `handoff.json`.                                                                                                                                             |
 | `role`                                         | Standalone docs only: what the doc is **for**, where `type` is its lifecycle. `steering` (the decisions and their evidence) · `spec` (what is to be built) · `reference` (knowledge transfer) · `brief-archive` (a finished delegation, kept). Absent ⇒ `reference`.                                                                                                                                                                                                                                                   |
 | `spec`                                         | _(optional)_ what this work is specified by. Resolved by the reader in order — a path, then a URL, then a board id. Not validated at creation: a handoff is routinely filed before its spec is written.                                                                                                                                                                                                                                                                                                                |
 | `blocked_on`                                   | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
@@ -202,16 +202,23 @@ is always current, one that is always append-only, and neither has to do the oth
 
 ## Configuration
 
-Settings resolve through four scopes, **nearest wins**:
+**One filename, `handoff.json`, at every layer.** The layers are told apart by *where* they sit,
+not by what they are called — the same shape `AGENTS.md` already uses. Nearest wins:
 
 ```text
-env  >  repo config.json  >  board config.json  >  built-in default
+env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
 ```
 
 Environment is for **overrides** — a one-off run, debugging, CI. Normal operating configuration
 belongs in a committed file, where it can be reviewed and where the whole team gets it.
 
-**`<board>/config.json`** — board-global. On a shared board this file is read by every member repo,
+Five predecessors are still **read**, each at lower precedence than the file that replaced it in
+the same directory, so a board or repo that has not been re-installed keeps working untouched:
+`<board>/config.json`, the KEY=value `<board>/config`, `<board>/repos.json`, `<board>/.version`,
+and `<repo>/.agents/handoff.config.json`. Re-running the installer or the cross-repo sync folds
+each into `handoff.json` and renames the old file to `*.superseded` — renamed, never deleted.
+
+**`<board>/handoff.json`** — board-global. On a shared board this file is read by every member repo,
 so it must never carry any one repo's identity.
 
 | Key              | Default                    | Meaning                                                                          |
@@ -223,8 +230,9 @@ so it must never carry any one repo's identity.
 | `ttlHours`       | `4`                        | Hours a claim holds before it self-reaps.                                        |
 | `allowVerifyCmd` | `false`                    | `true` lets `release --run-verify` execute a command from a local doc.           |
 | `environments`   | `["dev","staging","prod"]` | The board's environment ladder, lowest first — what `environment` is ordered by. |
+| `_generated`     | absent                     | **Owned by the tooling — do not hand-edit.** The cross-repo sync writes `repos` (the projected registry) here and the installer writes `payloadVersion`. Fenced off under one key so a re-sync can never clobber your `ttlHours` and a hand-edit can never masquerade as a projection of the manifest. |
 
-**`<repo>/.agents/handoff.config.json`** — per-consumer, written only for cross-repo installs.
+**`<repo>/.agents/handoff.json`** — per-consumer, written only for cross-repo installs.
 
 | Key         | Meaning                                                  |
 | ----------- | -------------------------------------------------------- |
@@ -251,8 +259,8 @@ in its siblings' sessions.
 ## Shared (cross-repo) board: per-repo identity
 
 A cross-repo board is **shared by N repos**, so no single repo's name may live in the board's
-`config.json` — the last installer to run would clobber every sibling's identity. Instead each
-consuming repo commits its own `.agents/handoff.config.json` (table above), and `hooks.sh` finds it
+`handoff.json` — the last installer to run would clobber every sibling's identity. Instead each
+consuming repo commits its own `.agents/handoff.json` (table above), and `hooks.sh` finds it
 by resolving the calling repo: the `--project-dir` anchor in the hook command first, then the git
 toplevel. Audience routing, the INDEX label, and `doc_is_local` therefore reflect the **calling**
 repo, not whoever installed last.
@@ -344,13 +352,14 @@ A lease **this session already holds** is extended rather than re-claimed, so `c
 written, rather than stranding half the children claimed and stamped.
 
 **Repo identity on a grouped board.** When a handoff's `audience` names a repo other than the one
-`export` runs in, the target is resolved through `<board>/repos.json` — the projection of the
+`export` runs in, the target is resolved through `_generated.repos` in `<board>/handoff.json` — the
+projection of the
 group manifest that `register-cross-repo-handoff`'s sync writes, where each member carries its path
 (relative to the board) and its root commit as an attestation. `export` reads the live root commit
 at that path and records identity only when the two agree; a stale entry, a missing registry, an
 undeclared or doubly-claimed audience, or an unreachable checkout each degrade to
 `repo_root_commit: unverified` with a warning naming the cause. It never matches an audience
-against a directory name. `repos.json` is generated — fix the manifest and re-sync, do not edit it.
+against a directory name. `_generated` is generated — fix the manifest and re-sync, do not edit it.
 
 **Commit the brief** before telling the executor — they pull it from the branch, they are not
 attached a file out of band. `export` prints a reminder to redact anything that should not enter

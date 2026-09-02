@@ -66,15 +66,25 @@ handoff_lease_expiry() { # board-dir owner-file fallback-expires default-ttl-hou
 }
 
 # handoff_config_load BOARD_DIR [REPO_DIR] -> prints shell assignments; non-zero on bad config.
+#
+# ONE filename, `handoff.json`, at every layer. It used to be six files with five names — a board
+# `config.json`, a generated `repos.json`, a `.version` stamp, a repo `handoff.config.json`, a
+# workspace `.handoff-repos.json`, and a machine-local locations map — and nobody could answer
+# "where is handoff configured" without listing all of them. They are now layers of one cascade
+# distinguished by WHERE they sit, not by what they are called, which is the same shape AGENTS.md
+# already uses and the same shape the fleet manifest's own user/scope/subdir cascade already had.
+#
+# Every legacy name is still READ, at lower precedence than the file that replaced it, so an
+# existing install keeps working untouched until its installer is re-run.
 handoff_config_load() {
   local board="$1" repo="${2:-}"
   if ! command -v python3 > /dev/null 2>&1; then
-    if [ -f "$board/config.json" ]; then
-      echo "handoff: config.json needs python3, which is not installed" >&2
+    if [ -f "$board/handoff.json" ] || [ -f "$board/config.json" ]; then
+      echo "handoff: handoff.json needs python3, which is not installed" >&2
       return 3
     fi
-    if [ -n "$repo" ] && [ -f "$repo/.agents/handoff.config.json" ]; then
-      echo "handoff: $repo/.agents/handoff.config.json needs python3, which is not installed" >&2
+    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ]; }; then
+      echo "handoff: $repo/.agents/handoff.json needs python3, which is not installed" >&2
       return 3
     fi
     _handoff_config_legacy_nopython "$board"
@@ -124,20 +134,40 @@ def read_legacy(path):
     return out
 
 cfg = {"topology": "single-repo", "repoName": "", "group": "", "groups": [],
-       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "boardPath": "",
+       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "board": "",
        # Ordered lowest-environment-first. Board-global because an index that sorted one member's
        # work by a different ladder than another's would not be one board's index.
        "environments": ["dev", "staging", "prod"]}
+
+# Board layer, oldest name first so the newest wins: KEY=value, then config.json, then handoff.json.
 cfg.update(read_legacy(os.path.join(board, "config")))
 cfg.update(read_json(os.path.join(board, "config.json")))
+cfg.update(read_json(os.path.join(board, "handoff.json")))
+
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
-    # board", which is the board's `repoName`. Everything else keeps its name.
-    for key, val in read_json(os.path.join(repo, ".agents", "handoff.config.json")).items():
-        cfg["repoName" if key == "repo" else key] = val
+    # board", which is the board's `repoName`. `boardPath` was a second name for `board`; both are
+    # accepted, and both mean the same thing — where this repo's board is.
+    for src in (os.path.join(repo, ".agents", "handoff.config.json"),
+                os.path.join(repo, ".agents", "handoff.json")):
+        for key, val in read_json(src).items():
+            if key == "repo":
+                cfg["repoName"] = val
+            elif key == "boardPath":
+                cfg["board"] = val
+            else:
+                cfg[key] = val
 
+# `groups` carries the section names, and it is accepted in either fidelity. A board records the
+# bare list of sections it hosts; a workspace manifest records the same names mapped to their
+# member repos. They are the same fact at two levels of detail, so they share one key rather than
+# splitting into `groups` and `groupDefs` — the resolver that needs the members reads the map, and
+# everything that only needs the names reads the keys.
 groups = cfg.get("groups") or []
-if isinstance(groups, str):
+if isinstance(groups, dict):
+    groups = [g for g, v in sorted(groups.items())
+              if not (isinstance(v, dict) and v.get("remove"))]
+elif isinstance(groups, str):
     groups = [g for g in groups.split(",") if g]
 
 envs = cfg.get("environments") or []
@@ -153,10 +183,10 @@ emit("HC_TOPOLOGY", cfg.get("topology") or "single-repo")
 emit("HC_REPO_NAME", cfg.get("repoName") or "")
 emit("HC_GROUP", cfg.get("group") or "")
 emit("HC_GROUPS", ",".join(str(g) for g in groups))
-emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or "")
+emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or cfg.get("layout") or "")
 emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
 emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
-emit("HC_BOARD_PATH", cfg.get("boardPath") or "")
+emit("HC_BOARD_PATH", cfg.get("board") or "")
 emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
 PY
 }

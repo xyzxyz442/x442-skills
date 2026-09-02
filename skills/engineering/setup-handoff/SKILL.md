@@ -25,8 +25,9 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
 1. **Universal payload (tool-agnostic, always installed)** under `.agents/handoff/`: the
    `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
    `templates/` (the doc scaffolds), `.locks/` (gitignored on a board with no remote, committed on
-   one that has it — see **A shared board is a git repo**), a committed `config` (topology + repo
-   name), and the `<!-- handoff -->` routing block appended to `AGENTS.md`. Because every tool's
+   one that has it — see **A shared board is a git repo**), a committed `handoff.json` (topology,
+   policy, and the tooling-owned `_generated` block), and the `<!-- handoff -->` routing block
+   appended to `AGENTS.md`. Because every tool's
    entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds
    only the `handoff` entry point and the docs themselves; a flat board from before this layout is
@@ -190,22 +191,34 @@ shared board `handoff new` requires an explicit `--audience`. Single-repo instal
 
 ## Configuration
 
-The board's settings live in JSON and resolve through four scopes, **nearest wins**:
+**Everything about handoff is configured in one filename: `handoff.json`.** Which layer a file is
+depends on _where_ it sits, not on what it is called — the same shape `AGENTS.md` already uses.
+Nearest wins:
 
 ```text
-env  >  <repo>/.agents/handoff.config.json  >  <board>/config.json  >  built-in default
+env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
 ```
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two
 never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while
 file keys are camelCase (`ttlHours`).
 
-**`<board>/config.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
-`allowVerifyCmd`, plus `repoName` on a single-repo board only. **`<repo>/.agents/handoff.config.json`**
-is per-consumer and written only for cross-repo installs — `repo`, `group`, `boardPath`. A shared
-board is read by every member repo, so no member's identity may live in the board file; the last
-installer would clobber the rest. The full key table ships in the board's own
-[`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the documentation.
+**`<board>/handoff.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
+`allowVerifyCmd`, `environments`, plus `repoName` on a single-repo board only, and the tooling-owned
+`_generated` block (the projected repo registry and the payload version stamp).
+**`<repo>/.agents/handoff.json`** is per-consumer and written only for cross-repo installs — `repo`,
+`group`, `board`. A shared board is read by every member repo, so no member's identity may live in
+the board file; the last installer would clobber the rest. The full key table ships in the board's
+own [`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the
+documentation.
+
+This used to be **five files with five names** — a board `config.json`, a generated `repos.json`, a
+`.version` stamp, a repo `handoff.config.json`, and a KEY=value `config` — and nobody could answer
+"where is handoff configured" without listing all of them. Every one of those is still **read**, at
+lower precedence than the file that replaced it in the same directory, so an install that has never
+been re-run keeps working. Re-running the installer folds each into `handoff.json` and renames the
+old file to `*.superseded`: renamed, never deleted, because nothing here removes a file somebody may
+have hand-edited.
 
 Three behaviours worth knowing before you re-run the installer:
 

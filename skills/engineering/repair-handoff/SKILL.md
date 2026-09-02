@@ -150,14 +150,21 @@ because each depends on the relationship between the board's parts rather than o
 - **Open versus archive.** A doc with `status: done` still on the open board, or an archived doc
   still holding a lease.
 - **Section resolution (shared boards only).** Confirm the board pointer in the tool hook commands
-  resolves, that the board's effective `groups` and `groupLayout` match what `.handoff-repos.json`
-  declares, that this repo's own `.agents/handoff.config.json` names the right `group`, and that its
+  resolves, that the board's effective `groups` and `groupLayout` match what the workspace manifest
+  declares, that this repo's own `.agents/handoff.json` names the right `group`, and that its
   section directory or prefix exists. A mismatch is why handoffs "disappear" — they are filed into a
-  section nobody reads. **Read those through the resolver, not by grepping a file**: board facts live
-  in `$BOARD/config.json` on any board the current installer wrote and in the legacy KEY=value
-  `$BOARD/config` only on older ones, and the repo's section is in its own
-  `.agents/handoff.config.json` — not baked into the hook command. `$BOARD/scripts/config.sh`'s
-  `handoff_config_load <board> [<repo>]` already decides all of that.
+  section nobody reads. **Read those through the resolver, never by grepping a file.** Handoff is
+  configured in one filename, `handoff.json`, at every layer — `$BOARD/handoff.json` for board facts,
+  `$REPO/.agents/handoff.json` for this repo's section — but four predecessors are still read
+  underneath (`config.json`, the KEY=value `config`, `repos.json`, `handoff.config.json`), so which
+  file actually answered is exactly the thing you must not guess at.
+  `$BOARD/scripts/config.sh`'s `handoff_config_load <board> [<repo>]` already decides all of that.
+
+  A board still carrying a `config.json`, `.version` or `repos.json` beside its `handoff.json` has
+  not been re-installed since the files were consolidated. That is drift, not damage: the resolver
+  prefers the consolidated file, and re-running `setup-handoff` (or the cross-repo sync) folds each
+  predecessor in and renames it `*.superseded`. Files ending `.superseded` are inert — never repair
+  them, and never treat one as the board's config.
 
   ```bash
   . "$BOARD/scripts/config.sh" && eval "$(handoff_config_load "$BOARD" "$REPO")"

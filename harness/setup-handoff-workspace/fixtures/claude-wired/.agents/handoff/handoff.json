@@ -1,4 +1,7 @@
 {
+  "_generated": {
+    "payloadVersion": "setup-handoff 14"
+  },
   "allowVerifyCmd": false,
   "groupLayout": "",
   "groups": [],

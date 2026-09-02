@@ -81,7 +81,7 @@ def dump(path: Path, data: dict) -> None:
 def command(hdpath: str, tool: str, kind: str) -> str:
     # Identity is NOT baked in here any more. It used to ride as a HANDOFF_REPO=... prefix, which
     # made normal operating configuration invisible to anyone reading the board and stale the
-    # moment a repo was renamed. It now lives in the consuming repo's .agents/handoff.config.json
+    # moment a repo was renamed. It now lives in the consuming repo's .agents/handoff.json
     # and hooks.sh discovers it. What the command still carries is an ANCHOR -- where the repo is,
     # never what it is configured to do -- so resolution stays deterministic instead of depending
     # on the tool's working directory.
@@ -134,22 +134,44 @@ def migrate_prefix(commands: list) -> tuple:
     if found.get("HANDOFF_GROUP"):
         cfg["group"] = found["HANDOFF_GROUP"]
     if found.get("HANDOFF_HDPATH"):
-        cfg["boardPath"] = found["HANDOFF_HDPATH"]
+        cfg["board"] = found["HANDOFF_HDPATH"]
     return cfg, []
 
 
 def write_repo_config(repo_root: str, cfg: dict) -> None:
-    """Write the consuming repo's own identity. Merges, so a hand-added key survives."""
-    path = os.path.join(repo_root, ".agents", "handoff.config.json")
+    """Write the consuming repo's own identity into .agents/handoff.json.
+
+    One filename at every layer: this is the repo layer of the same cascade the board and the
+    workspace manifest sit in. The predecessor, .agents/handoff.config.json, is still READ (see
+    config.sh) and is carried forward here before being renamed aside, so an existing repo keeps
+    its identity across the rename instead of silently filing unscoped.
+    """
+    path = os.path.join(repo_root, ".agents", "handoff.json")
+    legacy = os.path.join(repo_root, ".agents", "handoff.config.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     existing = {}
-    if os.path.isfile(path):
-        with open(path) as fh:
-            existing = json.load(fh)
+    for src in (legacy, path):
+        if os.path.isfile(src):
+            try:
+                with open(src) as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    existing.update(loaded)
+            except (ValueError, OSError):
+                pass  # a hand-broken file must not stop the install; the writer below re-states it
     existing.update(cfg)
     with open(path, "w") as fh:
         json.dump(existing, fh, indent=2, sort_keys=True)
         fh.write("\n")
+    # Renamed, never deleted — its contents are already merged above, and a `.superseded` suffix
+    # is obvious and reversible where a delete is neither.
+    if os.path.isfile(legacy):
+        try:
+            os.replace(legacy, legacy + ".superseded")
+            print("  repo config moved to .agents/handoff.json "
+                  "(.agents/handoff.config.json.superseded is safe to delete)")
+        except OSError:
+            pass
 
 
 def env_repo_config() -> dict:
@@ -171,7 +193,7 @@ def env_repo_config() -> dict:
         cfg["group"] = grp
     hdpath_env = os.environ.get("HANDOFF_HDPATH", "")
     if hdpath_env:
-        cfg["boardPath"] = hdpath_env
+        cfg["board"] = hdpath_env
     return cfg
 
 

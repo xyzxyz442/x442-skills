@@ -5,7 +5,7 @@
 #
 # Confirms the manifest cascade parses, each board is scaffolded with the expected group facts, each
 # member repo is wired to its board + section, the AGENTS.md block matches the resolved set, and
-# each board's repos.json still projects the manifest (the file `handoff export` resolves a
+# each board's handoff.json still projects the manifest (the file `handoff export` resolves a
 # cross-repo brief's target repo from — drift there is what silently degrades every brief).
 # Distinguishes "not configured" (no manifest -> exit 0) from "broken" (-> exit 1). Writes nothing.
 set -uo pipefail
@@ -14,8 +14,8 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESOLVE="$SKILL_DIR/scripts/manifest/resolve.py"
 REGISTRY="$SKILL_DIR/scripts/manifest/registry.py"
 # The payload's own config resolver, used here instead of grepping a filename. Board facts live in
-# config.json on any board the current installer wrote, in a legacy KEY=value `config` on older
-# ones, and a member repo's own identity lives in its .agents/handoff.config.json — with a
+# handoff.json on any board the current installer wrote, in a legacy config.json or KEY=value
+# `config` on older ones, and a member repo's own identity lives in its .agents/handoff.json — with a
 # precedence between them. This file already decides all of that for `handoff` and `hooks.sh`;
 # re-deriving it here is how this verifier came to report FAIL on every healthy board.
 #
@@ -97,8 +97,11 @@ cfg_reason() { # fallback -> one-line reason
 
 # "not configured" short-circuit: no manifest anywhere in the cascade. Still print a Summary line so
 # the harness (which parses exactly that line) sees a clean, gradeable result rather than no output.
-if [ ! -f "$SCOPE/.handoff-repos.json" ] && [ ! -f "$HOME/.agents/handoff-repos.json" ]; then
-  echo "verify: no .handoff-repos.json in scope or user layer — nothing to verify (not configured)."
+# Any layer of the cascade, under either name. A workspace that declares its fleet in the current
+# `.agents/handoff.json` is configured just as much as one still using `.handoff-repos.json`.
+if [ ! -f "$SCOPE/.agents/handoff.json" ] && [ ! -f "$SCOPE/.handoff-repos.json" ] \
+  && [ ! -f "$HOME/.agents/handoff.json" ] && [ ! -f "$HOME/.agents/handoff-repos.json" ]; then
+  echo "verify: no handoff manifest in scope or user layer — nothing to verify (not configured)."
   echo "Summary: 0 passed, 0 warnings, 0 failed"
   exit 0
 fi
@@ -150,7 +153,7 @@ while IFS=$'\t' read -r path groups layout; do
     if [ "$want" = "$got" ]; then pass "board $path hosts groups: $want"; else fail "board $path groups drift (config: '${got:-unset}', manifest: '$want') — re-run the sync"; fi
     if [ "$HC_GROUP_LAYOUT" = "$layout" ]; then pass "board $path layout=$layout"; else fail "board $path layout drift (config: '${HC_GROUP_LAYOUT:-unset}', manifest: '$layout')"; fi
   else
-    fail "board $path config could not be read — $(cfg_reason "no config.json and no legacy config file") — re-run the sync"
+    fail "board $path config could not be read — $(cfg_reason "no handoff.json and no legacy config file") — re-run the sync"
   fi
   # sub-index + roll-up presence (generated on first CLI use; absence is a warn, not a fail)
   [ -f "$path/INDEX.md" ] || warn "board $path has no roll-up INDEX.md yet (created on first handoff command)"
@@ -193,7 +196,7 @@ while IFS=$'\t' read -r group board alias repo exists has_agents; do
   fi
   # Wired and scoped are two different facts and are checked separately. The group used to be baked
   # into the hook command as HANDOFF_GROUP=<group>; it is not any more — merge-hooks.py writes it to
-  # the member's own .agents/handoff.config.json so a rename cannot leave a stale literal buried in
+  # the member's own .agents/handoff.json so a rename cannot leave a stale literal buried in
   # a tool config. Grepping the old literal made every correctly-wired member read as broken.
   cfg="$repo/.claude/settings.json"
   if [ -f "$cfg" ]; then
@@ -213,7 +216,7 @@ while IFS=$'\t' read -r group board alias repo exists has_agents; do
       fail "$group/$alias resolves to section '${HC_GROUP:-unset}', not $group — re-run the sync"
     fi
   else
-    fail "$group/$alias config could not be read — $(cfg_reason "no readable board config, and no $repo/.agents/handoff.config.json") — re-run the sync"
+    fail "$group/$alias config could not be read — $(cfg_reason "no readable board config, and no $repo/.agents/handoff.json") — re-run the sync"
   fi
 done < <(
   python3 - "$RESOLVED" << 'PY'
@@ -229,7 +232,8 @@ PY
 echo
 echo "4. board repo registries"
 echo "------------------------"
-# `handoff export` resolves a handoff's `audience` to a real repo through <board>/repos.json. It is
+# `handoff export` resolves a handoff's `audience` through the `_generated` block of the board's
+# handoff.json (or, on a board not yet re-synced, the standalone repos.json it replaced). It is
 # generated, never hand-edited, so ANY difference from the manifest is drift — and drift here is
 # invisible at export time: every affected brief just quietly renders repo_root_commit: unverified.
 # registry.py builds the expected bytes, the same call the sync writes with, so the two cannot

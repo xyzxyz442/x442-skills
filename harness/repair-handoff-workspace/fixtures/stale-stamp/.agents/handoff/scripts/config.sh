@@ -12,16 +12,79 @@
 # repo's installer and read by every member's hooks, so executing it would let one repo run shell
 # in its siblings' sessions. The legacy KEY=value file is PARSED for the same reason.
 
+# --- board git substrate (ADR 0002) ----------------------------------------------------
+# Lives here, beside the config resolver, for the reason stated above: `handoff` and `hooks.sh` are
+# two readers of one board, and anything they each re-derive is something they can each get wrong
+# differently. Lease expiry is the sharp case — if the CLI and the edit gate disagree about when a
+# lease lapses, the gate denies edits to the holder or admits them to everyone else, and neither
+# side reports a problem.
+#
+# A board is SHARED when it is the root of its own git worktree AND has a remote. Merely sitting
+# inside some repository is not enough: a nested board's remote belongs to the repo containing it,
+# so committing a lease there would push that repo's source alongside it.
+handoff_board_git() { # board-dir git-args...
+  local b="$1"
+  shift
+  git -C "$b" "$@" 2> /dev/null
+}
+handoff_board_remote() { handoff_board_git "$1" remote | head -1; }
+
+handoff_leases_shared() { # board-dir -> 0 when leases are shared state of record
+  local b="$1" top
+  top="$(handoff_board_git "$b" rev-parse --show-toplevel)" || return 1
+  [ -n "$top" ] || return 1
+  # `pwd -P` on both sides: git always reports the PHYSICAL toplevel, while `pwd` reports the
+  # logical path the caller arrived by. On macOS a board under $TMPDIR is reached through /var and
+  # lives at /private/var, so a logical comparison decides no board is ever its own repo — and
+  # every shared-board behavior switches itself off without a word.
+  [ "$(cd "$top" && pwd -P)" = "$(cd "$b" && pwd -P)" ] || return 1
+  [ -n "$(handoff_board_remote "$b")" ]
+}
+
+# Expiry of a COMMITTED lease is stamped from the commit that recorded it, never from the wall
+# clock of the machine that wrote the file. Two machines' clocks do not agree, and the whole point
+# of a shared lease is that both of them read the same deadline out of it: a claimer running an
+# hour fast would otherwise hand every peer a lease that already looks expired. `ttl_hours=` travels
+# inside the owner file so the reader applies the CLAIMER's TTL rather than its own.
+#
+# Falls back to the recorded `expires=` whenever git cannot answer — a local-only board, a lease
+# not yet committed, no git at all — so a board without a remote is unchanged in behavior.
+handoff_lease_expiry() { # board-dir owner-file fallback-expires default-ttl-hours -> epoch seconds
+  local b="$1" f="$2" fallback="${3:-0}" ttl_default="${4:-4}" ct ttl
+  handoff_leases_shared "$b" || {
+    printf '%s' "$fallback"
+    return
+  }
+  ct="$(handoff_board_git "$b" log -1 --format=%ct -- "$f")"
+  [ -n "$ct" ] || {
+    printf '%s' "$fallback"
+    return
+  }
+  ttl="$(sed -n 's/^ttl_hours=//p' "$f" 2> /dev/null)"
+  case "$ttl" in '' | *[!0-9]*) ttl="$ttl_default" ;; esac
+  printf '%s' "$((ct + ttl * 3600))"
+}
+
 # handoff_config_load BOARD_DIR [REPO_DIR] -> prints shell assignments; non-zero on bad config.
+#
+# ONE filename, `handoff.json`, at every layer. It used to be six files with five names — a board
+# `config.json`, a generated `repos.json`, a `.version` stamp, a repo `handoff.config.json`, a
+# workspace `.handoff-repos.json`, and a machine-local locations map — and nobody could answer
+# "where is handoff configured" without listing all of them. They are now layers of one cascade
+# distinguished by WHERE they sit, not by what they are called, which is the same shape AGENTS.md
+# already uses and the same shape the fleet manifest's own user/scope/subdir cascade already had.
+#
+# Every legacy name is still READ, at lower precedence than the file that replaced it, so an
+# existing install keeps working untouched until its installer is re-run.
 handoff_config_load() {
   local board="$1" repo="${2:-}"
   if ! command -v python3 > /dev/null 2>&1; then
-    if [ -f "$board/config.json" ]; then
-      echo "handoff: config.json needs python3, which is not installed" >&2
+    if [ -f "$board/handoff.json" ] || [ -f "$board/config.json" ]; then
+      echo "handoff: handoff.json needs python3, which is not installed" >&2
       return 3
     fi
-    if [ -n "$repo" ] && [ -f "$repo/.agents/handoff.config.json" ]; then
-      echo "handoff: $repo/.agents/handoff.config.json needs python3, which is not installed" >&2
+    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ]; }; then
+      echo "handoff: $repo/.agents/handoff.json needs python3, which is not installed" >&2
       return 3
     fi
     _handoff_config_legacy_nopython "$board"
@@ -52,6 +115,7 @@ LEGACY = {
     "TOPOLOGY": "topology", "REPO_NAME": "repoName",
     "HANDOFF_GROUPS": "groups", "HANDOFF_GROUP_LAYOUT": "groupLayout",
     "HANDOFF_TTL_HOURS": "ttlHours", "HANDOFF_ALLOW_VERIFY_CMD": "allowVerifyCmd",
+    "HANDOFF_ENVIRONMENTS": "environments",
 }
 
 def read_legacy(path):
@@ -70,18 +134,45 @@ def read_legacy(path):
     return out
 
 cfg = {"topology": "single-repo", "repoName": "", "group": "", "groups": [],
-       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "boardPath": ""}
+       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "board": "",
+       # Ordered lowest-environment-first. Board-global because an index that sorted one member's
+       # work by a different ladder than another's would not be one board's index.
+       "environments": ["dev", "staging", "prod"]}
+
+# Board layer, oldest name first so the newest wins: KEY=value, then config.json, then handoff.json.
 cfg.update(read_legacy(os.path.join(board, "config")))
 cfg.update(read_json(os.path.join(board, "config.json")))
+cfg.update(read_json(os.path.join(board, "handoff.json")))
+
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
-    # board", which is the board's `repoName`. Everything else keeps its name.
-    for key, val in read_json(os.path.join(repo, ".agents", "handoff.config.json")).items():
-        cfg["repoName" if key == "repo" else key] = val
+    # board", which is the board's `repoName`. `boardPath` was a second name for `board`; both are
+    # accepted, and both mean the same thing — where this repo's board is.
+    for src in (os.path.join(repo, ".agents", "handoff.config.json"),
+                os.path.join(repo, ".agents", "handoff.json")):
+        for key, val in read_json(src).items():
+            if key == "repo":
+                cfg["repoName"] = val
+            elif key == "boardPath":
+                cfg["board"] = val
+            else:
+                cfg[key] = val
 
+# `groups` carries the section names, and it is accepted in either fidelity. A board records the
+# bare list of sections it hosts; a workspace manifest records the same names mapped to their
+# member repos. They are the same fact at two levels of detail, so they share one key rather than
+# splitting into `groups` and `groupDefs` — the resolver that needs the members reads the map, and
+# everything that only needs the names reads the keys.
 groups = cfg.get("groups") or []
-if isinstance(groups, str):
+if isinstance(groups, dict):
+    groups = [g for g, v in sorted(groups.items())
+              if not (isinstance(v, dict) and v.get("remove"))]
+elif isinstance(groups, str):
     groups = [g for g in groups.split(",") if g]
+
+envs = cfg.get("environments") or []
+if isinstance(envs, str):
+    envs = [e for e in envs.split(",") if e]
 
 def emit(name, val):
     if isinstance(val, bool):
@@ -92,10 +183,11 @@ emit("HC_TOPOLOGY", cfg.get("topology") or "single-repo")
 emit("HC_REPO_NAME", cfg.get("repoName") or "")
 emit("HC_GROUP", cfg.get("group") or "")
 emit("HC_GROUPS", ",".join(str(g) for g in groups))
-emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or "")
+emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or cfg.get("layout") or "")
 emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
 emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
-emit("HC_BOARD_PATH", cfg.get("boardPath") or "")
+emit("HC_BOARD_PATH", cfg.get("board") or "")
+emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
 PY
 }
 
@@ -120,4 +212,5 @@ _handoff_config_legacy_nopython() {
   printf 'HC_TTL_HOURS=%s\n' "$(printf %q "${ttl:-4}")"
   printf 'HC_ALLOW_VERIFY_CMD=%s\n' "$(printf %q "${allow:-0}")"
   printf 'HC_BOARD_PATH=%s\n' "''"
+  printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
 }

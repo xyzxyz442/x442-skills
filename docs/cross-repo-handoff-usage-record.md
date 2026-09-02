@@ -39,7 +39,7 @@ about fleets. `register-cross-repo-handoff` is the fleet driver: it reads a mani
 | Wire one repo to a board section          | `setup-handoff --topology cross-repo --group <g>` | per-tool hooks + `additionalDirectories` + AGENTS.md block             |
 | Resolve the fleet manifest cascade        | `register-cross-repo-handoff`                     | `scripts/manifest/resolve.py`                                          |
 | Render the peer table into each AGENTS.md | `register-cross-repo-handoff`                     | `scripts/manifest/render.py`                                           |
-| Record the fleet for later `--prune`      | `register-cross-repo-handoff`                     | `<scope>/.agents/cross-repo-handoff-state.json`                        |
+| Record the fleet for later `--prune`      | `register-cross-repo-handoff`                     | `_generated` in `<scope>/.agents/handoff.json`                         |
 
 You never run the per-repo installer by hand in a fleet. The manifest is the source of truth; the
 sync is the only writer.

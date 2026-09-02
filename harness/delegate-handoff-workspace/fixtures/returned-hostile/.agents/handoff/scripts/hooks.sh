@@ -140,7 +140,7 @@ TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
 # Relative board path used in every hint/deny message. HANDOFF_HDPATH (baked into older
-# hook commands) wins; otherwise the consumer's own handoff.config.json boardPath, which is
+# hook commands) wins; otherwise the consumer's own .agents/handoff.json `board`, which is
 # what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
 hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
 

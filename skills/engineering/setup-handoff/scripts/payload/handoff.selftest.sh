@@ -933,7 +933,7 @@ mkshared() { # -> board dir (its own repo, pushed to a bare remote beside it)
   cp "$HERE/config.sh" "$b/scripts/config.sh"
   cp "$ASSETS"/handoff-*-template.md "$b/templates/"
   chmod +x "$b/handoff"
-  printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4\n}\n' > "$b/config.json"
+  printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4\n}\n' > "$b/handoff.json"
   # The stale rule a board carries from before it had a remote. The CLI must repair it, because
   # leaving it turns every push-CAS into a commit of nothing.
   printf '.locks/\n' > "$b/.gitignore"
@@ -1019,6 +1019,72 @@ hb "$SI" new declared-dep --title "Declared" --after dev-chore > /dev/null
 hb "$SI" index > /dev/null
 chk "a declared edge is not also reported as a prose mention" "" \
   "$(sed -n '/Referenced by/,$p' "$SIX" | grep -c 'declared-dep' | grep -v '^0$')"
+
+printf '\none handoff.json — the registry moved inside it, the old file still reads\n'
+# The board registry used to be its own `repos.json`. It is now the `_generated.repos` key of the
+# board's handoff.json — the block the cross-repo sync owns — so a board answers "which repo is
+# this audience" from the same file that holds everything else about it.
+OF="$(mkboard)"
+OF_TARGET="$(mktemp -d)/acme-lib"
+mkdir -p "$OF_TARGET"
+git -C "$OF_TARGET" init -q
+git -C "$OF_TARGET" config user.email "test@example.com"
+git -C "$OF_TARGET" config user.name "test"
+printf 'x\n' > "$OF_TARGET/README.md"
+git -C "$OF_TARGET" add -A
+git -C "$OF_TARGET" commit -qm "initial commit"
+OF_ROOT="$(git -C "$OF_TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+OF_HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+mkdir -p "$HOME/.agents"
+printf '{ "locations": { "%s": "%s" } }\n' "$OF_ROOT" "$OF_TARGET" > "$HOME/.agents/handoff.json"
+
+cat > "$OF/.agents/handoff/handoff.json" << JSON
+{
+  "topology": "cross-repo",
+  "ttlHours": 4,
+  "_generated": {
+    "schema": 2,
+    "repos": [
+      { "group": "acme", "alias": "lib", "audience": "acme-lib-$$", "rootCommit": "$OF_ROOT" }
+    ]
+  }
+}
+JSON
+OF_OUT="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/.agents/handoff" board_repo_entry "acme-lib-$$")"
+chk "the registry resolves from _generated inside handoff.json" \
+  "ok|$(cd "$OF_TARGET" && pwd -P)|$OF_ROOT" "$OF_OUT"
+
+# The machine-local layer is the same filename at $HOME. It is the one layer that must never be
+# committed, which is why it lives there rather than as a gitignored file inside a cloned board.
+chk "the location map is the ~ layer of the same file" "yes" \
+  "$([ -f "$HOME/.agents/handoff.json" ] && echo yes || echo no)"
+
+# Every board now HAS a handoff.json, so "present but declares no fleet" is the ordinary state of a
+# single-repo board. Reporting that as a corrupt registry would send someone to repair a good file.
+printf '{ "topology": "single-repo", "ttlHours": 4 }\n' > "$OF/.agents/handoff/handoff.json"
+OF_NONE="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/.agents/handoff" board_repo_entry "acme-lib-$$")"
+chk "a board with no fleet reports no-registry, not bad-registry" "no-registry||" "$OF_NONE"
+
+# CONSEQUENCE OF CONSOLIDATION, asserted so it cannot regress quietly: the registry now shares a
+# file with the board's config, so a corrupt registry is no longer a soft degrade of one feature —
+# it takes the whole CLI down. That is the right direction (a board whose config cannot be parsed
+# should not answer questions about itself), and it is loud: exit 3, naming the file and the parse
+# error. A LEGACY standalone repos.json keeps degrading to `bad-registry`, since a board that has
+# not been re-synced should not be worse off than before.
+printf '{ nope\n' > "$OF/.agents/handoff/handoff.json"
+OF_BAD="$(cd "$OF" && ./.agents/handoff/handoff list 2>&1)"
+chk "a corrupt board config is fatal, not a silent degrade" "3" \
+  "$(cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1; echo $?)"
+chk_contains "and it names the file that could not be read" "$OF_BAD" "cannot read"
+chk_contains "and the parse error itself" "$OF_BAD" "handoff.json"
+
+printf '{ "topology": "cross-repo", "ttlHours": 4 }\n' > "$OF/.agents/handoff/handoff.json"
+printf '{ nope\n' > "$OF/.agents/handoff/repos.json"
+OF_LEG="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/.agents/handoff" board_repo_entry "acme-lib-$$")"
+chk "a corrupt LEGACY repos.json still only degrades brief resolution" "bad-registry||" "$OF_LEG"
+chk "and the board still lists" "0" "$(cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1; echo $?)"
+export HOME="$OF_HOME_SAVE"
 
 printf '\nshared board — lease visibility and push-CAS\n'
 SB="$(mkshared)"

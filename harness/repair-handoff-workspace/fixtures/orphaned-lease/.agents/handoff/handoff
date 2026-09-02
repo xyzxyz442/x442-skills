@@ -1576,11 +1576,11 @@ board_repo_entry() { # audience -> "reason|abs-path|attested-root"
     printf 'no-python||'
     return
   }
-  [ -f "$DIR/repos.json" ] || {
+  [ -f "$DIR/handoff.json" ] || [ -f "$DIR/repos.json" ] || {
     printf 'no-registry||'
     return
   }
-  python3 - "$DIR/repos.json" "$DIR" "$aud" "$GROUP" << 'PY'
+  python3 - "$DIR/handoff.json" "$DIR" "$aud" "$GROUP" << 'PY'
 import json, os, subprocess, sys
 
 reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -1589,7 +1589,11 @@ HOME = os.path.expanduser("~")
 # because it answers the same kind of question ("where on THIS disk") and must never be committed
 # for the same reason. A gitignored file inside the board was rejected: a board is cloned by every
 # member, and a location map is true for exactly one of them.
-LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
+# The machine layer of the same cascade, under the same filename. It is the one layer that must
+# never be committed — a location map is true for exactly one disk — which is why it lives at $HOME
+# rather than as a gitignored file inside a board that everybody clones.
+LOCATIONS = os.path.join(HOME, ".agents", "handoff.json")
+LEGACY_LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
 
 
 def out(s):
@@ -1611,13 +1615,17 @@ def root_commit(path):
 
 
 def load_locations():
-    try:
-        with open(LOCATIONS) as fh:
-            data = json.load(fh)
-        locs = data.get("locations")
-        return locs if isinstance(locs, dict) else {}
-    except (OSError, ValueError, AttributeError):
-        return {}
+    out = {}
+    for path in (LEGACY_LOCATIONS, LOCATIONS):  # current name last, so it wins
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+            locs = data.get("locations")
+            if isinstance(locs, dict):
+                out.update(locs)
+        except (OSError, ValueError, AttributeError):
+            continue
+    return out
 
 
 def remember(sha, path):
@@ -1632,7 +1640,6 @@ def remember(sha, path):
                 data = {}
         except (OSError, ValueError):
             data = {}
-        data.setdefault("version", 1)
         data.setdefault("locations", {})
         if not isinstance(data["locations"], dict):
             data["locations"] = {}
@@ -1680,14 +1687,36 @@ def discover(sha):
     return ""
 
 
+def read_registry():
+    """The projected repo list, from the board's consolidated file or the standalone predecessor.
+
+    `_generated` is the block the cross-repo sync owns. Reading the consolidated file first means a
+    board that has been re-synced answers from one place; a board that has not keeps answering from
+    repos.json until it is.
+    """
+    for path, key in ((reg, "_generated"), (os.path.join(board, "repos.json"), None)):
+        if not os.path.isfile(path):
+            continue
+        with open(path) as fh:
+            data = json.load(fh)
+        block = data.get(key) if key else data
+        if not isinstance(block, dict):
+            continue
+        repos = block.get("repos")
+        if isinstance(repos, list):
+            return repos
+    return None
+
+
+# ABSENT and UNREADABLE are different answers and get different messages. Now that every board has
+# a handoff.json, "the file is there but declares no fleet" is the ordinary state of a single-repo
+# board — reporting that as a corrupt registry would send someone to repair a file that is fine.
 try:
-    with open(reg) as fh:
-        data = json.load(fh)
-    repos = data["repos"]
-    if not isinstance(repos, list):
-        raise ValueError("repos is not a list")
+    repos = read_registry()
 except Exception:  # noqa: BLE001 - any unreadable registry is one failure mode: do not trust it
     out("bad-registry||")
+if repos is None:
+    out("no-registry||")
 
 # `path` is no longer required for an entry to be usable — rootCommit alone identifies the repo,
 # which is the whole point of schema 2. A v1 entry still carries a path and it is still honoured

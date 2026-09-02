@@ -53,6 +53,7 @@ TOPOLOGY="$HC_TOPOLOGY"
 HANDOFF_GROUPS="${HANDOFF_GROUPS:-$HC_GROUPS}"
 HANDOFF_GROUP_LAYOUT="${HANDOFF_GROUP_LAYOUT:-$HC_GROUP_LAYOUT}"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
+HANDOFF_ENVIRONMENTS="${HANDOFF_ENVIRONMENTS:-$HC_ENVIRONMENTS}"
 # Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
 # board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
 REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
@@ -64,7 +65,126 @@ REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 # sections. Both empty => flat board, and every helper returns exactly today's paths.
 LAYOUT="${HANDOFF_GROUP_LAYOUT:-}"
 BOARD_GROUPS="${HANDOFF_GROUPS:-}"
+# --- board git substrate (ADR 0002) ----------------------------------------------------
+# The predicates themselves live in config.sh, which `hooks.sh` also sources: the CLI and the edit
+# gate must never disagree about whether a board is shared or when a lease lapses. What lives here
+# is only the $DIR-bound convenience wrapper and the per-invocation cache — `list` and `index` walk
+# every doc on the board and must not pay for a git process each time they ask.
+#
+# A board with no remote is not a broken shared board. It is the local-only board every existing
+# install already is, and it must keep behaving exactly as it did: leases ignored, no network on
+# any path, no git process on the read paths.
+board_git() { handoff_board_git "$DIR" "$@"; }
+board_remote() { handoff_board_remote "$DIR"; }
+
+_LEASES_SHARED=""
+leases_shared() {
+  if [ -z "$_LEASES_SHARED" ]; then
+    if handoff_leases_shared "$DIR"; then _LEASES_SHARED=1; else _LEASES_SHARED=0; fi
+  fi
+  [ "$_LEASES_SHARED" = 1 ]
+}
+
+# `.locks/` is gitignored on a local-only board (ephemeral machine state) and must NOT be on a
+# remote-backed one (shared state of record). A stale ignore rule does not fail loudly: it turns
+# push-CAS into a no-op, which is mutual exclusion that excludes nobody. Repair it on the claim
+# path rather than refusing — a board that just gained a remote would otherwise block every claim
+# until someone hand-edited a file, and the correct edit is not in question. Never silently.
+ensure_lease_visibility() {
+  leases_shared || return 0
+  local gi="$DIR/.gitignore" t
+  [ -f "$gi" ] || return 0
+  grep -qxF '.locks/' "$gi" 2> /dev/null || return 0
+  t="$(mktemp)" || return 0
+  grep -vxF '.locks/' "$gi" > "$t"
+  cat "$t" > "$gi"
+  rm -f "$t"
+  echo "This board has a remote, so leases are shared state — removed '.locks/' from its .gitignore."
+}
+
 slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'; }
+
+# Guard for every value-taking flag in the subcommand arg loops below. A value that is missing (the
+# flag was the last argument) or that itself looks like a flag is never accepted silently: without
+# this, `export ID --to --no-claim` sets to="--no-claim" and silently skips the claim. Mirrors
+# setup-handoff.sh's guard of the same name and fails hard for the same reason. $2 is the caller's
+# "$#" from before this flag's own shift; $3 is the candidate value.
+require_value() {
+  local flag="$1" argcount="$2" val="$3"
+  [ "$argcount" -lt 2 ] && die "$flag needs a value (got nothing — it was the last argument)"
+  case "$val" in
+    --*) die "$flag needs a value (got the flag \"$val\")" ;;
+  esac
+}
+
+# An EXISTING file or directory's absolute path, via `cd && pwd` (portable — no `realpath` on
+# stock macOS). A relative path is only ever meaningful next to the cwd it was typed in; stamping
+# one into a doc's frontmatter records a pointer that resolves differently — or not at all — once
+# the reader's cwd is different, which is exactly what happened to `export`'s `--out`.
+abs_path() { # path -> absolute path
+  local p="$1"
+  if [ -d "$p" ]; then
+    (cd "$p" && pwd)
+  else
+    printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+  fi
+}
+
+# --- repo identity ----------------------------------------------------------------------
+# A brief names file:line locations, and those paths plausibly exist in a DIFFERENT repo where they
+# mean something else. Identity therefore travels inside the brief and is checked on both sides.
+#
+# The root commit is the key rather than the remote URL: it survives renames, remote moves, and
+# mirror pushes, and a fork matching it is the correct answer because a fork is the same lineage.
+repo_root_commit() { # [dir] -> sha of the first commit, or "" outside a git repo
+  git -C "${1:-${REPO_DIR:-.}}" rev-list --max-parents=0 HEAD 2> /dev/null | tail -1
+}
+
+# Normalize a remote URL to bare host/owner/repo. This is a CORRECTNESS requirement, not cosmetics:
+# the SSH form "git@github.com:acme/acme-api.git" carries a ":" that would break the brief's
+# frontmatter under the board's no-colon rule. Strips scheme, embedded credentials, the ":" that
+# separates host from path in the SSH form, the ".git" suffix, and any trailing slash.
+# Known limitation: an https URL carrying an explicit port renders as host/port/owner/repo. Ports
+# on git remotes are rare enough that special-casing them would cost more than it buys.
+repo_origin_norm() { # url -> host/owner/repo
+  printf '%s' "$1" | sed \
+    -e 's#^[a-zA-Z+][a-zA-Z0-9+.-]*://##' \
+    -e 's#^[^/@]*@##' \
+    -e 's#:#/#' \
+    -e 's#\.git$##' \
+    -e 's#/*$##'
+}
+
+# Classify a normalized origin by its git host. The brief shows a PROVIDER rather than a host
+# because the host is a deployment detail — a repo that moves from github.com to an enterprise
+# install is still the same repo, and `repo_root_commit` is what actually proves identity.
+# "other" covers self-hosted git and any provider not listed here.
+repo_provider_of() { # host/owner/repo -> github|gitlab|bitbucket|other|unknown
+  case "${1%%/*}" in
+    "") printf 'unknown' ;;
+    github.com) printf 'github' ;;
+    gitlab.com) printf 'gitlab' ;;
+    bitbucket.org) printf 'bitbucket' ;;
+    *) printf 'other' ;;
+  esac
+}
+
+# The repo path shown beside the provider. A recognized public host is implied by the provider, so
+# it is dropped. An unrecognized host is KEPT: "acme/api on other" would not let a reader confirm
+# which repo they are standing in, and confirming exactly that is the whole job of the line.
+repo_path_of() { # host/owner/repo -> owner/repo, or the full string when the provider is "other"
+  case "$(repo_provider_of "$1")" in
+    other) printf '%s' "$1" ;;
+    *) printf '%s' "${1#*/}" ;;
+  esac
+}
+
+# Briefs live beside the section's archive, so a grouped board keeps each section's briefs separate.
+# briefs_dir forwards "$@" (rather than re-expanding "${1:-...}") because sec_dir deliberately uses
+# `${1-$GROUP}` (bare -, not :-): an explicit empty string means the flat board, while omission means
+# the caller's own section. Re-expanding here would pass an explicit "" and collapse that distinction.
+briefs_dir() { printf '%s/briefs' "$(sec_dir "$@")"; }
+
 GROUP="${HANDOFF_GROUP:-$HC_GROUP}"
 [ -n "$GROUP" ] && GROUP="$(slug "$GROUP")"
 grouped() { [ -n "$LAYOUT" ] && [ -n "$GROUP" ]; } # is this invocation acting inside a group section?
@@ -267,19 +387,67 @@ meta() { # path key -> value from YAML frontmatter, minus one surrounding quote 
     | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
 }
 
+# Extract one "## Heading" section's body from a doc, heading excluded. Used to lift Context /
+# Where / Verify / Decisions out of a board doc and into a brief. Blank leading and trailing lines
+# are trimmed so the rendered brief has no ragged gaps between sections.
+doc_section() { # path heading -> body lines
+  awk -v h="## $2" '
+    $0 == h { inside = 1; next }
+    inside && /^## / { inside = 0 }
+    inside { print }
+  ' "$1" | awk '
+    { line[NR] = $0 }
+    END {
+      first = 1; last = NR
+      while (first <= NR && line[first] ~ /^[[:space:]]*$/) first++
+      while (last >= first && line[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print line[i]
+    }
+  '
+}
+
+# Extract the spliced Result block from a doc (or a brief), bounded by the same marker pair
+# splice_result writes. Shared by import_result (reading the RETURNED brief's Result) and
+# cmd_release's copied-evidence check (reading the DOC's spliced Result) so both scan exactly the
+# text an executor actually reported — never frontmatter or the rest of the doc.
+result_block() { # path -> lines between the handoff:result markers
+  awk '
+    /<!-- handoff:result:begin -->/ { inside = 1; next }
+    /<!-- handoff:result:end -->/   { inside = 0 }
+    inside { print }
+  ' "$1"
+}
+
 # Update a frontmatter key in place, or insert it before the closing --- if absent.
 # Portable (awk), unlike GNU-only `sed -i 's/a/&\nb/'`.
+#
+# VALUE IS ROUTED THROUGH A FILE, never through `awk -v`. POSIX awk interprets C-style backslash
+# escapes (`\n`, `\072`, ...) in a -v-assigned value, so a value this CLI did not author itself —
+# e.g. `result_by`/`result_at` from a returned brief, in `import_result` — could carry a literal
+# `\n` and `\072` that `fold_colons` never sees (neither is a literal newline or colon in the
+# input) and that awk then decodes into a REAL newline and colon, injecting an arbitrary extra
+# frontmatter key. This is the chokepoint fix for that bug: every caller goes through here, so
+# fixing it here (rather than at each untrusted call site) closes it for good, the same remediation
+# `splice_result` already applies to the Result body. getline reads raw bytes and interprets
+# nothing. `key` is never attacker-controlled (always a fixed literal from this file), so it can
+# stay on `-v`.
 set_field() {
-  local f="$1" key="$2" val="$3" t
+  local f="$1" key="$2" val="$3" t vf rc=0
   t="$(mktemp)" || die "mktemp failed"
-  awk -v k="$key" -v v="$val" '
-    BEGIN { infm = 0; seen = 0 }
+  vf="$(mktemp)" || die "mktemp failed"
+  printf '%s' "$val" > "$vf"
+  awk -v k="$key" -v vf="$vf" '
+    BEGIN { infm = 0; seen = 0; v = ""; getline v < vf; close(vf) }
     NR == 1 && $0 == "---" { infm = 1; print; next }
     infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
     infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
     { print }
-  ' "$f" > "$t" && cat "$t" > "$f"
-  rm -f "$t"
+  ' "$f" > "$t" && cat "$t" > "$f" || rc=1
+  # Cleanup runs on BOTH paths. It used to sit after a `|| die`, so a genuine write failure
+  # (read-only doc, full disk) exited straight past it and leaked both mktemp files. Reporting the
+  # failure and cleaning up after it are not a trade — do both.
+  rm -f "$t" "$vf"
+  [ "$rc" -eq 0 ] || die "set_field: could not write $key into $f"
 }
 
 log_activity() { # path message -> append to the doc's Activity log
@@ -288,6 +456,12 @@ log_activity() { # path message -> append to the doc's Activity log
   # (MD022 blanks-around-headings / MD032 blanks-around-lists) the moment the first entry lands
   grep -q '^## Activity' "$f" || printf '\n## Activity\n\n' >> "$f"
   printf -- '- %s — %s\n' "$(today)" "$msg" >> "$f"
+}
+
+# Bound to this board and this install's TTL default; the rule itself is in config.sh so the edit
+# gate applies exactly the same one.
+lease_expiry() { # owner-file fallback-expires -> epoch seconds
+  handoff_lease_expiry "$DIR" "$1" "${2:-0}" "$TTL_HOURS"
 }
 
 lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|exp"
@@ -299,7 +473,27 @@ lock_state() { # key [locksdir] -> "free" | "held|owner|exp" | "expired|owner|ex
   local owner exp
   owner="$(sed -n 's/^owner=//p' "$d/owner" 2> /dev/null || echo unknown)"
   exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+  exp="$(lease_expiry "$d/owner" "${exp:-0}")"
   if [ "$(now)" -ge "${exp:-0}" ]; then echo "expired|$owner|$exp"; else echo "held|$owner|$exp"; fi
+}
+
+# Does THIS session hold a LIVE lease on <id>? Ownership is proven by the raw session id the tool
+# exposes, never by the display name: two concurrent sessions of one user share a user name, and
+# treating those as the same session would walk a bundle export straight into the foreign lease its
+# pre-flight exists to catch. When no session id is available at all (advisory mode, no tool)
+# nothing can be proven and the answer is no — a false "yes" is the dangerous direction here.
+#
+# `expired` deliberately answers no as well: an expired lease of one's own is taken over by a normal
+# claim, which is what refreshes it. Only a live self-held lease needs the carve-out.
+lease_is_mine() { # id -> 0 when this session holds a live lease on it
+  local key kind owner exp mine held
+  mine="$(session_id)"
+  [ -n "$mine" ] || return 1
+  key="$(lock_key "$1")"
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+  [ "$kind" = "held" ] || return 1
+  held="$(sed -n 's/^session=//p' "$LOCKS/$key/owner" 2> /dev/null)"
+  [ -n "$held" ] && [ "$held" = "$mine" ]
 }
 
 is_archived() { [ -f "$(arch_file "$1")" ]; }
@@ -313,6 +507,83 @@ doc_type() {
   t="$(meta "$1" type)"
   printf '%s' "${t:-coordination}"
 }
+# --- document schema (ADR 0004) --------------------------------------------------------
+# `environment` is an OPEN string, not an enum: every fleet names its stages differently, and a
+# closed list would either be wrong somewhere or grow forever. What IS normalized is the handful of
+# spellings that mean the same stage everywhere, so `prd`, `production` and `prod` do not read as
+# three environments in the index. An absent value means `dev` — the default is what unlabelled
+# work has always been, so no existing doc changes meaning by gaining this field.
+normalize_env() { # raw -> canonical
+  local e
+  e="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$e" in
+    '' | dev | develop | development | local) printf 'dev' ;;
+    stg | stage | staging | uat | qa | test | testing) printf 'staging' ;;
+    prd | prod | production | live) printf 'prod' ;;
+    *) printf '%s' "$(slug "$e")" ;;
+  esac
+}
+doc_env() { normalize_env "$(meta "$1" environment)"; }
+
+# The per-board ordered ladder, lowest environment first. It exists so `list` and the index can
+# order by how close work is to production rather than alphabetically — `dev, staging, prod` is
+# meaningful and `dev, prod, staging` is noise. Anything a board does not name sorts after the
+# ladder, in the order encountered.
+env_ladder() { printf '%s' "$HANDOFF_ENVIRONMENTS"; }
+env_rank() { # env -> integer sort key
+  local want="$1" i=0 e
+  local -a _ladder=()
+  IFS=',' read -r -a _ladder <<< "$(env_ladder)"
+  for e in "${_ladder[@]:-}"; do
+    i=$((i + 1))
+    [ "$(normalize_env "$e")" = "$want" ] && {
+      printf '%s' "$i"
+      return
+    }
+  done
+  printf '99'
+}
+
+# `depends_on` holds BOARD IDS ONLY and means "cannot start before that lands". `blocked_on` stays
+# free text for what the board cannot model (`external — …`, `decision — …`). Keeping them apart is
+# the whole of ADR 0004: they are written at different moments by different reasoning, and merging
+# them would either force free text into a machine-checkable field or discard the cases the board
+# genuinely cannot represent.
+#
+# Reads flow style (`[a, b]`) and block style (`- a`) alike, because meta() only ever sees the
+# key's own line and a block list would otherwise read as empty — the same trap repos_of documents.
+depends_of() { # path -> newline-separated child ids (canonicalized)
+  local f="$1" inline rest
+  inline="$(meta "$f" depends_on)"
+  # The brackets are QUOTED. `${var#[}` is an unterminated bracket EXPRESSION to bash, not a literal
+  # `[`, so it silently strips nothing and every declared dependency reads as empty.
+  inline="${inline#"["}"
+  inline="${inline%"]"}"
+  # `printf '%s\n'`, not `printf '%s'`. Without the trailing newline the final (and on a one-element
+  # list, only) field reaches `read` with no line terminator, so `read` sets the variable AND
+  # returns non-zero — the loop body never runs, and every single-dependency doc reads as having
+  # none. Silent, and in exactly the wrong direction: an unchecked dependency looks like no
+  # dependency at all.
+  printf '%s\n' "$inline" | tr ',' '\n' | while IFS= read -r one; do
+    one="$(printf '%s' "$one" | tr -d '[:space:]')"
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+  done
+  rest="$(sed -n '/^depends_on:/,/^[a-z_]*:/p' "$f" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')"
+  printf '%s\n' "$rest" | while IFS= read -r one; do
+    one="$(printf '%s' "$one" | tr -d '[:space:]')"
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+  done
+}
+
+# A standalone doc's `role` says what it is FOR, where `type` says what its lifecycle is. Absent
+# reads as `reference`, which is what every standalone doc written before this field was one.
+VALID_ROLES="steering spec reference brief-archive"
+doc_role() {
+  local r
+  r="$(meta "$1" role)"
+  printf '%s' "${r:-reference}"
+}
+
 is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
 is_orchestrator() { [ "$(doc_type "$1")" = "orchestrator" ]; }
 
@@ -389,6 +660,148 @@ child_progress() { # path -> "done|total|outstanding-csv"
     if [ "$st" = "done" ]; then done=$((done + 1)); else out="${out:+$out, }$c ($st)"; fi
   done <<< "$(children_of "$1")"
   printf '%s|%s|%s' "$done" "$total" "$out"
+}
+
+# The same derivation, rendered as a table INTO the orchestrator doc itself.
+#
+# `list` and INDEX.md already derive bundle progress, but neither is what a fresh session reads when
+# it opens the bundle doc: that session saw `children: [a, b, c]` and prose, and had to open every
+# child to learn which one to pick up and who holds it. This closes that gap WITHOUT reintroducing
+# the rot the type exists to prevent — the table is GENERATED between markers and rebuilt from the
+# children's own frontmatter on every `index`, so it can no more desync than INDEX.md can. Nothing
+# here is a stored fact, and a hand-edit inside the markers is overwritten on the next run.
+children_table() { # orchestrator-path -> the generated block's body
+  local f="$1" c cf link kind owner exp lease bo st
+  local prog kdone ktotal out
+  prog="$(child_progress "$f")"
+  kdone="${prog%%|*}"
+  ktotal="$(printf '%s' "$prog" | cut -d'|' -f2)"
+  out="${prog#*|*|}"
+  if [ "$ktotal" -eq 0 ]; then
+    printf 'No children yet. Add them with `./handoff children add %s <child-id>`.\n' "$(basename "$f" .md)"
+    return
+  fi
+  if [ -n "$out" ]; then
+    printf '**%s/%s done.** Outstanding — %s\n\n' "$kdone" "$ktotal" "$out"
+  else
+    printf '**%s/%s done** — every child is closed.\n\n' "$kdone" "$ktotal"
+  fi
+  printf '| Child | Status | Acts next | Severity | Updated | Blocked on | Lease |\n'
+  printf '| --- | --- | --- | --- | --- | --- | --- |\n'
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    cf=""
+    link=""
+    # The link is built from the basename, not from $DIR, because in all three layouts an active
+    # sibling sits beside the orchestrator and an archived one sits under its section's archive/.
+    if [ -f "$(doc_file "$c")" ]; then
+      cf="$(doc_file "$c")"
+      link="./$(basename "$cf")"
+    elif [ -f "$(arch_file "$c")" ]; then
+      cf="$(arch_file "$c")"
+      link="./archive/$(basename "$cf")"
+    fi
+    if [ -z "$cf" ]; then
+      # Planned but not filed. Rendered as a row rather than omitted: a bundle is routinely drafted
+      # before its children exist, and the missing row IS the next action.
+      printf '| `%s` | `MISSING` | — | — | — | — | not filed yet |\n' "$c"
+      continue
+    fi
+    st="$(meta "$cf" status)"
+    lease='—'
+    if [ "$st" != "done" ]; then
+      IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$c")")"
+      case "$kind" in
+        held) lease="🔒 $owner" ;;
+        expired) lease="⚠️ stale ($owner) — reclaimable" ;;
+      esac
+    fi
+    bo="$(meta "$cf" blocked_on)"
+    [ -n "$bo" ] && is_archived "${bo%% *}" && bo="$bo ✅ resolved"
+    # Pipes are stripped from every free-text cell: a title carrying one would shift the whole row
+    # and silently misreport the column after it. Empty cells render as an em dash rather than
+    # blank, so a missing audience reads as "nobody named" instead of a rendering glitch.
+    local title aud sev
+    title="$(strip_pipes "$(meta "$cf" title)")"
+    aud="$(strip_pipes "$(meta "$cf" audience)")"
+    sev="$(strip_pipes "$(meta "$cf" severity)")"
+    printf '| [%s](%s) | `%s` | %s | %s | %s | %s | %s |\n' \
+      "${title:-$c}" "$link" "$st" "${aud:-—}" "${sev:-—}" \
+      "$(meta "$cf" updated)" "$(strip_pipes "${bo:-—}")" "$lease"
+  done <<< "$(children_of "$f")"
+}
+
+# Rewrite one orchestrator's generated children block in place, adding the section if the doc
+# predates it. Writes ONLY when the rendered block differs from what is on disk: `index` runs after
+# every mutating command, so an unconditional write would touch every bundle doc on the board on
+# every claim anywhere — git churn that says a bundle changed when nothing about it did.
+write_children_block() { # orchestrator-path
+  local f="$1" t bf
+  t="$(mktemp)" || die "mktemp failed"
+  bf="$(mktemp)" || die "mktemp failed"
+  children_table "$f" > "$bf"
+  # The body is routed through a FILE, never `awk -v`: POSIX awk decodes C-style escapes in a
+  # -v-assigned value, so a child title carrying a Windows path would be mangled on the way in.
+  # Same remediation splice_result and set_field already apply.
+  if grep -q '<!-- handoff:children:begin -->' "$f"; then
+    awk -v bf="$bf" '
+      /<!-- handoff:children:begin -->/ {
+        print
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        print ""
+        skip = 1
+        next
+      }
+      /<!-- handoff:children:end -->/ { skip = 0 }
+      !skip { print }
+    ' "$f" > "$t"
+  else
+    # Inserted BEFORE "## Activity" rather than appended, because log_activity appends to the end
+    # of the file and would otherwise write its next entry underneath the table, outside its own
+    # section. Apostrophes are avoided in the emitted text — the awk program is single-quoted.
+    awk -v bf="$bf" '
+      function emit(   line) {
+        print "## Children"
+        print ""
+        print "<!-- GENERATED by ./handoff index - do not edit by hand. Rebuilt from the child docs"
+        print "     themselves on every index run, so it cannot drift from their real state."
+        print "     Change the roster with: ./handoff children add|rm <parent> <child> -->"
+        print ""
+        # prettier-ignore-start/end: the generated table is UNALIGNED markdown, and a repo that
+        # runs prettier over its docs would re-align it on every commit while the next index run
+        # un-aligns it again — the file would churn forever on a bundle nobody touched. Same
+        # reason INDEX.md is prettier-ignored. Inert in a repo that does not use prettier.
+        print "<!-- prettier-ignore-start -->"
+        print "<!-- handoff:children:begin -->"
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        print ""
+        print "<!-- handoff:children:end -->"
+        print "<!-- prettier-ignore-end -->"
+        print ""
+      }
+      !placed && /^## Activity/ { emit(); placed = 1 }
+      { print }
+      END { if (!placed) { print ""; emit() } }
+    ' "$f" > "$t"
+  fi
+  cmp -s "$t" "$f" || cat "$t" > "$f" || die "could not write the children block into $f"
+  rm -f "$t" "$bf"
+}
+
+# Refresh every orchestrator in the CALLER's section. Deliberately not applied across sections on a
+# grouped board: the roll-up is read-only across groups because each section is maintained by its
+# own repo, and a bundle's table is that section's generated state, not the board root's.
+refresh_children_blocks() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    is_orchestrator "$f" || continue
+    write_children_block "$f"
+  done < <(each_doc)
 }
 
 # Every handoff doc file is named "<id>-handoff.md" and the id IS the filename stem. norm_id
@@ -531,7 +944,8 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--audience REPO] [--group G] [--severity S] [--note N]}"
+  local environment="" depends="" role="" spec=""
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--note N]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -571,10 +985,36 @@ cmd_new() {
         children="${2:-}"
         shift 2
         ;;
+      --env | --environment)
+        environment="${2:-}"
+        shift 2
+        ;;
+      # `--after` writes depends_on, and the flag is named for what the author is actually saying:
+      # "this comes after that". There is deliberately no fanout command that clones one handoff
+      # across a ladder of environments — the prod follow-up is a different piece of work with
+      # different evidence, and minting it automatically produces the exact open-forever docs the
+      # boards are already full of. `new --env prod --after <id>` is one line and says more.
+      --after | --depends-on)
+        depends="${2:-}"
+        shift 2
+        ;;
+      --role)
+        role="${2:-}"
+        shift 2
+        ;;
+      --spec)
+        spec="${2:-}"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
+  if [ -n "$role" ]; then
+    [ "$type" = "standalone" ] || die "--role only applies to a standalone doc (it says what a reference doc is FOR; coordination docs have a lifecycle, not a role)"
+    case " $VALID_ROLES " in *" $role "*) ;; *) die "bad --role: $role (use ${VALID_ROLES// /|})" ;; esac
+  fi
+  [ -n "$spec" ] && [ "$type" = "orchestrator" ] && die "--spec applies to coordination and standalone docs, not to a bundle index"
   [ -n "$children" ] && [ "$type" != "orchestrator" ] && die "--children only applies to --orchestrator"
   # --group (or the wired $HANDOFF_GROUP) selects the board section this doc lands in. Overriding the
   # ambient GROUP here reroutes doc_file/arch_file/sec_index/lock_key for the rest of this command; on
@@ -595,6 +1035,21 @@ cmd_new() {
   note="$(fold_colons "$note")"
   audience="$(fold_colons "$audience")"
   severity="$(fold_colons "$severity")"
+  environment="$(normalize_env "$environment")"
+  # `--after` names board ids, so canonicalize them exactly as `claim` would. A dependency recorded
+  # under a spelling that matches no file is a dependency nothing can ever check.
+  local dlist=""
+  if [ -n "$depends" ]; then
+    dlist="$(children_csv "$depends")" || die "unusable id in --after: '$depends' (each needs at least one letter or digit)"
+  fi
+  # `spec:` is resolved by the reader, not here — a path, a URL, or a board id, in that order. It
+  # is not validated at creation because a handoff is routinely filed before its spec is written.
+  #
+  # QUOTED rather than colon-folded, for the same reason as `verified_by`: the most common value is
+  # a URL, and folding turns `https://…` into `https — //…`, which resolves to nothing. Readers
+  # strip one surrounding quote pair; an embedded double quote becomes a single one, since the
+  # frontmatter is unquoted YAML and a nested `"` would end the value early.
+  [ -n "$spec" ] && spec="\"$(printf '%s' "$spec" | tr '"' "'")\""
   local d target
   d="$(today)"
   target="$(doc_file "$id")"
@@ -631,6 +1086,13 @@ cmd_new() {
         echo
         echo "## Bundle"
         echo
+        echo "## Children"
+        echo
+        echo "<!-- prettier-ignore-start -->"
+        echo "<!-- handoff:children:begin -->"
+        echo "<!-- handoff:children:end -->"
+        echo "<!-- prettier-ignore-end -->"
+        echo
         echo "## Sequencing"
         echo
         echo "## Suggested skills"
@@ -644,6 +1106,7 @@ cmd_new() {
     tmpl="$(tmpl_path handoff-standalone-template.md)"
     if [ -f "$tmpl" ]; then
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
+        "PLACEHOLDER_ROLE=${role:-reference}" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
         "PLACEHOLDER_NOTE=$note" > "$target"
     else
@@ -652,6 +1115,7 @@ cmd_new() {
         echo "id: $id"
         echo "title: $title"
         echo "type: standalone"
+        echo "role: ${role:-reference}"
         echo "status: open"
         echo "created: $d"
         echo "updated: $d"
@@ -684,6 +1148,7 @@ cmd_new() {
       # template never mangles them before `handoff new` fills them in.
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
         "PLACEHOLDER_AUDIENCE=$audience" "PLACEHOLDER_SEVERITY=$severity" \
+        "PLACEHOLDER_ENVIRONMENT=$environment" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
         "PLACEHOLDER_NOTE=$note" > "$target"
     else
@@ -695,12 +1160,16 @@ cmd_new() {
         echo "status: open"
         [ -n "$audience" ] && echo "audience: $audience"
         echo "severity: $severity"
+        echo "environment: $environment"
+        echo "depends_on: []"
         echo "created: $d"
         echo "updated: $d"
         echo "note: $note"
         echo "---"
         echo
         redaction_comment
+        echo
+        echo "## Current state"
         echo
         echo "## Context"
         echo
@@ -715,15 +1184,222 @@ cmd_new() {
   # Mirror the section into a `group:` frontmatter key for search/roll-up. Only on a grouped board, so
   # a flat board's docs carry no group line and stay byte-identical to before this feature.
   grouped && set_field "$target" group "$GROUP"
+  # Written after rendering rather than through placeholders: both are optional, and a template
+  # placeholder left unsubstituted would put the literal string into the frontmatter.
+  [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
+  [ -n "$spec" ] && set_field "$target" spec "$spec"
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
+}
+
+# Read a returned brief back onto the board. Everything in the file was written OUTSIDE this repo's
+# tooling, so the refusals below are the substance of this command, not defensive padding.
+#
+# The one thing it never does is write `status`. The executor's claim lands in `result_claimed`,
+# beside a `status` it did not change: `done` stays a reviewer action backed by evidence the
+# reviewer reproduced. That is the whole protocol, preserved across a trust boundary.
+import_result() {
+  local src="" force_repo=0
+  src="${1:?usage: handoff import --result <file> [--force-repo]}"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force-repo)
+        force_repo=1
+        shift
+        ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -f "$src" ] || die "no such file: $src"
+
+  local ver
+  ver="$(meta "$src" brief)"
+  [ "$ver" = "1" ] || die "unknown brief format '$ver' — this CLI reads brief format 1. Update the board (re-run setup-handoff) or the brief."
+
+  # Repo guard FIRST. A brief names file:line locations that may exist in another repo and mean
+  # something else there; landing its result on a same-named handoff would be silent corruption.
+  local want_root have_root
+  want_root="$(meta "$src" repo_root_commit)"
+  have_root="$(repo_root_commit)"
+  if [ "$want_root" = "unverified" ]; then
+    [ "$force_repo" -eq 1 ] \
+      || die "this brief was rendered without a verified repo identity — confirm it targets $(basename "${REPO_DIR:-.}") by hand, then re-run with --force-repo"
+    echo "⚠️  Importing a brief with an unverified repo identity because --force-repo was given."
+  elif [ "$want_root" != "$have_root" ]; then
+    die "this brief targets a different repository ($(meta "$src" repo_name) at $(meta "$src" repo_origin), provider $(meta "$src" repo_provider)) — refusing to import it here"
+  fi
+
+  local id f
+  id="$(resolve_id "$(meta "$src" handoff)")" || die "brief names an unusable handoff id"
+  if is_archived "$id"; then
+    die "$id is already archived at $(arch_file "$id") — reopen it before importing a result"
+  fi
+  f="$(doc_of "$id")" || no_such "$id"
+
+  local claimed
+  claimed="$(meta "$src" result_status)"
+  case "$claimed" in
+    done | partial | blocked) ;;
+    "") die "the brief's result_status is empty — it was not filled in" ;;
+    *) die "bad result_status '$claimed' (expected done, partial, or blocked)" ;;
+  esac
+
+  local body
+  body="$(result_block "$src")"
+  # A block that still carries only headings and the template comments is not a result.
+  local substance
+  substance="$(printf '%s\n' "$body" | grep -v '^###' | grep -v '^[[:space:]]*<!--' | tr -d '[:space:]')"
+  [ -n "$substance" ] || die "the brief's Result block was not filled in"
+
+  # result_by/result_at are just as untrusted as the Result body and land in the same
+  # permanently-committed doc — fetched here, once, so the secret scan below and the writes further
+  # down both see the exact same values (nothing is re-read from the file in between).
+  local result_by_raw result_at_raw
+  result_by_raw="$(meta "$src" result_by)"
+  result_at_raw="$(meta "$src" result_at)"
+
+  # The returned text is untrusted and about to enter git history permanently. Scans the Result
+  # body AND the frontmatter fields spliced from this same file — a credential pasted into
+  # `result_by:` instead of the body would otherwise walk straight past a body-only scan.
+  if printf '%s\n%s\n%s\n' "$body" "$result_by_raw" "$result_at_raw" \
+    | grep -Eqi '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'; then
+    die "the Result block looks like a credential was pasted into it — redact the brief and re-run. Nothing was written."
+  fi
+
+  if [ "$claimed" = "done" ] \
+    && [ -z "$(printf '%s\n' "$body" | awk '/^### Commits and PR/{c=1;next} /^###/{c=0} c' | tr -d '[:space:]')" ]; then
+    echo "⚠️  The brief claims done but names no commit or PR. Treat the evidence with extra suspicion."
+  fi
+
+  local src_commit head_commit
+  src_commit="$(meta "$src" source_commit)"
+  head_commit="$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo "")"
+  if [ -n "$src_commit" ] && [ -n "$head_commit" ] && [ "$src_commit" != "$head_commit" ]; then
+    echo "⚠️  Brief was rendered at $src_commit; HEAD is $head_commit. The Where anchors may have moved."
+  fi
+
+  # `handoff:` above is attacker-controlled (it comes from the returned brief), so id resolution
+  # can be pointed at ANY live doc on the board, not only the one that was actually delegated —
+  # combined with the frontmatter-injection bug this fixes elsewhere, that let a result be stamped
+  # onto a doc nobody sent out. Refuse unless the target doc shows it was genuinely delegated, and
+  # unless its `brief:` pointer names THIS exact file — otherwise a stray or hand-edited `handoff:`
+  # value (or a second, unrelated brief) could stamp a claim onto a doc that was never exported, or
+  # silently overwrite an already-imported result from a different executor. Checked here, right
+  # before the writes, so every refusal above (format, repo, id, result_status, empty result,
+  # secrets) still fires on its own untouched doc first.
+  local want_brief brief_abs src_abs
+  want_brief="$(meta "$f" brief)"
+  [ -n "$want_brief" ] && [ -n "$(meta "$f" delegated_at)" ] \
+    || die "$id was never delegated (no brief:/delegated_at on the board doc) — refusing to import a result onto it. Nothing was written."
+  case "$want_brief" in
+    /*) brief_abs="$want_brief" ;;
+    *) brief_abs="${REPO_DIR:+$REPO_DIR/}$want_brief" ;;
+  esac
+  src_abs="$(abs_path "$src")"
+  [ "$brief_abs" = "$src_abs" ] \
+    || die "$id's brief: does not point at $src — refusing to import a result from a different or unrelated brief file. Nothing was written."
+
+  # Defense in depth, independent of how set_field is implemented: an imported result must never
+  # cause these keys to appear or change. If any did, something upstream broke — restore the doc
+  # immediately rather than leave a compromised frontmatter key on a doc headed for git history.
+  local backup
+  backup="$(mktemp)" || die "mktemp failed"
+  cp "$f" "$backup" || die "could not back up $f before importing"
+  local deny_before_verify deny_before_status deny_before_repos deny_before_audience \
+    deny_before_id deny_before_children deny_before_blocked_on
+  deny_before_verify="$(meta "$f" verify)"
+  deny_before_status="$(meta "$f" status)"
+  deny_before_repos="$(meta "$f" repos)"
+  deny_before_audience="$(meta "$f" audience)"
+  deny_before_id="$(meta "$f" id)"
+  deny_before_children="$(meta "$f" children)"
+  deny_before_blocked_on="$(meta "$f" blocked_on)"
+
+  splice_result "$f" "$body"
+  set_field "$f" result_from "$(fold_colons "$result_by_raw")"
+  set_field "$f" result_at "$(fold_colons "$result_at_raw")"
+  set_field "$f" result_claimed "$claimed"
+  # What makes the doc delegate-executed. Without it the release path has no way to tell work done
+  # by a party outside the board from work done by whoever is closing it.
+  set_field "$f" executed_by delegate
+  set_field "$f" review pending
+
+  if [ "$(meta "$f" verify)" != "$deny_before_verify" ] \
+    || [ "$(meta "$f" status)" != "$deny_before_status" ] \
+    || [ "$(meta "$f" repos)" != "$deny_before_repos" ] \
+    || [ "$(meta "$f" audience)" != "$deny_before_audience" ] \
+    || [ "$(meta "$f" id)" != "$deny_before_id" ] \
+    || [ "$(meta "$f" children)" != "$deny_before_children" ] \
+    || [ "$(meta "$f" blocked_on)" != "$deny_before_blocked_on" ]; then
+    cat "$backup" > "$f"
+    rm -f "$backup"
+    die "import --result: the reported values would have altered a protected frontmatter key (verify/status/repos/audience/id/children/blocked_on) on $id — refused and restored the doc. This should never happen; treat it as a bug."
+  fi
+  rm -f "$backup"
+
+  log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
+
+  echo "Imported the reported result into $f."
+  echo "Board status is UNCHANGED — the report is a claim, not a verdict."
+  echo "Review the PR, reproduce the evidence, then close it yourself:"
+  echo "  handoff release $id --status done --verified-by \"<how YOU verified live code>\""
+  cmd_index
+}
+
+# Replace (or append) the doc's reported-result block. Bounded by the same marker pair the brief
+# uses, which is what makes a re-import replace rather than stack up a second copy.
+splice_result() { # doc-path body
+  local f="$1" body="$2" t
+  t="$(mktemp)" || die "mktemp failed"
+  if grep -q '<!-- handoff:result:begin -->' "$f"; then
+    # The body is routed through a FILE, never through `awk -v`: POSIX awk interprets C-style
+    # backslash escapes (\f, \b, \t, ...) in a -v-assigned value, so evidence text containing a
+    # Windows path or a regex would be silently mangled here on every RE-import — the fresh-append
+    # branch below uses `printf '%s'` instead, which never interprets escapes, so identical input
+    # used to produce two different on-disk results depending on which branch ran. getline reads
+    # raw bytes and interprets nothing, so this branch now matches that branch byte-for-byte.
+    local bf
+    bf="$(mktemp)" || die "mktemp failed"
+    printf '%s' "$body" > "$bf"
+    awk -v bf="$bf" '
+      /<!-- handoff:result:begin -->/ {
+        print
+        print ""
+        while ((getline line < bf) > 0) print line
+        close(bf)
+        skip = 1
+        next
+      }
+      /<!-- handoff:result:end -->/   { skip = 0 }
+      !skip { print }
+    ' "$f" > "$t" && cat "$t" > "$f"
+    rm -f "$bf"
+  else
+    {
+      cat "$f"
+      printf '\n## Result (reported)\n\n'
+      printf '<!-- Reported by an external executor and spliced in by `handoff import --result`.\n'
+      printf '     It is a CLAIM about live code, not a verified board status. -->\n\n'
+      printf '<!-- handoff:result:begin -->\n\n%s\n\n<!-- handoff:result:end -->\n' "$body"
+    } > "$t" && cat "$t" > "$f"
+  fi
+  rm -f "$t"
 }
 
 # Bring an existing file onto the board as a handoff (default type: standalone). Used to migrate
 # reference docs. Never moves the source (the caller trashes it); we copy + normalize frontmatter.
 cmd_import() {
+  # Two commands under one verb, with INVERTED preconditions: plain `import` refuses an id that is
+  # already on the board, `--result` refuses one that is not. Routed here rather than as its own
+  # subcommand to keep the export/import pair symmetric for the caller.
+  if [ "${1:-}" = "--result" ]; then
+    shift
+    import_result "$@"
+    return
+  fi
   local src="" id="" title="" type="standalone" severity="" note="" group="${HANDOFF_GROUP:-}"
-  src="${1:?usage: handoff import <file> [--id ID] [--title T] [--type standalone|coordination] [--group G] [--severity S] [--note N]}"
+  src="${1:?usage: handoff import <file> [--id ID] ... | handoff import --result <file> [--force-repo]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -814,6 +1490,539 @@ cmd_import() {
   cmd_index
 }
 
+# Render a board doc into a self-contained execution brief for someone who has the repo but not the
+# board — no leases, no hooks, no skills. The brief inlines the executor contract that those would
+# otherwise carry, and it carries repo identity so it cannot be run against the wrong checkout.
+cmd_export() {
+  local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]}"
+  shift
+  local raw_id="$id" to="" outdir="" branch="" do_claim=1
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)
+        require_value --to "$#" "${2:-}"
+        to="$(fold_colons "$2")"
+        shift 2
+        ;;
+      --out)
+        require_value --out "$#" "${2:-}"
+        outdir="$2"
+        shift 2
+        ;;
+      --branch)
+        require_value --branch "$#" "${2:-}"
+        branch="$2"
+        shift 2
+        ;;
+      --no-claim)
+        do_claim=0
+        shift
+        ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  is_standalone "$f" && die "$id is a standalone/reference handoff — it holds no work to delegate. Send the file itself."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to delegate"
+
+  if is_orchestrator "$f"; then
+    # export_one hardcodes an empty branch per child (each gets its own default fix/<child-id>),
+    # so a bundle export silently DISCARDED --branch instead of honoring or rejecting it. Refuse
+    # it outright rather than pretend a single branch name could apply to N independent children.
+    [ -n "$branch" ] && die "--branch is not supported for a bundle export — each child gets its own default branch (fix/<child-id>)"
+    export_bundle "$id" "$f" "$to" "$outdir" "$do_claim"
+    return
+  fi
+  export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
+}
+
+# Guard for brief_identity's packed "a|b|c|d|e" return: `fold_colons` only folds ":", so a
+# user-supplied field (audience, via --audience) can still carry "|" and shift every field after
+# it when the caller's `IFS='|' read -r a b c d` splits the string back apart. Applied to every
+# field before packing, not just audience, so the guard holds even if a future field starts
+# carrying free text too.
+strip_pipes() { printf '%s' "$1" | tr -d '|'; }
+
+# --- cross-repo target resolution ---------------------------------------------------------
+# On a grouped board (register-cross-repo-handoff) the board is owned by NO repo and a handoff's
+# `audience` names a repo other than the one export runs in. The target is resolved from
+# `<board>/repos.json` — the projection of the `.handoff-repos.json` cascade that the cross-repo
+# sync writes, because this CLI ships inside the target repos and can neither reach that skill's
+# resolver nor know the cascade's --scope.
+#
+# It is NEVER resolved by name. An earlier version guessed `${REPO_DIR}/../$audience/.git` and
+# treated a hit as verified; a same-named but unrelated sibling then put that unrelated repo's REAL
+# root commit into the brief and rendered a fully confident preflight, which is indistinguishable
+# from a fabricated SHA to the executor.
+#
+# Each registry entry is ATTESTED with the target's root commit as of the last sync, and that
+# attestation is re-checked against the live repo here. A declared path that now holds something
+# else — a moved checkout, a hand-edited manifest, a stale registry — fails closed to "unverified"
+# instead of stamping a confident SHA for the wrong repo. Every failure mode degrades; none guesses.
+#
+# Prints "reason|abs-path|attested-root". reason is one of:
+#   ok           the audience resolved to exactly one attested entry
+#   no-python    python3 is unavailable, so the registry cannot be read
+#   no-registry  this board has no repos.json (never synced, or a flat board)
+#   bad-registry repos.json is unreadable or malformed
+#   no-entry     the registry declares no repo with this audience in the caller's section
+#   ambiguous    two entries in one section claim this audience, so there is no single answer
+board_repo_entry() { # audience -> "reason|abs-path|attested-root"
+  local aud="$1"
+  command -v python3 > /dev/null 2>&1 || {
+    printf 'no-python||'
+    return
+  }
+  [ -f "$DIR/handoff.json" ] || [ -f "$DIR/repos.json" ] || {
+    printf 'no-registry||'
+    return
+  }
+  python3 - "$DIR/handoff.json" "$DIR" "$aud" "$GROUP" << 'PY'
+import json, os, subprocess, sys
+
+reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+HOME = os.path.expanduser("~")
+# The per-machine layer. It sits beside ~/.agents/handoff-repos.json — the cascade's user layer —
+# because it answers the same kind of question ("where on THIS disk") and must never be committed
+# for the same reason. A gitignored file inside the board was rejected: a board is cloned by every
+# member, and a location map is true for exactly one of them.
+# The machine layer of the same cascade, under the same filename. It is the one layer that must
+# never be committed — a location map is true for exactly one disk — which is why it lives at $HOME
+# rather than as a gitignored file inside a board that everybody clones.
+LOCATIONS = os.path.join(HOME, ".agents", "handoff.json")
+LEGACY_LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
+
+
+def out(s):
+    sys.stdout.write(s)
+    raise SystemExit(0)
+
+
+def root_commit(path):
+    """The repo's first commit — the identity that survives being moved, renamed, or re-cloned."""
+    if not os.path.isdir(path):
+        return ""
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-list", "--max-parents=0", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = [ln for ln in r.stdout.split() if ln]
+    return lines[-1] if lines else ""
+
+
+def load_locations():
+    out = {}
+    for path in (LEGACY_LOCATIONS, LOCATIONS):  # current name last, so it wins
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+            locs = data.get("locations")
+            if isinstance(locs, dict):
+                out.update(locs)
+        except (OSError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def remember(sha, path):
+    """Cache a discovered location. Best-effort: a machine that cannot write $HOME still resolves,
+    it just pays for the scan again next time."""
+    try:
+        os.makedirs(os.path.dirname(LOCATIONS), exist_ok=True)
+        try:
+            with open(LOCATIONS) as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault("locations", {})
+        if not isinstance(data["locations"], dict):
+            data["locations"] = {}
+        data["locations"][sha] = path
+        tmp = LOCATIONS + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, LOCATIONS)
+    except OSError:
+        pass
+
+
+def scan_roots():
+    """Where to look for a checkout whose root commit matches. $WORKSPACE_ROOT is the declared
+    answer; the board's own parent directories are the fallback, because a board scaffolded by the
+    cross-repo sync sits beside the repos it coordinates. One level deep only — a full-disk walk on
+    every unresolved audience is not a lookup, it is a hang."""
+    roots = []
+    for raw in (os.environ.get("WORKSPACE_ROOT", ""), os.path.dirname(board),
+                os.path.dirname(os.path.dirname(board))):
+        if not raw:
+            continue
+        p = os.path.realpath(os.path.expanduser(raw))
+        if os.path.isdir(p) and p not in roots:
+            roots.append(p)
+    return roots
+
+
+def discover(sha):
+    for root in scan_roots():
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for name in names:
+            if name.startswith("."):
+                continue
+            cand = os.path.join(root, name)
+            if not os.path.isdir(os.path.join(cand, ".git")):
+                continue
+            if root_commit(cand) == sha:
+                remember(sha, cand)
+                return cand
+    return ""
+
+
+def read_registry():
+    """The projected repo list, from the board's consolidated file or the standalone predecessor.
+
+    `_generated` is the block the cross-repo sync owns. Reading the consolidated file first means a
+    board that has been re-synced answers from one place; a board that has not keeps answering from
+    repos.json until it is.
+    """
+    for path, key in ((reg, "_generated"), (os.path.join(board, "repos.json"), None)):
+        if not os.path.isfile(path):
+            continue
+        with open(path) as fh:
+            data = json.load(fh)
+        block = data.get(key) if key else data
+        if not isinstance(block, dict):
+            continue
+        repos = block.get("repos")
+        if isinstance(repos, list):
+            return repos
+    return None
+
+
+# ABSENT and UNREADABLE are different answers and get different messages. Now that every board has
+# a handoff.json, "the file is there but declares no fleet" is the ordinary state of a single-repo
+# board — reporting that as a corrupt registry would send someone to repair a file that is fine.
+try:
+    repos = read_registry()
+except Exception:  # noqa: BLE001 - any unreadable registry is one failure mode: do not trust it
+    out("bad-registry||")
+if repos is None:
+    out("no-registry||")
+
+# `path` is no longer required for an entry to be usable — rootCommit alone identifies the repo,
+# which is the whole point of schema 2. A v1 entry still carries a path and it is still honoured
+# below, as a hint that has to prove itself.
+hits = [r for r in repos
+        if isinstance(r, dict) and r.get("audience") == aud and r.get("rootCommit")]
+# The manifest is the fence: a repo coordinates only with the peers ITS OWN group lists, and a
+# handoff only ever acts within its caller's section. Restricting to that section is not a
+# tiebreak — it is the same scoping every other command already applies, and it lets two groups
+# sharing one board each have their own "api" without either becoming ambiguous. With no section
+# set (a flat board, or a board-level invocation) there is nothing to scope by, so uniqueness
+# across the whole registry is the requirement.
+if group:
+    hits = [r for r in hits if r.get("group") == group]
+if not hits:
+    out("no-entry||")
+if len(hits) > 1:
+    # Two repos answering to one audience within one section is not a tie to break by heuristic —
+    # it is a manifest the operator has to fix. Resolving either would be a coin flip rendered as
+    # verified.
+    out("ambiguous||")
+
+entry = hits[0]
+sha = entry["rootCommit"]
+
+# Resolution order, all of it keyed on the committed identity and none of it on a committed
+# location: the per-machine map, then the v1 path (accepted only if that checkout really is this
+# repo), then a bounded discovery scan whose answer is cached back into the map.
+cached = load_locations().get(sha)
+if cached and root_commit(cached) == sha:
+    out("ok|%s|%s" % (os.path.realpath(cached), sha))
+
+# A schema-1 entry's path is honoured UNVERIFIED, exactly as before. Attestation is the caller's
+# job — brief_identity compares the live root commit against the attested one and degrades to
+# "unverified" with a re-sync instruction when they disagree. Verifying here instead would collapse
+# "the recorded path now holds a different repo" (a stale registry, fix by re-syncing) into "no
+# checkout of this repo was found" (a missing clone, fix by cloning), and the operator would be
+# told to do the wrong thing.
+legacy = entry.get("path")
+if legacy:
+    out("ok|%s|%s" % (os.path.realpath(os.path.join(board, legacy)), sha))
+
+found = discover(sha)
+if found:
+    out("ok|%s|%s" % (os.path.realpath(found), sha))
+
+# Identified but not located. Distinct from "not declared": the board knows exactly which repo is
+# meant and this machine simply does not have it where anything can see it, which is a different
+# thing to tell the operator and a different thing to fix.
+out("no-location||%s" % sha)
+PY
+}
+
+# Resolve identity for the repo a brief targets. On a flat board that is this repo; on a grouped
+# board it is the audience's repo, resolved through board_repo_entry above. Anything that cannot be
+# resolved AND attested records "unverified" rather than fabricate a SHA — a fabricated SHA would
+# make a wrong-repo run look verified, which is worse than no guard at all.
+brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
+  local f="$1" target="${REPO_DIR:-}" name provider origin root note=""
+  local aud raw reason="" attested="" live=""
+  aud="$(strip_pipes "$(meta "$f" audience)")"
+  if [ -n "$aud" ] && [ "$aud" != "$REPO_NAME" ]; then
+    IFS='|' read -r reason target attested <<< "$(board_repo_entry "$aud")"
+    case "$reason" in
+      ok)
+        live="$(repo_root_commit "$target")"
+        if [ -z "$live" ]; then
+          target=""
+          note="> **Warning** — \`$aud\` is declared in this board's cross-repo registry, but its checkout was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        elif [ "$live" != "$attested" ]; then
+          target=""
+          note="> **Warning** — the path this board records for \`$aud\` no longer holds that repository (its root commit does not match the one recorded at the last cross-repo sync), so identity was not resolved. Re-run the cross-repo sync and re-export rather than trusting this brief's location."
+        fi
+        ;;
+      no-python)
+        target=""
+        note="> **Warning** — resolving \`$aud\` needs python3, which was not available when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        ;;
+      no-registry)
+        target=""
+        note="> **Warning** — this board carries no cross-repo registry, so \`$aud\` could not be resolved to a repository and the root-commit check above cannot pass. Re-run register-cross-repo-handoff's sync on the workspace, or confirm by name and remote and ask the sender before proceeding."
+        ;;
+      ambiguous)
+        target=""
+        note="> **Warning** — more than one repository on this board claims the audience \`$aud\`, so there is no single target and identity was not resolved. Fix the group manifest, re-sync, then re-export."
+        ;;
+      no-location)
+        # Identified but not located: the board knows which repo is meant, this machine just does
+        # not have it anywhere the resolver looks. That is a per-machine problem with a per-machine
+        # fix, and saying so is more useful than the generic "not declared" warning.
+        target=""
+        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in \`~/.agents/handoff-locations.json\`, then re-export."
+        ;;
+      bad-registry)
+        target=""
+        note="> **Warning** — this board's cross-repo registry could not be read (invalid JSON, or not the expected shape), so \`$aud\` was not resolved and the root-commit check above cannot pass. Re-run register-cross-repo-handoff's sync to regenerate it — the file is generated, so a hand-edit is the usual cause."
+        ;;
+      *)
+        target=""
+        note="> **Warning** — this board's cross-repo registry does not declare a repository named \`$aud\`${GROUP:+ in the \`$GROUP\` section}, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+        ;;
+    esac
+  fi
+  if [ -z "$target" ]; then
+    [ -n "$note" ] || note="> **Warning** — the target repository was not reachable when this brief was rendered, so the root-commit check above cannot pass. Confirm by name and remote instead, and ask the sender before proceeding."
+    printf '%s|%s|%s|%s|%s' "${aud:-unknown}" "unknown" "unverified" "unverified" "$(strip_pipes "$note")"
+    return
+  fi
+  name="$(strip_pipes "$(basename "$target")")"
+  raw="$(repo_origin_norm "$(git -C "$target" config --get remote.origin.url 2> /dev/null || echo "")")"
+  provider="$(strip_pipes "$(repo_provider_of "$raw")")"
+  origin="$(strip_pipes "$(repo_path_of "$raw")")"
+  root="$(strip_pipes "$(repo_root_commit "$target")")"
+  printf '%s|%s|%s|%s|%s' "$name" "$provider" "${origin:-unknown}" "${root:-unverified}" "$note"
+}
+
+# Resolve blocked_on and, for a bundle child, its siblings into readable lines. A brief's reader
+# cannot query the board, so a bare id would be meaningless to them.
+brief_dependencies() { # doc-path -> markdown lines
+  local f="$1" b out="" bf
+  b="$(meta "$f" blocked_on)"
+  if [ -n "$b" ]; then
+    case "$b" in
+      external*) out="- Blocked on something off the board — $b" ;;
+      *)
+        bf="$(doc_of "$(resolve_id "$b")" 2> /dev/null || true)"
+        if [ -n "$bf" ] && [ -f "$bf" ]; then
+          out="- Blocked on \`$b\` — $(meta "$bf" title) (status — $(meta "$bf" status))"
+        else
+          out="- Blocked on \`$b\` (not resolvable from this board)"
+        fi
+        ;;
+    esac
+  fi
+  [ -n "$out" ] || out="None. This unit stands alone."
+  printf '%s' "$out"
+}
+
+export_one() { # id doc to outdir branch do_claim
+  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
+  local name provider origin root note
+  IFS='|' read -r name provider origin root note <<< "$(brief_identity "$f")"
+  [ -n "$branch" ] || branch="fix/$id"
+
+  local dest_dir dest
+  dest_dir="${outdir:-$(briefs_dir)}"
+  mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  # Resolved to an absolute path (not left as whatever --out was typed, possibly relative) BEFORE
+  # building dest — a relative --out otherwise gets stamped raw into the doc's `brief:` field
+  # below, recording a pointer that only resolves from the exporter's transient cwd. abs_path needs
+  # the directory to exist first, which mkdir -p above already guarantees.
+  dest_dir="$(abs_path "$dest_dir")" || die "could not resolve $dest_dir"
+  dest="$dest_dir/$id.brief.md"
+
+  local tmpl
+  tmpl="$(tmpl_path handoff-brief-template.md)"
+  [ -f "$tmpl" ] || die "brief template missing from this board — re-run setup-handoff to update it"
+
+  # Claim BEFORE writing the brief or stamping the doc, not after. cmd_claim dies when the id is
+  # already leased by a concurrent agent — precisely the race the lease exists to prevent — and
+  # die exits the whole process. Claiming first means that death leaves the doc and filesystem
+  # untouched; claiming last would leave a doc reading "delegated", an Activity entry saying the
+  # export happened, and a brief on disk, with no lease actually held.
+  #
+  # A lease THIS session already holds is the one case that must not die: cmd_claim does not
+  # special-case self-ownership, so `claim X` then `export X` — the obvious order, investigate then
+  # delegate — refused on the caller's own lease, and inside a bundle it aborted the whole export.
+  # Extending is what a claim would have achieved anyway: the point of claiming at export time is
+  # "a live lease I own for as long as this is out", and renewing the held one reaches exactly that,
+  # with a full TTL, rather than leaving a lease that may expire while the brief is with an
+  # executor. Foreign and expired leases keep going through cmd_claim untouched.
+  if [ "$do_claim" -eq 1 ]; then
+    if lease_is_mine "$id"; then
+      cmd_touch "$id" > /dev/null
+      # stderr, not stdout: export_bundle sends export_one's stdout to /dev/null, and "I kept your
+      # lease instead of taking a new one" is exactly the kind of thing that must not vanish there.
+      echo "🔒 $id was already leased by this session — lease extended, not re-claimed." >&2
+    else
+      cmd_claim "$id" "delegated to ${to:-an external executor}" > /dev/null
+    fi
+  fi
+
+  render_tmpl "$tmpl" \
+    "PLACEHOLDER_ID=$id" \
+    "PLACEHOLDER_TITLE=$(meta "$f" title)" \
+    "PLACEHOLDER_SEVERITY=$(meta "$f" severity)" \
+    "PLACEHOLDER_REPO_NAME=$name" \
+    "PLACEHOLDER_REPO_PROVIDER=$provider" \
+    "PLACEHOLDER_REPO_ORIGIN=$origin" \
+    "PLACEHOLDER_ROOT_COMMIT=$root" \
+    "PLACEHOLDER_SOURCE_COMMIT=$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_SOURCE_BRANCH=$(git -C "${REPO_DIR:-.}" rev-parse --abbrev-ref HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_EXPORTED=$(today)" \
+    "PLACEHOLDER_BRANCH=$branch" \
+    "PLACEHOLDER_PREFLIGHT_NOTE=$note" \
+    "PLACEHOLDER_CONTEXT=$(doc_section "$f" Context)" \
+    "PLACEHOLDER_WHERE=$(doc_section "$f" Where)" \
+    "PLACEHOLDER_DECISIONS=$(doc_section "$f" Decisions)" \
+    "PLACEHOLDER_VERIFY=$(doc_section "$f" Verify)" \
+    "PLACEHOLDER_DEPENDENCIES=$(brief_dependencies "$f")" \
+    > "$dest" || die "could not write $dest"
+
+  set_field "$f" delegated_to "${to:-unassigned}"
+  set_field "$f" delegated_at "$(today)"
+  # A standalone shared board (no repo of its own — see register-cross-repo-handoff) runs with
+  # REPO_DIR empty. Without this guard, "${dest#"$REPO_DIR"/}" degrades to "${dest#/}", which only
+  # strips the leading slash off an absolute path — storing something no reader can resolve.
+  if [ -n "$REPO_DIR" ]; then
+    set_field "$f" brief "${dest#"$REPO_DIR"/}"
+  else
+    set_field "$f" brief "$dest"
+  fi
+  log_activity "$f" "exported as a brief for ${to:-an external executor}"
+
+  echo "Wrote $dest"
+  echo "🔒 Before committing — redact secrets/keys/PII, then commit the brief so the executor can pull it."
+  cmd_index
+}
+
+export_bundle() { # id doc to outdir do_claim
+  local id="$1" f="$2" to="$3" outdir="$4" do_claim="$5"
+  local dest_dir cover kid kf n=0
+  local kids
+
+  # Pre-flight EVERY child before writing anything — no cover file, no brief, no claim, no stamp.
+  # A live foreign lease used to surface only mid-fan-out: child 1 got claimed and stamped, child 2
+  # died on cmd_claim, `cmd_index` never ran, and the operator was left staring at a lease error
+  # with child 1 out to a contractor who was sent nothing and no reverse operation to undo it
+  # (finding 5, final whole-branch review — re-running just died again until the foreign lease
+  # cleared). Refuse the WHOLE export up front instead. A child with no doc at all is not part of
+  # this check — it was never claimable to begin with, and stays a per-child skip-with-warning
+  # below, same as before.
+  #
+  # A child leased by THIS session is not a blocker. Refusing there was a dead end: the orchestrator
+  # would have to release its own lease first, or pass --no-claim, which drops leasing for every
+  # child in the run. export_one extends a self-held lease instead of re-claiming it, so the export
+  # is still fully leased when it completes.
+  kids="$(children_of "$f")"
+  if [ "$do_claim" -eq 1 ]; then
+    local busy=""
+    while IFS= read -r kid; do
+      [ -n "$kid" ] || continue
+      kf="$(doc_of "$kid" 2> /dev/null || true)"
+      [ -n "$kf" ] && [ -f "$kf" ] || continue
+      local kind owner exp
+      IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$kid")")"
+      if [ "$kind" = "held" ] && ! lease_is_mine "$kid"; then
+        busy="$busy $kid(held by $owner until $(human "$exp"))"
+      fi
+    done <<< "$kids"
+    [ -z "$busy" ] \
+      || die "cannot export bundle $id — a child has a live lease held by another session and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
+  fi
+
+  dest_dir="${outdir:-$(briefs_dir)}"
+  mkdir -p "$dest_dir" || die "could not create $dest_dir"
+  # Same absolute-path fix as export_one — see there for why a relative --out cannot be stamped raw.
+  dest_dir="$(abs_path "$dest_dir")" || die "could not resolve $dest_dir"
+  cover="$dest_dir/$id.cover.md"
+  {
+    echo "# Bundle — $(meta "$f" title)"
+    echo
+    echo "You have been given a bundle of related units. Each has its own brief; read this first."
+    echo
+    echo "## Bundle"
+    echo
+    doc_section "$f" Bundle
+    echo
+    echo "## Sequencing"
+    echo
+    doc_section "$f" Sequencing
+    echo
+    echo "## Units"
+    echo
+  } > "$cover"
+
+  while IFS= read -r kid; do
+    [ -n "$kid" ] || continue
+    kf="$(doc_of "$kid" 2> /dev/null || true)"
+    if [ -z "$kf" ] || [ ! -f "$kf" ]; then
+      echo "⚠️  child $kid has no doc on this board — skipped" >&2
+      continue
+    fi
+    export_one "$kid" "$kf" "$to" "$dest_dir" "" "$do_claim" > /dev/null
+    echo "- \`$kid\` — $(meta "$kf" title) — brief at \`$kid.brief.md\`" >> "$cover"
+    n=$((n + 1))
+  done <<< "$kids"
+
+  # The parent used to gain no delegated_to/delegated_at/brief and no Activity entry, so `list`
+  # showed no recipient for the bundle and repair-handoff's orphaned-delegation check (which keys
+  # on delegated_at) was structurally blind to an abandoned bundle export (finding 4). Stamp it
+  # the same way export_one stamps a coordination doc, pointing brief: at the cover.
+  if [ -n "$REPO_DIR" ]; then
+    set_field "$f" brief "${cover#"$REPO_DIR"/}"
+  else
+    set_field "$f" brief "$cover"
+  fi
+  set_field "$f" delegated_to "${to:-unassigned}"
+  set_field "$f" delegated_at "$(today)"
+  log_activity "$f" "exported as a bundle cover for ${to:-an external executor} ($n child brief(s))"
+
+  echo "Wrote $cover and $n child brief(s) in $dest_dir"
+  echo "🔒 Before committing — redact secrets/keys/PII, then commit the briefs."
+  cmd_index
+}
+
 cmd_list() {
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
@@ -825,9 +2034,11 @@ cmd_list() {
     echo "handoff: this board is sectioned ($BOARD_GROUPS) and no HANDOFF_GROUP is set," >&2
     echo "         so nothing below is scoped to you. Re-run as: HANDOFF_GROUP=<section> handoff list" >&2
   fi
-  printf '%-44s %-9s %-14s %-8s %s\n' ID STATUS AUDIENCE SEVERITY LOCK
-  printf '%-44s %-9s %-14s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
-    "---------" "--------------" "--------" "----"
+  # ENV is on the session banner deliberately. "Which stage is this?" is the question that decides
+  # how carefully to move, and it was previously answerable only by opening the doc.
+  printf '%-44s %-9s %-14s %-8s %-8s %s\n' ID STATUS AUDIENCE ENV SEVERITY LOCK
+  printf '%-44s %-9s %-14s %-8s %-8s %s\n' "$(printf '%.44s' "--------------------------------------------")" \
+    "---------" "--------------" "--------" "--------" "----"
   local standalone="" orchestrators=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -854,9 +2065,17 @@ cmd_list() {
       held) lock="🔒 $owner until $(human "$exp")" ;;
       expired) lock="⚠️  STALE $owner (expired $(human "$exp")) — reclaimable" ;;
     esac
-    printf '%-44s %-9s %-14s %-8s %s\n' \
-      "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(meta "$f" severity)" "$lock"
-  done < <(each_doc)
+    # Delegation and review markers. A delegated row is NOT free even though its lease may look
+    # ordinary, and a review-pending row is waiting on the reader rather than on the executor —
+    # both are things a board reader acts on differently.
+    local deleg review_flag extra=""
+    deleg="$(meta "$f" delegated_to)"
+    review_flag="$(meta "$f" review)"
+    [ -n "$deleg" ] && [ "$(meta "$f" review)" != "done" ] && extra="$extra  → $deleg"
+    [ "$review_flag" = "pending" ] && extra="$extra  ⇤ review"
+    printf '%-44s %-9s %-14s %-8s %-8s %s\n' \
+      "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(doc_env "$f")" "$(meta "$f" severity)" "$lock$extra"
+  done < <(each_doc | while IFS= read -r one; do [ -n "$one" ] && printf '%s\t%s\n' "$(env_rank "$(doc_env "$one")")" "$one"; done | sort -k1,1n -k2,2 | cut -f2-)
   if [ -n "$orchestrators" ]; then
     printf '\nOrchestrators (bundles — progress derived from children, no claim needed):\n'
     printf '%-44s %-9s %s\n' ID PROGRESS OUTSTANDING
@@ -869,6 +2088,137 @@ cmd_list() {
   fi
 }
 
+# --- push-CAS lease transport (ADR 0002) -----------------------------------------------
+# `claim` is STRICT and `release` is OPTIMISTIC, and the asymmetry is the design, not an
+# inconsistency. A claim asserts something about the FUTURE ("nobody else may work this"), and an
+# assertion made without seeing the other machines' leases is not mutual exclusion — it is a local
+# file. A release records something that ALREADY HAPPENED, so refusing it offline would strand a
+# lease that its holder has already stopped working, which is the one failure the board exists to
+# prevent. Reads never touch the network at all.
+
+# Fetch and fast-forward so the local view of the leases is current. Never merge, never rebase: a
+# board whose history has genuinely diverged is a repair job, and papering over it on the claim
+# path is how two machines end up both believing they hold the same lease.
+board_sync_or_die() {
+  local br
+  board_git fetch --quiet || die "cannot reach the board's remote, so this claim cannot be safe.
+       'claim' needs the network to see other machines' leases (ADR 0002).
+       Reconnect and retry — 'release' still works offline."
+  board_git rev-parse --verify --quiet HEAD > /dev/null \
+    || die "the board has no commits yet, so there is nothing to claim against.
+       Re-run setup-handoff on it — the installer commits the board's machinery."
+  br="$(board_git rev-parse --abbrev-ref HEAD)"
+  [ -n "$br" ] && [ "$br" != "HEAD" ] || die "the board is in detached HEAD — check out its branch before claiming."
+  board_git rev-parse --verify --quiet '@{upstream}' > /dev/null || return 0 # no upstream yet; the first push sets it
+  board_git merge --ff-only --quiet '@{upstream}' && return 0
+  die "the board's local history has diverged from its remote, or an uncommitted change is in the way.
+       A claim will not merge that for you — sort it out in $DIR, then retry."
+}
+
+# What `cmd_index` regenerates and therefore what a lease commit must carry with it. These are
+# DERIVED files: committing them alongside the lease is safe, and leaving them behind is not —
+# an uncommitted generated file makes the next fast-forward refuse, so the board's own bookkeeping
+# would take the claim path down. Orchestrator docs are included because a claim changes the Lease
+# column of every bundle table the claimed doc appears in.
+board_generated_dirty() { # -> board-relative paths, one per line
+  local line rel
+  # `status --porcelain` rather than `diff`, because a freshly generated INDEX.md on a board whose
+  # first claim has not landed yet is UNTRACKED, and `diff` cannot see an untracked file. That was
+  # the whole failure mode: the index would never enter history, and every fast-forward afterwards
+  # would be fighting a file git had never been told about.
+  while IFS= read -r line; do
+    rel="${line:3}"
+    rel="${rel##* -> }" # a rename (a `done` release archives its doc through git mv)
+    rel="${rel%\"}"
+    rel="${rel#\"}"
+    [ -n "$rel" ] || continue
+    case "$rel" in
+      INDEX.md | */INDEX.md)
+        printf '%s\n' "$rel"
+        continue
+        ;;
+    esac
+    [ -f "$DIR/$rel" ] && is_orchestrator "$DIR/$rel" && printf '%s\n' "$rel"
+  done < <(board_git status --porcelain --untracked-files=all)
+}
+
+# The compare-and-swap itself. Commit the lease, push it, and let the REMOTE decide who won: a
+# rejected non-fast-forward push means another machine committed a lease against the same parent
+# first. There is no race window left to close by hand — this is the primitive git already gives
+# every branch, applied to a file whose whole purpose is to be claimed exactly once.
+lease_commit_push() { # key subject [doc-path] -> 0 won, non-zero lost or could not record
+  local key="$1" subject="$2" doc="${3:-}" rel
+  board_git add -- "$LOCKS/$key" || return 1
+  [ -n "$doc" ] && [ -e "$doc" ] && board_git add -- "$doc"
+  # ensure_lease_visibility may have just rewritten this; leaving it behind means the repair is
+  # re-announced on every claim and the board goes on ignoring leases for everyone else.
+  [ -f "$DIR/.gitignore" ] && board_git add -- "$DIR/.gitignore"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git commit --quiet -m "$subject" || return 1
+  board_git push --quiet "$(board_remote)" HEAD || return 1
+  return 0
+}
+
+# Losing the CAS is the NORMAL outcome of a race, not an error state, so the undo has to be
+# narrow and safe. `reset --soft` keeps the worktree; clear_lock removes the owner file we just
+# wrote; re-staging that one path brings the index back in line with HEAD. There is no
+# `reset --hard` and no recursive delete anywhere on this path — a board holds irreplaceable
+# documents, and the generated files swept into the commit are regenerated by the next index run.
+lease_rollback() { # key
+  board_git reset --soft --quiet HEAD~1
+  clear_lock "$1"
+  board_git add --all -- "$LOCKS/$1"
+}
+
+# Release's transport. Every failure here is a WARNING: the release already happened in the
+# frontmatter, and the lease is already gone locally. Saying "release failed" would be false and
+# would invite a retry that has nothing left to do.
+release_commit_push() { # subject [doc-path]
+  leases_shared || return 0
+  local rel doc="${2:-}"
+  board_git add --all -- "$LOCKS" 2> /dev/null
+  [ -f "$DIR/.gitignore" ] && board_git add -- "$DIR/.gitignore"
+  # `done` archives the doc through `git mv`, which is already staged; an open/blocked release only
+  # rewrote its frontmatter, which is not. Stage whichever happened — the doc's status IS the state
+  # other machines came here to read.
+  [ -n "$doc" ] && [ -e "$doc" ] && board_git add -- "$doc"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git diff --cached --quiet && return 0 # nothing of ours to record
+  if ! board_git commit --quiet -m "$1"; then
+    echo "⚠️  The release is recorded in the doc, but it could not be committed to the board."
+    echo "    Commit and push $DIR yourself so other machines see the lease is free."
+    return 0
+  fi
+  if ! board_git push --quiet "$(board_remote)" HEAD; then
+    echo "⚠️  Released locally and committed, but the push did not land (offline?)."
+    echo "    Other machines still see this lease as held until you push $DIR."
+  fi
+  return 0
+}
+
+warn_open_dependencies() { # doc-path id
+  local f="$1" id="$2" dep df open=""
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+    if [ -f "$(doc_file "$dep")" ]; then
+      df="$(doc_file "$dep")"
+    elif [ -f "$(arch_file "$dep")" ]; then
+      continue # archived means landed
+    else
+      open="$open\n  - $dep (not filed on this board yet)"
+      continue
+    fi
+    [ "$(meta "$df" status)" = "done" ] || open="$open\n  - $dep ($(meta "$df" status)) — $(meta "$df" title)"
+  done <<< "$(depends_of "$f")"
+  [ -n "$open" ] || return 0
+  printf '⚠️  %s declares prerequisites that have not landed:%b\n' "$id" "$open"
+  echo "    Claiming anyway — depends_on is advisory. If you are working around one, say so in the doc."
+}
+
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
@@ -878,13 +2228,27 @@ cmd_claim() {
   local note="${*:-}"
   # Resolve the doc BEFORE deriving the lock key. The key is a pure function of the id, so an
   # unresolvable id would otherwise mint a lease for a doc that does not exist.
-  local f
+  local f doc_path
   f="$(doc_of "$id")" || no_such "$id"
+  doc_path="$f" # survives cmd_index, which walks every doc on the board
   local key
   key="$(lock_key "$id")" # the lock is keyed on the doc's stem, unique board-wide across sections
   is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
+
+  # ADVISORY, and deliberately so (ADR 0004). `depends_on` is about whether work can START, and
+  # work legitimately starts out of order — a production incident gets fixed before the
+  # pre-production backfill. A tool that refused the claim here would be routed around, and a rule
+  # people route around protects nothing. So: say it, then get out of the way.
+  warn_open_dependencies "$f" "$id"
+
+  # On a shared board the lease state worth checking is the REMOTE's, so fetch before reading it.
+  # Both of these are no-ops on a local-only board and cost it nothing.
+  if leases_shared; then
+    board_sync_or_die
+    ensure_lease_visibility
+  fi
 
   local kind owner exp
   IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
@@ -910,6 +2274,9 @@ cmd_claim() {
     echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
     echo "claimed=$(now)"
     echo "expires=$exp_new"
+    # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
+    # claimer's TTL rather than its own — two members may configure different ttlHours.
+    echo "ttl_hours=$TTL_HOURS"
     echo "note=$note"
   } > "$LOCKS/$key/owner"
 
@@ -917,8 +2284,22 @@ cmd_claim() {
     echo "⚠️  Took over an EXPIRED lease from $owner (expired $(human "$exp"))."
     log_activity "$f" "lease taken over from $owner (expired $(human "$exp")) by $me"
   fi
-  echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
   cmd_index
+
+  # The compare-and-swap. The local `mkdir` above already excluded every other process on THIS
+  # machine; the push is what excludes the other machines. Run it after cmd_index so the generated
+  # files travel in the same commit — see board_generated_dirty for why they cannot be left behind.
+  if leases_shared && ! lease_commit_push "$key" "handoff: claim $id" "$doc_path"; then
+    lease_rollback "$key"
+    board_git fetch --quiet
+    board_git merge --ff-only --quiet '@{upstream}'
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+    [ "$kind" = "held" ] \
+      && die "$id was claimed by $owner first — their push landed before yours. Nothing was claimed here. Pick another handoff, or ask $owner."
+    die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
+  fi
+
+  echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
 }
 
 cmd_touch() {
@@ -936,6 +2317,10 @@ cmd_touch() {
   echo "expires=$(($(now) + TTL_HOURS * 3600))" >> "$t"
   cat "$t" > "$LOCKS/$key/owner"
   rm -f "$t"
+  # On a shared board the deadline other machines read is the lease's COMMIT time, so an extension
+  # that is not committed extends nothing outside this checkout. Optimistic, like a release: if the
+  # push cannot land, the extension is still real locally and saying "touch failed" would be false.
+  release_commit_push "handoff: extend lease on $id" "$(doc_of "$id" 2> /dev/null)"
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
@@ -945,9 +2330,29 @@ cmd_touch() {
 # reclassified into one of those types after being claimed (`claim` refuses both types, so that
 # conversion is the only way a lease gets onto one). The lease then survived until the TTL reap,
 # and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
-finish_release() { # id
+finish_release() { # id status
   clear_lock "$(lock_key "$1")"
+  _release_subject="handoff: release $1 ($2)"
+  # A closed handoff is no longer awaiting review; leaving `review: pending` set would make a
+  # reopened doc read as pending against a review that already happened. doc_of searches active
+  # THEN archive, so this reaches the doc whether or not a `done` release above already moved it.
+  #
+  # Cleared ONLY on a `done` release. `review: pending` means "an outsider's claim is sitting here
+  # unreviewed"; only `done` means a human actually looked at it. `open`/`blocked` release the
+  # lease without reviewing anything — clearing the marker on those releases (the previous
+  # behavior, which checked only that a review WAS pending, not what kind of release this is) let
+  # an orchestrator import a result, then release --status open to hand review to someone else, and
+  # have that very release erase the "needs a reviewer" signal it was trying to hand off. Also
+  # never stamp on an ACTUAL absent field (no review field, or mid-delegation with no result
+  # imported yet) — stamping those as reviewed too would silently hide the delegation marker in
+  # `list` for work that was never looked at.
+  local rf
+  rf="$(doc_of "$1" 2> /dev/null)"
+  [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
   cmd_index
+  # Optimistic by design: this records something that already happened, so a failure to reach the
+  # remote is a warning and the release still stands. See release_commit_push.
+  release_commit_push "$_release_subject" "$rf"
 }
 
 cmd_release() {
@@ -1006,7 +2411,7 @@ cmd_release() {
         echo "Updated orchestrator $id — $pdone/$ptotal children done.${pout:+ Outstanding: $pout}"
         ;;
       done)
-        [ "$ptotal" -gt 0 ] || die "$id has no children — add children: [...] before closing the bundle"
+        [ "$ptotal" -gt 0 ] || die "$id has no children — add them with 'handoff children add $id <child>' before closing the bundle"
         [ "$pdone" -eq "$ptotal" ] || die "$id still has outstanding children: $pout"
         set_field "$f" status done
         set_field "$f" updated "$(today)"
@@ -1021,7 +2426,7 @@ cmd_release() {
         ;;
       *) die "orchestrators support --status open|done (a bundle has no lease to block on)" ;;
     esac
-    finish_release "$id"
+    finish_release "$id" "$status"
     return
   fi
 
@@ -1050,7 +2455,7 @@ cmd_release() {
         ;;
       *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
     esac
-    finish_release "$id"
+    finish_release "$id" "$status"
     return
   fi
 
@@ -1087,6 +2492,34 @@ cmd_release() {
   fi
 
   if [ "$status" = "done" ]; then
+    # Work carried out by a delegate cannot be closed on the delegate's own say-so. The executor
+    # is outside the board and never runs `release` — so the thing to refuse is not a person, it is
+    # the executor's WORDS being used as the review. `--verified-by` identical to the claim the
+    # delegate reported is trust-closing with extra steps, and for delegated work that is a refusal
+    # rather than the warning it stays elsewhere: nobody checked anything, and the doc would carry
+    # a verification date implying somebody did.
+    if [ "$(meta "$f" executed_by)" = "delegate" ] && [ "$(meta "$f" review)" = "pending" ]; then
+      local claimed
+      claimed="$(meta "$f" result_claimed)"
+      if [ -n "$verified_by" ] && [ -n "$claimed" ] && [ "$verified_by" = "$claimed" ]; then
+        die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
+       That is the delegate reviewing itself. Re-run the check yourself and say what YOU observed,
+       or release --status open and hand it to a reviewer."
+      fi
+      echo "NOTE: this handoff was executed by a delegate and is awaiting review."
+      echo "      Closing it records YOU as the reviewer — --verified-by must be what you checked yourself."
+    fi
+    # Evidence quality is advisory and is said HERE, at the moment of closing, because that is the
+    # only moment anyone can still act on it: `done` archives the doc, so a later scan is talking to
+    # nobody. Generous on purpose — no pattern can judge whether evidence is good, only whether it
+    # names something a second person could go and look at.
+    case "$verified_by" in
+      '' | *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
+      *)
+        echo "⚠️  Your evidence names no command, file reference, or commit — nobody can re-check it."
+        echo "    Closing anyway. Next time: what you ran, or the file:line you read."
+        ;;
+    esac
     # done is a claim about the LIVE CODE, not about the doc. Require evidence.
     [ -n "$verified_by" ] || die "release --status done needs --verified-by \"<how you verified against live code>\" (e.g. a test run or file:line). Trust-closing is disabled."
     local vcmd
@@ -1109,10 +2542,34 @@ cmd_release() {
     fi
   fi
 
+  # Closing `done` with the executor's own evidence string is trusting the report with extra steps.
+  # A warning, never a refusal: the reviewer may legitimately have re-run the very same command.
+  # Scoped to the spliced RESULT BLOCK, not the whole doc — a whole-doc substring search fires on
+  # a reviewer who honestly re-ran the doc's own `## Verify` command and typed the same words to
+  # describe it, which live outside the Result block the executor reported.
+  if [ "$status" = "done" ] && [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ]; then
+    if printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
+      echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
+      echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
+    fi
+  fi
+
   set_field "$f" status "$status"
   set_field "$f" updated "$(today)"
   if [ "$status" = "done" ]; then
     set_field "$f" verified_at "$(today)"
+    # Persisted as a FIELD. It used to exist only as prose inside the activity log, which is why
+    # across two live boards 144 documents carried a verification DATE and 2 carried retrievable
+    # evidence: the date was a field and could be queried, the evidence was a sentence and could
+    # not. A closure nobody can query is a closure nobody can audit.
+    # QUOTED, not colon-folded — the second field in this file to need that treatment, and for a
+    # sharper reason than `verify:`. Good evidence names a `file:line` or a `cmd --flag`, and
+    # folding the colon turns `handoff:1855` into `handoff — 1855`: still readable, no longer a
+    # location anything can resolve. The check that asks for a file reference would have been
+    # mangling the very thing it asks for. Readers strip one surrounding quote pair (see meta()),
+    # so the value round-trips; embedded double quotes become single ones because the frontmatter
+    # is unquoted YAML and a nested `"` would end the value early.
+    set_field "$f" verified_by "\"$(printf '%s' "$verified_by" | tr '"' "'")\""
     log_activity "$f" "done — verified against live code by $me: ${verified_by}.${note}"
     if archive_doc "$f" "$id"; then
       echo "✅ $id → done, moved to archive/. verified-by: $verified_by"
@@ -1126,7 +2583,7 @@ cmd_release() {
     log_activity "$f" "$status — released by $me.${note}"
     echo "Released $id → $status."
   fi
-  finish_release "$id"
+  finish_release "$id" "$status"
 }
 
 # The effective `repos:` list — the inline flow list AND any block-list items on the lines after
@@ -1210,6 +2667,11 @@ cmd_reap() { # show (and with --force, clear) expired leases
     fi
   done
   [ "$found" = 0 ] && echo "No expired leases."
+  # A reap on a shared board deletes TRACKED files. Left uncommitted, those deletions are exactly
+  # the local modification that makes the next claim's fast-forward refuse — so the board's own
+  # self-healing would take the claim path down. Optimistic like a release: this records a lease
+  # that had already lapsed, so a failed push is a warning, not a reason to keep the lease.
+  [ "$force" = "--force" ] && release_commit_push "handoff: reap expired leases"
   return 0
 }
 
@@ -1217,8 +2679,73 @@ cmd_reap() { # show (and with --force, clear) expired leases
 # $DIR/INDEX.md and the output is byte-identical to before groups existed. Doc links stay `./$base.md`
 # because a sub-index always sits in the same directory as its docs (the group subdir for subfolder,
 # $DIR for prefix/flat), and archive links `./archive/$base.md` for the same reason.
+# A `spec:` value resolved for display. Order is path, then URL, then board id — the same order
+# the field is documented in, and the reason it is an order rather than three fields is that all
+# three are the same question ("what says what this should do") answered by whatever the team keeps
+# it in. Unresolvable renders as plain text: a dead link is worse than no link.
+spec_link() { # doc-path -> " · [spec](target)" or ""
+  local f="$1" sp
+  sp="$(meta "$f" spec)"
+  [ -n "$sp" ] || return 0
+  case "$sp" in
+    http://* | https://*) printf ' · [spec](%s)' "$sp" ;;
+    *)
+      if [ -e "$DIR/$sp" ] || [ -e "$sp" ]; then
+        printf ' · [spec](%s)' "$sp"
+      elif [ -f "$(doc_file "$(norm_id "$sp" 2> /dev/null)")" ]; then
+        printf ' · [spec](./%s.md)' "$(norm_id "$sp")"
+      else
+        printf ' · spec %s' "$sp"
+      fi
+      ;;
+  esac
+}
+
+# ADVISORY backlinks. Documents name each other in prose constantly — one on a live board named 22
+# siblings in body text while declaring no structured relationship at all — so the graph the humans
+# see is invisible to the tool. This surfaces those references without promoting them: a mention is
+# not a dependency, and manufacturing edges nobody asserted would be worse than showing none. Marked
+# generated, and never written into the docs themselves.
+backlink_block() {
+  local f base target tbase hits
+  local -a docs=()
+  while IFS= read -r f; do [ -n "$f" ] && docs+=("$f"); done < <(each_doc)
+  [ "${#docs[@]}" -gt 1 ] || return 0
+  local any=0 body=""
+  for target in "${docs[@]}"; do
+    tbase="$(basename "$target" .md)"
+    hits=""
+    for f in "${docs[@]}"; do
+      [ "$f" = "$target" ] && continue
+      # Body only: the frontmatter's own depends_on/blocked_on are real edges and are already
+      # rendered as such. Counting them here would report every declared edge twice, once as
+      # structure and once as gossip.
+      sed -n '/^---$/,/^---$/!p' "$f" | grep -qF "$tbase" 2> /dev/null || continue
+      base="$(basename "$f" .md)"
+      hits="$hits [$base](./$base.md)"
+    done
+    [ -n "$hits" ] || continue
+    any=1
+    body="$body| [$tbase](./$tbase.md) |$hits |
+"
+  done
+  [ "$any" = 1 ] || return 0
+  echo "## Referenced by (advisory)"
+  echo
+  echo "Generated from ids named in document BODIES. These are mentions, not declared edges — a"
+  echo "reference is not a dependency. If one of them is, put it in that doc's \`depends_on\`."
+  echo
+  echo "| Handoff | Mentioned in |"
+  echo "| --- | --- |"
+  printf '%s' "$body"
+  echo
+}
+
 write_section_index() {
-  local out
+  # `f` is local because it is a LOOP variable here and a doc path in every caller. Without this
+  # declaration, cmd_index quietly overwrites its caller's `$f` with whichever doc happened to be
+  # iterated last — which is exactly what made the claim path commit its lease without the doc.
+  local out f
   out="$(sec_index)"
   mkdir -p "$(dirname "$out")"
   {
@@ -1240,8 +2767,11 @@ write_section_index() {
     echo
     echo "## Open"
     echo
-    echo "| Handoff | Status | Acts next | Severity | Updated | Blocked on | Lease |"
-    echo "| --- | --- | --- | --- | --- | --- | --- |"
+    echo "| Handoff | Status | Acts next | Env | Severity | Updated | Blocked on | Lease |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+    # Ordered by the board's environment ladder, lowest stage first, then by filename. Sorting by
+    # how close work is to production is meaningful; sorting `dev, prod, staging` alphabetically is
+    # noise. env_rank puts anything the board does not name after the ladder rather than dropping it.
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       local base
@@ -1259,8 +2789,14 @@ write_section_index() {
       local bo
       bo="$(meta "$f" blocked_on)"
       [ -n "$bo" ] && is_archived "${bo%% *}" && bo="$bo ✅ resolved"
-      echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" audience) | $(meta "$f" severity) | $(meta "$f" updated) | ${bo:-—} | $lease |"
-    done < <(each_doc)
+      local env_c spec_c
+      env_c="$(doc_env "$f")"
+      # `spec:` is resolved by the READER, in order: a path (relative to the board), then a URL,
+      # then a board id. Nothing is validated at write time — a handoff is routinely filed before
+      # its spec is written — so an unresolvable value renders as plain text rather than a dead link.
+      spec_c="$(spec_link "$f")"
+      echo "| [$(meta "$f" title)](./$base.md)${spec_c} | \`$(meta "$f" status)\` | $(meta "$f" audience) | $env_c | $(meta "$f" severity) | $(meta "$f" updated) | ${bo:-—} | $lease |"
+    done < <(each_doc | while IFS= read -r one; do [ -n "$one" ] && printf '%s\t%s\n' "$(env_rank "$(doc_env "$one")")" "$one"; done | sort -k1,1n -k2,2 | cut -f2-)
     echo
     # Orchestrators: bundle indexes. Progress is derived from the children on every regeneration,
     # exactly as `handoff list` does it, so the index cannot drift from the children's real state.
@@ -1305,6 +2841,8 @@ write_section_index() {
       echo "| [$(meta "$f" title)](./$base.md) | \`$(meta "$f" status)\` | $(meta "$f" updated) |"
     done < <(each_doc)
     [ "$has_standalone" = 1 ] && echo
+    # Advisory, and placed after the claimable tables on purpose: it is context, not work.
+    backlink_block
     echo "## Archive (done / superseded)"
     echo
     echo "| Handoff | Status | Verified |"
@@ -1369,6 +2907,88 @@ rollup_index() {
   } > "$out"
 }
 
+# Grow, prune, or just read a bundle's roster.
+#
+# Until this existed the only way to change `children:` was to hand-edit the frontmatter — a key
+# `import --result` explicitly refuses to let an external result touch, and one `release --status
+# done` told you to edit by hand in its own error text. A hand-edit also skipped children_csv, so a
+# child written under a spelling that named no file reported MISSING for the bundle's whole life.
+#
+# `add`/`rm` are reserved in the first position; `handoff children <parent>` with no verb prints the
+# same table the doc carries, without writing anything.
+cmd_children() {
+  local usage="usage: handoff children <parent> | handoff children add|rm <parent> <child> [child...]"
+  local action="${1:?$usage}"
+  local parent
+  case "$action" in
+    add | rm)
+      shift
+      parent="${1:?usage: handoff children $action <parent> <child> [child...]}"
+      shift
+      [ $# -gt 0 ] || die "usage: handoff children $action <parent> <child> [child...]"
+      ;;
+    *)
+      parent="$action"
+      action="show"
+      shift
+      [ $# -eq 0 ] || die "$usage"
+      ;;
+  esac
+
+  local raw="$parent" f
+  parent="$(resolve_id "$parent")" || die "unusable id: '$raw' (needs at least one letter or digit)"
+  f="$(doc_of "$parent")" || no_such "$parent"
+  is_orchestrator "$f" || die "$parent is not an orchestrator — only a bundle has children. Create one with: handoff new <id> --orchestrator --children a,b,c"
+
+  if [ "$action" = "show" ]; then
+    children_table "$f"
+    return
+  fi
+
+  # The roster is re-read from the doc rather than taken from anything the caller holds: another
+  # session may have added a child since, and a read-modify-write over a stale copy drops it.
+  local cur want raw_want changed=0
+  cur="$(children_of "$f")"
+  for raw_want in "$@"; do
+    want="$(resolve_id "$raw_want")" || die "unusable child id: '$raw_want' (needs at least one letter or digit)"
+    [ "$want" = "$parent" ] && die "a bundle cannot be its own child"
+    if [ "$action" = "add" ]; then
+      if printf '%s\n' "$cur" | grep -qxF "$want"; then
+        echo "= $want is already a child of $parent"
+        continue
+      fi
+      # A child that does not exist yet is allowed, exactly as `new --children` allows it: bundles
+      # are routinely planned before they are filed, and the table reports the gap as MISSING.
+      [ -f "$(doc_file "$want")" ] || [ -f "$(arch_file "$want")" ] \
+        || echo "  (note: $want is not on the board yet — it will read MISSING until you file it)"
+      cur="${cur:+$cur$'\n'}$want"
+      echo "+ $want"
+    else
+      printf '%s\n' "$cur" | grep -qxF "$want" || die "$want is not a child of $parent"
+      # `|| true`: grep -v exits non-zero when it removes the only line, and an empty roster is a
+      # legitimate result here (the bundle is being emptied, not failing).
+      cur="$(printf '%s\n' "$cur" | grep -vxF "$want" || true)"
+      echo "- $want"
+    fi
+    changed=$((changed + 1))
+  done
+  [ "$changed" -gt 0 ] || {
+    echo "No change to $parent."
+    return
+  }
+
+  local clist="" c
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    clist="${clist:+$clist, }$c"
+  done <<< "$cur"
+  set_field "$f" children "[$clist]"
+  set_field "$f" updated "$(today)"
+  log_activity "$f" "bundle roster updated by $(whoami_id) — now [${clist:-empty}]"
+  cmd_index
+  echo "Bundle $parent now covers ${clist:-no children}."
+}
+
 cmd_index() {
   # A board-level invocation on a grouped board (no HANDOFF_GROUP in scope) owns only the roll-up —
   # writing a section index would clobber $DIR/INDEX.md with a flat listing of nothing.
@@ -1377,6 +2997,10 @@ cmd_index() {
     echo "Wrote $DIR/INDEX.md"
     return
   fi
+  # Bundle children tables are generated board state too, and they read the same derivation the
+  # sub-index does — so they are refreshed here, in the one pass every mutating command already
+  # triggers, rather than from each of those commands.
+  refresh_children_blocks
   write_section_index
   # A grouped board also gets a board-root roll-up across every section; a flat board's sub-index IS
   # the board root, so there is nothing extra to write.
@@ -1384,32 +3008,44 @@ cmd_index() {
   echo "Wrote $(sec_index)"
 }
 
-case "${1:-list}" in
-  list) cmd_list ;;
-  new)
-    shift
-    cmd_new "$@"
-    ;;
-  import)
-    shift
-    cmd_import "$@"
-    ;;
-  claim)
-    shift
-    cmd_claim "$@"
-    ;;
-  touch)
-    shift
-    cmd_touch "$@"
-    ;;
-  release)
-    shift
-    cmd_release "$@"
-    ;;
-  reap)
-    shift
-    cmd_reap "$@"
-    ;;
-  index) cmd_index ;;
-  *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | reap [--force] | index]" ;;
-esac
+# Sourcing this file (the self-test does) must not execute a subcommand. Any other entry point is
+# unaffected: HANDOFF_NO_MAIN is set by nothing but the self-test.
+if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
+  case "${1:-list}" in
+    list) cmd_list ;;
+    new)
+      shift
+      cmd_new "$@"
+      ;;
+    import)
+      shift
+      cmd_import "$@"
+      ;;
+    export)
+      shift
+      cmd_export "$@"
+      ;;
+    claim)
+      shift
+      cmd_claim "$@"
+      ;;
+    touch)
+      shift
+      cmd_touch "$@"
+      ;;
+    release)
+      shift
+      cmd_release "$@"
+      ;;
+    reap)
+      shift
+      cmd_reap "$@"
+      ;;
+    children)
+      shift
+      cmd_children "$@"
+      ;;
+    index) cmd_index ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add|rm <parent> <child> | reap [--force] | index]" ;;
+  esac
+fi

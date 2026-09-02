@@ -187,30 +187,62 @@ while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exis
 done <<< "$PLAN"
 
 # --- 4. state ledger (for --prune drift reporting) ----------------------------------------------
-LEDGER="$SCOPE/.agents/cross-repo-handoff-state.json"
+# The ledger is generated state, so it lives under `_generated` in the workspace's own layer of the
+# cascade rather than in a file of its own. Same rule as the board's registry: one filename, and
+# the generated block is fenced off from the hand-edited keys beside it.
+LEDGER="$SCOPE/.agents/handoff.json"
+LEGACY_LEDGER="$SCOPE/.agents/cross-repo-handoff-state.json"
 if [ "$DRYRUN" != 1 ]; then
   mkdir -p "$SCOPE/.agents"
-  python3 - "$RESOLVED" "$LEDGER" << 'PY'
-import json, sys
+  python3 - "$RESOLVED" "$LEDGER" "$LEGACY_LEDGER" << 'PY'
+import json, os, sys
 d = json.load(open(sys.argv[1]))
+dest, legacy = sys.argv[2], sys.argv[3]
 members = [{"group": g["group"], "alias": m["alias"], "path": m["path"], "board": g["board"]}
            for g in d["groups"] for m in g["members"] if m["exists"]]
-prev = {}
-try:
-    prev = json.load(open(sys.argv[2]))
-except Exception:
-    pass
-out = {"version": 1, "scope": d["scope"],
-       "members": sorted(members, key=lambda m: (m["group"], m["alias"])),
-       "boards": [b["path"] for b in d["boards"]]}
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+# Everything outside `_generated` is the workspace's manifest and belongs to whoever wrote it.
+# Read it back and write it out untouched; only the generated block is ours to replace.
+doc = read(dest)
+prev = doc.get("_generated")
+prev = dict(prev) if isinstance(prev, dict) else {}
+if not prev.get("members"):
+    prev = read(legacy) or prev  # first run after consolidation: carry the standalone ledger over
+
+gen = doc.get("_generated")
+gen = dict(gen) if isinstance(gen, dict) else {}
+gen["scope"] = d["scope"]
+gen["members"] = sorted(members, key=lambda m: (m["group"], m["alias"]))
+gen["boards"] = [b["path"] for b in d["boards"]]
+doc["_generated"] = gen
+
 # report members that were wired before but have left scope (advisory — sync does not unwire)
 cur = {(m["group"], m["alias"]) for m in members}
 for m in prev.get("members", []):
     if (m["group"], m["alias"]) not in cur:
         print(f"  [prune] {m['group']}/{m['alias']} left scope — remove its handoff hooks manually "
               f"in {m['path']} (.claude/settings.json) if it should no longer coordinate.", file=sys.stderr)
-json.dump(out, open(sys.argv[2], "w"), indent=2)
-open(sys.argv[2], "a").write("\n")
+
+want = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+if read(dest) != doc or not os.path.isfile(dest):
+    with open(dest, "w") as fh:
+        fh.write(want)
+if os.path.isfile(legacy):
+    try:
+        os.replace(legacy, legacy + ".superseded")
+        print("  %s folded into handoff.json (.superseded is safe to delete)" % os.path.basename(legacy))
+    except OSError:
+        pass
 PY
 fi
 
