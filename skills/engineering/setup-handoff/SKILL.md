@@ -189,6 +189,39 @@ session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer
 the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## `verify-setup-handoff.sh --json`
+
+The verifier speaks two ways. Without a flag it prints prose for a human; with `--json` it emits
+every finding as an object, each carrying a **stable id**:
+
+```json
+{
+  "tool": "verify-setup-handoff",
+  "schema": 1,
+  "summary": { "pass": 24, "warn": 2, "fail": 0 },
+  "findings": [
+    {
+      "id": "bundle.children.dangling",
+      "level": "warn",
+      "section": "7. Document schema",
+      "message": "…"
+    }
+  ]
+}
+```
+
+This is not a convenience. Roughly half of what the verifier checks is **advisory by design** —
+staleness, document size, weak closure evidence, a missing current state, a board with no remote, a
+bundle whose roster names documents that were never filed. None of it changes the exit code, so a
+grader or a repair skill reading only the exit status is blind to exactly the checks most likely to
+rot. Both consume the findings instead.
+
+The **id is the contract**: it names the check, `level` carries the outcome, and prose is reworded
+freely. Assert on `board.git.remote` coming back `warn`, never on the sentence. Where two outcomes
+of one check need different remediation they get their own ids (`payload.version.behind` vs
+`payload.version.ahead`). `schema` is bumped only when the document SHAPE changes — new ids appear
+over time by design, and a consumer that broke on each one would be abandoned within a release.
+
 ## Configuration
 
 **Everything about handoff is configured in one filename: `handoff.json`.** Which layer a file is

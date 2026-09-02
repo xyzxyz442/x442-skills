@@ -218,6 +218,12 @@ the same directory, so a board or repo that has not been re-installed keeps work
 and `<repo>/.agents/handoff.config.json`. Re-running the installer or the cross-repo sync folds
 each into `handoff.json` and renames the old file to `*.superseded` — renamed, never deleted.
 
+One consequence worth knowing: because the registry now shares a file with the board's policy, a
+**corrupt `handoff.json` is fatal to every command** rather than degrading one feature. That is the
+right direction — a board whose own config will not parse should not answer questions about itself —
+and it is loud: exit 3, naming the file and the parse error. A board still on the standalone
+`repos.json` keeps the old softer behavior, so nothing regresses for an install that has not moved.
+
 **`<board>/handoff.json`** — board-global. On a shared board this file is read by every member repo,
 so it must never carry any one repo's identity.
 

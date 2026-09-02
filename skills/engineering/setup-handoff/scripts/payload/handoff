@@ -644,6 +644,33 @@ children_csv() { # "a, b, c" -> "a-handoff, b-handoff, c-handoff"; non-zero on a
 
 # "<done>/<total>" plus the ids still outstanding. A child that names no file counts as missing, not
 # as done — a typo must never read as progress.
+# An outstanding roster is UNBOUNDED, and it is rendered in places that are read constantly: the
+# session banner is injected into every agent's context on every session, so a bundle with a large
+# roster is a direct token cost levied on unrelated work. One live board carries a bundle declaring
+# 100 children of which 97 do not exist — 97 ids reprinted on every session start, forever, for a
+# bundle that can never close.
+#
+# The count is the signal; the names are a sample. `list --verbose` restores the full roster for
+# the one moment somebody actually wants it, and the orchestrator's own generated table always
+# holds every row, so nothing is lost — it is just not shouted.
+ROSTER_LIMIT="${HANDOFF_ROSTER_LIMIT:-5}"
+truncate_roster() { # csv [limit] -> "a, b, c, … and N more"
+  local csv="$1" limit="${2:-$ROSTER_LIMIT}" n=0 head="" one
+  [ -n "$csv" ] || return 0
+  local total
+  total="$(printf '%s' "$csv" | awk -F', ' '{print NF}')"
+  if [ "${total:-0}" -le "$limit" ]; then
+    printf '%s' "$csv"
+    return 0
+  fi
+  while [ "$n" -lt "$limit" ]; do
+    n=$((n + 1))
+    one="$(printf '%s' "$csv" | cut -d',' -f"$n" | sed 's/^ //')"
+    head="${head:+$head, }$one"
+  done
+  printf '%s, … and %s more' "$head" "$((total - limit))"
+}
+
 child_progress() { # path -> "done|total|outstanding-csv"
   local total=0 done=0 out="" cf st
   while IFS= read -r c; do
@@ -682,7 +709,10 @@ children_table() { # orchestrator-path -> the generated block's body
     return
   fi
   if [ -n "$out" ]; then
-    printf '**%s/%s done.** Outstanding — %s\n\n' "$kdone" "$ktotal" "$out"
+    # Truncated here too: the table immediately below carries every child, one row each, so a full
+    # roster in the summary line is the same information twice — and it is the copy that gets
+    # quoted into banners and briefs.
+    printf '**%s/%s done.** Outstanding — %s\n\n' "$kdone" "$ktotal" "$(truncate_roster "$out")"
   else
     printf '**%s/%s done** — every child is closed.\n\n' "$kdone" "$ktotal"
   fi
@@ -2024,6 +2054,8 @@ export_bundle() { # id doc to outdir do_claim
 }
 
 cmd_list() {
+  local VERBOSE=0
+  case "${1:-}" in --verbose | -v) VERBOSE=1 ;; esac
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
   # cannot see the work" indistinguishable — and this is the reachable case, not a corner one,
@@ -2051,6 +2083,7 @@ cmd_list() {
       done="${prog%%|*}"
       total="$(printf '%s' "$prog" | cut -d'|' -f2)"
       out="${prog#*|*|}"
+      [ "$VERBOSE" = 1 ] || out="$(truncate_roster "$out")"
       orchestrators="${orchestrators}$(printf '%-44s %-9s %s' "$base" "$done/$total done" "${out:-— all children done}")"$'\n'
       continue
     fi
@@ -2492,20 +2525,29 @@ cmd_release() {
   fi
 
   if [ "$status" = "done" ]; then
-    # Work carried out by a delegate cannot be closed on the delegate's own say-so. The executor
-    # is outside the board and never runs `release` — so the thing to refuse is not a person, it is
-    # the executor's WORDS being used as the review. `--verified-by` identical to the claim the
-    # delegate reported is trust-closing with extra steps, and for delegated work that is a refusal
-    # rather than the warning it stays elsewhere: nobody checked anything, and the doc would carry
-    # a verification date implying somebody did.
+    # Is the evidence just the executor's own words handed back? Asked ONCE here, and answered
+    # against the spliced RESULT BLOCK — the executor's report — rather than the whole doc: a
+    # reviewer who honestly re-ran the doc's own `## Verify` command and described it in the same
+    # words is not copying anything, and that text lives outside the result block.
+    #
+    # This used to compare `--verified-by` against `result_claimed`, which holds the executor's
+    # STATUS word (done/partial/blocked), not their evidence — so the check could only fire if
+    # somebody typed `--verified-by "done"`. It was inert, and it read as though it were not.
+    local copied=0
+    if [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ] \
+      && printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
+      copied=1
+    fi
+    # For DELEGATED work that is a refusal, not a warning. The executor is outside the board and
+    # never runs `release`, so the thing to refuse is not a person — it is the executor's words
+    # being used as the review. Closing on them stamps a verification date asserting somebody
+    # checked, when nobody did.
+    if [ "$copied" = 1 ] && [ "$(meta "$f" executed_by)" = "delegate" ]; then
+      die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
+       That is the delegate reviewing itself. Re-run the check and say what YOU observed, or
+       release --status open and hand it to a reviewer."
+    fi
     if [ "$(meta "$f" executed_by)" = "delegate" ] && [ "$(meta "$f" review)" = "pending" ]; then
-      local claimed
-      claimed="$(meta "$f" result_claimed)"
-      if [ -n "$verified_by" ] && [ -n "$claimed" ] && [ "$verified_by" = "$claimed" ]; then
-        die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
-       That is the delegate reviewing itself. Re-run the check yourself and say what YOU observed,
-       or release --status open and hand it to a reviewer."
-      fi
       echo "NOTE: this handoff was executed by a delegate and is awaiting review."
       echo "      Closing it records YOU as the reviewer — --verified-by must be what you checked yourself."
     fi
@@ -2542,16 +2584,12 @@ cmd_release() {
     fi
   fi
 
-  # Closing `done` with the executor's own evidence string is trusting the report with extra steps.
-  # A warning, never a refusal: the reviewer may legitimately have re-run the very same command.
-  # Scoped to the spliced RESULT BLOCK, not the whole doc — a whole-doc substring search fires on
-  # a reviewer who honestly re-ran the doc's own `## Verify` command and typed the same words to
-  # describe it, which live outside the Result block the executor reported.
-  if [ "$status" = "done" ] && [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ]; then
-    if printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
-      echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
-      echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
-    fi
+  # The non-delegated arm of the same question (`copied`, computed above). A warning rather than a
+  # refusal here: without a delegate there is no second party whose words these are, so the
+  # reviewer may legitimately have re-run the very same command and written it the same way.
+  if [ "$status" = "done" ] && [ "${copied:-0}" = 1 ]; then
+    echo "⚠️  Your --verified-by is identical to the reported evidence already in the doc."
+    echo "    'done' means YOU verified against live code. If you re-ran it yourself, say so."
   fi
 
   set_field "$f" status "$status"
@@ -2917,15 +2955,29 @@ rollup_index() {
 # `add`/`rm` are reserved in the first position; `handoff children <parent>` with no verb prints the
 # same table the doc carries, without writing anything.
 cmd_children() {
-  local usage="usage: handoff children <parent> | handoff children add|rm <parent> <child> [child...]"
+  local usage="usage: handoff children <parent> | handoff children add [--stub] <parent> <child> [child...] | handoff children rm <parent> <child> [child...]"
   local action="${1:?$usage}"
-  local parent
+  local parent stub=0
   case "$action" in
     add | rm)
       shift
+      # `--stub` FILES each named child as a real (empty, open) doc instead of leaving the roster
+      # pointing at nothing. Declaring a roster before authoring its docs is legitimate planning —
+      # the bug is never being told the gap exists, and then having no cheap way to close it. One
+      # live board carries a bundle of 100 children of which 97 were never filed: it can never
+      # close, and nothing ever said so.
+      if [ "${1:-}" = "--stub" ]; then
+        stub=1
+        shift
+      fi
       parent="${1:?usage: handoff children $action <parent> <child> [child...]}"
       shift
+      [ "${1:-}" = "--stub" ] && {
+        stub=1
+        shift
+      }
       [ $# -gt 0 ] || die "usage: handoff children $action <parent> <child> [child...]"
+      [ "$stub" = 1 ] && [ "$action" = "rm" ] && die "--stub only applies to 'children add'"
       ;;
     *)
       parent="$action"
@@ -2953,14 +3005,34 @@ cmd_children() {
     want="$(resolve_id "$raw_want")" || die "unusable child id: '$raw_want' (needs at least one letter or digit)"
     [ "$want" = "$parent" ] && die "a bundle cannot be its own child"
     if [ "$action" = "add" ]; then
+      # Filing the doc happens BEFORE the roster check, because the case `--stub` exists for is a
+      # child that is ALREADY on the roster and was never filed — a bundle declaring 100 children
+      # with 97 missing is the reason this flag exists, and every one of those is already listed.
+      # Treating "already a child" as nothing to do would make --stub a no-op exactly when it is
+      # needed.
+      local have=0
+      { [ -f "$(doc_file "$want")" ] || [ -f "$(arch_file "$want")" ]; } && have=1
+      if [ "$have" = 0 ] && [ "$stub" = 1 ]; then
+        # Filed through cmd_new so a stub is a real doc — same template, same frontmatter, same
+        # lease gate — and not a second, thinner notion of "handoff" that later has to be
+        # special-cased everywhere.
+        if cmd_new "$want" --title "$want" ${GROUP:+--group "$GROUP"} \
+          --note "stub filed by 'children add --stub' for $parent" > /dev/null 2>&1; then
+          echo "  + filed stub $want"
+          have=1
+          changed=1
+        else
+          echo "  (could not file a stub for $want — file it by hand)"
+        fi
+      fi
       if printf '%s\n' "$cur" | grep -qxF "$want"; then
-        echo "= $want is already a child of $parent"
+        [ "$have" = 1 ] || echo "= $want is already a child of $parent"
         continue
       fi
       # A child that does not exist yet is allowed, exactly as `new --children` allows it: bundles
       # are routinely planned before they are filed, and the table reports the gap as MISSING.
-      [ -f "$(doc_file "$want")" ] || [ -f "$(arch_file "$want")" ] \
-        || echo "  (note: $want is not on the board yet — it will read MISSING until you file it)"
+      [ "$have" = 1 ] \
+        || echo "  (note: $want is not on the board yet — it will read MISSING until you file it, or re-run with --stub)"
       cur="${cur:+$cur$'\n'}$want"
       echo "+ $want"
     else
@@ -3012,7 +3084,12 @@ cmd_index() {
 # unaffected: HANDOFF_NO_MAIN is set by nothing but the self-test.
 if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
   case "${1:-list}" in
-    list) cmd_list ;;
+    list)
+      # `shift || true` because `${1:-list}` above means this branch is also reached with NO
+      # arguments at all, where a bare `shift` fails under a strict shell.
+      shift || true
+      cmd_list "$@" # --verbose restores an unbounded bundle roster
+      ;;
     new)
       shift
       cmd_new "$@"

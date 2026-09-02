@@ -183,6 +183,28 @@ each_doc() { # this section's active docs, one per line (space-safe)
 # only reaps/touches/nags its own section's leases, and the key matches what the CLI wrote.
 LOCKS="$(sec_dir)/.locks"
 
+# Progress for a bundle, as a count. hooks.sh deliberately does NOT reuse the CLI's child_progress:
+# it must run with nothing but bash, and it must never be the reason a session-start hook is slow.
+# Reading each child's status line is enough to say "2/6 done"; the CLI owns the detail.
+bundle_progress() { # orchestrator-path -> " (2/6 done)" or ""
+  local f="$1" raw total=0 done=0 c cf
+  raw="$(meta "$f" children)"
+  raw="${raw#"["}"
+  raw="${raw%"]"}"
+  [ -n "$raw" ] || return 0
+  local IFS=,
+  for c in $raw; do
+    c="$(printf '%s' "$c" | tr -d '[:space:]')"
+    [ -n "$c" ] || continue
+    total=$((total + 1))
+    cf="$(sec_dir)/$c.md"
+    [ -f "$cf" ] || cf="$(sec_dir)/archive/$c.md"
+    [ -f "$cf" ] || continue
+    [ "$(meta "$cf" status)" = "done" ] && done=$((done + 1))
+  done
+  [ "$total" -gt 0 ] && printf ' (%s/%s done)' "$done" "$total"
+}
+
 PAYLOAD="$(cat)"
 
 # Strips one surrounding quote pair, matching the CLI's meta() — a quoted value (see the `verify:`
@@ -383,7 +405,14 @@ case "$KIND" in
       # Standalone/reference docs and orchestrators are not claimable work — list them apart,
       # no lease nag. An orchestrator holds no work of its own; its children are the work.
       case "$(meta "$f" type)" in
-        standalone | orchestrator)
+        orchestrator)
+          # A COUNT, never the roster. This line is injected into every agent's context on every
+          # session; an unbounded list of child ids here is a token cost levied on unrelated work
+          # forever. `handoff list` shows a bounded sample, and `list --verbose` the full roster.
+          refs="${refs}- ${id} — $(meta "$f" title)$(bundle_progress "$f")"$'\n'
+          continue
+          ;;
+        standalone)
           refs="${refs}- ${id} — $(meta "$f" title)"$'\n'
           continue
           ;;

@@ -19,6 +19,13 @@
       "expected_output": "Repair TARGET (agent-required): .agents/handoff/.version records payload v0 while the skill ships a much later version, so verify-setup-handoff.sh reports a payload-drift [warn]. The version is deliberately not named here -- an earlier revision of this text hardcoded one and rotted eight releases behind. The fixture's whole payload is old, not just the stamp: its handoff CLI predates `handoff export`, so a raw grade also shows one [FAIL] for that missing subcommand. Both are by design -- grading the raw fixture is expected to fail or warn. After repair-handoff re-runs the installer, the stamp matches what the skill ships, the CLI regains export, and both findings are gone."
     },
     {
+      "id": "dangling-children",
+      "kind": "pre-state",
+      "prompt": "Check the handoff board in this repo and repair anything that has drifted.",
+      "fixture": "fixtures/dangling-children",
+      "expected_output": "Repair TARGET (agent-required). The board carries an orchestrator whose roster names three children that were never filed, so the bundle can never close. This is ADVISORY drift: it changes no exit code, so grading it at all depends on verify-setup-handoff.sh --json -- the raw fixture reports bundle.children.dangling as `warn` while the verifier still exits 0. That is the exact blind spot this case exists to cover. After repair-handoff runs, every child on the roster is a real doc (`handoff children add --stub` is the cheap fix) and the same finding comes back `pass`. Declaring a roster before authoring its docs is legitimate planning, so the fix is to file the missing docs -- never to silently prune the roster."
+    },
+    {
       "id": "orphaned-lease",
       "kind": "pre-state",
       "prompt": "Something on the handoff board is holding a lease I cannot release. Sort it out.",

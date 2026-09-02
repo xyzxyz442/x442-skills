@@ -147,6 +147,16 @@ because each depends on the relationship between the board's parts rather than o
   it breaks the frontmatter render, and the CLI folds colons to an em dash precisely to avoid it.
 - **Id and filename disagreement.** The lock key is the file stem, so a doc whose `id:` does not
   match its filename can be claimed under one name and gated under another.
+- **Read the verifier's findings, not its prose.** `verify-setup-handoff.sh --json` emits every
+  check as an object with a stable id, a level, and a message. Roughly half of what it checks is
+  advisory and changes no exit code — a stale payload stamp, a board with no remote, a bundle whose
+  roster names documents that were never filed — so a board that exits 0 can still have real drift
+  on it. Match on the **id** (`bundle.children.dangling`, `board.git.lease_visibility`,
+  `payload.version.behind`); the wording is not a contract.
+- **Dangling bundle children.** A roster naming docs that were never filed means the bundle can
+  never close, since `release --status done` refuses while anything is outstanding. The fix is to
+  FILE them — `handoff children add --stub <parent> <child>` files each as a real, claimable doc —
+  never to quietly prune the roster, which throws away somebody's plan.
 - **Open versus archive.** A doc with `status: done` still on the open board, or an archived doc
   still holding a lease.
 - **Section resolution (shared boards only).** Confirm the board pointer in the tool hook commands

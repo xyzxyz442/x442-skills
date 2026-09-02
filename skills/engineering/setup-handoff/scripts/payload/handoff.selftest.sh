@@ -719,8 +719,16 @@ printf '\nlist and release\n'
 chk_contains "list shows the delegate" "$(hb "$R" list)" "Alice"
 chk_contains "list shows review pending" "$(hb "$R" list)" "review"
 
+# Handing the delegate's own words back as the review is now REFUSED, not warned: this doc came
+# through `import --result`, so it carries executed_by: delegate, and closing it on the executor's
+# evidence would stamp a verification date asserting somebody checked when nobody did.
 OUT="$(hb "$R" release rbac-gap --status done --verified-by "Ran npm test -- tenant; 14 passing.")"
-chk_contains "warns on copied evidence" "$OUT" "identical to the reported evidence"
+chk_contains "refuses the delegate's own words as the review" "$OUT" "That is the delegate reviewing itself"
+chk "and the doc is NOT closed" "open" "$(sed -n 's/^status: //p' "$BOARD/rbac-gap-handoff.md" | head -1)"
+chk "nor stamped with a verification date" "" "$(sed -n 's/^verified_at: //p' "$BOARD/rbac-gap-handoff.md" | head -1)"
+# Evidence the reviewer actually produced closes it normally.
+OUT="$(hb "$R" release rbac-gap --status done --verified-by "re-ran npm test -- tenant myself; 14 passing at rbac.e2e.ts:88")"
+chk_contains "evidence of the reviewer's own check closes it" "$OUT" "done"
 
 hb "$R" new fresh-close --title "Never delegated" > /dev/null
 FRESH_OUT="$(hb "$R" release fresh-close --status done --verified-by "checked src/foo.ts:12 by hand")"
@@ -1085,6 +1093,46 @@ OF_LEG="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/
 chk "a corrupt LEGACY repos.json still only degrades brief resolution" "bad-registry||" "$OF_LEG"
 chk "and the board still lists" "0" "$(cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1; echo $?)"
 export HOME="$OF_HOME_SAVE"
+
+printf '\nbundle rosters are bounded, and a dangling one can be closed\n'
+# The session banner is injected into every agent's context on every session, so an unbounded
+# roster is a token cost levied on unrelated work forever. One live board carries a bundle
+# declaring 100 children of which 97 do not exist.
+RB="$(mkboard)"
+hb "$RB" new wide-bundle --orchestrator --title "Wide bundle" \
+  --children c-one,c-two,c-three,c-four,c-five,c-six,c-seven,c-eight > /dev/null
+RB_LIST="$(hb "$RB" list)"
+chk_contains "list truncates a long roster" "$RB_LIST" "… and 3 more"
+chk "and shows exactly the limit before the tail" "5" \
+  "$(printf '%s' "$RB_LIST" | grep -o 'c-[a-z]*-handoff (MISSING)' | wc -l | tr -d ' ')"
+chk_contains "the count is always there, whatever the roster does" "$RB_LIST" "0/8 done"
+RB_V="$(hb "$RB" list --verbose)"
+chk "--verbose restores the whole roster" "8" \
+  "$(printf '%s' "$RB_V" | grep -o 'c-[a-z]*-handoff (MISSING)' | wc -l | tr -d ' ')"
+chk "a bare list still works after the flag was added" "yes" \
+  "$(printf '%s' "$(hb "$RB" list)" | grep -q '^ID ' && echo yes || echo no)"
+
+# The generated summary line inside the bundle doc is truncated too: the table right below it
+# carries every child, so a full roster there is the same information twice.
+chk_contains "the generated summary line is bounded as well" \
+  "$(sed -n 's/^\*\*.*Outstanding — //p' "$RB/.agents/handoff/wide-bundle-handoff.md")" "and 3 more"
+# Counted as TABLE ROWS, not as occurrences of the word: the truncated summary line above the table
+# also names a few of them, and a loose count silently passes whether the table is complete or not.
+chk "while the generated table still carries every child, one row each" "8" \
+  "$(grep -c '^| `c-[a-z]*-handoff` | `MISSING`' "$RB/.agents/handoff/wide-bundle-handoff.md")"
+
+# --stub exists for children that are ALREADY on the roster and were never filed — which is every
+# one of the 97. Skipping them as "already a child" would make the flag a no-op exactly when needed.
+STUB_OUT="$(hb "$RB" children add --stub wide-bundle c-one c-two)"
+chk_contains "--stub files a child that is already on the roster" "$STUB_OUT" "filed stub c-one-handoff"
+chk "and the doc really exists afterwards" "yes" \
+  "$([ -f "$RB/.agents/handoff/c-one-handoff.md" ] && echo yes || echo no)"
+chk "a stub is a REAL handoff, claimable like any other" "yes" \
+  "$(printf '%s' "$(hb "$RB" claim c-one "working the stub")" | grep -q 'Claimed' && echo yes || echo no)"
+chk "the bundle now counts it as outstanding work, not as a gap" "yes" \
+  "$(printf '%s' "$(hb "$RB" list)" | grep -q 'c-one-handoff (open)' && echo yes || echo no)"
+chk_contains "--stub is refused on rm, where it means nothing" \
+  "$(hb "$RB" children rm --stub wide-bundle c-two)" "only applies to 'children add'"
 
 printf '\nshared board — lease visibility and push-CAS\n'
 SB="$(mkshared)"
