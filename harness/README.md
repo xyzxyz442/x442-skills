@@ -79,6 +79,27 @@ Self-test the shared library at any time:
 for m in grade_common aggregate reorg; do python3 harness/lib/$m.py --selftest; done
 ```
 
+## Keeping fixture boards in sync with the payload
+
+A handoff fixture board is a committed snapshot of an installed board, so the files the installer
+copies verbatim — the dispatcher, `hooks.sh`, `config.sh`, `README.md`, the doc templates — are
+**mirrors of `setup-handoff`'s payload**. Edit the payload and they drift, and the idempotency
+evals fail with "re-run produces an empty diff", which names the symptom and not the file.
+
+```bash
+bash scripts/sync-fixture-boards.sh         # refresh every mirror
+bash scripts/sync-fixture-boards.sh --check # report drift, write nothing (exit 1 if any)
+```
+
+It only refreshes files a fixture already carries, never adds new ones, and skips the fixtures
+whose board is a deliberately old install (`stale-stamp`, `legacy-install`) — there, the stale
+mirror _is_ the scenario.
+
+The `handoff` CLI is deliberately **not** mirrored into fixtures. A board's `handoff` is a small
+dispatcher; the harness points `$HANDOFF_BIN` at the skill's payload
+(`grade_common.payload_cli`), so every fixture runs the binary under test by construction and a
+stale committed copy is impossible rather than merely discouraged.
+
 ## Guardrail
 
 Do not launch automated multi-run LLM loops without first computing the expected call count

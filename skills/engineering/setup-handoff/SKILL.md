@@ -32,6 +32,14 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
    tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds
    only the `handoff` entry point and the docs themselves; a flat board from before this layout is
    migrated on the next install (`git mv`, hook commands rewritten), and keeps working until then.
+   The `handoff` entry point is a **dispatcher**, not the CLI: the CLI is ~180 KB and changes on
+   every fix, so a copy of it on every board made each fix an N-file regeneration. The dispatcher
+   resolves `$HANDOFF_BIN` → a **user-level install** (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`,
+   written by this installer — the one thing it writes outside the repo) → the board's vendored
+   `scripts/handoff-cli`, which is what keeps a cold clone working with nothing but bash. Pass
+   `--no-vendor-cli` to skip the vendored copy on a board that is never cloned cold. Which board
+   and which CLI answered is always reportable with `./handoff --which`, and repointing a repo at
+   another board needs no committed edit — export `HANDOFF_BOARD_PATH`.
 2. **One enforcement core (`hooks.sh`).** A single dispatcher runs every hook kind
    (`sessionstart` / `pretool-edit` / `posttool-edit` / `stop`). It parses each tool's payload
    with **python3** (this repo standardises on python3, not `jq`) and emits that tool's native
@@ -262,7 +270,9 @@ env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in defaul
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two
 never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while
-file keys are camelCase (`ttlHours`).
+file keys are camelCase (`ttlHours`). Two overrides resolve the board and the CLI themselves and so
+sit above every config layer: `HANDOFF_BOARD_PATH` (which board) and `HANDOFF_BIN` (which CLI). A
+board named by either and not found is a hard error, never a silent fallback to a different board.
 
 **`<board>/handoff.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
 `allowVerifyCmd`, `environments`, plus `repoName` on a single-repo board only, and the tooling-owned

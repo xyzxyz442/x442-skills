@@ -9,7 +9,103 @@
 # frontmatter edits go through awk. Enforcement lives in hooks.sh.
 set -uo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --- which board? ----------------------------------------------------------------------
+# The CLI used to BE the board: `DIR` was `dirname $0`, so wherever the file sat was the board it
+# acted on. That made the 180 KB CLI a mandatory per-board artifact — vendored into every install
+# and every test fixture, so every bugfix became an N-file regeneration. Board and binary are now
+# separate, and this ladder is how they find each other.
+#
+#   1. $HANDOFF_BOARD_PATH   — explicit. The board's dispatcher sets it to its own directory, so
+#                              `<board>/handoff` still means exactly that board. An operator may
+#                              also export it to point a repo at another board WITHOUT editing any
+#                              committed file, which is the whole reason it exists.
+#   2. this file's directory — only when the file itself sits in a board. This is the vendored
+#                              install and every board that predates the split: invoking the CLI
+#                              inside a board has always meant that board, and it still does.
+#   3. the repo's own config — .agents/handoff.json `board`/`boardPath`, what a cross-repo install
+#                              records. This is how a user-level CLI finds a shared board.
+#   4. an in-repo board      — .agents/handoff/ walking up from the working directory.
+#
+# CONFIGURED-BUT-ABSENT IS A HARD ERROR, never a fallback. Rungs 1 and 3 are someone stating where
+# the board is; if it is not there, the honest answer is to say so. Silently sliding down to rung 4
+# would write leases into a DIFFERENT board than the one the operator named, and nothing about the
+# resulting state would look wrong. Nothing here ever creates a board.
+_board_looks_real() { [ -f "$1/scripts/config.sh" ] || [ -f "$1/config.sh" ]; }
+
+# `board`/`boardPath` out of the repo scope, read WITHOUT config.sh — config.sh lives on the board,
+# and this is the lookup that finds the board. Deliberately the narrowest possible reader: one key,
+# no precedence, no legacy shell format (a machine with a KEY=value config predates board/binary
+# separation and resolves by rung 2 anyway).
+_board_from_repo_config() { # repo-dir -> prints the configured board path, or nothing
+  local repo="$1" f
+  [ -n "$repo" ] || return 0
+  for f in "$repo/.agents/handoff.json" "$repo/.agents/handoff.config.json"; do
+    [ -f "$f" ] || continue
+    if command -v python3 > /dev/null 2>&1; then
+      python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+if isinstance(d, dict):
+    v = d.get("board") or d.get("boardPath") or ""
+    if isinstance(v, str) and v:
+        sys.stdout.write(v)' "$f" && return 0
+    else
+      sed -n 's/.*"board\(Path\)\{0,1\}"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' "$f" | head -1
+      return 0
+    fi
+  done
+}
+
+_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_repo_top="$(git rev-parse --show-toplevel 2> /dev/null || true)"
+BOARD_SOURCE=""
+DIR=""
+if [ -n "${HANDOFF_BOARD_PATH:-}" ]; then
+  # The dispatcher sets this to its own directory and says so, which is the common case; a value
+  # from anywhere else is an operator override and prints as HANDOFF_BOARD_PATH.
+  BOARD_SOURCE="${HANDOFF_BOARD_SOURCE:-HANDOFF_BOARD_PATH}"
+  DIR="$HANDOFF_BOARD_PATH"
+  case "$DIR" in /*) ;; *) DIR="$(cd "${_repo_top:-$PWD}/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
+  [ -d "$DIR" ] || {
+    echo "handoff: HANDOFF_BOARD_PATH points at $DIR, which does not exist." >&2
+    echo "         Refusing to fall back to another board — unset it, or create that one with setup-handoff." >&2
+    exit 3
+  }
+elif _board_looks_real "$_self_dir"; then
+  BOARD_SOURCE="this CLI's own directory"
+  DIR="$_self_dir"
+else
+  _cfg_board="$(_board_from_repo_config "$_repo_top")"
+  if [ -n "$_cfg_board" ]; then
+    BOARD_SOURCE="$_repo_top/.agents/handoff.json"
+    DIR="$_cfg_board"
+    case "$DIR" in /*) ;; *) DIR="$(cd "$_repo_top/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
+    [ -d "$DIR" ] || {
+      echo "handoff: this repo's .agents/handoff.json points at $DIR, which does not exist." >&2
+      echo "         Refusing to fall back to another board — fix the config, or re-run setup-handoff." >&2
+      exit 3
+    }
+  else
+    _walk="${_repo_top:-$PWD}"
+    while :; do
+      if _board_looks_real "$_walk/.agents/handoff"; then
+        BOARD_SOURCE="in-repo .agents/handoff"
+        DIR="$(cd "$_walk/.agents/handoff" && pwd)"
+        break
+      fi
+      [ "$_walk" = "/" ] && break
+      _walk="$(dirname "$_walk")"
+    done
+  fi
+fi
+[ -n "$DIR" ] || {
+  echo "handoff: no board found." >&2
+  echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, this repo's .agents/handoff.json, then .agents/handoff/ upward from $PWD." >&2
+  echo "         Fix: run the setup-handoff skill in this repo, or export HANDOFF_BOARD_PATH=<board>." >&2
+  exit 3
+}
 LOCKS="$DIR/.locks"
 
 # Configuration comes from config.sh, the one place precedence is decided:
@@ -3628,6 +3724,24 @@ cmd_index() {
   echo "Wrote $(sec_index)"
 }
 
+cmd_which() {
+  # The one command that answers "why is this thing acting on THAT board with THAT binary". Both
+  # halves are resolved independently and both can surprise you — a stale user-level CLI, an
+  # exported HANDOFF_BOARD_PATH left over from another repo — so both print their source, not just
+  # their path. Reads nothing and writes nothing; safe on a board you do not hold a lease on.
+  local src="${HANDOFF_CLI_SOURCE:-}" path="${HANDOFF_CLI_PATH:-}"
+  if [ -z "$src" ]; then
+    # Not launched through a board dispatcher, so this file IS the CLI that answered.
+    src="direct"
+    path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  fi
+  printf 'CLI      %s\n         (resolved from %s)\n' "$path" "$src"
+  printf 'board    %s\n         (resolved from %s)\n' "$DIR" "${BOARD_SOURCE:-unknown}"
+  if [ -n "${HANDOFF_GROUP:-$GROUP}" ]; then
+    printf 'section  %s (%s layout)\n' "${HANDOFF_GROUP:-$GROUP}" "${LAYOUT:-flat}"
+  fi
+}
+
 # Sourcing this file (the self-test does) must not execute a subcommand. Any other entry point is
 # unaffected: HANDOFF_NO_MAIN is set by nothing but the self-test.
 if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
@@ -3675,6 +3789,7 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       cmd_children "$@"
       ;;
     index) cmd_index ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index]" ;;
+    --which | which) cmd_which ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | --which]" ;;
   esac
 fi

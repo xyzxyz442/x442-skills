@@ -12,6 +12,41 @@
 # repo's installer and read by every member's hooks, so executing it would let one repo run shell
 # in its siblings' sessions. The legacy KEY=value file is PARSED for the same reason.
 
+# --- CLI resolution -------------------------------------------------------------------
+# Where the `handoff` CLI actually lives, defined ONCE because three readers need the same answer:
+# the board's dispatcher (which execs it), the `handoff` CLI itself (for `--which`), and hooks.sh
+# (which must know whether a CLI exists at all before it denies anybody an edit). A hand-copied
+# ladder in three files is the same drift this resolver exists to end.
+#
+# Order is fixed and deliberate:  $HANDOFF_BIN  >  user-level install  >  the board's vendored copy.
+# The env var is an operator override (testing an unreleased CLI, or a harness pointing every
+# fixture at one binary). The user-level install is what setup-handoff writes and what upgrades on
+# its own cadence. The vendored copy is last because it is the one that goes stale — but it is
+# still there, because a cold clone with nothing but bash must work.
+handoff_cli_home() { # -> the directory setup-handoff installs the user-level CLI into
+  printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff"
+}
+
+handoff_cli_resolve() { # board-dir -> prints "<source> <path>"; returns 1 when nothing resolves
+  local board="${1:-}" c
+  # An unreadable or non-executable candidate is SKIPPED, not fatal: a half-finished install
+  # further down the ladder should not shadow a working one below it.
+  if [ -n "${HANDOFF_BIN:-}" ] && [ -f "$HANDOFF_BIN" ]; then
+    printf 'env %s' "$HANDOFF_BIN"
+    return 0
+  fi
+  c="$(handoff_cli_home)/handoff"
+  if [ -f "$c" ]; then
+    printf 'user %s' "$c"
+    return 0
+  fi
+  if [ -n "$board" ] && [ -f "$board/scripts/handoff-cli" ]; then
+    printf 'vendored %s' "$board/scripts/handoff-cli"
+    return 0
+  fi
+  return 1
+}
+
 # --- board git substrate (ADR 0002) ----------------------------------------------------
 # Lives here, beside the config resolver, for the reason stated above: `handoff` and `hooks.sh` are
 # two readers of one board, and anything they each re-derive is something they can each get wrong

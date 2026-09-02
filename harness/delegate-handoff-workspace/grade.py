@@ -31,6 +31,13 @@ import grade_common as gc  # noqa: E402
 REPO = gc.repo_root(HERE)
 VERIFY = REPO / "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh"
 HD = ".agents/handoff"
+
+# Fixture boards carry no CLI copy of their own. <board>/handoff is a small dispatcher that execs
+# the CLI named by $HANDOFF_BIN (then a user-level install, then a vendored copy), so pointing it
+# at the skill's payload here is what puts the binary under test in front of every fixture — and
+# makes a stale committed mirror impossible. Set once, for every subprocess this grader spawns,
+# including the verify script.
+os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
 TO = "Acme Contracting"  # the delegate every fixture's briefs were exported --to
 
 

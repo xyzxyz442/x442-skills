@@ -144,6 +144,29 @@ TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 # what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
 hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
 
+# --- is there a CLI at all? ------------------------------------------------------------
+# Two failures used to look identical to this gate, and treating them the same way was wrong in
+# opposite directions:
+#
+#   * The hook PAYLOAD cannot be parsed. We cannot tell who is editing, so we cannot tell whether
+#     they hold the lease. That stays fail-CLOSED: refusing one edit is recoverable, admitting an
+#     unverified one silently is not.
+#   * No `handoff` CLI resolves for this board. Nothing is ambiguous here — we simply cannot offer
+#     the fix. Every deny message this gate emits ends in "claim it first: <board>/handoff claim
+#     …", and that command does not exist. Denying anyway locks someone out of their own repo with
+#     an instruction they cannot follow, and the rational response is to delete the hook. So this
+#     one fails OPEN: edits proceed, and the session banner says loudly that the gate is off.
+#
+# Pure file tests, no subprocess — this runs on every single edit.
+CLI_OK=0
+if command -v handoff_cli_resolve > /dev/null 2>&1; then
+  handoff_cli_resolve "$DIR" > /dev/null 2>&1 && CLI_OK=1
+elif [ -f "$DIR/handoff" ]; then
+  # config.sh is missing or predates the resolver, so the ladder is unknowable from here. A file at
+  # the board root is the only signal left, and on such a board it IS the CLI.
+  CLI_OK=1
+fi
+
 # group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
 # this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
 # the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
@@ -469,11 +492,23 @@ case "$KIND" in
       fi
       out="${out}${line}"$'\n'
     done < <(each_doc)
-    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && exit 0
-    ctx="Handoffs for \`${REPO:-this repo}\` (from ${hd}/):"
+    # CLI_OK is part of this guard: a board with nothing open still has to report a dead gate,
+    # and an empty board is exactly where a broken install goes unnoticed longest.
+    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && [ "$CLI_OK" = "1" ] && exit 0
+    # Name the board. `hd` is the RELATIVE path this repo was wired with, which reads as
+    # ".agents/handoff" whether the board is in this repo or three directories up in a shared
+    # workspace — the two cases where acting on the wrong one costs the most. When the resolved
+    # board is not this repo's own, print where it actually is.
+    board_note="${hd}/"
+    [ "$DIR" = "${PROJECT_DIR:-$PWD}/.agents/handoff" ] || board_note="${hd}/ → ${DIR}"
+    ctx="Handoffs for \`${REPO:-this repo}\` (from ${board_note}):"
+    # The parenthetical is a promise about enforcement, so it tracks whether enforcement is
+    # actually running. Telling an agent its edits are gated while the gate is off is worse than
+    # saying nothing: it is the sentence that stops them from coordinating by hand.
+    if [ "$CLI_OK" = "1" ]; then claim_note="claim before working — editing a doc without its lease is blocked"; else claim_note="claim before working — BUT the lease gate is off this session, see below"; fi
     [ -n "$out" ] && ctx="${ctx}
 
-Open (claim before working — editing a doc without its lease is blocked):
+Open (${claim_note}):
 ${out}"
     [ -n "$refs" ] && ctx="${ctx}
 
@@ -492,6 +527,12 @@ Schema: ${SCHEMA_NOTE}"
 Board needs attention:
 $(printf '%s\n' "$health" | sed 's/^/  - /')
   Repair: use the repair-handoff skill (re-running setup-handoff does not fix board state)."
+    [ "$CLI_OK" = "1" ] || ctx="${ctx}
+
+LEASE GATE IS OFF for this session. No handoff CLI resolves for the board at ${DIR}:
+  \$HANDOFF_BIN is unset or missing, there is no user-level install, and this board vendors no copy.
+  Edits to handoff docs are NOT being checked against their leases — coordinate by hand until this
+  is fixed. Fix: re-run the setup-handoff skill in this repo, or export \$HANDOFF_BIN."
     [ "$CONFIG_MISSING" = "1" ] && ctx="${ctx}
 
 This board's configuration could not be loaded (${CONFIG_MISSING_WHY:-scripts/config.sh is missing}) — identity and settings are running on built-in defaults.
@@ -500,6 +541,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     ;;
 
   pretool-edit)
+    # No CLI => no way to claim => nothing this gate says is actionable. Allow, silently; the
+    # session banner already told the user the gate is off (see CLI_OK above).
+    [ "$CLI_OK" = "1" ] || exit 0
     path="$(field path)"
     if [ -z "$path" ]; then
       # FAIL-SAFE: couldn't parse the path. Only refuse if the payload clearly targets

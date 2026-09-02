@@ -95,13 +95,25 @@ it _running_ — a CRLF shebang, a truncated copy, or a missing `python3` all le
 file that dies on invocation.
 
 ```bash
+"$BOARD/handoff" --which # which CLI answers, and which board it acts on
 "$BOARD/handoff" list    # exits 0? or shebang / syntax / parse error
 bash -n "$BOARD/handoff" # syntax check without executing
 bash -n "$BOARD/scripts/hooks.sh"
 ```
 
+Start with `--which`, because `$BOARD/handoff` is a **dispatcher**: the CLI it runs comes from
+`$HANDOFF_BIN`, a user-level install, or the board's vendored `scripts/handoff-cli`, and which one
+answered is the first thing that explains a board behaving like a different board or a fixed bug
+that appears to still be present.
+
 Classify and act:
 
+- **no CLI resolves** (exit 4, and the dispatcher lists the three places it looked) — the lease
+  gate is **off**, not broken: the session banner says so and edits are allowed, because denying
+  them would lock people out with an error the tool cannot fix. Re-run the installer to restore a
+  CLI, or point `$HANDOFF_BIN` at one.
+- **the wrong CLI answers** (`--which` names a stale user-level install) — re-run the installer to
+  refresh it, or set `$HANDOFF_BIN` for the session.
 - **broken** (non-zero exit, `bad interpreter`, or a syntax error) — the payload is corrupt.
   Re-run the installer to restore it before touching anything else, then re-run this step.
 - **CRLF** — `grep -c $'\r' "$BOARD/handoff"` returns non-zero on a Windows-mangled copy. The

@@ -5,6 +5,46 @@ directory (`.agents/handoff/`) holds every handoff doc; ownership is settled by 
 file lock, not by editing the doc. Wired by [`setup-handoff`](https://github.com/xyzxyz442/x442-skills)
 and operated per the [`run-handoff`] discipline.
 
+## What `./handoff` is
+
+`<board>/handoff` is a **dispatcher**, not the CLI. It is a few dozen lines whose only job is to
+say which board you are on and which CLI to run, then hand over. The CLI itself is ~180 KB and
+changes constantly; a copy of it on every board (and in every test fixture) made each bugfix an
+N-file regeneration, so board and binary were separated.
+
+Nothing about how you invoke it changed — `./handoff list`, `./handoff claim <id>`, and every
+wired hook command still point at `<board>/handoff`.
+
+**Which CLI runs** — first match wins:
+
+| Source             | Where                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| `$HANDOFF_BIN`     | an explicit override — testing an unreleased CLI                                   |
+| user-level install | `${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`, written by `setup-handoff` |
+| vendored copy      | `<board>/scripts/handoff-cli`, so a cold clone with nothing but bash still works   |
+
+**Which board it acts on** — first match wins:
+
+| Source                        | Where                                                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `$HANDOFF_BOARD_PATH`         | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
+| the CLI's own directory       | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
+| `<repo>/.agents/handoff.json` | its `boardPath`, what a cross-repo install records                                                                 |
+| `.agents/handoff/`            | walking up from the working directory                                                                              |
+
+`$HANDOFF_BOARD_PATH` is how you point a repo at a different board **without editing any committed
+file**. A board that is named but absent is a hard error, never a silent fallback to a different
+one — writing leases into the wrong board is not a failure anyone would notice.
+
+`./handoff --which` prints both answers and where each came from. Reach for it whenever the board
+behaves like a different board, or a fixed bug appears to still be present.
+
+If no CLI resolves at all, the dispatcher says so and the **lease gate fails open**: edits to
+handoff docs are allowed and the session banner says loudly that nothing is being checked. Denying
+edits would leave people locked out of their own repo by an error whose fix the tool cannot run.
+(An unparseable hook payload is the opposite case and still fails closed — there, ownership is
+genuinely unverifiable.)
+
 ## Naming
 
 Every handoff doc is a file named **`<id>-handoff.md`**, and the **id is the filename stem**
@@ -316,7 +356,9 @@ so it must never carry any one repo's identity.
 
 **Environment overrides** keep the `HANDOFF_` prefix, so the two are never confused: a `HANDOFF_`
 name always means "override this run", a camelCase key always means "configured". `HANDOFF_TTL_HOURS`,
-`HANDOFF_ALLOW_VERIFY_CMD`, `HANDOFF_REPO`, `HANDOFF_GROUP`, `HANDOFF_GROUP_LAYOUT`.
+`HANDOFF_ALLOW_VERIFY_CMD`, `HANDOFF_REPO`, `HANDOFF_GROUP`, `HANDOFF_GROUP_LAYOUT`,
+`HANDOFF_ENVIRONMENTS`, plus the two resolution overrides above — `HANDOFF_BOARD_PATH` (which
+board) and `HANDOFF_BIN` (which CLI).
 
 Two keys behave differently on re-install, deliberately:
 

@@ -23,6 +23,11 @@ set -uo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAYLOAD="$SKILL_DIR/scripts/payload"
 ASSETS="$SKILL_DIR/assets"
+# Sourced for handoff_cli_home() alone — where the user-level CLI goes. The installer writes that
+# path and the dispatcher, the CLI and hooks.sh all read it, so it is defined once, in the file
+# they already share. config.sh defines functions and nothing else; sourcing it runs no code.
+# shellcheck disable=SC1091
+. "$PAYLOAD/config.sh"
 
 die() {
   echo "setup-handoff: $*" >&2
@@ -51,6 +56,37 @@ require_value() {
 install_file() {
   local s="$1" d="$2"
   if [ ! -f "$d" ] || ! cmp -s "$s" "$d"; then cp "$s" "$d"; fi
+}
+
+# The CLI, in its three possible homes. Board and binary are separate (see payload/dispatcher):
+# what every board gets is the small dispatcher at <board>/handoff, which is what all the wired
+# hook commands and every README already point at. The CLI it execs comes from $HANDOFF_BIN, the
+# user-level install this function writes, or the board's vendored copy — in that order.
+install_cli() { # board-dir
+  local b="$1" home
+  install_file "$PAYLOAD/dispatcher" "$b/handoff"
+  chmod +x "$b/handoff"
+  if [ "$VENDOR_CLI" = "1" ]; then
+    install_file "$PAYLOAD/handoff" "$b/scripts/handoff-cli"
+    chmod +x "$b/scripts/handoff-cli"
+  elif [ -f "$b/scripts/handoff-cli" ]; then
+    # Never deleted by this installer — removing a working CLI out from under a board is not a
+    # side effect an install should have. Say it is there and leave the choice to the operator.
+    echo "setup-handoff: --no-vendor-cli, but $b/scripts/handoff-cli already exists — left in place; remove it yourself to finish de-vendoring."
+  fi
+  # User-level install: one copy per machine, upgraded on its own cadence, shared by every board.
+  # Best-effort — a read-only or unset HOME is not a reason to fail an install whose board half
+  # just succeeded, and the vendored copy (or $HANDOFF_BIN) still answers.
+  home="$(handoff_cli_home)"
+  if mkdir -p "$home" 2> /dev/null; then
+    if install_file "$PAYLOAD/handoff" "$home/handoff" 2> /dev/null; then
+      chmod +x "$home/handoff" 2> /dev/null || true
+    else
+      echo "setup-handoff: could not write the user-level CLI to $home/handoff — boards will use their vendored copy."
+    fi
+  else
+    echo "setup-handoff: could not create $home — skipping the user-level CLI install."
+  fi
 }
 
 # Writes the board's config as JSON, MERGING with whatever config.json is already there rather
@@ -171,6 +207,11 @@ PY
 }
 
 REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" HANDOFF_DIR="" MIGRATE="" ALLOW_VERIFY=0
+# Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
+# works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
+# fixtures, where a committed byte-copy of a 180 KB script is 15 files to re-sync on every bugfix
+# and the exact drift the split was made to end.
+VENDOR_CLI=1
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
 GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE=""
@@ -210,6 +251,10 @@ while [ $# -gt 0 ]; do
       require_value --handoff-dir "$#" "${2:-}"
       HANDOFF_DIR="${2:-}"
       shift 2
+      ;;
+    --no-vendor-cli)
+      VENDOR_CLI=0
+      shift
       ;;
     --group)
       require_value --group "$#" "${2:-}"
@@ -370,7 +415,7 @@ if [ -n "$BOARD_ONLY" ]; then
   # idempotent, so it lands cleanly on top of whatever the clone brought.
   board_bootstrap "$HDEST" "$BOARD_REMOTE"
   mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive" "$HDEST/briefs"
-  install_file "$PAYLOAD/handoff" "$HDEST/handoff"
+  install_cli "$HDEST"
   install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
   install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
   install_file "$PAYLOAD/README.md" "$HDEST/README.md"
@@ -378,7 +423,7 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$ASSETS/handoff-standalone-template.md" "$HDEST/templates/handoff-standalone-template.md"
   install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
   install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
-  chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
+  chmod +x "$HDEST/scripts/hooks.sh"
   write_board_config "$HDEST/handoff.json" cross-repo ""
   supersede_legacy "$HDEST/config.json" "board config now lives in handoff.json"
   supersede_legacy "$HDEST/.version" "the payload stamp now lives in handoff.json"
@@ -513,7 +558,7 @@ fi
 
 # --- install the payload --------------------------------------------------------------
 mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"
-install_file "$PAYLOAD/handoff" "$HDEST/handoff"
+install_cli "$HDEST"
 install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
 install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
 install_file "$PAYLOAD/README.md" "$HDEST/README.md"
@@ -526,7 +571,7 @@ install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief
 # it may run on a machine with nothing but bash. An ABSENT .version means a pre-versioning
 # install, not a corrupt one; readers treat the two the same and report "behind".
 
-chmod +x "$HDEST/handoff" "$HDEST/scripts/hooks.sh"
+chmod +x "$HDEST/scripts/hooks.sh"
 
 # config (committed): board-global facts only. See write_board_config (top) for why REPO_NAME is
 # single-repo-only and how the group facts are recorded, and allowVerifyCmd is written as a JSON key.

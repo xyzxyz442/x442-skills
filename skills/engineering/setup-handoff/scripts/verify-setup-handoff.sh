@@ -395,7 +395,18 @@ else
 fi
 
 section "6. handoff script runs"
+# Board and binary are separate: <board>/handoff is a dispatcher that execs a CLI found via
+# $HANDOFF_BIN, the user-level install, or the board's vendored copy. Report WHICH answered —
+# "the CLI works" is not a useful finding when three of them could have run and the stale one did.
 if [ -x "$HD/handoff" ]; then
+  CLI_WHICH="$("$HD/handoff" --which 2> /dev/null | sed -n '1,2p' | tr '\n' ' ' | sed -e 's/  */ /g' -e 's/^CLI //' -e 's/ *$//')"
+  if [ -n "$CLI_WHICH" ]; then
+    ok cli.resolves "CLI resolves — $CLI_WHICH"
+  else
+    # Either nothing resolved (the dispatcher already said so on stderr) or this is a pre-split
+    # board whose root file IS the CLI. Both run; neither can name its source.
+    warn cli.resolves "could not determine which CLI answers for this board (pre-split board, or none resolves) — run: $HD/handoff --which"
+  fi
   "$HD/handoff" list > /dev/null 2>&1 && ok cli.list "handoff list runs" || bad cli.list "handoff list failed"
   # export must be a recognized subcommand: a nonexistent id should reach id-resolution and fail
   # with "no such handoff", not fall through to the top-level usage catch-all (which would mean

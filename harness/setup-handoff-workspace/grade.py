@@ -115,6 +115,23 @@ def _handoff(target, *args, session="sess-AAA", allow_verify=False):
     return _run(["bash", str(ho), *args], target, env)
 
 
+def _resolved_cli(target) -> Path | None:
+    """The CLI file <board>/handoff actually execs.
+
+    The board root holds a dispatcher now, not the CLI, so a static assertion about CLI content
+    has to follow the same ladder the dispatcher does ($HANDOFF_BIN, user-level install, vendored
+    copy) rather than grepping the entry point. `--which` reports it; a pre-split board that does
+    not know the flag falls back to the root file, which on such a board IS the CLI.
+    """
+    r = _run(["bash", str(Path(target) / HD / "handoff"), "--which"], target)
+    for line in r.stdout.splitlines():
+        if line.startswith("CLI"):
+            cand = Path(line.split(None, 1)[1].strip())
+            return cand if cand.is_file() else None
+    root = Path(target) / HD / "handoff"
+    return root if root.is_file() else None
+
+
 def _hook(target, kind, payload, session="sess-AAA"):
     # hooks.sh lives under scripts/; fall back to the flat path for a pre-restructure board. Raise
     # rather than returning "" when neither exists: empty output means ALLOW, so a missing hooks.sh
@@ -694,8 +711,14 @@ def grade_layout_migration(target):
                             and not (hd / "handoff-doc-template.md").exists(),
                             f"templates/: {(hd / 'templates/handoff-doc-template.md').is_file()}; "
                             f"stale root copy: {(hd / 'handoff-doc-template.md').exists()}"))
-    e.append(gc.expectation("the handoff CLI stays at the board root", (hd / "handoff").is_file(),
+    # The board root keeps a file called `handoff` — every wired hook command and README points
+    # there — but it is now the dispatcher, and the CLI it execs is vendored under scripts/. Both
+    # halves are asserted: a dispatcher with nothing to exec is a board whose lease gate is off.
+    e.append(gc.expectation("the board root keeps a `handoff` entry point", (hd / "handoff").is_file(),
                             f"handoff at root: {(hd / 'handoff').is_file()}"))
+    e.append(gc.expectation("and a default install vendors the CLI it dispatches to",
+                            (hd / "scripts/handoff-cli").is_file(),
+                            f"scripts/handoff-cli: {(hd / 'scripts/handoff-cli').is_file()}"))
 
     cfg = json.loads(settings.read_text())
     cmds = [h.get("command", "") for groups in cfg.get("hooks", {}).values()
@@ -991,8 +1014,11 @@ def _grade(target, eval_id):
         exps = [gc.run_verify_script(VERIFY, target)]
         exps.append(gc.contains(target, CLAUDE_CFG, "pretool-edit",
                                 label="claude config has the hard-enforcement pretool deny gate"))
-        # idempotency: a clean re-run must leave nothing dirty
-        _install(target, "--primary", "claude")
+        # Idempotency: a clean re-run must leave nothing dirty. --no-vendor-cli because this
+        # fixture is the BARE half of the cold-clone pair — it ships the dispatcher and no CLI
+        # copy, so a default (vendoring) re-run would add scripts/handoff-cli and read as drift.
+        # The flag never removes an existing copy, so this is idempotent on a vendored board too.
+        _install(target, "--primary", "claude", "--no-vendor-cli")
         exps.append(gc.git_diff_empty(target))
         return exps
 
@@ -1042,8 +1068,11 @@ def _grade(target, eval_id):
         exps.append(gc.file_exists(target, f"{HD}/legacy-open-handoff.md"))
         exps.append(gc.file_exists(target, f"{HD}/archive/legacy-done-handoff.md"))
         exps.append(gc.no_fabrication(target, ".claude/handoff"))  # legacy dir moved away
-        exps.append(gc.contains(target, f"{HD}/handoff", "session=",
-                                label="migrated handoff script writes session= (defect #1 fixed)"))
+        cli = _resolved_cli(target)
+        exps.append(gc.expectation(
+            "the migrated board runs a CLI that writes session= (defect #1 fixed)",
+            bool(cli) and "session=" in cli.read_text(encoding="utf-8", errors="replace"),
+            f"resolved CLI: {cli}" if cli else "no CLI resolved for the migrated board"))
         exps.append(gc.run_verify_script(VERIFY, target))
         return exps
 

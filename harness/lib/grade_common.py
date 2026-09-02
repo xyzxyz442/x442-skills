@@ -273,6 +273,21 @@ def repo_root(start: Path) -> Path:
     return next(p for p in Path(start).resolve().parents if (p / "skills").is_dir())
 
 
+def payload_cli(start: Path) -> Path:
+    """The one `handoff` CLI the harness runs.
+
+    Fixture boards no longer vendor a copy of it. A board ships a small dispatcher at
+    <board>/handoff which execs a CLI found via $HANDOFF_BIN, a user-level install, or a vendored
+    copy — so the harness points $HANDOFF_BIN at the skill's payload and every fixture runs the
+    binary under test by construction. A committed per-fixture copy could only ever be a mirror
+    that someone forgets to re-sync, and 13 of them were.
+
+    Deliberately NOT used by graders whose fixture is a cold clone (a legacy board carrying its own
+    CLI): there, which binary answers is the thing being graded.
+    """
+    return repo_root(start) / "skills/engineering/setup-handoff/scripts/payload/handoff"
+
+
 _HARNESS_GIT_ENV = {
     "GIT_AUTHOR_NAME": "x442-harness", "GIT_AUTHOR_EMAIL": "harness@x442.local",
     "GIT_COMMITTER_NAME": "x442-harness", "GIT_COMMITTER_EMAIL": "harness@x442.local",
