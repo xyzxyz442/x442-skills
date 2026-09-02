@@ -1213,6 +1213,34 @@ CLEAN_BRIEF="$OB/.agents/handoff/briefs/clean-unit-handoff.brief.md"
 chk "a clean brief carries no Current state" "0" "$(grep -c '^## Current state' "$CLEAN_BRIEF")"
 chk "and no Activity log" "0" "$(grep -c '^## Activity' "$CLEAN_BRIEF")"
 
+printf '\nexit codes — success is 0, on every command, restricted or not\n'
+# Every assertion in this file checked OUTPUT. None checked status, and that gap shipped a bug:
+# cmd_claim ended in `is_restricted ... && restricted_banner ...`, so a claim on an ORDINARY doc
+# returned the condition's false status and exited 1 while succeeding in every visible way — and
+# the restricted case, the one nobody runs in a loop, was the only one that exited 0. Anything
+# gating on `handoff claim && ...` read every successful ordinary claim as a failure.
+#
+# `hb` captures output, so it cannot carry a status; these call the board CLI directly.
+hbrc() { # repo subcommand... -> exit status only
+  (cd "$1" && shift && ./.agents/handoff/handoff "$@" > /dev/null 2>&1)
+  echo $?
+}
+XC="$(mkboard)"
+chk "new (normal)" "0" "$(hbrc "$XC" new plain --title "Plain")"
+chk "new (restricted)" "0" "$(hbrc "$XC" new locked --title "Locked" --sensitivity restricted)"
+chk "claim (normal) — the regression" "0" "$(hbrc "$XC" claim plain "working")"
+chk "claim (restricted)" "0" "$(hbrc "$XC" claim locked "working")"
+chk "touch" "0" "$(hbrc "$XC" touch plain)"
+chk "release --status open" "0" "$(hbrc "$XC" release plain --status open)"
+chk "list" "0" "$(hbrc "$XC" list)"
+chk "index" "0" "$(hbrc "$XC" index)"
+chk "export (normal)" "0" "$(hbrc "$XC" export plain --to Someone)"
+# And the refusals still refuse: a uniform 0 would be the same bug wearing the other mask.
+hbrc "$XC" release locked --status open > /dev/null
+chk "export (restricted) refuses" "1" "$(hbrc "$XC" export locked --to Someone)"
+chk "claim on an unknown id refuses" "1" "$(hbrc "$XC" claim no-such-doc "x")"
+chk "release with no --status refuses" "1" "$(hbrc "$XC" release plain)"
+
 printf '\nsensitivity — a handling flag, not an access boundary (ADR 0005)\n'
 SN="$(mkboard)"
 hb "$SN" new key-rotation --title "Key rotation inventory" --sensitivity restricted --severity high > /dev/null

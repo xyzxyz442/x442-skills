@@ -13,6 +13,8 @@
 # Splice rules (a string splice, never sed) mirror register-cross-repo-graph:
 #   - exactly one begin/end pair  -> replace the span
 #   - no markers                  -> append after one blank line at EOF
+#
+# Self-test:  python3 render.py --selftest
 #   - unbalanced / duplicated     -> refuse, exit 1 (a human must fix it)
 #   - group no longer in scope    -> remove the block
 # Writes only when the bytes change, so a re-run leaves `git status --porcelain` empty.
@@ -60,9 +62,64 @@ def splice(existing: str, block: str) -> str:
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
     tail = existing[existing.index(END) + len(END):]
+    rest = tail.lstrip("\n")
     if not block:
-        return head.rstrip("\n") + "\n" if head.strip() else head
-    return head + block + tail.lstrip("\n")
+        # The removal path used to return `head` and DISCARD the tail outright — every byte after
+        # this block's end marker, deleted, in a script whose whole contract is "touching not one
+        # byte outside the markers". Unreached only because this block is appended last today; a
+        # sibling skill splicing below it would have lost its block on the next un-declare.
+        if not head.strip():
+            return rest
+        return head.rstrip("\n") + "\n" + ("\n" + rest if rest else "")
+    # The separator is owned here, not by the tail — see splice-agents-block.py, which had the
+    # same defect and is where it actually fired.
+    block = block.rstrip("\n") + "\n"
+    return head + block + ("\n" + rest if rest else "")
+
+
+def _selftest() -> int:
+    """python3 render.py --selftest
+
+    Mirrors splice-agents-block.py's selftest, because the two splices are declared to mirror each
+    other and both carried the same separator defect. This one additionally covers the removal
+    path, which used to discard every byte after the end marker.
+    """
+    blk = BEGIN + " -->\nbody\n" + END + "\n"
+
+    assert splice("# A\n", blk) == "# A\n\n" + blk
+    assert splice("# A\n\n", blk) == "# A\n\n" + blk
+    assert splice("# A", blk) == "# A\n\n" + blk
+
+    one = "# A\n\n" + BEGIN + " -->\nold\n" + END + "\n"
+    assert splice(one, blk) == "# A\n\n" + blk
+    assert splice(splice(one, blk), blk) == splice(one, blk), "must be idempotent"
+
+    # A sibling managed block below this one keeps its separating blank line.
+    sib = "<!-- handoff:begin -->\nx\n"
+    two = "# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n" + sib
+    got = splice(two, blk)
+    assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
+    assert splice(got, blk) == got, "idempotent with a sibling block below"
+
+    # A block whose template left a trailing blank line must not widen the gap on every run.
+    assert splice(two, blk + "\n") == got
+
+    # REMOVAL keeps everything outside the markers. Returning `head` alone deleted the tail.
+    assert splice(two, "") == "# A\n\n" + sib, repr(splice(two, ""))
+    assert splice(one, "") == "# A\n"
+    assert splice(BEGIN + " -->\no\n" + END + "\n\n" + sib, "") == sib
+    assert splice("# A\n", "") == "# A\n", "no block, nothing to remove"
+
+    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+        try:
+            splice(bad, blk)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"must refuse malformed input: {bad!r}")
+
+    print("render selftest OK")
+    return 0
 
 
 def main() -> int:
@@ -111,4 +168,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())

@@ -59,13 +59,42 @@ def _read_shell_config(target):
     return out
 
 
+def _board_json(board):
+    """One board's JSON config, or {} when absent/unparseable.
+
+    Every layer was consolidated onto `handoff.json`; `config.json` is the generation before it.
+    Both are read, newest last, so a run against an older fixture still says something true.
+    Callers must assert on the VALUES: a bare {} is indistinguishable from a correctly-configured
+    board, which is exactly how the assertions below went on "passing" against an empty dict for a
+    whole release after the rename.
+    """
+    cfg = {}
+    for name in ("config.json", "handoff.json"):
+        try:
+            data = json.loads((Path(board) / name).read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            cfg.update(data)
+    return cfg
+
+
+def _repo_json(repo):
+    """A member repo's own handoff config (the `group` it resolves to), pre-consolidation name
+    accepted as a fallback."""
+    for name in ("handoff.config.json", "handoff.json"):
+        try:
+            data = json.loads((Path(repo) / ".agents" / name).read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
 def _read_json_config(target):
-    """The board's config.json, or {} when absent/unparseable -- the caller asserts on the values."""
-    path = Path(target) / HD / "config.json"
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    """The board config for a single-repo target at <target>/.agents/handoff."""
+    return _board_json(Path(target) / HD)
 
 
 def _run(args, cwd, env_extra=None):
@@ -243,7 +272,7 @@ def grade_script_behavior(target):
     # config.json. Written through json so the file stays parseable — the readers now REFUSE a
     # malformed config rather than silently falling back, so a hand-appended line would not just
     # be ignored here, it would fail the whole board.
-    _cfg_path = Path(target) / ".agents/handoff/config.json"
+    _cfg_path = Path(target) / ".agents/handoff/handoff.json"
     _cfg = json.loads(_cfg_path.read_text())
     _cfg["allowVerifyCmd"] = True
     _cfg_path.write_text(json.dumps(_cfg, indent=2, sort_keys=True) + "\n")
@@ -675,12 +704,12 @@ def grade_cross_repo(_target):
             e.append(gc.expectation(f"installer succeeds cross-repo in {name}", res.returncode == 0,
                                     f"exit {res.returncode}: {res.stderr.strip()[:120]}"))
 
-        cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+        cfg = _board_json(board)
         e.append(gc.expectation("shared config omits repoName (no last-writer clobber)",
                                 "repoName" not in cfg and cfg.get("topology") == "cross-repo", f"config={cfg!r}"))
 
         for name, r in repos.items():
-            rc_path = r / ".agents/handoff.config.json"
+            rc_path = r / ".agents/handoff.json"
             rc = json.loads(rc_path.read_text()) if rc_path.is_file() else {}
             e.append(gc.expectation(f"{name} repo config records its own identity",
                                     rc.get("repo") == name, f"repo config={rc!r}"))
@@ -698,8 +727,11 @@ def grade_cross_repo(_target):
 
         # Re-run A: B's identity and the shared config must NOT flip (the exact spec repro).
         install(repos["repo-a"])
-        rc_b = json.loads((repos["repo-b"] / ".agents/handoff.config.json").read_text())
-        cfg2 = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+        # Through the resolver, not a bare read_text(): the pre-consolidation filename made this
+        # line raise FileNotFoundError and take the WHOLE cross-repo eval down — no grading.json
+        # was produced at all, so the case read as "not run" rather than "failing".
+        rc_b = _repo_json(repos["repo-b"])
+        cfg2 = _board_json(board)
         e.append(gc.expectation("re-installing repo-a leaves repo-b's identity intact",
                                 rc_b.get("repo") == "repo-b" and "repoName" not in cfg2,
                                 f"b-intact repo config: {rc_b!r}; cfg-neutral: {'repoName' not in cfg2}"))
@@ -790,7 +822,7 @@ def grade_grouped_board(_target):
                     "--groups", "auth,infra", "--layout", layout], base)
             e.append(gc.expectation(f"{tag} --board-only scaffolds a standalone board", r.returncode == 0,
                                     f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
-            cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+            cfg = _board_json(board)
             e.append(gc.expectation(f"{tag} board config records groups + layout",
                                     cfg.get("groups") == ["auth", "infra"] and cfg.get("groupLayout") == layout,
                                     f"config={cfg!r}"))
@@ -914,9 +946,9 @@ def _grade(target, eval_id):
         return exps
 
     if eval_id == "legacy-config":
-        # A board still on the sourced shell `config`, with no config.json. The installer must
-        # migrate it, and every value must survive: the migration is worthless if it produces a
-        # well-formed file with the wrong numbers in it. ttlHours is the one that proves it,
+        # A board still on the sourced shell `config`, with no JSON config at all. The installer
+        # must migrate it, and every value must survive: the migration is worthless if it produces
+        # a well-formed file with the wrong numbers in it. ttlHours is the one that proves it,
         # because the installer's own default (4) differs from the fixture's (8) -- so a value
         # that survives cannot have come from the default path.
         before = _read_shell_config(target)
@@ -924,8 +956,8 @@ def _grade(target, eval_id):
         exps = [gc.expectation("installer succeeds on a legacy-config board", r.returncode == 0,
                                f"exit {r.returncode}: {r.stderr.strip()[:120]}")]
         exps.append(gc.run_verify_script(VERIFY, target))
-        exps.append(gc.file_exists(target, f"{HD}/config.json"))
-        exps.append(gc.json_roundtrip(target, f"{HD}/config.json"))
+        exps.append(gc.file_exists(target, f"{HD}/handoff.json"))
+        exps.append(gc.json_roundtrip(target, f"{HD}/handoff.json"))
         after = _read_json_config(target)
         for key, want in (("ttlHours", before.get("ttlHours")), ("topology", before.get("topology"))):
             if want is None:
@@ -934,9 +966,16 @@ def _grade(target, eval_id):
                 f"{key} survived the shell-to-JSON migration",
                 str(after.get(key)) == str(want),
                 f"legacy {key}={want!r} -> json {key}={after.get(key)!r}"))
-        # The readers deliberately fall back to the legacy file, so removing it would strand any
-        # board whose migration half-completed.
-        exps.append(gc.file_exists(target, f"{HD}/config"))
+        # The legacy file is SUPERSEDED, not deleted: renamed to `config.superseded` so it can
+        # never be read as authoritative again while still being there to recover from if the
+        # migration got a value wrong. Asserting both halves — the rename happened AND nothing was
+        # destroyed — is the whole claim; asserting only that `config` still exists (what this
+        # used to do) now passes exactly when the migration has NOT run.
+        exps.append(gc.file_exists(target, f"{HD}/config.superseded"))
+        exps.append(gc.expectation(
+            "the superseded legacy config is no longer readable as authoritative",
+            not (Path(target) / HD / "config").exists(),
+            f"{HD}/config present: {(Path(target) / HD / 'config').exists()}"))
         return exps
 
     if eval_id == "legacy-install":

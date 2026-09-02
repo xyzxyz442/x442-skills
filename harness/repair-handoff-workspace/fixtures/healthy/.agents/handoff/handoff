@@ -1424,7 +1424,9 @@ cmd_new() {
     log_activity "$target" "secret-scan OVERRIDDEN at creation ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
     echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
   fi
-  is_restricted "$target" && restricted_banner "$id"
+  # Same `if` form as cmd_claim's, for the same reason — here the status is currently swallowed by
+  # the two commands below, which is luck, not design.
+  if is_restricted "$target"; then restricted_banner "$id"; fi
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
 }
@@ -2269,7 +2271,7 @@ export_bundle() { # id doc to outdir do_claim force-secret-reason
     [ -n "$kid" ] || continue
     kf="$(doc_of "$kid" 2> /dev/null || true)"
     [ -n "$kf" ] && [ -f "$kf" ] || continue
-    is_restricted "$kf" && restricted="${restricted:+$restricted }$kid"
+    if is_restricted "$kf"; then restricted="${restricted:+$restricted }$kid"; fi
   done <<< "$kids"
   [ -z "$restricted" ] \
     || die "cannot export bundle $id — restricted child(ren):$restricted. A restricted unit is never handed to an external executor. Nothing was written; split it out of the bundle, or do the whole bundle in a session with board access."
@@ -2628,7 +2630,12 @@ cmd_claim() {
   # the work, and printing it on a claim that then lost a race would be telling nobody anything.
   # `$doc_path`, not `$f`: cmd_index ran above and walks every doc on the board, and this is the
   # same dynamic-scope hazard the doc_path copy was introduced for.
-  is_restricted "$doc_path" && restricted_banner "$id"
+  # `if`, not `cond && action`: this is the LAST statement in the function, so `&&` handed the
+  # function — and the process — the CONDITION's exit status. An ordinary claim on a non-restricted
+  # doc therefore exited 1 while succeeding in every observable way, which is the worst shape a bug
+  # can take here: every hook, script and CI step that checks `handoff claim`'s exit code read a
+  # successful claim as a failure, and the one case that exited 0 was the restricted one.
+  if is_restricted "$doc_path"; then restricted_banner "$id"; fi
 }
 
 cmd_touch() {
