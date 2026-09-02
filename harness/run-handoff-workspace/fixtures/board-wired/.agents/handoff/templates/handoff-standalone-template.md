@@ -2,6 +2,7 @@
 id: PLACEHOLDER_ID
 title: PLACEHOLDER_TITLE
 type: standalone
+role: PLACEHOLDER_ROLE
 status: open
 created: PLACEHOLDER_CREATED
 updated: PLACEHOLDER_UPDATED
@@ -17,7 +18,13 @@ note: PLACEHOLDER_NOTE
 
 <!-- STANDALONE / reference handoff: self-contained, gate-exempt (no lease needed to edit),
      and not surfaced as claimable work. Use it for knowledge transfer, a porting guide, an
-     eval report, or a session-compaction brief — not for coordinating who edits what next. -->
+     eval report, or a session-compaction brief — not for coordinating who edits what next.
+
+     `type:` says what its LIFECYCLE is; `role:` says what it is FOR:
+       steering       — the decisions and the evidence behind them
+       spec           — what is to be built; a coordination doc points at it with `spec:`
+       reference      — knowledge transfer, a porting guide, a glossary
+       brief-archive  — a completed delegation's brief and result, kept for the record -->
 
 ## Summary
 

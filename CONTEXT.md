@@ -99,6 +99,12 @@ A structural prerequisite: this cannot _start_ before that lands. Board ids only
 Distinguished from **blocked on**, which is the reason someone _stopped_ and is reserved for
 what the board cannot model.
 
+**Environment**:
+The stage a piece of work targets. An open string, ordered per board by a **ladder** running
+lowest to highest; an unlabelled document reads as the lowest. Naming an environment does not
+duplicate the work — the same fix at two stages is two documents with two pieces of evidence.
+_Avoid_: stage, tier, deployment target
+
 **Sensitivity**:
 How the tooling must handle a document — whether it may be exported, delegated, or shown
 without a banner. A handling flag, never an access boundary; board membership is the access

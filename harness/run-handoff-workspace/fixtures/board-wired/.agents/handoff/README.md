@@ -148,13 +148,13 @@ server, and the losing claim is undone rather than kept locally.
 A board earns this by being **its own git repository with a remote**. Nothing changes on a board
 without one: leases stay gitignored machine state, and no command touches the network.
 
-| | Board with a remote | Local-only board |
-| --- | --- | --- |
-| `.locks/` | committed — shared state of record | gitignored — ephemeral machine state |
-| `claim` | **strict**: fetches first, and refuses outright if the remote is unreachable | offline, as always |
-| `release` | **optimistic**: commits and pushes, but a failed push is a warning and the release stands | offline, as always |
-| every read (`list`, `index`, the edit gate) | offline and free | offline and free |
-| lease expiry | stamped from the lease's **commit time** | stamped from the claiming machine's clock |
+|                                             | Board with a remote                                                                       | Local-only board                          |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `.locks/`                                   | committed — shared state of record                                                        | gitignored — ephemeral machine state      |
+| `claim`                                     | **strict**: fetches first, and refuses outright if the remote is unreachable              | offline, as always                        |
+| `release`                                   | **optimistic**: commits and pushes, but a failed push is a warning and the release stands | offline, as always                        |
+| every read (`list`, `index`, the edit gate) | offline and free                                                                          | offline and free                          |
+| lease expiry                                | stamped from the lease's **commit time**                                                  | stamped from the claiming machine's clock |
 
 The asymmetry between `claim` and `release` is the design. A claim asserts something about the
 future ("nobody else may work this"), and asserting that without seeing the other machines' leases
@@ -168,6 +168,17 @@ One thing to watch: a board that gains a remote later is still gitignoring `.loc
 combination is silent — every claim commits, pushes, and reports success while carrying no lease.
 The next `claim` removes the rule and says so; `verify-setup-handoff.sh` reports it too.
 
+## Current state, and why the activity log stays boring
+
+`## Current state` is **rewritable**: overwrite it, do not append. It is where a session says where
+things stand, and it is the first thing the next session reads.
+
+`## Activity` is the opposite — **one line per event**, appended, never revised. Two live boards
+grew activity logs forty entries deep with multi-paragraph revisions inside them, plus hand-rolled
+`Resolution (date)`, `Execution log (date)` and `Recheck <date> — still unfixed` headings. All of
+that is people improvising the rewritable channel the template did not give them. One section that
+is always current, one that is always append-only, and neither has to do the other's job.
+
 ## Fields
 
 | Field                                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -177,12 +188,17 @@ The next `claim` removes the rule and says so; `verify-setup-handoff.sh` reports
 | `status`                                       | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `audience`                                     | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
 | `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
+| `depends_on`                                   | **Board ids only**, as a list. Means _this cannot start before that lands_. `claim` **warns** when a target is still open and proceeds anyway — `depends_on` is about starting, and work legitimately starts out of order; `release --status done` is never gated on it. Set it with `new --after <id>`. If your blocker is a board id it belongs here, not in `blocked_on`. |
+| `superseded_by`                                | The handoff id that replaced this one. First-class because it already occurred in the wild.                                                                                                                                                                                                                                                                                |
+| `environment`                                  | Which stage the work targets. An **open string**, not an enum — every fleet names its stages differently — but the common spellings are normalized (`prd`/`production`/`live` ⇒ `prod`; `stg`/`uat`/`qa` ⇒ `staging`). **Absent reads as `dev`**, so no existing doc changes meaning by gaining the field. Order them for your board with `environments` in `config.json`. |
+| `role`                                         | Standalone docs only: what the doc is **for**, where `type` is its lifecycle. `steering` (the decisions and their evidence) · `spec` (what is to be built) · `reference` (knowledge transfer) · `brief-archive` (a finished delegation, kept). Absent ⇒ `reference`.                                                                                                        |
+| `spec`                                         | _(optional)_ what this work is specified by. Resolved by the reader in order — a path, then a URL, then a board id. Not validated at creation: a handoff is routinely filed before its spec is written.                                                                                                                                                                    |
 | `blocked_on`                                   | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
-| `updated` / `verified_at`                      | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it and requires `--verified-by`.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `updated` / `verified_at` / `verified_by`      | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it, requires `--verified-by`, and now **persists that evidence as `verified_by`** rather than only as prose in the activity log — evidence that lives in a log can be read but not queried, which is how boards end up with hundreds of verification dates and a handful of retrievable checks. Evidence naming no command, file reference, or commit is reported by `verify-setup-handoff.sh`. |
 | `verify`                                       | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
 | `delegated_to` / `delegated_at` / `brief`      | Written by `export`: who it went to, when, and the path to the rendered brief under `briefs/`. See "Delegating off-board".                                                                                                                                                                                                                                                                                                                                                                                             |
 | `result_from` / `result_at` / `result_claimed` | Written by `import --result`: who reported back, when, and what they claimed (`done`/`partial`/`blocked`). A **claim**, not a verdict — `status` is untouched until a reviewer runs `release`.                                                                                                                                                                                                                                                                                                                         |
-| `review`                                       | `pending` once `import --result` lands a report; cleared by `release`. Surfaces the doc as needing a reviewer's eyes rather than an executor's.                                                                                                                                                                                                                                                                                                                                                                        |
+| `review` / `executed_by`                       | `import --result` sets `executed_by: delegate` and `review: pending`. While both hold, `release --status done` **refuses** a `--verified-by` that is word-for-word the delegate's own reported claim — that is the delegate reviewing itself. Re-run the check and say what you observed, or release `open` and hand it to a reviewer.                                                                                                                                                                                    |
 
 ## Configuration
 
@@ -205,7 +221,8 @@ so it must never carry any one repo's identity.
 | `groups`         | `[]`            | Sections a shared board hosts, as a JSON array.                        |
 | `groupLayout`    | `""`            | `subfolder` or `prefix` — how each section is laid out.                |
 | `ttlHours`       | `4`             | Hours a claim holds before it self-reaps.                              |
-| `allowVerifyCmd` | `false`         | `true` lets `release --run-verify` execute a command from a local doc. |
+| `allowVerifyCmd` | `false`                     | `true` lets `release --run-verify` execute a command from a local doc. |
+| `environments`   | `["dev","staging","prod"]` | The board's environment ladder, lowest first — what `environment` is ordered by. |
 
 **`<repo>/.agents/handoff.config.json`** — per-consumer, written only for cross-repo installs.
 

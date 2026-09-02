@@ -177,7 +177,7 @@ else bad "config missing (no config.json)"; fi
 if [ -f "$HD/config.json" ] && command -v python3 > /dev/null 2>&1; then
   UNKNOWN="$(python3 -c '
 import json,sys
-known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd","boardPath"}
+known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd","boardPath","environments"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -328,6 +328,93 @@ if [ -x "$HD/handoff" ]; then
     bad "handoff export did not respond as expected: $out"
   fi
 else warn "handoff not executable"; fi
+
+echo
+echo "7. Document schema (advisory — ADR 0004)"
+echo "----------------------------------------"
+# Every finding in this section is ADVISORY. None of it blocks anything, and that is the design:
+# `depends_on` is about whether work can start, and work legitimately starts out of order. What a
+# board cannot survive is these things being invisible — the two live boards that motivated this
+# schema recorded their dependency graph in prose, folded closure evidence into an activity log,
+# and grew hand-rolled "Resolution (date)" headings because the template had nowhere to put the
+# current state. Reporting is the whole intervention.
+SCHEMA_DOCS=0 SCHEMA_STALE=0
+fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
+NOW_S="$(date +%s)"
+while IFS= read -r doc; do
+  [ -f "$doc" ] || continue
+  SCHEMA_DOCS=$((SCHEMA_DOCS + 1))
+  dname="$(basename "$doc")"
+  dtype="$(fm "$doc" type)"
+  dtype="${dtype:-coordination}"
+  # An archived doc is closed. Its shape is history and nobody is going to restructure it, so only
+  # the evidence check applies — that one is an audit question ("can this closure be re-checked?")
+  # and it is the ONLY place it can be asked, since `done` archives the doc that carries it.
+  darch=0
+  case "$doc" in */archive/*) darch=1 ;; esac
+
+  # A board id sitting in `blocked_on` is not wrong, it is just in the field that cannot be
+  # checked. `depends_on` renders as a real edge and can be warned on at claim time; free text
+  # cannot, which is why the two fields exist separately.
+  bo=""
+  [ "$darch" = 1 ] || bo="$(fm "$doc" blocked_on)"
+  case "$bo" in
+    "" | external* | decision* | 'external —'* | 'decision —'*) ;;
+    *) warn "$dname: blocked_on names \"$bo\", which looks like a board id — that belongs in depends_on (blocked_on is for what the board cannot model)" ;;
+  esac
+
+  # Closure evidence that names no command, no file, and no commit is a claim about somebody's
+  # memory. It is still recorded and still closes the doc; it just cannot be re-checked by the
+  # next reader, which is the entire purpose of writing it down.
+  vb="$(fm "$doc" verified_by)"
+  vb="${vb%\"}"
+  vb="${vb#\"}" # stored quoted so a file:line survives; compare the value, not the quoting
+  if [ -n "$vb" ]; then
+    # Deliberately generous. The question is not "is this good evidence" — no pattern can answer
+    # that — it is "does this name ANYTHING a second person could go and look at". A colon-numbered
+    # location, a path, a flagged command, a sha, or the words test/spec/commit all pass. What
+    # fails is prose: "works now", "confirmed with the team", "looks right".
+    case "$vb" in
+      *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
+      *) warn "$dname: verified_by (\"$vb\") names no command, file reference, or commit — nobody can re-check it" ;;
+    esac
+  fi
+
+  # Rewritable current state. Its absence is why boards sprout "Resolution (date)" and "Execution
+  # log (date)" headings: people need somewhere to say where things stand, and append-only activity
+  # is not it.
+  case "$dtype" in
+    coordination | orchestrator)
+      [ "$darch" = 1 ] && continue
+      grep -q '^## Current state' "$doc" \
+        || warn "$dname: no '## Current state' section — a reader has to reconstruct where this stands from the activity log"
+      ;;
+  esac
+
+  # Size. A document nobody will read coordinates nobody; the boards that motivated this carried
+  # one of 1401 lines. Standalone/reference docs are exempt — length is what they are for.
+  if [ "$dtype" != "standalone" ] && [ "$darch" = 0 ]; then
+    lines="$(wc -l < "$doc" | tr -d ' ')"
+    [ "${lines:-0}" -gt 400 ] \
+      && warn "$dname: $lines lines — past ~400 a coordination doc has stopped being one unit of work; split it"
+  fi
+
+  # Staleness is COUNTED, never warned per document. A board with 143 open handoffs would emit 143
+  # warnings and teach everyone to ignore the section.
+  upd="$(fm "$doc" updated)"
+  if [ -n "$upd" ] && [ "$darch" = 0 ] && [ "$(fm "$doc" status)" != "done" ]; then
+    upd_s="$(date -j -f '%Y-%m-%d' "$upd" +%s 2> /dev/null || date -d "$upd" +%s 2> /dev/null || echo "")"
+    [ -n "$upd_s" ] && [ "$(((NOW_S - upd_s) / 86400))" -gt 30 ] && SCHEMA_STALE=$((SCHEMA_STALE + 1))
+  fi
+done <<< "$(find "$HD" -maxdepth 3 -name '*-handoff.md' 2> /dev/null)"
+
+if [ "$SCHEMA_DOCS" -eq 0 ]; then
+  ok "no handoff docs on this board yet — nothing to check"
+else
+  [ "$SCHEMA_STALE" -gt 0 ] \
+    && warn "$SCHEMA_STALE of $SCHEMA_DOCS open doc(s) have not been updated in over 30 days — the board is accumulating, not closing" \
+    || ok "no open doc has gone 30 days without an update"
+fi
 
 echo
 echo "Summary: $P passed, $W warnings, $F failed"

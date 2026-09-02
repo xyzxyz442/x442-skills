@@ -947,6 +947,57 @@ mkshared() { # -> board dir (its own repo, pushed to a bare remote beside it)
   printf '%s' "$b"
 }
 
+printf '\ndocument schema — environment, typed edges, role, evidence (ADR 0004)\n'
+SC="$(mkboard)"
+hb "$SC" new base-work --title "Base work" > /dev/null
+hb "$SC" new prod-followup --title "Prod follow-up" --env production --after base-work > /dev/null
+SCD="$SC/.agents/handoff/prod-followup-handoff.md"
+chk "an environment alias normalizes to the canonical stage" "prod" \
+  "$(sed -n 's/^environment: //p' "$SCD" | head -1)"
+chk "--after records a canonicalized board id in depends_on" "[base-work-handoff]" \
+  "$(sed -n 's/^depends_on: //p' "$SCD" | head -1)"
+chk "an environment-less doc reads as dev" "dev" \
+  "$(cd "$SC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && doc_env "$SC/.agents/handoff/base-work-handoff.md")"
+chk "a coordination doc is given a rewritable Current state section" "yes" \
+  "$(grep -q '^## Current state' "$SCD" && echo yes || echo no)"
+
+# Advisory, and that is the decision, not an oversight: depends_on is about whether work can
+# START, and work legitimately starts out of order.
+DEP_OUT="$(hb "$SC" claim prod-followup "starting early")"
+chk_contains "claiming past an unlanded prerequisite warns" "$DEP_OUT" "prerequisites that have not landed"
+chk_contains "and names the prerequisite" "$DEP_OUT" "base-work-handoff (open)"
+# `file:line` evidence is the format the verifier asks for, so the field has to be able to hold
+# one. Colon-folding it (the treatment every other free-text field gets) would mangle exactly the
+# thing being asked for, which is why this one is stored quoted like `verify:`.
+chk_contains "and proceeds anyway" "$DEP_OUT" "Claimed prod-followup-handoff"
+hb "$SC" release prod-followup --status open > /dev/null
+hb "$SC" release base-work --status done --verified-by "read handoff:1 and ran the selftest" > /dev/null
+QUIET_OUT="$(hb "$SC" claim prod-followup "starting again")"
+chk "a landed prerequisite warns about nothing" "" \
+  "$(printf '%s' "$QUIET_OUT" | grep -c 'have not landed' | grep -v '^0$')"
+
+printf '\ndocument schema — closure evidence is a field, not a sentence in a log\n'
+# 144 documents across two live boards carried a verification DATE and 2 carried retrievable
+# evidence, for exactly this reason: the date was a field and the evidence was prose.
+# Read through meta(), which is how every reader sees it: the field is STORED quoted so the colon
+# survives, and meta() strips one surrounding quote pair — the same contract `verify:` already has.
+chk "evidence is persisted as a field with its colons intact" "read handoff:1 and ran the selftest" \
+  "$(cd "$SC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff \
+    && meta "$SC/.agents/handoff/archive/base-work-handoff.md" verified_by)"
+chk "verified_at is still stamped beside it" "$(date '+%Y-%m-%d')" \
+  "$(sed -n 's/^verified_at: //p' "$SC/.agents/handoff/archive/base-work-handoff.md" | head -1)"
+
+printf '\ndocument schema — role says what a standalone doc is FOR\n'
+hb "$SC" new auth-spec --standalone --role spec --title "Auth spec" > /dev/null
+chk "role is recorded" "spec" \
+  "$(sed -n 's/^role: //p' "$SC/.agents/handoff/auth-spec-handoff.md" | head -1)"
+chk_contains "an unknown role is refused rather than stored" \
+  "$(hb "$SC" new bad-role-doc --standalone --role nonsense --title Bad)" "bad --role"
+chk_contains "role is refused on a coordination doc, which has a lifecycle rather than a purpose" \
+  "$(hb "$SC" new bad-role-coord --role spec --title Bad)" "only applies to a standalone"
+chk "a standalone with no declared role reads as reference" "reference" \
+  "$(hb "$SC" new plain-ref --standalone --title Plain > /dev/null && sed -n 's/^role: //p' "$SC/.agents/handoff/plain-ref-handoff.md" | head -1)"
+
 printf '\nshared board — lease visibility and push-CAS\n'
 SB="$(mkshared)"
 "$SB/handoff" new cas-case --title "CAS case" --audience acme-api > /dev/null

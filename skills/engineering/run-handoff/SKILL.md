@@ -139,6 +139,52 @@ As you write:
 - **Link, don't duplicate.** Reference existing artifacts (PRDs, plans, ADRs, issues, commits,
   diffs) by path or URL instead of pasting their content into the doc.
 
+## The fields that carry the graph, the stage, and the evidence
+
+Four things real boards record constantly and the template used to have nowhere to put. Getting
+them into fields rather than prose is what makes them queryable — and a relationship the tool
+cannot see is one nobody is warned about.
+
+**`depends_on` vs `blocked_on`.** `depends_on` holds **board ids only** and means _this cannot
+start before that lands_. `blocked_on` is free text, reserved for what the board cannot model
+(`external: …`, `decision: …`). If your blocker is a handoff id it belongs in `depends_on`; put it
+in `blocked_on` and the verifier will say so.
+
+```text
+handoff new prod-backfill --title "…" --env prod --after schema-change
+```
+
+Enforcement is **advisory** on purpose: `claim` warns when a prerequisite is still open and then
+gets out of the way. Work legitimately proceeds out of order — a production incident gets fixed
+before the pre-production backfill — and a rule that refused it would be routed around. If you
+are working past a prerequisite, say so in `## Current state`.
+
+**`environment`** is an open string defaulting to `dev`, with the common spellings normalized.
+There is deliberately **no fanout command**: the prod follow-up to a dev fix is a different piece
+of work with different evidence, and minting it automatically produces exactly the open-forever
+documents these boards are already full of. `new --env prod --after <id>` is one line and says
+more.
+
+**`role`** applies to standalone docs and says what one is _for_ — `steering`, `spec`,
+`reference`, `brief-archive` — where `type` says what its lifecycle is. A coordination doc points
+at its spec with `spec:`, which the reader resolves as a path, then a URL, then a board id.
+
+**Evidence is a field.** `release --status done --verified-by "…"` now persists what you wrote as
+`verified_by:`, not only as a sentence in the activity log. Write something the next reader can
+re-run: a command, a `file:line`, a commit. Evidence naming none of those is a claim about your
+memory, and the verifier reports it as such.
+
+## Keep `## Current state` current, and the activity log boring
+
+Every coordination and orchestrator doc carries a **`## Current state`** section. It is
+**rewritable** — overwrite it, do not append. It is where the work actually stands, and it is the
+first thing the next session reads.
+
+`## Activity` is the opposite: one line per event, appended, never revised. When you find yourself
+adding a `Resolution (date)` or `Execution log` heading, what you want is `## Current state` — the
+boards that motivated this schema are full of exactly those improvised headings, and nobody can
+find anything in them.
+
 ## 4. Work under the lease
 
 Edit code and keep the doc current as you learn. The `posttool-edit` hook regenerates `INDEX.md`
@@ -190,3 +236,7 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Pasting a secret/key/password/PII into a doc → it lands in git history; redact it and request the
   value via a safe channel (env var / secret-manager ref) instead.
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.
+- Putting a handoff id in `blocked_on` → it belongs in `depends_on`, where the tool can see it.
+- Appending a `Resolution (date)` heading → that is what `## Current state` is for; rewrite it.
+- Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
+  and rightly: nobody checked anything.

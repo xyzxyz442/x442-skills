@@ -105,6 +105,7 @@ LEGACY = {
     "TOPOLOGY": "topology", "REPO_NAME": "repoName",
     "HANDOFF_GROUPS": "groups", "HANDOFF_GROUP_LAYOUT": "groupLayout",
     "HANDOFF_TTL_HOURS": "ttlHours", "HANDOFF_ALLOW_VERIFY_CMD": "allowVerifyCmd",
+    "HANDOFF_ENVIRONMENTS": "environments",
 }
 
 def read_legacy(path):
@@ -123,7 +124,10 @@ def read_legacy(path):
     return out
 
 cfg = {"topology": "single-repo", "repoName": "", "group": "", "groups": [],
-       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "boardPath": ""}
+       "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "boardPath": "",
+       # Ordered lowest-environment-first. Board-global because an index that sorted one member's
+       # work by a different ladder than another's would not be one board's index.
+       "environments": ["dev", "staging", "prod"]}
 cfg.update(read_legacy(os.path.join(board, "config")))
 cfg.update(read_json(os.path.join(board, "config.json")))
 if repo:
@@ -135,6 +139,10 @@ if repo:
 groups = cfg.get("groups") or []
 if isinstance(groups, str):
     groups = [g for g in groups.split(",") if g]
+
+envs = cfg.get("environments") or []
+if isinstance(envs, str):
+    envs = [e for e in envs.split(",") if e]
 
 def emit(name, val):
     if isinstance(val, bool):
@@ -149,6 +157,7 @@ emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or "")
 emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
 emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
 emit("HC_BOARD_PATH", cfg.get("boardPath") or "")
+emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
 PY
 }
 
@@ -173,4 +182,5 @@ _handoff_config_legacy_nopython() {
   printf 'HC_TTL_HOURS=%s\n' "$(printf %q "${ttl:-4}")"
   printf 'HC_ALLOW_VERIFY_CMD=%s\n' "$(printf %q "${allow:-0}")"
   printf 'HC_BOARD_PATH=%s\n' "''"
+  printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
 }

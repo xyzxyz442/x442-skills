@@ -53,6 +53,7 @@ TOPOLOGY="$HC_TOPOLOGY"
 HANDOFF_GROUPS="${HANDOFF_GROUPS:-$HC_GROUPS}"
 HANDOFF_GROUP_LAYOUT="${HANDOFF_GROUP_LAYOUT:-$HC_GROUP_LAYOUT}"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
+HANDOFF_ENVIRONMENTS="${HANDOFF_ENVIRONMENTS:-$HC_ENVIRONMENTS}"
 # Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
 # board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
 REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
@@ -506,6 +507,83 @@ doc_type() {
   t="$(meta "$1" type)"
   printf '%s' "${t:-coordination}"
 }
+# --- document schema (ADR 0004) --------------------------------------------------------
+# `environment` is an OPEN string, not an enum: every fleet names its stages differently, and a
+# closed list would either be wrong somewhere or grow forever. What IS normalized is the handful of
+# spellings that mean the same stage everywhere, so `prd`, `production` and `prod` do not read as
+# three environments in the index. An absent value means `dev` — the default is what unlabelled
+# work has always been, so no existing doc changes meaning by gaining this field.
+normalize_env() { # raw -> canonical
+  local e
+  e="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$e" in
+    '' | dev | develop | development | local) printf 'dev' ;;
+    stg | stage | staging | uat | qa | test | testing) printf 'staging' ;;
+    prd | prod | production | live) printf 'prod' ;;
+    *) printf '%s' "$(slug "$e")" ;;
+  esac
+}
+doc_env() { normalize_env "$(meta "$1" environment)"; }
+
+# The per-board ordered ladder, lowest environment first. It exists so `list` and the index can
+# order by how close work is to production rather than alphabetically — `dev, staging, prod` is
+# meaningful and `dev, prod, staging` is noise. Anything a board does not name sorts after the
+# ladder, in the order encountered.
+env_ladder() { printf '%s' "$HANDOFF_ENVIRONMENTS"; }
+env_rank() { # env -> integer sort key
+  local want="$1" i=0 e
+  local -a _ladder=()
+  IFS=',' read -r -a _ladder <<< "$(env_ladder)"
+  for e in "${_ladder[@]:-}"; do
+    i=$((i + 1))
+    [ "$(normalize_env "$e")" = "$want" ] && {
+      printf '%s' "$i"
+      return
+    }
+  done
+  printf '99'
+}
+
+# `depends_on` holds BOARD IDS ONLY and means "cannot start before that lands". `blocked_on` stays
+# free text for what the board cannot model (`external — …`, `decision — …`). Keeping them apart is
+# the whole of ADR 0004: they are written at different moments by different reasoning, and merging
+# them would either force free text into a machine-checkable field or discard the cases the board
+# genuinely cannot represent.
+#
+# Reads flow style (`[a, b]`) and block style (`- a`) alike, because meta() only ever sees the
+# key's own line and a block list would otherwise read as empty — the same trap repos_of documents.
+depends_of() { # path -> newline-separated child ids (canonicalized)
+  local f="$1" inline rest
+  inline="$(meta "$f" depends_on)"
+  # The brackets are QUOTED. `${var#[}` is an unterminated bracket EXPRESSION to bash, not a literal
+  # `[`, so it silently strips nothing and every declared dependency reads as empty.
+  inline="${inline#"["}"
+  inline="${inline%"]"}"
+  # `printf '%s\n'`, not `printf '%s'`. Without the trailing newline the final (and on a one-element
+  # list, only) field reaches `read` with no line terminator, so `read` sets the variable AND
+  # returns non-zero — the loop body never runs, and every single-dependency doc reads as having
+  # none. Silent, and in exactly the wrong direction: an unchecked dependency looks like no
+  # dependency at all.
+  printf '%s\n' "$inline" | tr ',' '\n' | while IFS= read -r one; do
+    one="$(printf '%s' "$one" | tr -d '[:space:]')"
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+  done
+  rest="$(sed -n '/^depends_on:/,/^[a-z_]*:/p' "$f" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')"
+  printf '%s\n' "$rest" | while IFS= read -r one; do
+    one="$(printf '%s' "$one" | tr -d '[:space:]')"
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+  done
+}
+
+# A standalone doc's `role` says what it is FOR, where `type` says what its lifecycle is. Absent
+# reads as `reference`, which is what every standalone doc written before this field was one.
+VALID_ROLES="steering spec reference brief-archive"
+doc_role() {
+  local r
+  r="$(meta "$1" role)"
+  printf '%s' "${r:-reference}"
+}
+
 is_standalone() { [ "$(doc_type "$1")" = "standalone" ]; }
 is_orchestrator() { [ "$(doc_type "$1")" = "orchestrator" ]; }
 
@@ -866,7 +944,8 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--audience REPO] [--group G] [--severity S] [--note N]}"
+  local environment="" depends="" role="" spec=""
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--note N]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -906,10 +985,36 @@ cmd_new() {
         children="${2:-}"
         shift 2
         ;;
+      --env | --environment)
+        environment="${2:-}"
+        shift 2
+        ;;
+      # `--after` writes depends_on, and the flag is named for what the author is actually saying:
+      # "this comes after that". There is deliberately no fanout command that clones one handoff
+      # across a ladder of environments — the prod follow-up is a different piece of work with
+      # different evidence, and minting it automatically produces the exact open-forever docs the
+      # boards are already full of. `new --env prod --after <id>` is one line and says more.
+      --after | --depends-on)
+        depends="${2:-}"
+        shift 2
+        ;;
+      --role)
+        role="${2:-}"
+        shift 2
+        ;;
+      --spec)
+        spec="${2:-}"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
+  if [ -n "$role" ]; then
+    [ "$type" = "standalone" ] || die "--role only applies to a standalone doc (it says what a reference doc is FOR; coordination docs have a lifecycle, not a role)"
+    case " $VALID_ROLES " in *" $role "*) ;; *) die "bad --role: $role (use ${VALID_ROLES// /|})" ;; esac
+  fi
+  [ -n "$spec" ] && [ "$type" = "orchestrator" ] && die "--spec applies to coordination and standalone docs, not to a bundle index"
   [ -n "$children" ] && [ "$type" != "orchestrator" ] && die "--children only applies to --orchestrator"
   # --group (or the wired $HANDOFF_GROUP) selects the board section this doc lands in. Overriding the
   # ambient GROUP here reroutes doc_file/arch_file/sec_index/lock_key for the rest of this command; on
@@ -930,6 +1035,16 @@ cmd_new() {
   note="$(fold_colons "$note")"
   audience="$(fold_colons "$audience")"
   severity="$(fold_colons "$severity")"
+  environment="$(normalize_env "$environment")"
+  # `--after` names board ids, so canonicalize them exactly as `claim` would. A dependency recorded
+  # under a spelling that matches no file is a dependency nothing can ever check.
+  local dlist=""
+  if [ -n "$depends" ]; then
+    dlist="$(children_csv "$depends")" || die "unusable id in --after: '$depends' (each needs at least one letter or digit)"
+  fi
+  # `spec:` is resolved by the reader, not here — a path, a URL, or a board id, in that order. It
+  # is not validated at creation because a handoff is routinely filed before its spec is written.
+  spec="$(fold_colons "$spec")"
   local d target
   d="$(today)"
   target="$(doc_file "$id")"
@@ -986,6 +1101,7 @@ cmd_new() {
     tmpl="$(tmpl_path handoff-standalone-template.md)"
     if [ -f "$tmpl" ]; then
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
+        "PLACEHOLDER_ROLE=${role:-reference}" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
         "PLACEHOLDER_NOTE=$note" > "$target"
     else
@@ -994,6 +1110,7 @@ cmd_new() {
         echo "id: $id"
         echo "title: $title"
         echo "type: standalone"
+        echo "role: ${role:-reference}"
         echo "status: open"
         echo "created: $d"
         echo "updated: $d"
@@ -1026,6 +1143,7 @@ cmd_new() {
       # template never mangles them before `handoff new` fills them in.
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
         "PLACEHOLDER_AUDIENCE=$audience" "PLACEHOLDER_SEVERITY=$severity" \
+        "PLACEHOLDER_ENVIRONMENT=$environment" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
         "PLACEHOLDER_NOTE=$note" > "$target"
     else
@@ -1037,12 +1155,16 @@ cmd_new() {
         echo "status: open"
         [ -n "$audience" ] && echo "audience: $audience"
         echo "severity: $severity"
+        echo "environment: $environment"
+        echo "depends_on: []"
         echo "created: $d"
         echo "updated: $d"
         echo "note: $note"
         echo "---"
         echo
         redaction_comment
+        echo
+        echo "## Current state"
         echo
         echo "## Context"
         echo
@@ -1057,6 +1179,10 @@ cmd_new() {
   # Mirror the section into a `group:` frontmatter key for search/roll-up. Only on a grouped board, so
   # a flat board's docs carry no group line and stay byte-identical to before this feature.
   grouped && set_field "$target" group "$GROUP"
+  # Written after rendering rather than through placeholders: both are optional, and a template
+  # placeholder left unsubstituted would put the literal string into the frontmatter.
+  [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
+  [ -n "$spec" ] && set_field "$target" spec "$spec"
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
 }
@@ -1189,6 +1315,9 @@ import_result() {
   set_field "$f" result_from "$(fold_colons "$result_by_raw")"
   set_field "$f" result_at "$(fold_colons "$result_at_raw")"
   set_field "$f" result_claimed "$claimed"
+  # What makes the doc delegate-executed. Without it the release path has no way to tell work done
+  # by a party outside the board from work done by whoever is closing it.
+  set_field "$f" executed_by delegate
   set_field "$f" review pending
 
   if [ "$(meta "$f" verify)" != "$deny_before_verify" ] \
@@ -2035,6 +2164,25 @@ release_commit_push() { # subject [doc-path]
   return 0
 }
 
+warn_open_dependencies() { # doc-path id
+  local f="$1" id="$2" dep df open=""
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+    if [ -f "$(doc_file "$dep")" ]; then
+      df="$(doc_file "$dep")"
+    elif [ -f "$(arch_file "$dep")" ]; then
+      continue # archived means landed
+    else
+      open="$open\n  - $dep (not filed on this board yet)"
+      continue
+    fi
+    [ "$(meta "$df" status)" = "done" ] || open="$open\n  - $dep ($(meta "$df" status)) — $(meta "$df" title)"
+  done <<< "$(depends_of "$f")"
+  [ -n "$open" ] || return 0
+  printf '⚠️  %s declares prerequisites that have not landed:%b\n' "$id" "$open"
+  echo "    Claiming anyway — depends_on is advisory. If you are working around one, say so in the doc."
+}
+
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
@@ -2052,6 +2200,12 @@ cmd_claim() {
   is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
+
+  # ADVISORY, and deliberately so (ADR 0004). `depends_on` is about whether work can START, and
+  # work legitimately starts out of order — a production incident gets fixed before the
+  # pre-production backfill. A tool that refused the claim here would be routed around, and a rule
+  # people route around protects nothing. So: say it, then get out of the way.
+  warn_open_dependencies "$f" "$id"
 
   # On a shared board the lease state worth checking is the REMOTE's, so fetch before reading it.
   # Both of these are no-ops on a local-only board and cost it nothing.
@@ -2302,6 +2456,34 @@ cmd_release() {
   fi
 
   if [ "$status" = "done" ]; then
+    # Work carried out by a delegate cannot be closed on the delegate's own say-so. The executor
+    # is outside the board and never runs `release` — so the thing to refuse is not a person, it is
+    # the executor's WORDS being used as the review. `--verified-by` identical to the claim the
+    # delegate reported is trust-closing with extra steps, and for delegated work that is a refusal
+    # rather than the warning it stays elsewhere: nobody checked anything, and the doc would carry
+    # a verification date implying somebody did.
+    if [ "$(meta "$f" executed_by)" = "delegate" ] && [ "$(meta "$f" review)" = "pending" ]; then
+      local claimed
+      claimed="$(meta "$f" result_claimed)"
+      if [ -n "$verified_by" ] && [ -n "$claimed" ] && [ "$verified_by" = "$claimed" ]; then
+        die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
+       That is the delegate reviewing itself. Re-run the check yourself and say what YOU observed,
+       or release --status open and hand it to a reviewer."
+      fi
+      echo "NOTE: this handoff was executed by a delegate and is awaiting review."
+      echo "      Closing it records YOU as the reviewer — --verified-by must be what you checked yourself."
+    fi
+    # Evidence quality is advisory and is said HERE, at the moment of closing, because that is the
+    # only moment anyone can still act on it: `done` archives the doc, so a later scan is talking to
+    # nobody. Generous on purpose — no pattern can judge whether evidence is good, only whether it
+    # names something a second person could go and look at.
+    case "$verified_by" in
+      '' | *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
+      *)
+        echo "⚠️  Your evidence names no command, file reference, or commit — nobody can re-check it."
+        echo "    Closing anyway. Next time: what you ran, or the file:line you read."
+        ;;
+    esac
     # done is a claim about the LIVE CODE, not about the doc. Require evidence.
     [ -n "$verified_by" ] || die "release --status done needs --verified-by \"<how you verified against live code>\" (e.g. a test run or file:line). Trust-closing is disabled."
     local vcmd
@@ -2340,6 +2522,18 @@ cmd_release() {
   set_field "$f" updated "$(today)"
   if [ "$status" = "done" ]; then
     set_field "$f" verified_at "$(today)"
+    # Persisted as a FIELD. It used to exist only as prose inside the activity log, which is why
+    # across two live boards 144 documents carried a verification DATE and 2 carried retrievable
+    # evidence: the date was a field and could be queried, the evidence was a sentence and could
+    # not. A closure nobody can query is a closure nobody can audit.
+    # QUOTED, not colon-folded — the second field in this file to need that treatment, and for a
+    # sharper reason than `verify:`. Good evidence names a `file:line` or a `cmd --flag`, and
+    # folding the colon turns `handoff:1855` into `handoff — 1855`: still readable, no longer a
+    # location anything can resolve. The check that asks for a file reference would have been
+    # mangling the very thing it asks for. Readers strip one surrounding quote pair (see meta()),
+    # so the value round-trips; embedded double quotes become single ones because the frontmatter
+    # is unquoted YAML and a nested `"` would end the value early.
+    set_field "$f" verified_by "\"$(printf '%s' "$verified_by" | tr '"' "'")\""
     log_activity "$f" "done — verified against live code by $me: ${verified_by}.${note}"
     if archive_doc "$f" "$id"; then
       echo "✅ $id → done, moved to archive/. verified-by: $verified_by"
