@@ -998,6 +998,28 @@ chk_contains "role is refused on a coordination doc, which has a lifecycle rathe
 chk "a standalone with no declared role reads as reference" "reference" \
   "$(hb "$SC" new plain-ref --standalone --title Plain > /dev/null && sed -n 's/^role: //p' "$SC/.agents/handoff/plain-ref-handoff.md" | head -1)"
 
+printf '\ndocument schema — the index shows the graph, the stage, and the spec\n'
+SI="$(mkboard)"
+hb "$SI" new dev-chore --title "Dev chore" > /dev/null
+hb "$SI" new prod-fix --title "Prod fix" --env prod > /dev/null
+hb "$SI" new uat-check --title "UAT check" --env uat --spec "https://example.invalid/spec" > /dev/null
+hb "$SI" new id-spec --title "Id spec" --spec dev-chore > /dev/null
+printf '\nGroundwork lives in dev-chore-handoff.\n' >> "$SI/.agents/handoff/prod-fix-handoff.md"
+hb "$SI" index > /dev/null
+SIX="$SI/.agents/handoff/INDEX.md"
+chk "the ladder orders the table, lowest stage first" "dev dev staging prod" \
+  "$(grep -oE '\| (dev|staging|prod) \|' "$SIX" | tr -d '| ' | tr '\n' ' ' | sed 's/ $//')"
+chk_contains "a URL spec resolves to a link" "$(cat "$SIX")" "[spec](https://example.invalid/spec)"
+chk_contains "a board-id spec resolves to the doc" "$(cat "$SIX")" "[spec](./dev-chore-handoff.md)"
+chk_contains "a prose mention becomes an advisory backlink" "$(cat "$SIX")" "Referenced by (advisory)"
+chk_contains "and it names who mentioned it" "$(sed -n '/Referenced by/,$p' "$SIX")" "prod-fix-handoff"
+# The backlink block reads BODIES only. Counting a declared depends_on here would report every real
+# edge twice — once as structure, once as gossip — and make the advisory block look authoritative.
+hb "$SI" new declared-dep --title "Declared" --after dev-chore > /dev/null
+hb "$SI" index > /dev/null
+chk "a declared edge is not also reported as a prose mention" "" \
+  "$(sed -n '/Referenced by/,$p' "$SIX" | grep -c 'declared-dep' | grep -v '^0$')"
+
 printf '\nshared board — lease visibility and push-CAS\n'
 SB="$(mkshared)"
 "$SB/handoff" new cas-case --title "CAS case" --audience acme-api > /dev/null
