@@ -54,7 +54,7 @@ reflexive clicking. Include the agent, its party class, what will be touched, th
 your recommendation, **including when your recommendation is not to delegate**.
 
 If the agent is third-party, say so in the prompt. "This sends the file to someone who cannot
-information the user needs before answering, not after.
+already see this code" is information the user needs before answering, not after.
 
 Classes listed in the profile's `autoApprove` (typically read-only or formatting work) still need
 an approval record for the task; what they skip is asking again. `alwaysAsk` classes always ask.

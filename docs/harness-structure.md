@@ -8,12 +8,17 @@ read-only `verify-*.sh` checkers each skill already ships.
 This document is the **contract**; [harness/](../harness/README.md) is the implementation.
 
 - **All porting-checklist steps are done.** `harness/lib/` (three self-tested modules), the
-  `.gitignore` entries, `harness/README.md`, and a workspace for every one of the five engineering
-  skills: `initial-project-workspace/`, `setup-project-tooling-workspace/`,
-  `setup-graph-hooks-workspace/`, `register-cross-repo-graph-workspace/`,
-  `repair-graph-hooks-workspace/` — plus `release-announcement-workspace/`, the first
-  workspace for a productivity skill and the first text-output grader (step 9 below). Every grader has been exercised against its fixtures —
-  post-state fixtures score 1.00, the unwired pre-states and drifted repair targets score 0.00.
+  `.gitignore` entries, `harness/README.md`, and **twelve** workspaces covering every shipped
+  skill: the project-setup and graph suites (`initial-project-workspace/`,
+  `setup-project-tooling-workspace/`, `setup-graph-hooks-workspace/`,
+  `register-cross-repo-graph-workspace/`, `repair-graph-hooks-workspace/`), the handoff suite
+  (`setup-handoff-workspace/`, `run-handoff-workspace/`, `delegate-handoff-workspace/`,
+  `repair-handoff-workspace/`, `register-cross-repo-handoff-workspace/`),
+  `setup-delegate-agent-workspace/` (which also grades `register-delegate-agents` and
+  `run-delegate-agent`), and `release-announcement-workspace/`, the first workspace for a
+  productivity skill and the first text-output grader (step 9 below). Every grader has been
+  exercised against its fixtures — post-state fixtures score 1.00, the unwired pre-states and
+  drifted repair targets score 0.00.
   A first **deterministic** benchmark is committed (`setup-graph-hooks` and `setup-project-tooling`
   iteration-1, `+1.00` delta); a true agent A/B remains the follow-up (see [Iterations](#iterations)).
 - Every grader wraps its target with `isolated_git_target` (a fixture nested inside x442-skills is
@@ -471,9 +476,11 @@ Recorded so they are not inherited by accident:
   works, but it puts the pass condition in two places when the skill also ships a checker.
 
 **Which of these this repo inherited:** none. The README status lists every on-disk workspace
-(gap 1 avoided); `outputs/`/`iterations/` trees are gitignored and none are tracked (gap 4 avoided);
-all five graders wrap a `verify-*.sh` (gap 5 avoided). The benchmark gap (3) does not apply because
-this repo commits no iterations at all — there is no misleading 100% to inherit. Gap 2 (a verifier
+(gap 1 avoided); `outputs/`/`iterations/` trees are gitignored except the two committed benchmark iterations (gap 4 avoided);
+all twelve graders wrap a `verify-*.sh` (gap 5 avoided). The benchmark gap (3) does not apply:
+the only iterations this repo commits are the two deterministic `setup-graph-hooks` and
+`setup-project-tooling` A/B runs, which report the cases they actually ran — there is no
+misleading 100% to inherit. Gap 2 (a verifier
 with no workspace) is **now closed** — `setup-project-tooling-workspace/` exists.
 
 ## Open gaps in this repo's harness

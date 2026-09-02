@@ -104,9 +104,25 @@ handoff new <id> --orchestrator --children a,b,c --title "..."
 ```
 
 It holds no work of its own, so it is never claimed; claim one of its children instead. `list` shows
-live progress (`2/3 done`) derived from each child's own status, so never write child status into
-the doc by hand — it is stale the moment a child closes. A child that names no doc shows as
-`MISSING`, and `release --status done` refuses while anything is outstanding.
+live progress (`2/3 done`) derived from each child's own status, and the bundle doc carries that same
+derivation as a **generated `## Children` table** — status, who acts next, lease holder, blocked-on,
+one row per child — so a session opening the doc cold can pick up the bundle without reading every
+child first. A child that names no doc shows as `MISSING`, and `release --status done` refuses while
+anything is outstanding.
+
+Everything between the doc's `handoff:children` markers is generated on every `index` run, exactly
+like `INDEX.md`. Never write child status into it by hand: your copy is stale the moment a child
+closes, and the next index run overwrites it anyway. Only the prose sections — **Bundle**,
+**Sequencing**, **Notes** — are yours.
+
+Change the roster with `children`, not by hand-editing `children:` — the command canonicalizes the
+id, so you cannot record a child under a spelling that names no file:
+
+```text
+handoff children <parent>                  # print the table, write nothing
+handoff children add <parent> <child>      # grow the bundle (the child need not exist yet)
+handoff children rm  <parent> <child>      # prune it
+```
 
 Then fill the doc (`.agents/handoff/<id>.md`): **Context** (symptom → root cause), **Where**
 (concrete `file:line` in the target repo — read the code, do not guess), **Verify** (how the next
@@ -168,8 +184,9 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
 - Writing a compaction brief that restates the diff → the next agent can read the diff; what it
   cannot recover is why you chose that approach and what you already ruled out.
-- Writing child status into an orchestrator by hand → `list` derives it; your copy goes stale
-  the moment a child closes, which is what the type exists to prevent.
+- Writing child status into an orchestrator by hand, or hand-editing its `children:` list →
+  the `## Children` table is generated and your edit is overwritten on the next `index`; use
+  `handoff children add|rm` to change the roster.
 - Pasting a secret/key/password/PII into a doc → it lands in git history; redact it and request the
   value via a safe channel (env var / secret-manager ref) instead.
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.

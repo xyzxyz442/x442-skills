@@ -76,10 +76,48 @@ child closes, which is the rot an orchestrator exists to prevent. A child naming
 `MISSING` rather than counted as done, and `release --status done` refuses while anything is
 outstanding, so a bundle cannot be closed on a doc that says it is finished.
 
+The bundle doc carries that derivation as a **generated children table**, so a session that opens it
+cold can pick up the bundle without reading every child first — which child is next, who holds it,
+what it is blocked on, which children are not filed yet:
+
+```markdown
+## Children
+
+<!-- prettier-ignore-start -->
+<!-- handoff:children:begin -->
+
+**1/3 done.** Outstanding — token-refresh-handoff (open), audit-logs-handoff (MISSING)
+
+| Child                                       | Status    | Acts next | Severity | Updated    | Blocked on | Lease         |
+| ------------------------------------------- | --------- | --------- | -------- | ---------- | ---------- | ------------- |
+| [RBAC gap](./archive/rbac-gap-handoff.md)   | `done`    | acme-api  | high     | 2026-03-04 | —          | —             |
+| [Token refresh](./token-refresh-handoff.md) | `open`    | acme-lib  | medium   | 2026-03-06 | —          | 🔒 dana       |
+| `audit-logs-handoff`                        | `MISSING` | —         | —        | —          | —          | not filed yet |
+
+<!-- handoff:children:end -->
+<!-- prettier-ignore-end -->
+```
+
+Everything between the markers is **generated**, exactly like `INDEX.md`: it is rebuilt from the
+child docs on every `index` run — which every mutating command already triggers — so it cannot
+drift, and a hand-edit inside the markers is overwritten on the next run. The `prettier-ignore`
+pair is there because the generated table is unaligned markdown — without it, a repo that runs
+prettier over its docs would re-align the table on every commit and the next `index` run would
+un-align it again, churning forever on a bundle nobody touched. Only the doc's prose
+sections (Bundle, Sequencing, Notes) are yours to write. An existing bundle doc gains the section
+automatically on the next `index`, above its Activity log.
+
+Change the roster with `children`, never by hand-editing `children:`: the command canonicalizes each
+id the same way `--children` does, so a child recorded under a spelling that names no file — and
+therefore reads `MISSING` for the bundle's whole life — is not a failure mode you can reach.
+
 ```bash
 ./handoff new port-guide --standalone --title "Porting guide" # create a standalone doc
 ./handoff import ./NOTES.md --id notes --standalone           # bring an existing file onto the board
 ./handoff new auth-suite --orchestrator --children rbac-gap,token-refresh --title "Auth bundle"
+./handoff children auth-suite                  # print the table without writing anything
+./handoff children add auth-suite audit-logs   # grow the bundle (the child need not exist yet)
+./handoff children rm auth-suite token-refresh # prune it
 ```
 
 `import` copies a file in (never moves it), normalizing its frontmatter (`id/title/type/status/
@@ -105,7 +143,7 @@ content verbatim.
 | Field                                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `type`                                         | `coordination` (default; lease-gated work item), `standalone` (self-contained reference doc, gate-exempt), or `orchestrator` (an index over a bundle of children, gate-exempt). Absent ⇒ `coordination`. See "Three types of handoff".                                                                                                                                                                                                                                                                                 |
-| `children`                                     | Orchestrators only: the handoff ids in the bundle. Progress is derived from them at read time and never stored here.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `children`                                     | Orchestrators only: the handoff ids in the bundle. Progress is derived from them at read time and never stored here. Change it with `handoff children add\|rm`, not by hand.                                                                                                                                                                                                                                                                                                                                           |
 | `status`                                       | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `audience`                                     | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
 | `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
@@ -182,8 +220,10 @@ Single-repo boards keep it simple: no repo config file at all, identity comes fr
 1. **`done` means verified against the live code, not "the doc says resolved."** `release
 --status done` **requires `--verified-by "<how>"`** — a test run, a `file:line`, an evidence
    string — recorded into `verified_at` and the Activity log. Trust-closing is disabled.
-2. **INDEX.md is generated** (`./handoff index`) and must never be hand-edited. A hand-maintained
-   tracker is exactly the thing that goes stale; the hooks regenerate it after every doc edit.
+2. **Generated state is generated** and must never be hand-edited: `INDEX.md`, and an
+   orchestrator's `## Children` table between its `handoff:children` markers. Both are rebuilt by
+   `./handoff index` from the docs' own frontmatter, and the hooks run it after every doc edit. A
+   hand-maintained tracker is exactly the thing that goes stale.
 
 ## Authoring a doc: redact, suggest, link
 
