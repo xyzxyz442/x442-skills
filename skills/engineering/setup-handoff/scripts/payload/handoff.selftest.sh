@@ -1134,6 +1134,100 @@ chk "the bundle now counts it as outstanding work, not as a gap" "yes" \
 chk_contains "--stub is refused on rm, where it means nothing" \
   "$(hb "$RB" children rm --stub wide-bundle c-two)" "only applies to 'children add'"
 
+printf '\nschema versioning — read forward, refuse to write backward (ADR 0003)\n'
+# These two are ONE decision. Warn-and-proceed covers reading and says nothing about writing, so an
+# older CLI could read a newer doc, release it, and silently drop every field it did not know.
+# Shipping only the read half is worse than shipping neither, so both are asserted together.
+SV="$(mkboard)"
+hb "$SV" new from-the-future --title "Written by a newer CLI" > /dev/null
+FUT="$SV/.agents/handoff/from-the-future-handoff.md"
+python3 - "$FUT" << 'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text().replace("schema: 1", "schema: 99", 1)
+# A field this CLI has never heard of, to prove nothing quietly eats it.
+p.write_text(s.replace("status: open", "status: open\nsensitivity: restricted", 1))
+PY
+hb "$SV" new ordinary-doc --title "An ordinary doc" > /dev/null
+
+SV_LIST="$(hb "$SV" list)"
+chk_contains "a newer doc is still LISTED" "$SV_LIST" "from-the-future-handoff"
+chk_contains "with one warning naming both versions" "$SV_LIST" "is schema 99; this CLI understands 1"
+chk "the warning is printed once, not once per doc" "1" \
+  "$(printf '%s' "$SV_LIST" | grep -c 'this CLI understands' | tr -d ' ')"
+
+chk_contains "claim on a newer doc is REFUSED" "$(hb "$SV" claim from-the-future "try")" "refusing to write it"
+chk_contains "release too" "$(hb "$SV" release from-the-future --status open)" "refusing to write it"
+chk_contains "and export, which stamps the doc" "$(hb "$SV" export from-the-future --to Someone)" "refusing to write it"
+chk "the unknown field was never touched" "yes" \
+  "$(grep -q '^sensitivity: restricted' "$FUT" && echo yes || echo no)"
+chk "an ordinary doc is completely unaffected" "yes" \
+  "$(printf '%s' "$(hb "$SV" claim ordinary-doc "fine")" | grep -q 'Claimed' && echo yes || echo no)"
+
+printf '\nmigrate — structure only, and gated (ADR 0003)\n'
+SM="$(mkboard)"
+SMB="$SM/.agents/handoff"
+cat > "$SMB/legacy-one-handoff.md" << 'EOF'
+---
+id: legacy-one-handoff
+title: Written before the schema was versioned
+type: coordination
+status: open
+severity: medium
+created: 2026-01-01
+updated: 2026-01-01
+---
+
+## Context
+
+Predates environment, depends_on and Current state.
+EOF
+python3 - "$SMB/handoff.json" << 'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["schema"] = 0
+json.dump(d, open(p, "w"), indent=2, sort_keys=True)
+PY
+chk_contains "a dry run reports what it would do and writes nothing" \
+  "$(hb "$SM" migrate --dry-run)" "would migrate legacy-one-handoff"
+chk "and really wrote nothing" "" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+
+# GATE: a live lease in this section. Migrating rewrites the file its holder is working in.
+hb "$SM" claim legacy-one "holding it" > /dev/null
+chk_contains "a live lease in the section blocks migration" "$(hb "$SM" migrate --yes)" "live lease(s) in this section"
+hb "$SM" release legacy-one --status open > /dev/null
+
+MIG="$(hb "$SM" migrate --yes)"
+chk_contains "migration reports the version move" "$MIG" "Board schema 0 → 1"
+chk "environment becomes EXPLICIT (absent already meant dev — this asserts nothing new)" "dev" \
+  "$(sed -n 's/^environment: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+chk "depends_on gains its empty list" "[]" \
+  "$(sed -n 's/^depends_on: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+chk "the doc is stamped" "1" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+chk "a rewritable Current state section is added" "yes" \
+  "$(grep -q '^## Current state' "$SMB/legacy-one-handoff.md" && echo yes || echo no)"
+# STRUCTURE ONLY. A migration that seeded Current state from the activity log, or stamped a
+# sensitivity, would be writing a claim nobody made — on a board full of credential inventories
+# that is an actively false claim, which is why this is asserted rather than assumed.
+chk "but it is left EMPTY — no value was inferred" "" \
+  "$(sed -n '/^## Current state/,/^## /p' "$SMB/legacy-one-handoff.md" | grep -v '^## \|^<!--\|^$' | head -1)"
+chk "each migrated doc gains exactly one activity entry" "1" \
+  "$(grep -c 'migrated to schema 1' "$SMB/legacy-one-handoff.md" | tr -d ' ')"
+chk "the board itself is stamped" "1" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$SMB/handoff.json")"
+chk_contains "re-running is a no-op, not a second rewrite" "$(hb "$SM" migrate --yes)" "nothing to migrate"
+
+# A payload bump moves a different number, and must not drag the whole board through a rewrite.
+python3 - "$SMB/handoff.json" << 'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("_generated", {})["payloadVersion"] = "setup-handoff 999"
+json.dump(d, open(p, "w"), indent=2, sort_keys=True)
+PY
+chk_contains "a payload-only bump triggers no migration" "$(hb "$SM" migrate)" "nothing to migrate"
+
 printf '\nshared board — lease visibility and push-CAS\n'
 SB="$(mkshared)"
 "$SB/handoff" new cas-case --title "CAS case" --audience acme-api > /dev/null

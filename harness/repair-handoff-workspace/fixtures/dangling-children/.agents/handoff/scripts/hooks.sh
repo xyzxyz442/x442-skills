@@ -186,6 +186,36 @@ LOCKS="$(sec_dir)/.locks"
 # Progress for a bundle, as a count. hooks.sh deliberately does NOT reuse the CLI's child_progress:
 # it must run with nothing but bash, and it must never be the reason a session-start hook is slow.
 # Reading each child's status line is enough to say "2/6 done"; the CLI owns the detail.
+# Schema drift, as ONE line on the session banner. Never a block and never a prompt: a hook has
+# nobody listening, and taking a session down over a board upgrade is how a hook gets deleted.
+# Reported in both directions, because they need opposite actions — an older board wants
+# `handoff migrate`, a newer one wants the payload updated first.
+SCHEMA_VERSION=1
+schema_note() { # -> one line, or nothing
+  local board=0 ahead=0 f v
+  if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+    board="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get("schema")
+print(v if isinstance(v, int) else 0)' "$DIR/handoff.json" 2> /dev/null)"
+  fi
+  case "$board" in '' | *[!0-9]*) board=0 ;; esac
+  if [ "$board" -gt "$SCHEMA_VERSION" ]; then
+    printf 'Board is schema %s; this payload understands %s. Reads work; WRITES to newer docs are refused. Re-run setup-handoff to update the payload.' "$board" "$SCHEMA_VERSION"
+    return 0
+  fi
+  for f in $(each_doc); do
+    [ -f "$f" ] || continue
+    v="$(meta "$f" schema)"
+    case "$v" in '' | *[!0-9]*) v=0 ;; esac
+    [ "$v" -lt "$SCHEMA_VERSION" ] && ahead=$((ahead + 1))
+  done
+  [ "$ahead" -gt 0 ] \
+    && printf '%s document(s) predate schema %s. Run `%s/handoff migrate` when convenient — reads are unaffected.' "$ahead" "$SCHEMA_VERSION" "$hd"
+  return 0
+}
+
 bundle_progress() { # orchestrator-path -> " (2/6 done)" or ""
   local f="$1" raw total=0 done=0 c cf
   raw="$(meta "$f" children)"
@@ -444,6 +474,12 @@ Standalone / reference (no claim needed — edit freely):
 ${refs}"
     ctx="${ctx}
 Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
+    # One line, informational, never a block. Placed with the board's own state rather than under
+    # "needs attention": schema drift is a scheduled upgrade, not damage.
+    SCHEMA_NOTE="$(schema_note)"
+    [ -n "$SCHEMA_NOTE" ] && ctx="${ctx}
+
+Schema: ${SCHEMA_NOTE}"
     [ -n "$health" ] && ctx="${ctx}
 
 Board needs attention:

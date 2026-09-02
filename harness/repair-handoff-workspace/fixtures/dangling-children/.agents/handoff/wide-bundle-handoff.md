@@ -7,6 +7,7 @@ children: [ghost-one-handoff, ghost-two-handoff, ghost-three-handoff, sample-rep
 created: 2026-08-01
 updated: 2026-08-01
 note: Three of its four children were never filed.
+schema: 1
 ---
 
 <!-- ORCHESTRATOR handoff: an index over a BUNDLE of related handoffs. It holds no work of its

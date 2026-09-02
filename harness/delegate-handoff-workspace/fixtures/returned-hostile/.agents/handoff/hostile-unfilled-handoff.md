@@ -12,6 +12,7 @@ note:
 delegated_to: Acme Contracting
 delegated_at: 2026-08-21
 brief: .agents/handoff/briefs/hostile-unfilled-handoff.brief.md
+schema: 1
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -20,6 +21,10 @@ brief: .agents/handoff/briefs/hostile-unfilled-handoff.brief.md
      needs a credential, do NOT paste it — leave a named placeholder, prompt the user, and
      suggest a safe channel (an environment variable, a secret-manager reference, or
      out-of-band). Record the variable/reference NAME here, never the value. -->
+
+## Current state
+
+<!-- REWRITABLE. Where this stands right now — overwrite it, do not append. -->
 
 ## Context
 

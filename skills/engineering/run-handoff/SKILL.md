@@ -185,6 +185,18 @@ adding a `Resolution (date)` or `Execution log` heading, what you want is `## Cu
 boards that motivated this schema are full of exactly those improvised headings, and nobody can
 find anything in them.
 
+## When the board refuses to let you write
+
+`claim`/`release`/`export` can refuse with _"this doc is schema N and this CLI understands M"_.
+That is not a bug and not something to work around: the doc carries fields your CLI does not know,
+and writing it here would silently drop them. Update the payload (re-run `setup-handoff`), then
+`./handoff migrate`. Reading — `list`, the index, the doc itself — keeps working throughout.
+
+The reverse direction is a one-line note on the session banner: documents that _predate_ the
+current schema. Nothing is broken, reads and writes both work, and `./handoff migrate` moves them
+when convenient. Migration rewrites every document on the board, so it asks first, refuses while
+anyone holds a lease in your section, and never runs itself.
+
 ## 4. Work under the lease
 
 Edit code and keep the doc current as you learn. The `posttool-edit` hook regenerates `INDEX.md`

@@ -1,11 +1,12 @@
 {
   "_generated": {
-    "payloadVersion": "setup-handoff 15"
+    "payloadVersion": "setup-handoff 16"
   },
   "allowVerifyCmd": false,
   "groupLayout": "",
   "groups": [],
   "repoName": "returned-hostile",
+  "schema": 1,
   "topology": "single-repo",
   "ttlHours": 4
 }

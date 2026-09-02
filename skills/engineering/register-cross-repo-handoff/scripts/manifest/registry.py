@@ -105,7 +105,10 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
     data = load_board(board)
     gen = data.get(GENERATED_KEY)
     gen = dict(gen) if isinstance(gen, dict) else {}
-    gen["schema"] = 2
+    # NOT `schema`: that key now belongs to the board's DOCUMENT schema, which is what triggers a
+    # migration. Two meanings for one key inside one file is exactly the kind of trap this
+    # consolidation was supposed to remove.
+    gen["registrySchema"] = 2
     gen["repos"] = sorted(entries, key=lambda e: (e["group"], e["alias"]))
     data[GENERATED_KEY] = gen
     return json.dumps(data, indent=2, sort_keys=True) + "\n", warnings

@@ -577,6 +577,72 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
 
 # A standalone doc's `role` says what it is FOR, where `type` says what its lifecycle is. Absent
 # reads as `reference`, which is what every standalone doc written before this field was one.
+# --- schema versioning (ADR 0003) ------------------------------------------------------
+# TWO numbers, because the documents and the tooling that reads them drift at very different
+# rates — and on a shared board they drift PER PERSON. `payload` covers the CLI, templates and
+# hooks, and its drift stays a verifier warning saying re-run the installer. `schema` covers the
+# DOCUMENT FORMAT and is the only thing that ever triggers a migration. One number would mean a
+# routine CLI bugfix prompting a whole-board rewrite for every member of every group.
+#
+# The compatibility rule is deliberately ASYMMETRIC:
+#
+#   read forward   — a doc from a newer schema is listed, indexed and shown, with one warning.
+#   write backward — refused outright, naming both versions.
+#
+# Refusing to write is what makes reading safe, and the two are one decision. Warn-and-proceed
+# covers reading and says nothing about writing, so an older CLI could read a newer doc, run
+# `release` on it, and silently drop every field it did not understand. The brief check at the
+# offline-import path dies on an unknown format instead; that is right for a brief (one file, one
+# executor, a bad parse means wrong work) and wrong here, where one newer document would take
+# `list` down for every member of a shared board.
+SCHEMA_VERSION=1
+
+# Absent means schema 0 — every document written before the format was versioned. Not "unknown":
+# those docs have a known shape, it is simply the one that predates the stamp.
+doc_schema() { # path -> integer
+  local v
+  v="$(meta "$1" schema)"
+  case "$v" in '' | *[!0-9]*) printf '0' ;; *) printf '%s' "$v" ;; esac
+}
+
+# Printed at most once per invocation. A board mid-upgrade has many newer docs, and one warning per
+# doc turns `list` into a wall of identical text that everybody learns to scroll past.
+_SCHEMA_WARNED=0
+warn_schema_forward() { # path
+  [ "$_SCHEMA_WARNED" = 0 ] || return 0
+  local v
+  v="$(doc_schema "$1")"
+  [ "$v" -gt "$SCHEMA_VERSION" ] || return 0
+  _SCHEMA_WARNED=1
+  echo "⚠️  $(basename "$1" .md) is schema $v; this CLI understands $SCHEMA_VERSION." >&2
+  echo "    Reading it anyway — fields this CLI does not know are shown as-is. To EDIT it, update" >&2
+  echo "    the board: re-run setup-handoff, then './handoff migrate'." >&2
+}
+
+# The write gate. Every mutating command calls this before touching a doc; nothing else needs to,
+# because a read that goes wrong shows stale text and a write that goes wrong destroys data.
+require_writable() { # path id
+  local v
+  v="$(doc_schema "$1")"
+  [ "$v" -le "$SCHEMA_VERSION" ] && return 0
+  die "$2 is schema $v and this CLI understands $SCHEMA_VERSION — refusing to write it.
+       Editing it here would silently drop every field this CLI does not know about.
+       Update the board first: re-run setup-handoff, then './handoff migrate'."
+}
+
+# The board's own stamp, which is what `migrate` moves. A board with no stamp is schema 0.
+board_schema() {
+  local v=""
+  if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+    v="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get("schema")
+print(v if isinstance(v, int) else "")' "$DIR/handoff.json" 2> /dev/null)"
+  fi
+  case "$v" in '' | *[!0-9]*) printf '0' ;; *) printf '%s' "$v" ;; esac
+}
+
 VALID_ROLES="steering spec reference brief-archive"
 doc_role() {
   local r
@@ -1214,6 +1280,7 @@ cmd_new() {
   # Mirror the section into a `group:` frontmatter key for search/roll-up. Only on a grouped board, so
   # a flat board's docs carry no group line and stay byte-identical to before this feature.
   grouped && set_field "$target" group "$GROUP"
+  set_field "$target" schema "$SCHEMA_VERSION"
   # Written after rendering rather than through placeholders: both are optional, and a template
   # placeholder left unsubstituted would put the literal string into the frontmatter.
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
@@ -1335,6 +1402,7 @@ import_result() {
   # immediately rather than leave a compromised frontmatter key on a doc headed for git history.
   local backup
   backup="$(mktemp)" || die "mktemp failed"
+  require_writable "$f" "$(meta "$f" id)"
   cp "$f" "$backup" || die "could not back up $f before importing"
   local deny_before_verify deny_before_status deny_before_repos deny_before_audience \
     deny_before_id deny_before_children deny_before_blocked_on
@@ -1886,6 +1954,7 @@ brief_dependencies() { # doc-path -> markdown lines
 }
 
 export_one() { # id doc to outdir branch do_claim
+  require_writable "$2" "$1" # stamps delegated_to/delegated_at on the doc
   local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
   local name provider origin root note
   IFS='|' read -r name provider origin root note <<< "$(brief_identity "$f")"
@@ -2101,6 +2170,7 @@ cmd_list() {
     # Delegation and review markers. A delegated row is NOT free even though its lease may look
     # ordinary, and a review-pending row is waiting on the reader rather than on the executor —
     # both are things a board reader acts on differently.
+    warn_schema_forward "$f"
     local deleg review_flag extra=""
     deleg="$(meta "$f" delegated_to)"
     review_flag="$(meta "$f" review)"
@@ -2266,6 +2336,7 @@ cmd_claim() {
   doc_path="$f" # survives cmd_index, which walks every doc on the board
   local key
   key="$(lock_key "$id")" # the lock is keyed on the doc's stem, unique board-wide across sections
+  require_writable "$f" "$id"
   is_standalone "$f" && die "$id is a standalone/reference handoff — no lease needed; just edit it."
   is_orchestrator "$f" && die "$id is an orchestrator (a bundle index) — no lease needed; claim one of its children instead."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to claim"
@@ -2338,6 +2409,8 @@ cmd_claim() {
 cmd_touch() {
   local id="${1:?usage: handoff touch <id>}"
   id="$(resolve_id "$id")" || die "unusable id: '$1' (needs at least one letter or digit)"
+  local tf
+  tf="$(doc_of "$id" 2> /dev/null)" && require_writable "$tf" "$id"
   local key
   key="$(lock_key "$id")"
   local kind owner exp
@@ -2423,6 +2496,7 @@ cmd_release() {
 
   local f
   f="$(doc_of "$id")" || no_such "$id"
+  require_writable "$f" "$id"
   local me
   me="$(whoami_id)"
 
@@ -2685,6 +2759,228 @@ surface_unblocked() { # closed_id -> print any open docs (in this section) block
     esac
   done < <(each_doc)
   return 0
+}
+
+# --- migrate (ADR 0003) ----------------------------------------------------------------
+# A whole-board rewrite pushed to a shared remote is an irreversible, outward-facing action that
+# races everyone's in-flight work. So it is GATED, never silent, and never automatic.
+#
+# The gates, in the order they are checked:
+#   1. the board is under version control       — without history there is no undo
+#   2. no live lease in this section            — migrating under someone's feet rewrites the doc
+#                                                 they are holding
+#   3. a clean worktree, then fetch + fast-forward — so the rewrite starts from what everyone else
+#                                                 can see, not from a stale local copy
+#   4. one commit, pushed as a compare-and-swap — a rejected push aborts and leaves the board
+#                                                 exactly as it was
+#
+# And the rule that shapes every step below: migration moves STRUCTURE. It adds, renames and moves
+# keys. It never infers a value. A script that stamps a default sensitivity onto a document about a
+# credential exposure writes an actively false claim, and no script can decide which entry of a
+# forty-entry activity log is the current state. Judgment stays lazy-on-touch, and `verify` lists
+# what is still missing.
+
+# Is this an interactive human, or a hook? A hook must never prompt (nothing is listening) and must
+# never block (it would take the session down over a board upgrade). $HANDOFF_NONINTERACTIVE is the
+# explicit override for CI.
+migrate_can_prompt() {
+  [ -z "${HANDOFF_NONINTERACTIVE:-}" ] || return 1
+  [ -t 0 ] && [ -t 1 ]
+}
+
+# One document, schema 0 -> 1. Everything here is a key or a heading that the CURRENT template
+# already writes; nothing gains a value that was not already true of it. `environment: dev` is the
+# explicit spelling of what an absent environment has always meant, not a new claim.
+migrate_doc_0_to_1() { # path -> 0 when it changed the file
+  local f="$1" changed=0 t
+  if [ -z "$(meta "$f" environment)" ] && ! is_standalone "$f"; then
+    set_field "$f" environment dev
+    changed=1
+  fi
+  if [ -z "$(meta "$f" depends_on)" ] && ! is_standalone "$f"; then
+    set_field "$f" depends_on "[]"
+    changed=1
+  fi
+  if is_standalone "$f" && [ -z "$(meta "$f" role)" ]; then
+    # Absent has always READ as `reference`; writing it down asserts nothing new.
+    set_field "$f" role reference
+    changed=1
+  fi
+  # `## Current state` goes ABOVE `## Context`, empty. Left empty on purpose: seeding it from the
+  # activity log would be exactly the inference this migration refuses to make.
+  if ! is_standalone "$f" && ! grep -q '^## Current state' "$f"; then
+    t="$(mktemp)" || return 1
+    if grep -q '^## Context' "$f"; then
+      awk '!done && /^## Context/ { print "## Current state"; print ""; print "<!-- REWRITABLE. Where this stands right now — overwrite it, do not append. -->"; print ""; done = 1 } { print }' "$f" > "$t"
+    else
+      # No Context heading to anchor to (an orchestrator, or a hand-written doc): append instead of
+      # guessing at a position.
+      cat "$f" > "$t"
+      printf '\n## Current state\n\n<!-- REWRITABLE. Where this stands right now — overwrite it, do not append. -->\n' >> "$t"
+    fi
+    cat "$t" > "$f"
+    rm -f "$t"
+    changed=1
+  fi
+  set_field "$f" schema 1
+  log_activity "$f" "migrated to schema 1 (structure only — no values were inferred)"
+  return $((1 - changed))
+}
+
+cmd_migrate() {
+  local yes=0 dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes | -y)
+        yes=1
+        shift
+        ;;
+      --dry-run)
+        dry=1
+        shift
+        ;;
+      *) die "unknown arg: $1 (usage: handoff migrate [--yes] [--dry-run])" ;;
+    esac
+  done
+
+  local from to
+  from="$(board_schema)"
+  to="$SCHEMA_VERSION"
+  if [ "$from" -gt "$to" ]; then
+    die "this board is schema $from and this CLI understands $to — it is NEWER than the tool.
+       Update the payload first (re-run setup-handoff); migrating backward is not a thing."
+  fi
+
+  # Collect what would actually change BEFORE any gate complains, so a no-op board is told it is a
+  # no-op rather than being sent to clean its worktree for nothing.
+  local pending=0 f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(doc_schema "$f")" -lt "$to" ] && pending=$((pending + 1))
+  done < <(each_doc)
+
+  if [ "$from" = "$to" ] && [ "$pending" = 0 ]; then
+    echo "Board is already schema $to — nothing to migrate."
+    return 0
+  fi
+  echo "Board schema $from → $to · $pending document(s) to rewrite${GROUP:+ in section $GROUP}."
+  if [ "$dry" = 1 ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      [ "$(doc_schema "$f")" -lt "$to" ] && echo "  would migrate $(basename "$f" .md) (schema $(doc_schema "$f"))"
+    done < <(each_doc)
+    echo "(dry run — nothing was written)"
+    return 0
+  fi
+
+  # GATE 1 — version control. Without it there is no undo for a whole-board rewrite, and one of the
+  # boards this decision came from held 193 irreplaceable documents with no history at all.
+  board_git rev-parse --show-toplevel > /dev/null 2>&1 \
+    || die "this board is not under version control, so a whole-board rewrite has no undo.
+       git init it first (or re-run setup-handoff --board-only on it), then migrate."
+
+  # GATE 2 — no live lease in THIS section. Migrating a doc somebody is holding rewrites the file
+  # under them. A lease in another section is somebody else's business and does not block this.
+  local held=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    local kind owner exp key
+    key="$(basename "$f" .md)"
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+    [ "$kind" = "held" ] && held="${held:+$held, }$key ($owner)"
+  done < <(each_doc)
+  [ -n "$held" ] && die "live lease(s) in this section — migrating would rewrite documents somebody is holding: $held
+       Wait for them to release, or take over an expired lease first."
+
+  # GATE 3 — start from what everyone else can see. A rewrite computed against a stale local copy
+  # produces a diff nobody else can fast-forward.
+  if leases_shared; then
+    board_git diff --quiet && board_git diff --cached --quiet \
+      || die "the board has uncommitted changes. A migration is one commit touching every document;
+       mixing it with unrelated edits makes it impossible to revert cleanly. Commit or stash first."
+    board_sync_or_die
+  fi
+
+  # NEVER SILENT. An interactive caller is asked; a hook is told and does nothing; --yes is the
+  # explicit consent CI and local boards use.
+  if [ "$yes" != 1 ]; then
+    if migrate_can_prompt; then
+      printf 'Rewrite %s document(s) and push? [y/N] ' "$pending"
+      local reply=""
+      read -r reply < /dev/tty || reply=""
+      case "$reply" in y | Y | yes | YES) ;; *) die "migration declined — nothing was written." ;; esac
+    else
+      echo "Not migrating: this is a non-interactive invocation and --yes was not passed."
+      echo "Run './handoff migrate --yes' yourself, from a session where you can see the result."
+      return 0
+    fi
+  fi
+
+  local migrated=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(doc_schema "$f")" -lt "$to" ] || continue
+    if migrate_doc_0_to_1 "$f"; then
+      migrated=$((migrated + 1))
+      echo "  migrated $(basename "$f" .md)"
+    else
+      # Already structurally current; it only lacked the stamp. Still counted and still logged, so
+      # the activity trail matches the commit.
+      migrated=$((migrated + 1))
+      echo "  stamped $(basename "$f" .md) (already structurally current)"
+    fi
+  done < <(each_doc)
+
+  board_write_schema "$to"
+  cmd_index
+
+  # GATE 4 — one commit, pushed as a compare-and-swap. A rejected push means somebody else moved
+  # the board while this ran; the migration is undone rather than left half-applied.
+  if leases_shared; then
+    board_git add --all -- "$DIR"
+    if ! board_git commit --quiet -m "handoff: migrate board schema $from → $to ($migrated docs)"; then
+      die "could not commit the migration (is git identity configured?). Nothing was pushed."
+    fi
+    if ! board_git push --quiet "$(board_remote)" HEAD; then
+      # Undo the migration commit and restore the working tree to the shared state. This is the one
+      # place a hard reset is correct: the commit being discarded is the one just created here, its
+      # entire content is reproducible by re-running, and gate 3 already refused to start from a
+      # dirty tree — so there is nothing of anybody's to lose.
+      board_git reset --hard --quiet HEAD~1 \
+        || echo "⚠️  could not roll back automatically — inspect $DIR before retrying." >&2
+      die "the push was rejected: somebody else moved the board while this migration ran.
+       The migration was rolled back rather than left half-applied. Re-run './handoff migrate --yes'."
+    fi
+    echo "✅ Migrated $migrated document(s) to schema $to and pushed."
+  else
+    board_git add --all -- "$DIR" 2> /dev/null
+    board_git commit --quiet -m "handoff: migrate board schema $from → $to ($migrated docs)" 2> /dev/null \
+      && echo "✅ Migrated $migrated document(s) to schema $to (committed locally)." \
+      || echo "✅ Migrated $migrated document(s) to schema $to. Commit $DIR when you are ready."
+  fi
+}
+
+# The board's own stamp. Written through the same merge the installer uses so a hand-set ttlHours
+# beside it survives.
+board_write_schema() { # n
+  command -v python3 > /dev/null 2>&1 || return 0
+  python3 - "$DIR/handoff.json" "$1" << 'PY'
+import json, os, sys
+path, n = sys.argv[1], int(sys.argv[2])
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        data = {}
+except (OSError, ValueError):
+    data = {}
+data["schema"] = n
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp, path)
+PY
 }
 
 cmd_reap() { # show (and with --force, clear) expired leases
@@ -2991,6 +3287,7 @@ cmd_children() {
   parent="$(resolve_id "$parent")" || die "unusable id: '$raw' (needs at least one letter or digit)"
   f="$(doc_of "$parent")" || no_such "$parent"
   is_orchestrator "$f" || die "$parent is not an orchestrator — only a bundle has children. Create one with: handoff new <id> --orchestrator --children a,b,c"
+  [ "$action" = "show" ] || require_writable "$f" "$parent"
 
   if [ "$action" = "show" ]; then
     children_table "$f"
@@ -3090,6 +3387,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift || true
       cmd_list "$@" # --verbose restores an unbounded bundle roster
       ;;
+    migrate)
+      shift
+      cmd_migrate "$@"
+      ;;
     new)
       shift
       cmd_new "$@"
@@ -3123,6 +3424,6 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       cmd_children "$@"
       ;;
     index) cmd_index ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add|rm <parent> <child> | reap [--force] | index]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index]" ;;
   esac
 fi

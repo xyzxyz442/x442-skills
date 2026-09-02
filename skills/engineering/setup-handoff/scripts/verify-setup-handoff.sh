@@ -191,6 +191,29 @@ print(str(g.get("payloadVersion") or "").split(" ")[-1])' "$HD/handoff.json" 2> 
 }
 check_payload_version "$(installed_payload_version)" setup-handoff
 
+# The DOCUMENT schema, which is a different number from the payload beside it and the only one that
+# triggers a migration (ADR 0003). Reported in both directions: a board BEHIND the payload wants
+# `handoff migrate`, a board AHEAD of it wants the payload updated first, and telling someone to do
+# the wrong one of those wastes a whole-board rewrite.
+CLI_SCHEMA="$(sed -n 's/^SCHEMA_VERSION=//p' "$SCRIPT_DIR/payload/handoff" 2> /dev/null | head -1)"
+BOARD_SCHEMA=""
+if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+  BOARD_SCHEMA="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get("schema")
+print(v if isinstance(v, int) else "")' "$HD/handoff.json" 2> /dev/null)"
+fi
+if [ -n "$CLI_SCHEMA" ] && [ -n "$BOARD_SCHEMA" ]; then
+  if [ "$BOARD_SCHEMA" -lt "$CLI_SCHEMA" ]; then
+    warn board.schema.behind "board is document schema $BOARD_SCHEMA, this skill ships $CLI_SCHEMA — run './handoff migrate' (reads are unaffected; writes to newer docs are refused)"
+  elif [ "$BOARD_SCHEMA" -gt "$CLI_SCHEMA" ]; then
+    warn board.schema.ahead "board is document schema $BOARD_SCHEMA, NEWER than the $CLI_SCHEMA this skill ships — update the payload (re-run setup-handoff) before editing anything here"
+  else
+    ok board.schema "board document schema $BOARD_SCHEMA matches what the skill ships"
+  fi
+fi
+
 section "2. Config, gitignore, AGENTS.md block"
 TOPO=""
 # CONFIG_JSON_BAD tracks whether the "not valid JSON" FAIL below already fired, so the resolver
@@ -240,7 +263,8 @@ if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command 
   UNKNOWN="$(python3 -c '
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
-       "board","boardPath","environments","layout","boardRemote","locations","repo","_generated"}
+       "board","boardPath","environments","layout","boardRemote","locations","repo",
+       "schema","_generated"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -391,7 +415,7 @@ section "7. Document schema (advisory — ADR 0004)"
 # schema recorded their dependency graph in prose, folded closure evidence into an activity log,
 # and grew hand-rolled "Resolution (date)" headings because the template had nowhere to put the
 # current state. Reporting is the whole intervention.
-SCHEMA_DOCS=0 SCHEMA_STALE=0
+SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_NEW=0
 fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 NOW_S="$(date +%s)"
 while IFS= read -r doc; do
@@ -444,6 +468,14 @@ while IFS= read -r doc; do
       ;;
   esac
 
+  # Documents that predate the board's schema. Counted below rather than warned here, for the same
+  # reason staleness is: a board mid-upgrade has many, and one warning each teaches people to skip
+  # the section.
+  dsch="$(fm "$doc" schema)"
+  case "$dsch" in '' | *[!0-9]*) dsch=0 ;; esac
+  [ -n "$CLI_SCHEMA" ] && [ "$dsch" -lt "$CLI_SCHEMA" ] && SCHEMA_OLD=$((SCHEMA_OLD + 1))
+  [ -n "$CLI_SCHEMA" ] && [ "$dsch" -gt "$CLI_SCHEMA" ] && SCHEMA_NEW=$((SCHEMA_NEW + 1))
+
   # A bundle whose roster names documents that were never filed can never close, and until now
   # nothing said so. DETECT-ONLY, deliberately: declaring a roster before authoring its docs is
   # legitimate planning. The bug is never being told, and having no cheap way to close the gap —
@@ -489,6 +521,13 @@ else
   [ "$SCHEMA_STALE" -gt 0 ] \
     && warn board.staleness "$SCHEMA_STALE of $SCHEMA_DOCS open doc(s) have not been updated in over 30 days — the board is accumulating, not closing" \
     || ok board.staleness "no open doc has gone 30 days without an update"
+  if [ "$SCHEMA_NEW" -gt 0 ]; then
+    warn doc.schema.ahead "$SCHEMA_NEW of $SCHEMA_DOCS doc(s) are NEWER than schema $CLI_SCHEMA — this payload can read them but refuses to write them. Re-run setup-handoff."
+  elif [ "$SCHEMA_OLD" -gt 0 ]; then
+    warn doc.schema.behind "$SCHEMA_OLD of $SCHEMA_DOCS doc(s) predate schema $CLI_SCHEMA — run './handoff migrate'. Reads and writes both still work."
+  else
+    ok doc.schema "every doc is at schema ${CLI_SCHEMA:-?}"
+  fi
 fi
 
 echo

@@ -76,6 +76,7 @@ write_board_config() { # dest topology repo_name
   local dest="$1" topo="$2" rn="$3"
   TOPO="$topo" RN="$rn" GRPS="$GROUP_LIST" GRPS_SET="$GROUP_LIST_SET" LAY="$LAYOUT" LAY_SET="$LAYOUT_SET" ALLOW="$ALLOW_VERIFY" \
     PAYLOAD_VERSION="$(cat "$SKILL_DIR/scripts/payload.version" 2> /dev/null | head -1)" \
+    SCHEMA_VERSION="$(sed -n 's/^SCHEMA_VERSION=//p' "$PAYLOAD/handoff" | head -1)" \
     python3 - "$dest" << 'PY'
 import json, os, sys
 
@@ -136,6 +137,19 @@ cfg = {
     "ttlHours": ttl,
     "allowVerifyCmd": os.environ.get("ALLOW") == "1",
 }
+
+# The DOCUMENT schema, which is the only thing that triggers a migration — distinct from the
+# payload version beside it, which moves on every CLI bugfix (ADR 0003). Preserved when already
+# set: an installer must never claim a board's documents were migrated when they were not. A board
+# with no stamp at all is schema 0, and a FRESH board is stamped current because it has no legacy
+# documents to migrate.
+existing_schema = existing.get("schema")
+if isinstance(existing_schema, int) and not isinstance(existing_schema, bool):
+    cfg["schema"] = existing_schema
+elif not any(os.scandir(os.path.dirname(dest))) or not [
+    f for f in os.listdir(os.path.dirname(dest)) if f.endswith("-handoff.md")
+]:
+    cfg["schema"] = int(os.environ.get("SCHEMA_VERSION", "1"))
 
 # `_generated` belongs to the cross-repo sync (the repo registry) and to this installer (the
 # payload stamp). It is preserved wholesale rather than rebuilt, because this installer does not

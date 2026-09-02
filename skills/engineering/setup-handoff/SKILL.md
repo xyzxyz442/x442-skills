@@ -189,6 +189,25 @@ session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer
 the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## Two version numbers — payload and schema
+
+A board carries **`payload`** (the CLI, templates, hooks) and **`schema`** (the document format).
+Payload drift stays a verifier warning saying re-run the installer; **`schema` is the only thing
+that triggers a migration.** One number would mean a routine CLI bugfix prompting a whole-board
+rewrite for every member of every group (ADR 0003).
+
+The compatibility rule is asymmetric on purpose: an older CLI **reads** a newer document with one
+warning, and **refuses to write** it, naming both versions. Refusing to write is what makes reading
+safe — warn-and-proceed says nothing about writing, so an older CLI could read a newer doc, release
+it, and silently drop every field it did not understand. The two ship together; the read half alone
+is worse than neither.
+
+`./handoff migrate [--dry-run] [--yes]` moves documents forward. It moves **structure only** —
+never an inferred environment, sensitivity, or a current state seeded from an activity log — and it
+is gated on version control, no live lease in the section, a clean worktree, and a push that rolls
+back rather than half-applying. Interactive callers are asked, hooks print one line and do nothing,
+`--yes` is for CI.
+
 ## `verify-setup-handoff.sh --json`
 
 The verifier speaks two ways. Without a flag it prints prose for a human; with `--json` it emits

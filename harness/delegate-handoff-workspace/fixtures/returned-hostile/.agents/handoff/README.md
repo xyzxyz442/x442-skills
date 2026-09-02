@@ -197,6 +197,53 @@ grew activity logs forty entries deep with multi-paragraph revisions inside them
 that is people improvising the rewritable channel the template did not give them. One section that
 is always current, one that is always append-only, and neither has to do the other's job.
 
+## Two version numbers, and what each one does
+
+A board carries **`payload`** (the installed CLI, templates and hooks) and **`schema`** (the
+document format). They move at very different rates, and on a shared board they move _per person_.
+
+- **`payload`** drift is a verifier warning saying re-run the installer. Nothing else.
+- **`schema`** is the only thing that ever triggers a migration.
+
+One number would mean a routine CLI bugfix prompting a whole-board rewrite for every member of
+every group. The compatibility rule is deliberately asymmetric:
+
+|                                        | Older CLI, newer document                                  |
+| -------------------------------------- | ---------------------------------------------------------- |
+| `list`, `index`, reading               | **works** — one warning naming both versions, printed once |
+| `claim`, `release`, `export`, `import` | **refused**, naming both versions                          |
+
+Refusing to write is what makes reading safe: warn-and-proceed covers reading and says nothing
+about writing, so an older CLI could read a newer document, run `release` on it, and silently drop
+every field it did not understand.
+
+```text
+./handoff migrate [--dry-run] [--yes]
+```
+
+**Migration moves structure, never values.** It adds, renames and moves keys — `environment: dev`
+is the explicit spelling of what an absent environment already meant, not a new claim. It never
+infers: not a sensitivity, not a summary seeded from an activity log. A script that stamps a
+default sensitivity onto a document about a credential exposure writes an actively false claim, and
+no script can decide which of forty activity entries is the current state. Judgment stays
+lazy-on-touch, and `verify-setup-handoff.sh` lists what is still missing.
+
+It is **gated**, because on a shared board it is a distributed mass write racing everyone's
+in-flight work:
+
+1. the board must be under version control — a whole-board rewrite with no history has no undo;
+2. no live lease in this section — migrating rewrites the file its holder is working in (a lease
+   in another section is somebody else's business and does not block);
+3. a clean worktree, then fetch and fast-forward, so the rewrite starts from what everyone can see;
+4. one commit, pushed as a compare-and-swap — a rejected push rolls the migration back rather than
+   leaving it half-applied.
+
+And it is **never silent**. An interactive caller is asked; a hook prints one line and does
+nothing; `--yes` is the explicit consent for CI and local boards.
+
+**Downstream forks extend with flat `x_*` keys**, which upstream validation ignores. Flat, not
+nested — every frontmatter reader here is a line-matcher.
+
 ## Fields
 
 | Field                                          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -206,6 +253,7 @@ is always current, one that is always append-only, and neither has to do the oth
 | `status`                                       | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `audience`                                     | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
 | `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
+| `schema`                                       | The document format version. Absent means schema 0 — written before the format was versioned, which is a known shape, not an unknown one. An older CLI **reads** a newer document and **refuses to write** it. `handoff migrate` moves them.                                                                                                                                                                                                                                                                           |
 | `depends_on`                                   | **Board ids only**, as a list. Means _this cannot start before that lands_. `claim` **warns** when a target is still open and proceeds anyway — `depends_on` is about starting, and work legitimately starts out of order; `release --status done` is never gated on it. Set it with `new --after <id>`. If your blocker is a board id it belongs here, not in `blocked_on`.                                                                                                                                           |
 | `superseded_by`                                | The handoff id that replaced this one. First-class because it already occurred in the wild.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `environment`                                  | Which stage the work targets. An **open string**, not an enum — every fleet names its stages differently — but the common spellings are normalized (`prd`/`production`/`live` ⇒ `prod`; `stg`/`uat`/`qa` ⇒ `staging`). **Absent reads as `dev`**, so no existing doc changes meaning by gaining the field. Order them for your board with `environments` in `handoff.json`.                                                                                                                                            |
@@ -254,6 +302,7 @@ so it must never carry any one repo's identity.
 | `ttlHours`       | `4`                        | Hours a claim holds before it self-reaps.                                                                                                                                                                                                                                                              |
 | `allowVerifyCmd` | `false`                    | `true` lets `release --run-verify` execute a command from a local doc.                                                                                                                                                                                                                                 |
 | `environments`   | `["dev","staging","prod"]` | The board's environment ladder, lowest first — what `environment` is ordered by.                                                                                                                                                                                                                       |
+| `schema`         | current on a fresh board   | The board's DOCUMENT schema, and the only migration trigger — distinct from the payload version, which moves on every CLI fix.                                                                                                                                                                         |
 | `_generated`     | absent                     | **Owned by the tooling — do not hand-edit.** The cross-repo sync writes `repos` (the projected registry) here and the installer writes `payloadVersion`. Fenced off under one key so a re-sync can never clobber your `ttlHours` and a hand-edit can never masquerade as a projection of the manifest. |
 
 **`<repo>/.agents/handoff.json`** — per-consumer, written only for cross-repo installs.
