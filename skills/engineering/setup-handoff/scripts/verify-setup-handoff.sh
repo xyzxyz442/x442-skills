@@ -415,8 +415,18 @@ section "7. Document schema (advisory — ADR 0004)"
 # schema recorded their dependency graph in prose, folded closure evidence into an activity log,
 # and grew hand-rolled "Resolution (date)" headings because the template had nowhere to put the
 # current state. Reporting is the whole intervention.
-SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_NEW=0
+SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_NEW=0 SENS_RESTRICTED=0
 fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
+
+# The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
+# rather than restated here: two copies of a credential-pattern list is two copies that drift, and
+# the one that drifts is always the one nobody runs interactively. The CLI cannot simply be sourced
+# — the board's own copy may be an older payload that has no scanner at all, which is precisely the
+# board this sweep is for — so its rules table is read as data.
+#
+# The sweep catches what the write path cannot: a secret pasted into a doc by hand, or committed
+# before this payload was installed. It never prints what it matched, only which rule fired.
+SECRET_RULES="$(awk "/cat << 'RULES'/{f=1;next} f&&/^RULES\$/{exit} f" "$SCRIPT_DIR/payload/handoff" 2> /dev/null)"
 NOW_S="$(date +%s)"
 while IFS= read -r doc; do
   [ -f "$doc" ] || continue
@@ -455,6 +465,42 @@ while IFS= read -r doc; do
       *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
       *) warn doc.evidence.unverifiable "$dname: verified_by (\"$vb\") names no command, file reference, or commit — nobody can re-check it" ;;
     esac
+  fi
+
+  # `sensitivity` (ADR 0005). Absent reads as `normal` and is NOT reported — migrate deliberately
+  # never backfills it, so on any board that predates this field every document would be flagged,
+  # which teaches people to skip the section. Only a value that is neither of the two is a defect:
+  # a typo'd `sensitivity: restrcted` reads as normal to every gate in the CLI, silently.
+  dsens="$(fm "$doc" sensitivity)"
+  case "$dsens" in
+    "" | normal) ;;
+    restricted) SENS_RESTRICTED=$((SENS_RESTRICTED + 1)) ;;
+    *) warn doc.sensitivity.invalid "$dname: sensitivity is \"$dsens\", which is neither normal nor restricted — every gate in the CLI reads it as normal. Fix it or remove it." ;;
+  esac
+
+  # Credential sweep. A FAIL, not a warning, and the only one in this advisory section: everything
+  # else here describes a board that is merely hard to work with, and this one describes material
+  # that is already in git history and needs rotating, not editing.
+  if [ -n "$SECRET_RULES" ]; then
+    dhits="" dwaived=""
+    while IFS="$(printf '\t')" read -r srule sre; do
+      [ -n "$srule" ] || continue
+      grep -Eq -- "$sre" "$doc" 2> /dev/null || continue
+      # An override the CLI recorded on this doc's own activity log, naming this same rule, is a
+      # decision somebody made and signed. Reporting it as a FAIL forever would mean a board with
+      # one legitimate vendor example key can never come back clean, and a check that can never
+      # pass gets ignored wholesale. It stays visible as a warning — never silent — because the
+      # decision is auditable, not because it is right.
+      if grep -q "secret-scan OVERRIDDEN.*($srule" "$doc" 2> /dev/null; then
+        dwaived="${dwaived:+$dwaived, }$srule"
+      else
+        dhits="${dhits:+$dhits, }$srule"
+      fi
+    done <<< "$SECRET_RULES"
+    [ -n "$dhits" ] \
+      && bad doc.secret.detected "$dname: matches credential pattern(s) $dhits — this doc is in git history, so redact it AND rotate the credential. (Never paste the value into a handoff; record its name.)"
+    [ -n "$dwaived" ] \
+      && warn doc.secret.overridden "$dname: matches credential pattern(s) $dwaived, with a recorded --force-secret override on the doc — re-read the stated reason and confirm it still holds"
   fi
 
   # Rewritable current state. Its absence is why boards sprout "Resolution (date)" and "Execution
@@ -518,6 +564,11 @@ done <<< "$(find "$HD" -maxdepth 3 -name '*-handoff.md' 2> /dev/null)"
 if [ "$SCHEMA_DOCS" -eq 0 ]; then
   ok board.docs.none "no handoff docs on this board yet — nothing to check"
 else
+  # Reported at every count, including zero, and always as a PASS. Holding restricted work is not a
+  # defect — it is the field doing its job — so this is an audit line, not a warning. What it
+  # answers is "how much of this board must never leave it", which is the question somebody asks
+  # before widening board membership or wiring up a delegated agent.
+  ok board.sensitivity.restricted "$SENS_RESTRICTED of $SCHEMA_DOCS doc(s) are sensitivity: restricted — never exported, never delegated (a handling flag; board membership is the access boundary)"
   [ "$SCHEMA_STALE" -gt 0 ] \
     && warn board.staleness "$SCHEMA_STALE of $SCHEMA_DOCS open doc(s) have not been updated in over 30 days — the board is accumulating, not closing" \
     || ok board.staleness "no open doc has gone 30 days without an update"

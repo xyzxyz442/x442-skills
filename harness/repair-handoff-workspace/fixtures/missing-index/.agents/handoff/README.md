@@ -200,7 +200,7 @@ is always current, one that is always append-only, and neither has to do the oth
 ## Two version numbers, and what each one does
 
 A board carries **`payload`** (the installed CLI, templates and hooks) and **`schema`** (the
-document format). They move at very different rates, and on a shared board they move *per person*.
+document format). They move at very different rates, and on a shared board they move _per person_.
 
 - **`payload`** drift is a verifier warning saying re-run the installer. Nothing else.
 - **`schema`** is the only thing that ever triggers a migration.
@@ -208,10 +208,10 @@ document format). They move at very different rates, and on a shared board they 
 One number would mean a routine CLI bugfix prompting a whole-board rewrite for every member of
 every group. The compatibility rule is deliberately asymmetric:
 
-| | Older CLI, newer document |
-| --- | --- |
-| `list`, `index`, reading | **works** — one warning naming both versions, printed once |
-| `claim`, `release`, `export`, `import` | **refused**, naming both versions |
+|                                        | Older CLI, newer document                                  |
+| -------------------------------------- | ---------------------------------------------------------- |
+| `list`, `index`, reading               | **works** — one warning naming both versions, printed once |
+| `claim`, `release`, `export`, `import` | **refused**, naming both versions                          |
 
 Refusing to write is what makes reading safe: warn-and-proceed covers reading and says nothing
 about writing, so an older CLI could read a newer document, run `release` on it, and silently drop
@@ -253,11 +253,12 @@ nested — every frontmatter reader here is a line-matcher.
 | `status`                                       | `open` (needs work) · `blocked` (waiting — see `blocked_on`) · `done` (verified, archived)                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `audience`                                     | **Which repo acts next** (cross-repo topology only). An agent in `main-api` only claims `audience: main-api` docs. This, not the lock, is what keeps a backend and a frontend agent off each other's toes. On a shared board, `handoff new` **requires** `--audience` (no default identity — see below).                                                                                                                                                                                                               |
 | `repos`                                        | Every repo the handoff touches (for search, and to scope `verify:`). Absent or empty (`[]`, the template default) means "this repo's own doc"; naming other repos marks it foreign and blocks `--run-verify`. Flow (`[a, b]`) and block (`- a`) lists both count, and the match is on the whole name — `[api-gateway]` is not repo `api`.                                                                                                                                                                              |
-| `schema`                                       | The document format version. Absent means schema 0 — written before the format was versioned, which is a known shape, not an unknown one. An older CLI **reads** a newer document and **refuses to write** it. `handoff migrate` moves them. |
+| `schema`                                       | The document format version. Absent means schema 0 — written before the format was versioned, which is a known shape, not an unknown one. An older CLI **reads** a newer document and **refuses to write** it. `handoff migrate` moves them.                                                                                                                                                                                                                                                                           |
 | `depends_on`                                   | **Board ids only**, as a list. Means _this cannot start before that lands_. `claim` **warns** when a target is still open and proceeds anyway — `depends_on` is about starting, and work legitimately starts out of order; `release --status done` is never gated on it. Set it with `new --after <id>`. If your blocker is a board id it belongs here, not in `blocked_on`.                                                                                                                                           |
 | `superseded_by`                                | The handoff id that replaced this one. First-class because it already occurred in the wild.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `environment`                                  | Which stage the work targets. An **open string**, not an enum — every fleet names its stages differently — but the common spellings are normalized (`prd`/`production`/`live` ⇒ `prod`; `stg`/`uat`/`qa` ⇒ `staging`). **Absent reads as `dev`**, so no existing doc changes meaning by gaining the field. Order them for your board with `environments` in `handoff.json`.                                                                                                                                            |
 | `role`                                         | Standalone docs only: what the doc is **for**, where `type` is its lifecycle. `steering` (the decisions and their evidence) · `spec` (what is to be built) · `reference` (knowledge transfer) · `brief-archive` (a finished delegation, kept). Absent ⇒ `reference`.                                                                                                                                                                                                                                                   |
+| `sensitivity`                                  | `normal` (default) or `restricted` — a **handling flag, not an access boundary** (board membership is). `restricted` refuses `export` outright, prints a handling banner on `claim`, and is refused by a delegated agent's dispatcher. Absent reads as `normal`; `handoff migrate` never backfills it. Set at `new --sensitivity restricted` or by hand; refused on a `--standalone` doc (never exported, so the flag has nothing to apply to). See "Sensitivity and the secret scanner" below.                        |
 | `spec`                                         | _(optional)_ what this work is specified by. Resolved by the reader in order — a path, then a URL, then a board id. Not validated at creation: a handoff is routinely filed before its spec is written.                                                                                                                                                                                                                                                                                                                |
 | `blocked_on`                                   | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
 | `updated` / `verified_at` / `verified_by`      | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it, requires `--verified-by`, and now **persists that evidence as `verified_by`** rather than only as prose in the activity log — evidence that lives in a log can be read but not queried, which is how boards end up with hundreds of verification dates and a handful of retrievable checks. Evidence naming no command, file reference, or commit is reported by `verify-setup-handoff.sh`.                          |
@@ -302,7 +303,7 @@ so it must never carry any one repo's identity.
 | `ttlHours`       | `4`                        | Hours a claim holds before it self-reaps.                                                                                                                                                                                                                                                              |
 | `allowVerifyCmd` | `false`                    | `true` lets `release --run-verify` execute a command from a local doc.                                                                                                                                                                                                                                 |
 | `environments`   | `["dev","staging","prod"]` | The board's environment ladder, lowest first — what `environment` is ordered by.                                                                                                                                                                                                                       |
-| `schema`         | current on a fresh board   | The board's DOCUMENT schema, and the only migration trigger — distinct from the payload version, which moves on every CLI fix.                                                                                                                                                                          |
+| `schema`         | current on a fresh board   | The board's DOCUMENT schema, and the only migration trigger — distinct from the payload version, which moves on every CLI fix.                                                                                                                                                                         |
 | `_generated`     | absent                     | **Owned by the tooling — do not hand-edit.** The cross-repo sync writes `repos` (the projected registry) here and the installer writes `payloadVersion`. Fenced off under one key so a re-sync can never clobber your `ttlHours` and a hand-edit can never masquerade as a projection of the manifest. |
 
 **`<repo>/.agents/handoff.json`** — per-consumer, written only for cross-repo installs.
@@ -365,6 +366,46 @@ Single-repo boards keep it simple: no repo config file at all, identity comes fr
   continuation starts on the right path.
 - **Link, don't duplicate.** Reference existing artifacts (PRDs, plans, ADRs, issues, commits,
   diffs) by path or URL instead of pasting their content into the doc.
+
+## Sensitivity and the secret scanner
+
+Two protections from ADR 0005 layer on top of the redaction habit above.
+
+**`sensitivity: normal | restricted`** on a `coordination` or `orchestrator` doc marks work that
+must never leave the board. Absent reads as `normal`; `handoff migrate` never backfills it —
+stamping a default sensitivity onto a document about a credential exposure would write an actively
+false claim, so it is set by the author, at `new --sensitivity restricted` or by hand. It is
+refused at creation on a `--standalone` doc: a standalone/reference doc is never exported, so the
+flag has nothing to apply to.
+
+**It is a handling flag, not an access boundary.** Board membership is the access control —
+anyone who can read the board can read a restricted document. What `restricted` changes is what
+the tooling **does** with the document:
+
+- `export` refuses it outright, with no override. A bundle export refuses the WHOLE bundle if the
+  parent or any child is restricted, before a cover file, a child brief, a lease, or a stamp is
+  written.
+- `claim` still succeeds, then prints a handling banner restating the boundary.
+- The session-start banner marks the row:
+  `[🔴 RESTRICTED — never export or delegate; do it in this session]`.
+- A dispatch to a delegated or external agent refuses it (`misrouted`, exit 77 in `delegate-run`).
+- The board index still shows a restricted doc's **title**. Redacting it would make the board
+  useless for exactly the work that most needs coordination, and the id discloses as much as the
+  title does.
+
+**The secret scanner runs on the CLI write path** — `new`, `release`, `import --result`, and
+`export` — not as a pre-commit hook: a pre-commit hook has nothing to attach to on a board that is
+not a repository, which is precisely the board most likely to need it. `export` scans the
+**rendered brief**, before the claim and before anything is written — the outbound half that used
+to be missing, when only a returned brief was ever checked for a pasted credential. On a match the
+command dies naming the RULE that fired, never the value, and nothing is written — no doc, no
+brief, no lease, no stamp.
+
+**`--force-secret "<reason>"`** overrides the scanner on `new`, `release`, `import --result`, and
+`export`. The reason is required and is recorded on the doc's Activity log next to the rules that
+fired — the honest answer to a scanner that will occasionally misfire on legitimate prose is a
+recorded decision, not a silent bypass. It overrides the scanner only: nothing overrides
+`sensitivity: restricted` on export.
 
 ## `verify:` is safe by default
 

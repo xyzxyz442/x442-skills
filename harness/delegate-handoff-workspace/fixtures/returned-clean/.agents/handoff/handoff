@@ -968,6 +968,100 @@ redaction_comment() {
   echo "     prompt the user and record its NAME (env var / secret-manager ref), never the value. -->"
 }
 
+# --- the secret scanner (ADR 0005) --------------------------------------------------------
+# The redaction comment above is a REQUEST. This is the enforcement, and it runs on the CLI's
+# WRITE path — create, release, import a result, render an outbound brief — rather than in a
+# pre-commit hook. A pre-commit hook has nothing to attach to on a board that is not a repository,
+# and that is exactly the board that most needs the check.
+#
+# Two rules shape every line of it:
+#
+#   1. It never echoes what it matched. A refusal that prints the credential it caught has put
+#      that credential into a terminal, a scrollback, and very likely an agent transcript — which
+#      is the harm the check exists to prevent. Refusals name the RULE, never the value.
+#   2. It is a chokepoint, not a habit. Every write path calls this one function, so a new rule
+#      lands everywhere at once and no path can drift into scanning less than its neighbours.
+#
+# The patterns are shaped like credentials, not like the word "password": every one of them has a
+# vendor prefix or a structural marker, so prose about secrets (which is most of what a security
+# handoff contains) passes clean. The two shapeless rules — a quoted assignment and a long random
+# base64 run — are the ones that will produce the occasional false positive, which is what
+# `--force-secret` is for.
+secret_rules() {
+  cat << 'RULES'
+aws-access-key-id	(AKIA|ASIA)[0-9A-Z]{16}
+github-token	gh[pousr]_[A-Za-z0-9]{20,}
+github-fine-grained-pat	github_pat_[A-Za-z0-9_]{30,}
+gitlab-token	glpat-[A-Za-z0-9_-]{20,}
+slack-token	xox[baprs]-[A-Za-z0-9-]{10,}
+private-key-block	-----BEGIN [A-Z ]*PRIVATE KEY-----
+anthropic-api-key	sk-ant-[A-Za-z0-9_-]{24,}
+openai-api-key	sk-(proj-)?[A-Za-z0-9_-]{32,}
+google-api-key	AIza[0-9A-Za-z_-]{35}
+stripe-secret-key	[sr]k_(live|test)_[A-Za-z0-9]{20,}
+npm-token	npm_[A-Za-z0-9]{36}
+json-web-token	eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
+quoted-credential-assignment	(password|passwd|secret|token|api[_-]?key)[[:space:]]*[=:][[:space:]]*["'][^"']{12,}["']
+RULES
+}
+
+# Scan text on stdin. Prints the names of every rule that matched, one per line, and returns 0 when
+# something matched — so callers read like `if hits="$(... | scan_secrets)"; then refuse`.
+scan_secrets() { # stdin -> matched rule names; 0 = something matched
+  local buf hit=1 name re
+  buf="$(cat)"
+  while IFS="$(printf '\t')" read -r name re; do
+    [ -n "$name" ] || continue
+    if printf '%s\n' "$buf" | grep -Eq -- "$re"; then
+      printf '%s\n' "$name"
+      hit=0
+    fi
+  done <<< "$(secret_rules)"
+  return $hit
+}
+
+# The one refusal message, so every write path says the same thing and none of them can drift into
+# printing the value. `where` names what was being written, `hits` the rules that fired.
+#
+# The override is a FLAG WITH A REASON, not a bare bypass: a scanner on the write path will produce
+# false positives (see the two shapeless rules above), and the honest answer to that is a recorded
+# decision rather than a silent hole. Callers log the reason onto the doc's Activity log.
+die_on_secret() { # where hits
+  die "$1 looks like it contains a credential — matched: $(printf '%s' "$2" | tr '\n' ' ' | sed 's/ $//').
+       Nothing was written. Redact it and re-run, recording the credential's NAME (env var or
+       secret-manager reference) rather than its value.
+       If this is a false positive, re-run with: --force-secret \"<why this is safe>\""
+}
+
+# --- sensitivity (ADR 0005) ---------------------------------------------------------------
+# `sensitivity` is a HANDLING FLAG, NOT AN ACCESS BOUNDARY. Board membership is the access
+# boundary: anyone who can read the board can read every document on it, restricted or not. What
+# the flag changes is what the TOOLING will do with a document — refuse to export it, refuse to
+# hand it to a delegated agent, and say so at claim time. Nothing here keeps a reader out, and it
+# must never be described as if it does.
+#
+# Absent reads as `normal`, and `migrate` never fills it in: stamping a default sensitivity onto a
+# document about a credential exposure writes an actively false claim, and no script can tell which
+# document that is. It is set by the author, at `new` or by hand.
+VALID_SENSITIVITY="normal restricted"
+doc_sensitivity() { # path -> normal | restricted (anything unrecognized reads as normal)
+  local s
+  s="$(meta "$1" sensitivity)"
+  case " $VALID_SENSITIVITY " in *" $s "*) printf '%s' "$s" ;; *) printf 'normal' ;; esac
+}
+is_restricted() { [ "$(doc_sensitivity "$1")" = "restricted" ]; }
+
+# Printed on claim, and nowhere else it would become wallpaper. It states the boundary in the same
+# breath as the handling rule, because the whole failure mode of a flag like this is somebody
+# reading it as a permission.
+restricted_banner() { # id
+  echo "🔴 RESTRICTED — $1 is marked sensitivity: restricted."
+  echo "    It cannot be exported as a brief and must not be handed to a delegated or external"
+  echo "    agent. Do the work yourself, in this session."
+  echo "    This is a HANDLING rule, not an access control — everyone with board access can read"
+  echo "    it. Keep credentials out of the doc; record their NAMES, never their values."
+}
+
 # Templates live in <board>/templates/. The flat fallback covers a board installed before the
 # restructure (templates sat next to the CLI); when neither exists the callers fall back to an
 # inline heredoc, so a missing template is never fatal.
@@ -1040,8 +1134,8 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  local environment="" depends="" role="" spec=""
-  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--note N]}"
+  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret=""
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--note N]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1102,9 +1196,24 @@ cmd_new() {
         spec="${2:-}"
         shift 2
         ;;
+      --sensitivity)
+        sensitivity="${2:-}"
+        shift 2
+        ;;
+      --force-secret)
+        # Reason REQUIRED, and recorded on the doc. An override with no stated reason is a silent
+        # bypass wearing a flag, and the whole point of putting the scanner on the write path is
+        # that getting past it leaves a trace.
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
       *) shift ;;
     esac
   done
+  case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
+  [ "$sensitivity" = "restricted" ] && [ "$type" = "standalone" ] \
+    && die "--sensitivity applies to work that can be delegated; a standalone/reference doc is never exported. Keep the material off the board instead."
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
   if [ -n "$role" ]; then
     [ "$type" = "standalone" ] || die "--role only applies to a standalone doc (it says what a reference doc is FOR; coordination docs have a lifecycle, not a role)"
@@ -1150,6 +1259,11 @@ cmd_new() {
   d="$(today)"
   target="$(doc_file "$id")"
   mkdir -p "$(dirname "$target")" # the section subdir on a subfolder-layout board (a no-op when flat)
+  # Rendered to a temp file, NOT to $target. The scanner below has to see the finished document
+  # before the board does, so that a credential pasted into --title/--note/--audience/--spec is
+  # refused with nothing on disk — "nothing was written" has to be literally true, not nearly.
+  local staged created_msg=""
+  staged="$(mktemp)" || die "mktemp failed"
 
   if [ "$type" = "orchestrator" ]; then
     # An orchestrator: an index over a bundle of related handoffs. Gate-exempt (no lease), no
@@ -1164,7 +1278,7 @@ cmd_new() {
     if [ -f "$tmpl" ]; then
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
-        "PLACEHOLDER_CHILDREN=$clist" "PLACEHOLDER_NOTE=$note" > "$target"
+        "PLACEHOLDER_CHILDREN=$clist" "PLACEHOLDER_NOTE=$note" > "$staged"
     else
       {
         echo "---"
@@ -1193,9 +1307,9 @@ cmd_new() {
         echo
         echo "## Suggested skills"
         echo
-      } > "$target"
+      } > "$staged"
     fi
-    echo "Created $target (orchestrator over ${clist:-no children yet}) — no claim needed."
+    created_msg="Created $target (orchestrator over ${clist:-no children yet}) — no claim needed."
   elif [ "$type" = "standalone" ]; then
     # A standalone/reference doc: gate-exempt, self-contained, no audience/severity/lease.
     local tmpl
@@ -1204,7 +1318,7 @@ cmd_new() {
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
         "PLACEHOLDER_ROLE=${role:-reference}" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
-        "PLACEHOLDER_NOTE=$note" > "$target"
+        "PLACEHOLDER_NOTE=$note" > "$staged"
     else
       {
         echo "---"
@@ -1226,9 +1340,9 @@ cmd_new() {
         echo
         echo "## Suggested skills"
         echo
-      } > "$target"
+      } > "$staged"
     fi
-    echo "Created $target (standalone/reference) — no claim needed; edit it freely."
+    created_msg="Created $target (standalone/reference) — no claim needed; edit it freely."
   else
     if [ "$TOPOLOGY" = "cross-repo" ] && [ -z "$audience" ]; then
       # Shared board: no single default identity. Use the calling repo's env identity if present,
@@ -1244,9 +1358,9 @@ cmd_new() {
       # template never mangles them before `handoff new` fills them in.
       render_tmpl "$tmpl" "PLACEHOLDER_ID=$id" "PLACEHOLDER_TITLE=$title" \
         "PLACEHOLDER_AUDIENCE=$audience" "PLACEHOLDER_SEVERITY=$severity" \
-        "PLACEHOLDER_ENVIRONMENT=$environment" \
+        "PLACEHOLDER_ENVIRONMENT=$environment" "PLACEHOLDER_SENSITIVITY=$sensitivity" \
         "PLACEHOLDER_CREATED=$d" "PLACEHOLDER_UPDATED=$d" \
-        "PLACEHOLDER_NOTE=$note" > "$target"
+        "PLACEHOLDER_NOTE=$note" > "$staged"
     else
       {
         echo "---"
@@ -1257,6 +1371,7 @@ cmd_new() {
         [ -n "$audience" ] && echo "audience: $audience"
         echo "severity: $severity"
         echo "environment: $environment"
+        echo "sensitivity: $sensitivity"
         echo "depends_on: []"
         echo "created: $d"
         echo "updated: $d"
@@ -1273,10 +1388,26 @@ cmd_new() {
         echo
         echo "## Suggested skills"
         echo
-      } > "$target"
+      } > "$staged"
     fi
-    echo "Created $target — claim it before working: ./handoff claim $id \"...\""
+    created_msg="Created $target — claim it before working: ./handoff claim $id \"...\""
   fi
+  # The write path's scanner (ADR 0005). Everything above rendered into $staged; the board is still
+  # untouched, so a refusal here leaves no half-created doc, no index entry, and nothing to clean up.
+  local hits=""
+  if hits="$(scan_secrets < "$staged")"; then
+    if [ -z "$force_secret" ]; then
+      rm -f "$staged"
+      die_on_secret "the new $id doc" "$hits"
+    fi
+  fi
+  cat "$staged" > "$target" || {
+    rm -f "$staged"
+    die "could not write $target"
+  }
+  rm -f "$staged"
+  echo "$created_msg"
+
   # Mirror the section into a `group:` frontmatter key for search/roll-up. Only on a grouped board, so
   # a flat board's docs carry no group line and stay byte-identical to before this feature.
   grouped && set_field "$target" group "$GROUP"
@@ -1285,6 +1416,15 @@ cmd_new() {
   # placeholder left unsubstituted would put the literal string into the frontmatter.
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
   [ -n "$spec" ] && set_field "$target" spec "$spec"
+  # Coordination and orchestrator docs carry it explicitly so the field is discoverable at the one
+  # moment somebody is looking at the frontmatter. A standalone doc is never exported or delegated,
+  # so the field would assert a handling rule that has nothing to apply to.
+  [ "$type" = "standalone" ] || set_field "$target" sensitivity "$sensitivity"
+  if [ -n "$force_secret" ] && [ -n "$hits" ]; then
+    log_activity "$target" "secret-scan OVERRIDDEN at creation ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
+  fi
+  is_restricted "$target" && restricted_banner "$id"
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
 }
@@ -1296,14 +1436,19 @@ cmd_new() {
 # beside a `status` it did not change: `done` stays a reviewer action backed by evidence the
 # reviewer reproduced. That is the whole protocol, preserved across a trust boundary.
 import_result() {
-  local src="" force_repo=0
-  src="${1:?usage: handoff import --result <file> [--force-repo]}"
+  local src="" force_repo=0 force_secret=""
+  src="${1:?usage: handoff import --result <file> [--force-repo] [--force-secret REASON]}"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --force-repo)
         force_repo=1
         shift
+        ;;
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
         ;;
       *) die "unknown flag: $1" ;;
     esac
@@ -1359,9 +1504,15 @@ import_result() {
   # The returned text is untrusted and about to enter git history permanently. Scans the Result
   # body AND the frontmatter fields spliced from this same file — a credential pasted into
   # `result_by:` instead of the body would otherwise walk straight past a body-only scan.
-  if printf '%s\n%s\n%s\n' "$body" "$result_by_raw" "$result_at_raw" \
-    | grep -Eqi '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'; then
-    die "the Result block looks like a credential was pasted into it — redact the brief and re-run. Nothing was written."
+  #
+  # Through the shared scanner (ADR 0005), not a local regex: this used to be the ONLY scan in the
+  # CLI and it carried its own four patterns, so every rule added for the outbound path would have
+  # had to be added here too, by hand, forever.
+  local in_hits=""
+  if in_hits="$(printf '%s\n%s\n%s\n' "$body" "$result_by_raw" "$result_at_raw" | scan_secrets)"; then
+    if [ -z "$force_secret" ]; then
+      die_on_secret "the Result block returned for $id" "$in_hits"
+    fi
   fi
 
   if [ "$claimed" = "done" ] \
@@ -1437,6 +1588,10 @@ import_result() {
   rm -f "$backup"
 
   log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
+  if [ -n "$force_secret" ] && [ -n "$in_hits" ]; then
+    log_activity "$f" "inbound secret-scan OVERRIDDEN on import ($(printf '%s' "$in_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    echo "⚠️  Inbound secret scan overridden — recorded on $id's activity log."
+  fi
 
   echo "Imported the reported result into $f."
   echo "Board status is UNCHANGED — the report is a claim, not a verdict."
@@ -1592,9 +1747,9 @@ cmd_import() {
 # board — no leases, no hooks, no skills. The brief inlines the executor contract that those would
 # otherwise carry, and it carries repo identity so it cannot be run against the wrong checkout.
 cmd_export() {
-  local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]}"
+  local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] [--force-secret REASON]}"
   shift
-  local raw_id="$id" to="" outdir="" branch="" do_claim=1
+  local raw_id="$id" to="" outdir="" branch="" do_claim=1 force_secret=""
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1617,6 +1772,11 @@ cmd_export() {
         do_claim=0
         shift
         ;;
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
       *) die "unknown flag: $1" ;;
     esac
   done
@@ -1625,16 +1785,26 @@ cmd_export() {
   f="$(doc_of "$id")" || no_such "$id"
   is_standalone "$f" && die "$id is a standalone/reference handoff — it holds no work to delegate. Send the file itself."
   [ "$(meta "$f" status)" = "done" ] && die "$id is already done — nothing to delegate"
+  # Before reading sensitivity off it: a doc this CLI cannot write is a doc whose fields it has no
+  # business interpreting. export_one/export_bundle check again on their own path; this is a pure
+  # check, so the second call costs nothing.
+  require_writable "$f" "$id"
+  # The hard half of `sensitivity: restricted` (ADR 0005). Checked HERE, before the bundle branch
+  # and before a single file is touched, so the refusal is total: no cover, no child brief, no
+  # lease, no stamp. There is no --force for it — an override on the claim banner is a nudge, an
+  # override on the outbound path is the whole control.
+  is_restricted "$f" \
+    && die "$id is sensitivity: restricted — it cannot be exported as a brief or handed to an external executor. Do the work in a session with board access. (This is a handling rule; board membership is the access boundary.)"
 
   if is_orchestrator "$f"; then
     # export_one hardcodes an empty branch per child (each gets its own default fix/<child-id>),
     # so a bundle export silently DISCARDED --branch instead of honoring or rejecting it. Refuse
     # it outright rather than pretend a single branch name could apply to N independent children.
     [ -n "$branch" ] && die "--branch is not supported for a bundle export — each child gets its own default branch (fix/<child-id>)"
-    export_bundle "$id" "$f" "$to" "$outdir" "$do_claim"
+    export_bundle "$id" "$f" "$to" "$outdir" "$do_claim" "$force_secret"
     return
   fi
-  export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim"
+  export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim" "$force_secret"
 }
 
 # Guard for brief_identity's packed "a|b|c|d|e" return: `fold_colons` only folds ":", so a
@@ -1953,9 +2123,9 @@ brief_dependencies() { # doc-path -> markdown lines
   printf '%s' "$out"
 }
 
-export_one() { # id doc to outdir branch do_claim
+export_one() { # id doc to outdir branch do_claim force-secret-reason
   require_writable "$2" "$1" # stamps delegated_to/delegated_at on the doc
-  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6"
+  local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6" force_secret="${7:-}"
   local name provider origin root note
   IFS='|' read -r name provider origin root note <<< "$(brief_identity "$f")"
   [ -n "$branch" ] || branch="fix/$id"
@@ -1973,6 +2143,48 @@ export_one() { # id doc to outdir branch do_claim
   local tmpl
   tmpl="$(tmpl_path handoff-brief-template.md)"
   [ -f "$tmpl" ] || die "brief template missing from this board — re-run setup-handoff to update it"
+
+  # OUTBOUND REDACTION (ADR 0005). The brief is rendered to a temp file and scanned BEFORE the
+  # claim and before anything lands on the board, because this is the one path on which a secret
+  # leaves the trust boundary. The inbound check on `import --result` used to be the only scan,
+  # which is the wrong half: refusing a pasted secret on the way IN while splicing document
+  # sections verbatim on the way OUT protects nothing.
+  #
+  # It scans the RENDERED brief, not the source doc — the brief is what ships, and it is also the
+  # only artifact that carries the spliced Context/Where/Decisions/Verify together with the
+  # identity block this command generates.
+  local staged
+  staged="$(mktemp)" || die "mktemp failed"
+  render_tmpl "$tmpl" \
+    "PLACEHOLDER_ID=$id" \
+    "PLACEHOLDER_TITLE=$(meta "$f" title)" \
+    "PLACEHOLDER_SEVERITY=$(meta "$f" severity)" \
+    "PLACEHOLDER_REPO_NAME=$name" \
+    "PLACEHOLDER_REPO_PROVIDER=$provider" \
+    "PLACEHOLDER_REPO_ORIGIN=$origin" \
+    "PLACEHOLDER_ROOT_COMMIT=$root" \
+    "PLACEHOLDER_SOURCE_COMMIT=$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_SOURCE_BRANCH=$(git -C "${REPO_DIR:-.}" rev-parse --abbrev-ref HEAD 2> /dev/null || echo unknown)" \
+    "PLACEHOLDER_EXPORTED=$(today)" \
+    "PLACEHOLDER_BRANCH=$branch" \
+    "PLACEHOLDER_PREFLIGHT_NOTE=$note" \
+    "PLACEHOLDER_CONTEXT=$(doc_section "$f" Context)" \
+    "PLACEHOLDER_WHERE=$(doc_section "$f" Where)" \
+    "PLACEHOLDER_DECISIONS=$(doc_section "$f" Decisions)" \
+    "PLACEHOLDER_VERIFY=$(doc_section "$f" Verify)" \
+    "PLACEHOLDER_DEPENDENCIES=$(brief_dependencies "$f")" \
+    > "$staged" || {
+    rm -f "$staged"
+    die "could not render the brief for $id"
+  }
+
+  local hits=""
+  if hits="$(scan_secrets < "$staged")"; then
+    if [ -z "$force_secret" ]; then
+      rm -f "$staged"
+      die_on_secret "the brief for $id" "$hits"
+    fi
+  fi
 
   # Claim BEFORE writing the brief or stamping the doc, not after. cmd_claim dies when the id is
   # already leased by a concurrent agent — precisely the race the lease exists to prevent — and
@@ -1998,25 +2210,16 @@ export_one() { # id doc to outdir branch do_claim
     fi
   fi
 
-  render_tmpl "$tmpl" \
-    "PLACEHOLDER_ID=$id" \
-    "PLACEHOLDER_TITLE=$(meta "$f" title)" \
-    "PLACEHOLDER_SEVERITY=$(meta "$f" severity)" \
-    "PLACEHOLDER_REPO_NAME=$name" \
-    "PLACEHOLDER_REPO_PROVIDER=$provider" \
-    "PLACEHOLDER_REPO_ORIGIN=$origin" \
-    "PLACEHOLDER_ROOT_COMMIT=$root" \
-    "PLACEHOLDER_SOURCE_COMMIT=$(git -C "${REPO_DIR:-.}" rev-parse --short HEAD 2> /dev/null || echo unknown)" \
-    "PLACEHOLDER_SOURCE_BRANCH=$(git -C "${REPO_DIR:-.}" rev-parse --abbrev-ref HEAD 2> /dev/null || echo unknown)" \
-    "PLACEHOLDER_EXPORTED=$(today)" \
-    "PLACEHOLDER_BRANCH=$branch" \
-    "PLACEHOLDER_PREFLIGHT_NOTE=$note" \
-    "PLACEHOLDER_CONTEXT=$(doc_section "$f" Context)" \
-    "PLACEHOLDER_WHERE=$(doc_section "$f" Where)" \
-    "PLACEHOLDER_DECISIONS=$(doc_section "$f" Decisions)" \
-    "PLACEHOLDER_VERIFY=$(doc_section "$f" Verify)" \
-    "PLACEHOLDER_DEPENDENCIES=$(brief_dependencies "$f")" \
-    > "$dest" || die "could not write $dest"
+  cat "$staged" > "$dest" || {
+    rm -f "$staged"
+    die "could not write $dest"
+  }
+  rm -f "$staged"
+
+  if [ -n "$force_secret" ] && [ -n "$hits" ]; then
+    log_activity "$f" "outbound secret-scan OVERRIDDEN on export ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    echo "⚠️  Outbound secret scan overridden — recorded on $id's activity log." >&2
+  fi
 
   set_field "$f" delegated_to "${to:-unassigned}"
   set_field "$f" delegated_at "$(today)"
@@ -2035,8 +2238,8 @@ export_one() { # id doc to outdir branch do_claim
   cmd_index
 }
 
-export_bundle() { # id doc to outdir do_claim
-  local id="$1" f="$2" to="$3" outdir="$4" do_claim="$5"
+export_bundle() { # id doc to outdir do_claim force-secret-reason
+  local id="$1" f="$2" to="$3" outdir="$4" do_claim="$5" force_secret="${6:-}"
   local dest_dir cover kid kf n=0
   local kids
 
@@ -2054,6 +2257,23 @@ export_bundle() { # id doc to outdir do_claim
   # child in the run. export_one extends a self-held lease instead of re-claiming it, so the export
   # is still fully leased when it completes.
   kids="$(children_of "$f")"
+
+  # Restricted children, checked in the SAME pre-flight as live foreign leases and for the same
+  # reason: a refusal that lands mid-fan-out has already written a cover file and shipped half the
+  # bundle. cmd_export already refused a restricted PARENT; this is the child that carries the
+  # sensitive half of an otherwise ordinary bundle, and exporting the other five briefs while
+  # refusing that one would hand an executor a bundle whose cover names a unit they were never
+  # sent — so the whole export is refused, not the child.
+  local restricted=""
+  while IFS= read -r kid; do
+    [ -n "$kid" ] || continue
+    kf="$(doc_of "$kid" 2> /dev/null || true)"
+    [ -n "$kf" ] && [ -f "$kf" ] || continue
+    is_restricted "$kf" && restricted="${restricted:+$restricted }$kid"
+  done <<< "$kids"
+  [ -z "$restricted" ] \
+    || die "cannot export bundle $id — restricted child(ren):$restricted. A restricted unit is never handed to an external executor. Nothing was written; split it out of the bundle, or do the whole bundle in a session with board access."
+
   if [ "$do_claim" -eq 1 ]; then
     local busy=""
     while IFS= read -r kid; do
@@ -2099,7 +2319,7 @@ export_bundle() { # id doc to outdir do_claim
       echo "⚠️  child $kid has no doc on this board — skipped" >&2
       continue
     fi
-    export_one "$kid" "$kf" "$to" "$dest_dir" "" "$do_claim" > /dev/null
+    export_one "$kid" "$kf" "$to" "$dest_dir" "" "$do_claim" "$force_secret" > /dev/null
     echo "- \`$kid\` — $(meta "$kf" title) — brief at \`$kid.brief.md\`" >> "$cover"
     n=$((n + 1))
   done <<< "$kids"
@@ -2404,6 +2624,11 @@ cmd_claim() {
   fi
 
   echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
+  # After the claim, not before: the banner is a HANDLING instruction for whoever is about to do
+  # the work, and printing it on a claim that then lost a race would be telling nobody anything.
+  # `$doc_path`, not `$f`: cmd_index ran above and walks every doc on the board, and this is the
+  # same dynamic-scope hazard the doc_path copy was introduced for.
+  is_restricted "$doc_path" && restricted_banner "$id"
 }
 
 cmd_touch() {
@@ -2462,13 +2687,18 @@ finish_release() { # id status
 }
 
 cmd_release() {
-  local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [note]}"
+  local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--run-verify] [--force-secret REASON] [note]}"
   shift
   local raw_id="$id"
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
-  local status='' note='' verified_by='' blocked_on='' run_verify=0
+  local status='' note='' verified_by='' blocked_on='' run_verify=0 force_secret=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
       --status)
         status="${2:?}"
         shift 2
@@ -2499,6 +2729,20 @@ cmd_release() {
   require_writable "$f" "$id"
   local me
   me="$(whoami_id)"
+
+  # The write-path scanner (ADR 0005), before ANY branch below writes a field, archives a doc, or
+  # touches a lease. `release` is the command that most often carries pasted output — an evidence
+  # line is frequently a copied terminal session, and terminal sessions are where credentials
+  # appear. Everything a release can put into the permanently-committed doc goes through here:
+  # the evidence, the blocker, and the free-text note.
+  local rel_hits=""
+  if rel_hits="$(printf '%s\n%s\n%s\n' "$verified_by" "$blocked_on" "$note" | scan_secrets)"; then
+    if [ -z "$force_secret" ]; then
+      die_on_secret "the release of $id" "$rel_hits"
+    fi
+    log_activity "$f" "release secret-scan OVERRIDDEN ($(printf '%s' "$rel_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    echo "⚠️  Secret scan overridden — recorded on $id's activity log."
+  fi
 
   if is_orchestrator "$f"; then
     # An orchestrator carries no lease of its own. `done` is the one place the bundle relationship
@@ -3424,6 +3668,6 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       cmd_children "$@"
       ;;
     index) cmd_index ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index]" ;;
   esac
 fi

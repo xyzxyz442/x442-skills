@@ -674,13 +674,13 @@ chk "unfilled-result refusal writes nothing" "$BEFORE" "$(cat "$UNFILLED_DOC")"
 SECRET="$(mktemp)"
 sed 's/Ran npm test -- tenant; 14 passing./token AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET"
 BEFORE="$(cat "$DOC")"
-chk_contains "secret-bearing result refused" "$(hb "$R" import --result "$SECRET")" "looks like a credential"
+chk_contains "secret-bearing result refused" "$(hb "$R" import --result "$SECRET")" "aws-access-key-id"
 chk "secret-bearing-body refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
 SECRET_BY="$(mktemp)"
 sed 's/^result_by: Alice$/result_by: AKIAIOSFODNN7EXAMPLE/' "$BRIEF" > "$SECRET_BY"
 BEFORE="$(cat "$DOC")"
-chk_contains "secret-bearing result_by refused" "$(hb "$R" import --result "$SECRET_BY")" "looks like a credential"
+chk_contains "secret-bearing result_by refused" "$(hb "$R" import --result "$SECRET_BY")" "aws-access-key-id"
 chk "secret-in-result_by refusal writes nothing" "$BEFORE" "$(cat "$DOC")"
 
 printf '\nimport --result refuses a target that was never delegated (finding 3)\n'
@@ -1134,6 +1134,131 @@ chk "the bundle now counts it as outstanding work, not as a gap" "yes" \
 chk_contains "--stub is refused on rm, where it means nothing" \
   "$(hb "$RB" children rm --stub wide-bundle c-two)" "only applies to 'children add'"
 
+printf '\nthe secret scanner — write path, outbound, and a recorded override (ADR 0005)\n'
+# The scanner exists because the only control before it was an HTML comment asking people not to
+# paste secrets. Its two invariants are asserted everywhere below: NOTHING is written when it
+# trips, and the refusal names the RULE, never the value it matched.
+#
+# `printf` builds every test credential from parts. A literal one in this file would be caught by
+# the very sweep this feature adds to `verify`, and the file would then fail its own check.
+AWSKEY="AKIA""IOSFODNN7EXAMPLE"
+GHKEY="ghp_""abcdefghijklmnopqrstuvwxyz1234"
+
+chk "a plausible AWS key id trips its rule" "aws-access-key-id" "$(printf '%s\n' "$AWSKEY" | scan_secrets)"
+chk "and a GitHub token trips its own" "github-token" "$(printf '%s\n' "$GHKEY" | scan_secrets)"
+chk "a clean line trips nothing, and says so by exit status" "1" \
+  "$(printf 'nothing here\n' | scan_secrets > /dev/null; echo $?)"
+# The single most important false-negative case and the single most important false-positive case.
+# A security handoff is MOSTLY prose about credentials; a scanner that fires on the word is a
+# scanner that gets bypassed with --force-secret on every write, which is the same as no scanner.
+chk "prose about secrets is not a secret" "1" \
+  "$(printf 'rotate the deploy token and the db password before Friday\n' | scan_secrets > /dev/null; echo $?)"
+chk "and neither is a redaction placeholder" "1" \
+  "$(printf 'password = <redacted len=25 sha256:585c2252>\n' | scan_secrets > /dev/null; echo $?)"
+
+SEC="$(mkboard)"
+NEW_OUT="$(hb "$SEC" new leak-probe --title "probe" --note "key $AWSKEY here")"
+chk_contains "new refuses a credential pasted into a flag" "$NEW_OUT" "aws-access-key-id"
+chk "the refusal never echoes the value" "0" \
+  "$(printf '%s' "$NEW_OUT" | grep -cF "$AWSKEY")"
+# "Nothing was written" has to be literally true, which is why cmd_new renders to a temp file.
+chk "and nothing was written" "no" \
+  "$([ -f "$SEC/.agents/handoff/leak-probe-handoff.md" ] && echo yes || echo no)"
+
+FORCE_OUT="$(hb "$SEC" new leak-probe --title "probe" --note "key $AWSKEY here" --force-secret "example key from the vendor's own docs")"
+chk_contains "--force-secret gets past it" "$FORCE_OUT" "overridden"
+chk_contains "and the override is RECORDED, with its reason" \
+  "$(cat "$SEC/.agents/handoff/leak-probe-handoff.md")" "secret-scan OVERRIDDEN at creation (aws-access-key-id)"
+chk_contains "naming the reason, not just the fact" \
+  "$(cat "$SEC/.agents/handoff/leak-probe-handoff.md")" "example key from the vendor's own docs"
+chk_contains "a bare --force-secret is refused — an unstated reason is a silent bypass" \
+  "$(hb "$SEC" new other-probe --title "p" --force-secret)" "needs a value"
+
+# release carries pasted terminal output more often than any other command, and terminal output is
+# where credentials appear.
+hb "$SEC" new rel-probe --title "rel" > /dev/null
+hb "$SEC" claim rel-probe "x" > /dev/null
+REL_OUT="$(hb "$SEC" release rel-probe --status done --verified-by "ran the suite with $GHKEY")"
+chk_contains "release refuses a credential in the evidence" "$REL_OUT" "github-token"
+chk "and the doc is untouched — still open, not archived" "open" \
+  "$(sed -n 's/^status: //p' "$SEC/.agents/handoff/rel-probe-handoff.md" | head -1)"
+
+printf '\noutbound redaction — the brief is scanned before anything leaves (ADR 0005)\n'
+# The half that was missing. The CLI checked a RETURNED brief for pasted credentials while
+# splicing document sections verbatim into an OUTBOUND one with no check at all.
+OB="$(mkboard)"
+hb "$OB" new ctx-leak --title "ctx leak" > /dev/null
+python3 - "$OB/.agents/handoff/ctx-leak-handoff.md" "$AWSKEY" << 'PY'
+import sys
+p, key = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8").write(s.replace("## Context\n", "## Context\n\nthe backup job authenticates as %s.\n" % key, 1))
+PY
+OB_OUT="$(hb "$OB" export ctx-leak --to Bob)"
+chk_contains "export refuses a brief that would carry a credential" "$OB_OUT" "aws-access-key-id"
+chk "no brief was written" "no" \
+  "$([ -f "$OB/.agents/handoff/briefs/ctx-leak-handoff.brief.md" ] && echo yes || echo no)"
+# The refusal happens BEFORE the claim on purpose: a lease taken for an export that never
+# happened is a lease nobody knows to release.
+chk "no lease was taken" "no" \
+  "$([ -d "$OB/.agents/handoff/.locks/ctx-leak-handoff" ] && echo yes || echo no)"
+chk "and the doc was not stamped as delegated" "" \
+  "$(sed -n 's/^delegated_at: //p' "$OB/.agents/handoff/ctx-leak-handoff.md" | head -1)"
+
+# A brief carries the four sections an executor needs and nothing else. The board's internal
+# chronology — where the work stands, and who did what when — does not leave the board.
+hb "$OB" new clean-unit --title "clean unit" > /dev/null
+hb "$OB" export clean-unit --to Alice > /dev/null
+CLEAN_BRIEF="$OB/.agents/handoff/briefs/clean-unit-handoff.brief.md"
+chk "a clean brief carries no Current state" "0" "$(grep -c '^## Current state' "$CLEAN_BRIEF")"
+chk "and no Activity log" "0" "$(grep -c '^## Activity' "$CLEAN_BRIEF")"
+
+printf '\nsensitivity — a handling flag, not an access boundary (ADR 0005)\n'
+SN="$(mkboard)"
+hb "$SN" new key-rotation --title "Key rotation inventory" --sensitivity restricted --severity high > /dev/null
+SN_DOC="$SN/.agents/handoff/key-rotation-handoff.md"
+chk "restricted is recorded in frontmatter" "restricted" "$(sed -n 's/^sensitivity: //p' "$SN_DOC" | head -1)"
+chk "an ordinary doc records the default explicitly, so the field is discoverable" "normal" \
+  "$(hb "$SN" new ordinary --title "ordinary" > /dev/null; sed -n 's/^sensitivity: //p' "$SN/.agents/handoff/ordinary-handoff.md" | head -1)"
+chk_contains "a bad value is refused rather than silently read as normal" \
+  "$(hb "$SN" new typo-doc --title "t" --sensitivity restrcted)" "bad --sensitivity"
+chk_contains "and it is refused on a standalone doc, which is never exported anyway" \
+  "$(hb "$SN" new ref-doc --title "r" --standalone --sensitivity restricted)" "never exported"
+
+# Captured ONCE: claim takes a lease, so a second call would be answered by the lease, not the
+# banner.
+SN_CLAIM="$(hb "$SN" claim key-rotation "starting")"
+chk_contains "claim prints the handling banner" "$SN_CLAIM" "RESTRICTED"
+# The whole failure mode of a flag like this is being read as a permission. The banner has to say
+# what it is not, in the same breath as what it is.
+chk_contains "and the banner says plainly that it is not an access control" "$SN_CLAIM" "not an access control"
+
+EXP_OUT="$(hb "$SN" export key-rotation --to "an external executor")"
+chk_contains "export refuses a restricted doc outright" "$EXP_OUT" "sensitivity: restricted"
+chk "with no brief written" "no" \
+  "$([ -f "$SN/.agents/handoff/briefs/key-rotation-handoff.brief.md" ] && echo yes || echo no)"
+# There is no --force-secret for this. The scanner's override is for false positives; restricted
+# is a stated decision about the work, and an override would be a way to unmake it by accident.
+chk_contains "and --force-secret does not unlock it" \
+  "$(hb "$SN" export key-rotation --to X --force-secret "I am sure")" "sensitivity: restricted"
+
+# The index keeps the title. Redacting it makes the board useless for exactly the work that most
+# needs coordination, and the id discloses as much as the title does.
+chk_contains "the index still lists it, by title" "$(cat "$SN/.agents/handoff/INDEX.md")" "Key rotation inventory"
+
+# A bundle is refused WHOLE. Exporting the other children while refusing the restricted one would
+# hand an executor a cover naming a unit they were never sent.
+SB="$(mkboard)"
+hb "$SB" new safe-child --title "safe" > /dev/null
+hb "$SB" new secret-child --title "secret" --sensitivity restricted > /dev/null
+hb "$SB" new roll-up --orchestrator --title "Roll-up" --children safe-child,secret-child > /dev/null
+SB_OUT="$(hb "$SB" export roll-up --to Contractor)"
+chk_contains "a bundle with a restricted child is refused" "$SB_OUT" "restricted child"
+chk "and no cover file was written" "no" \
+  "$([ -f "$SB/.agents/handoff/briefs/roll-up-handoff.cover.md" ] && echo yes || echo no)"
+chk "nor a brief for the innocent sibling" "no" \
+  "$([ -f "$SB/.agents/handoff/briefs/safe-child-handoff.brief.md" ] && echo yes || echo no)"
+
 printf '\nschema versioning — read forward, refuse to write backward (ADR 0003)\n'
 # These two are ONE decision. Warn-and-proceed covers reading and says nothing about writing, so an
 # older CLI could read a newer doc, release it, and silently drop every field it did not know.
@@ -1145,8 +1270,10 @@ python3 - "$FUT" << 'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 s = p.read_text().replace("schema: 1", "schema: 99", 1)
-# A field this CLI has never heard of, to prove nothing quietly eats it.
-p.write_text(s.replace("status: open", "status: open\nsensitivity: restricted", 1))
+# A field this CLI has never heard of, to prove nothing quietly eats it. Deliberately nonsense:
+# it was `sensitivity` until that became a real field, and a placeholder the CLI later learns
+# stops testing anything.
+p.write_text(s.replace("status: open", "status: open\nquantum_flux: 7", 1))
 PY
 hb "$SV" new ordinary-doc --title "An ordinary doc" > /dev/null
 
@@ -1160,7 +1287,7 @@ chk_contains "claim on a newer doc is REFUSED" "$(hb "$SV" claim from-the-future
 chk_contains "release too" "$(hb "$SV" release from-the-future --status open)" "refusing to write it"
 chk_contains "and export, which stamps the doc" "$(hb "$SV" export from-the-future --to Someone)" "refusing to write it"
 chk "the unknown field was never touched" "yes" \
-  "$(grep -q '^sensitivity: restricted' "$FUT" && echo yes || echo no)"
+  "$(grep -q '^quantum_flux: 7' "$FUT" && echo yes || echo no)"
 chk "an ordinary doc is completely unaffected" "yes" \
   "$(printf '%s' "$(hb "$SV" claim ordinary-doc "fine")" | grep -q 'Claimed' && echo yes || echo no)"
 
@@ -1182,10 +1309,13 @@ updated: 2026-01-01
 
 Predates environment, depends_on and Current state.
 EOF
+# mkboard writes no handoff.json, so this used to raise FileNotFoundError and stamp nothing — the
+# gate still read as schema 0 (absent means 0), so the assertions passed while the setup they
+# depend on had silently not happened, and the suite printed a traceback everyone learned to skip.
 python3 - "$SMB/handoff.json" << 'PY'
-import json, sys
+import json, os, sys
 p = sys.argv[1]
-d = json.load(open(p))
+d = json.load(open(p)) if os.path.exists(p) else {}
 d["schema"] = 0
 json.dump(d, open(p, "w"), indent=2, sort_keys=True)
 PY

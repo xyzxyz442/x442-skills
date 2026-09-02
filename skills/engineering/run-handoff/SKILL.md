@@ -45,6 +45,22 @@ handoff claim <id> "what you're doing"
 - A **stale** lease (past its TTL) is reclaimable: claiming takes it over and logs the takeover.
 - The lease auto-renews while you keep editing and auto-reaps if you crash — you do not babysit it.
 
+## Restricted work stays in this session
+
+A handoff whose frontmatter carries `sensitivity: restricted` is not a permission boundary —
+everyone with board access can still read it — but it is a hard instruction to the tooling: never
+export it, never hand it to a delegated or external agent. If the session-start board or a `claim`
+banner shows `[🔴 RESTRICTED — never export or delegate; do it in this session]`, do the work
+yourself, right here. `handoff export` refuses it outright with no override, and a dispatcher wired
+through `run-delegate-agent` refuses to run a brief carrying it. Whether _other_ work is fit to
+delegate is the judgment [`delegate-handoff`](../delegate-handoff/SKILL.md) carries; a restricted
+handoff never reaches that judgment — it is a gate above it.
+
+Keep credential VALUES out of every doc regardless of sensitivity. The write path scans `new`,
+`release`, and `import --result` for anything shaped like a credential and refuses to write it,
+naming the rule that matched, never the value. Record a credential's NAME — an env var or
+secret-manager reference — never its value.
+
 ## 3. File a new handoff when work crosses a boundary
 
 When you find work you will not finish here, or that another repo/session must pick up:
@@ -222,6 +238,10 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   unblocked at the next session start.
 - Don't hold a lease you are not working. The stop hook nags if you end a session still holding
   one — release it so others are not blocked.
+- **A release refused for looking like a secret is not a bug to route around.** Redact the
+  `--verified-by`/`--blocked-on`/note text and re-run. Reach for `--force-secret "<reason>"` only
+  when it is a genuine false positive, and say concretely why the match is safe — the override is
+  recorded on the doc's Activity log, not silently applied.
 
 ## `verify:` commands are not auto-run
 
@@ -252,3 +272,7 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Appending a `Resolution (date)` heading → that is what `## Current state` is for; rewrite it.
 - Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
   and rightly: nobody checked anything.
+- Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;
+  do the work in this session instead.
+- Reaching for `--force-secret` to push past a real credential match → redact and rotate it
+  instead; the flag is for false positives, and every use is permanently logged.

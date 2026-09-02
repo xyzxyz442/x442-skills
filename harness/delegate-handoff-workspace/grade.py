@@ -160,7 +160,9 @@ def _grade(target: Path, eval_id):
         cases = [
             ("hostile-unfilled-handoff", "not filled in", True),
             ("hostile-wrong-repo-handoff", "different repository", False),
-            ("hostile-secret-handoff", "looks like a credential", True),
+            # The RULE the scanner names, not a phrase from the message wrapper: the refusal is
+            # now shared across every write path (ADR 0005), so the rule id is the stable part.
+            ("hostile-secret-handoff", "aws-access-key-id", True),
         ]
         for id_, msg, do_restamp in cases:
             brief = doc_dir / "briefs" / f"{id_}.brief.md"

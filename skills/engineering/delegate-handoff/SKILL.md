@@ -33,7 +33,16 @@ handoff does not make it less vague — it hands your own uncertainty to a stran
 resolve it with less context than you had, at a slower feedback loop, and reports back something
 you still have to untangle. That is more expensive than finishing the investigation yourself.
 
-Before you export, check all four:
+**First, the one question that is not a judgment call: is it restricted?** A handoff whose
+frontmatter carries `sensitivity: restricted` is never brief-able, full stop — this is a hard gate
+above the four criteria below, not one more thing to weigh against convenience. `handoff export`
+refuses it outright, with no override, and refuses the WHOLE bundle if an orchestrator's parent or
+any child carries it. If it is restricted, stop here: do the work yourself, in a session with
+board access — see [`run-handoff`](../run-handoff/SKILL.md#restricted-work-stays-in-this-session)
+for what that means day to day. `sensitivity` is a handling flag, not an access boundary — board
+membership is — but it is absolute with respect to this skill's two commands.
+
+Once a handoff clears that gate, check all four:
 
 - **Context links symptom to root cause.** Not "the tests fail sometimes" — the actual mechanism,
   written down.
@@ -56,7 +65,7 @@ handoff already `done` has nothing left to delegate.
 ## 2. Exporting
 
 ```text
-handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim]
+handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] [--force-secret "<reason>"]
 ```
 
 - `<id>` must resolve to a live `coordination` or `orchestrator` handoff on the board.
@@ -84,9 +93,20 @@ one brief per child — the whole bundle goes out together.
 
 The brief inlines everything the missing hooks and skills would otherwise enforce: a preflight
 that checks the executor is in the right repository before they touch a line, the Context/Where/
-Decisions/Verify from the doc, and an executor contract spelling out scope discipline, evidence
+Decisions/Verify from the doc — never `## Current state` or `## Activity`; the board's internal
+chronology stays on the board — and an executor contract spelling out scope discipline, evidence
 requirements, and the no-`rm` rule. None of that is optional reading for the executor — it is the
 whole reason a bare file can carry what normally lives in tooling.
+
+**Export scans the rendered brief before writing anything.** The write-path scanner (ADR 0005)
+checks the Context/Where/Decisions/Verify it just spliced together for anything shaped like a
+credential — an AWS key, a GitHub/GitLab/Slack token, a private-key block, a JWT, a quoted
+`token: "…"` assignment — and refuses before the claim, before the brief lands on disk, and before
+any stamp is written. It dies naming the RULE that matched, never the value. If it is a genuine
+false positive, re-run with `--force-secret "<why this is safe>"`; the reason is required and gets
+recorded on the doc's Activity log next to the rules that fired. This closes the gap that used to
+exist: the CLI checked a returned brief for a pasted credential but spliced document sections
+verbatim into an outbound one with no check at all.
 
 ## 3. What to send
 
@@ -94,10 +114,11 @@ Export writes `.agents/handoff/briefs/<id>.brief.md`. **Commit it** before telli
 they need to pull it from the branch, not receive it as an attachment. A brief that only exists in
 your working tree is not exported yet.
 
-Before committing, reread it once for anything that should not enter git history permanently — a
-pasted log line with a token in it, an internal URL that names a system the executor should not
-see. The CLI's secret scan runs on the way back in, not on the way out; export trusts you to have
-written a clean doc in the first place.
+Before committing, reread it once for anything that should not enter git history permanently — an
+internal URL that names a system the executor should not see, business context, or anything else
+that is not shaped like a credential. `export` scans the rendered brief and refuses on a
+credential-shaped match (see above), but the scanner only catches what LOOKS like a secret; it is
+not a substitute for reading what you are about to send.
 
 ## 4. Reviewing the return
 
@@ -160,6 +181,9 @@ closing on their word with extra steps, and the warning exists to catch exactly 
   handoff you have not actually diagnosed. This does not buy time — see [Is this
   brief-able?](#1-is-this-brief-able) above.
 - **Reading the Result before the PR diff.** Reverses the order that keeps the review honest.
+- **Reaching for `--force-secret` on a `sensitivity: restricted` handoff.** Wrong override —
+  `--force-secret` overrides the credential scanner, not the sensitivity gate, and nothing
+  overrides that one. See [Is this brief-able?](#1-is-this-brief-able) above.
 
 ## Notes
 

@@ -126,6 +126,9 @@ the existing scope, or do the task yourself.
 Some things are not yours to approve, and the dispatcher enforces them before the agent starts:
 
 - a brief naming a never-delegate path, or one that a credential scan flags
+- a brief carrying `sensitivity: restricted` in its frontmatter — a handoff marked restricted
+  (x442-skills ADR 0005) is never dispatched to any agent; `delegate-run` exits `misrouted` (77),
+  and that refusal is a stop, not a thing to work around
 - an allowlist that differs from what was approved — widening after the fact is the escalation the
   gate exists to stop
 - `bypassPermissions`, in any mode
@@ -155,6 +158,8 @@ failure — that output is what you delegated in order not to read.
   misrouted, not under-explained.
 - Delegating something confidential to a third-party agent because it looked mechanical.
   Sensitivity is not a function of difficulty.
+- Trying to route around a `misrouted` exit on a restricted handoff. It is a stop, not an
+  obstacle — do the work in a session with board access instead.
 - Pasting a credential into a brief to save a step. The dispatcher scans and will refuse,
   but the habit is what fails on the day the scanner has a gap — trivy does not flag every
   secret shape.

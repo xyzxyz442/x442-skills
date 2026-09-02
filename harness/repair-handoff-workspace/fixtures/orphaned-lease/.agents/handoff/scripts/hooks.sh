@@ -451,6 +451,13 @@ case "$KIND" in
       # cross-repo: only surface what THIS repo must act on next.
       [ "$TOPOLOGY" = "cross-repo" ] && [ -n "$REPO" ] && [ -n "$aud" ] && [ "$aud" != "$REPO" ] && continue
       line="- ${id} — $(meta "$f" status) · $(meta "$f" severity) · $(meta "$f" title)"
+      # The session banner is where an agent decides what to pick up and, crucially, what to hand
+      # to a cheaper or external agent. A restricted unit that reads as ordinary work here has
+      # already lost — `export` would refuse it, but only after the agent has planned around it.
+      # The title is NOT redacted (ADR 0005): the index is what makes the work coordinable, and
+      # the id discloses as much as the title does.
+      [ "$(meta "$f" sensitivity)" = "restricted" ] \
+        && line="$line [🔴 RESTRICTED — never export or delegate; do it in this session]"
       if lock_live "$id"; then
         line="$line [🔒 HELD by $(lock_owner "$id") — do not work on it]"
       elif [ -d "$LOCKS/$id" ]; then

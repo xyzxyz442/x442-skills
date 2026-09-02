@@ -241,6 +241,15 @@ of one check need different remediation they get their own ids (`payload.version
 `payload.version.ahead`). `schema` is bumped only when the document SHAPE changes — new ids appear
 over time by design, and a consumer that broke on each one would be abandoned within a release.
 
+Section 7 also carries the sensitivity/secret-scan trio from ADR 0005: `board.sensitivity.restricted`
+(always a `pass`, reporting the count — holding restricted work is the field doing its job, not a
+defect), `doc.sensitivity.invalid` (`warn` — a typo'd value reads as `normal` to every gate,
+silently), and `doc.secret.detected` (the section's one `fail` — a credential pattern already in
+git history, which needs redacting AND rotating, not just editing). A match on a doc whose activity
+log records a `--force-secret` override for that same rule reports as `doc.secret.overridden`
+(`warn`) instead: the decision is signed and auditable, so it stays visible without leaving a board
+that can never come back clean.
+
 ## Configuration
 
 **Everything about handoff is configured in one filename: `handoff.json`.** Which layer a file is
@@ -335,6 +344,20 @@ working and migrates on its next install.
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`
   section, and a link-don't-duplicate note. It is guidance, not a hard gate — redaction can't be
   mechanically verified.
+- **Sensitivity is a handling flag, not an access control (ADR 0005).**
+  `handoff new --sensitivity normal|restricted` marks a `coordination`/`orchestrator` doc that
+  must never leave the board; absent reads as `normal`, and `migrate` never backfills it. `restricted` refuses `export`
+  outright — a bundle refuses the whole export if the parent or any child carries it — prints a
+  handling banner on `claim`, marks the session-start row, and is refused by a delegated agent's
+  dispatcher. Board membership is the access boundary; the flag only changes what the tooling does
+  with the document.
+- **A secret scanner sits on the CLI write path, not in a pre-commit hook (ADR 0005)** — a
+  pre-commit hook has nothing to attach to on a board with no repository, which is the board most
+  likely to need it. `new`, `release`, `import --result`, and `export` all scan before writing
+  (`export` scans the RENDERED brief, closing the gap where the outbound path used to be
+  unchecked) and die naming the matched rule, never the value. `--force-secret "<reason>"`
+  overrides it on all four commands; the reason is required and recorded on the doc's Activity
+  log.
 - **Three handoff types.** Each doc carries a `type:` — `coordination` (default; the lease-gated work
   item) or `standalone` (a self-contained reference/knowledge doc: porting guide, eval report,
   compaction brief). A **standalone** doc is **gate-exempt** — the `pretool-edit` hook allows editing
