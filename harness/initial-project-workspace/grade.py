@@ -50,6 +50,16 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
 
 def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     exps = [gc.run_verify_script(VERIFY, target)]
+    # The advisory half of the verifier. An uncited karpathy-guidelines link, an uncited commit
+    # ruleset, and a repo with no tool entry file at all are all WARNINGS -- they never move the
+    # exit code, so run_verify_script above passes whether they fired or not. Assert them on the
+    # --json channel or they ship untested.
+    findings = gc.verify_findings(VERIFY, target)
+    exps.append(gc.finding(findings, "agents.karpathy_cited", "pass"))
+    exps.append(gc.finding(findings, "agents.commit_ruleset_cited", "pass"))
+    # tool.any_wired and copilot.vscode.present fire only when something is MISSING, so there is no
+    # id to assert at pass -- their absence is the assertion.
+    exps.append(gc.no_findings_at(findings, "warn"))
     if eval_id == "nest-new":
         # Fresh app, no AI config: the skill creates AGENTS.md and wires Claude to it.
         exps.append(gc.contains(target, "AGENTS.md", "Coding guidelines"))
