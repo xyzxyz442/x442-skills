@@ -108,16 +108,33 @@ check_payload_version() { # installed-version skill-name   (caller reads the sta
 is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
 is_json_str() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.stdin)" 2> /dev/null; }
 
+# How a handoff hook command is RECOGNIZED, everywhere in this script. Mirrors is_managed() in
+# merge-hooks.py, which is the authority: a command is ours iff it invokes `<board>/scripts/hooks.sh`
+# AND carries handoff's own `--kind` flag. Anchoring on the shape the renderer emits rather than on
+# the board's DIRECTORY NAME is the whole point -- `--handoff-dir` accepts any path, so the old
+# literal `handoff/...hooks.sh` was blind to a board named anything else and reported a healthy
+# install as "not installed" / "no tool hooks wired".
+# Requiring BOTH halves is the guard against the opposite error: setup-graph-hooks writes `--kind`
+# commands into these same config files, so a bare `hooks\.sh` would claim its dispatcher as ours.
+# It cannot collide as written -- its dispatcher is `.graph-hooks/hook.sh` (singular, no `/hooks.sh`
+# segment) and it renders `--tool` before `--kind`.
+# The quote is optional because claude's command is `hooks.sh\" --kind` (JSON-escaped) while
+# gemini/copilot render it bare. The trailing alternative is merge-hooks.py's LEGACY_MARKERS: a
+# pre-restructure flat board baked `handoff/hooks.sh` and was always named "handoff".
+HOOK_CMD_RE='/(scripts/)?hooks\.sh(\\")?[[:space:]]+--kind[[:space:]]|handoff/hooks\.sh'
+
 # Locate the handoff dir: the default repo-level path, else derive the configured location
 # from any wired tool config (honors a custom --handoff-dir and any primary tool).
 HD="$ROOT/.agents/handoff"
 # The repo's own config DECLARES its board, so prefer it over reverse-engineering the path out of
-# a hook command string. The grep below still runs as a fallback -- it is what recovers a board
-# from a repo wired before the config layer existed -- but it can only find a board whose
-# directory is named *handoff, since that name is what its pattern anchors on. A board reached
-# through --handoff-dir under any other name resolves from here or not at all.
+# a hook command string. The grep below still runs as a fallback -- it recovers a board from a repo
+# wired before the config layer existed, and from any single-repo install, since setup-handoff.sh
+# only records `board` in .agents/handoff.json for a CROSS-REPO install. That is why the fallback
+# had to stop anchoring on the board's directory name: for `--handoff-dir <anything-but-handoff>`
+# on a single repo it is the ONLY path that runs, and it used to miss.
 if [ ! -d "$HD" ]; then
-  D="$(python3 - "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
+  D="$(
+    python3 - "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
 import json, os, sys
 
 for path in sys.argv[1:]:
@@ -145,9 +162,11 @@ if [ ! -d "$HD" ]; then
   for CF in .claude/settings.json .claude/settings.local.json .gemini/settings.json .github/hooks/handoff.json; do
     [ -f "$ROOT/$CF" ] || continue
     # hooks.sh lives at <board>/scripts/hooks.sh; a board wired before the layout restructure has
-    # it at <board>/hooks.sh. Match either, then strip the right number of path segments — one
-    # dirname too few would point the verifier at the scripts/ subdir instead of the board.
-    DERIVED=$(grep -o '[^"]*handoff/\(scripts/\)\?hooks\.sh' "$ROOT/$CF" 2> /dev/null | head -1)
+    # it at <board>/hooks.sh. Narrow to OUR hook commands first (HOOK_CMD_RE), then pull the path
+    # token off such a line — matching the path alone would also claim another tool's hooks.sh.
+    # Strip the right number of path segments afterwards: one dirname too few would point the
+    # verifier at the scripts/ subdir instead of the board.
+    DERIVED=$(grep -E "$HOOK_CMD_RE" "$ROOT/$CF" 2> /dev/null | grep -oE '[^" ]*/(scripts/)?hooks\.sh' | head -1)
     [ -n "$DERIVED" ] || continue
     D="${DERIVED##*CLAUDE_PROJECT_DIR/}"
     D="${D#bash }"
@@ -350,7 +369,8 @@ else
   # hard failure is worse than not checking: a FAIL nobody can clear is a FAIL everybody learns to
   # scroll past, and it takes the real ones with it. The installer records the choice on every run
   # (true or false), so this reads a declaration rather than inferring one from an absence.
-  LOCAL_WIRING="$(python3 - "$ROOT/.agents/handoff.json" 2> /dev/null << 'PYEOF'
+  LOCAL_WIRING="$(
+    python3 - "$ROOT/.agents/handoff.json" 2> /dev/null << 'PYEOF'
 import json, os, sys
 
 path = sys.argv[1]
@@ -384,7 +404,10 @@ HARD=""
 check_tool() { # name file marker_event
   local name="$1" file="$2"
   [ -f "$file" ] || return 0
-  if grep -qE 'handoff/(scripts/)?hooks\.sh' "$file" 2> /dev/null; then
+  # Board-name-agnostic on purpose — see HOOK_CMD_RE. This check used to grep for a literal
+  # `handoff/...hooks.sh`, so a board wired through --handoff-dir under any other name was
+  # reported as "no tool hooks wired" against a wiring the resolution above had just found.
+  if grep -qE "$HOOK_CMD_RE" "$file" 2> /dev/null; then
     if is_json "$file"; then
       ok tool.wired "$name wired + valid JSON: ${file#$ROOT/}"
       WIRED="${WIRED:+$WIRED }$name"
