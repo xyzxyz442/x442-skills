@@ -8,16 +8,22 @@ longer wire is removed, so a re-run, a change of primary tool, or a migration fr
 layout converges instead of duplicating. Holding the slot rather than re-appending is what keeps
 us from fighting setup-graph-hooks over the order of a shared .gemini/settings.json.
 
+The board path is an ARGUMENT, not an environment variable. It used to arrive as
+``HANDOFF_HDPATH``, which put an installer-internal value in the public ``HANDOFF_`` namespace
+and read like a board override that operators could set -- it never was one. ``--board`` says
+what it is. The env name is still honoured for one deprecation window so an older
+setup-handoff.sh driving a newer merge-hooks.py keeps working; it warns once when it answers.
+
 Env (set by setup-handoff.sh):
-  HANDOFF_HDPATH   path tools use to reach hooks.sh (e.g. ".agents/handoff")
   HANDOFF_TOOL     claude | gemini | copilot
   HANDOFF_PRIMARY  "1" for the hard-enforcement primary, else "0"
+  HANDOFF_HDPATH   DEPRECATED spelling of --board. Removal tracked in the deprecation registry.
 
 Usage:
-  merge-hooks.py <settings.json>            # wire hooks for HANDOFF_TOOL
-  merge-hooks.py <settings.json> --add-dir  # add the handoff dir to additionalDirectories (claude)
-  merge-hooks.py <settings.json> --check    # 0 current, 2 drifted, 3 not wired; writes nothing
-  merge-hooks.py --selftest                 # unit-check the managed-group predicate; writes nothing
+  merge-hooks.py <settings.json> [--board PATH]   # wire hooks for HANDOFF_TOOL
+  merge-hooks.py <settings.json> --add-dir        # add the handoff dir to additionalDirectories (claude)
+  merge-hooks.py <settings.json> --check          # 0 current, 2 drifted, 3 not wired; writes nothing
+  merge-hooks.py --selftest                       # unit-check the managed-group predicate; writes nothing
 
 No eval, no network — reads/writes one JSON file. Claude's schema is wired precisely;
 Gemini/Copilot use their documented event names on a best-effort basis (the AGENTS.md
@@ -190,7 +196,7 @@ def env_repo_config() -> dict:
     would end up with no identity anywhere (exactly the unscoped-filing failure the refusal
     guard exists to prevent). setup-handoff.sh always exports HANDOFF_REPO for a cross-repo
     install (empty for single-repo, which is why this intentionally contributes nothing there),
-    plus HANDOFF_GROUP and HANDOFF_HDPATH (the board path) alongside it.
+    plus HANDOFF_GROUP alongside it; the board path arrives as --board (see board_arg).
     """
     repo = os.environ.get("HANDOFF_REPO", "")
     if not repo:
@@ -199,9 +205,11 @@ def env_repo_config() -> dict:
     grp = os.environ.get("HANDOFF_GROUP", "")
     if grp:
         cfg["group"] = grp
-    hdpath_env = os.environ.get("HANDOFF_HDPATH", "")
-    if hdpath_env:
-        cfg["board"] = hdpath_env
+    board = os.environ.get("_HANDOFF_BOARD_ARG", "") or os.environ.get(
+        "HANDOFF_HDPATH", ""
+    )
+    if board:
+        cfg["board"] = board
     return cfg
 
 
@@ -501,12 +509,46 @@ def _selftest() -> int:
     return 0
 
 
+_DEPRECATION_WARNED = False
+
+
+def board_arg(argv: list[str]) -> str:
+    """The board path this run wires, from --board, else the deprecated env name, else default.
+
+    Warned ONCE per process, on stderr, naming the replacement -- a warning that does not name
+    what to use instead generates a support question rather than a fix. It is a single line and
+    it never fails the run: an installer that dies on a name it still accepts has removed the
+    name, not deprecated it.
+
+    The resolved value is re-exported as _HANDOFF_BOARD_ARG so env_repo_config() records the same
+    board this run actually wired. Two readers of one fact is how they drift apart.
+    """
+    global _DEPRECATION_WARNED
+    if "--board" in argv:
+        idx = argv.index("--board")
+        if idx + 1 >= len(argv):
+            raise SystemExit("merge-hooks: --board requires a value")
+        board = argv[idx + 1]
+    else:
+        board = os.environ.get("HANDOFF_HDPATH", "")
+        if board and not _DEPRECATION_WARNED:
+            _DEPRECATION_WARNED = True
+            print(
+                "merge-hooks: HANDOFF_HDPATH is deprecated -- pass --board instead. "
+                "It still works; see the deprecation registry for when it stops.",
+                file=sys.stderr,
+            )
+        board = board or ".agents/handoff"
+    os.environ["_HANDOFF_BOARD_ARG"] = board
+    return board
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
         return 2
     path = Path(argv[0])
-    hdpath = os.environ.get("HANDOFF_HDPATH", ".agents/handoff")
+    hdpath = board_arg(argv)
     if "--add-dir" in argv:
         add_dir(path, hdpath)
         return 0

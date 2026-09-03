@@ -347,8 +347,8 @@ check_tool() { # name file marker_event
       if [ ! -f "$SCRIPT_DIR/merge-hooks.py" ]; then
         rc=99
       else
-        HANDOFF_HDPATH="$HDREL" HANDOFF_TOOL="$name" HANDOFF_PRIMARY="$is_primary" \
-          python3 "$SCRIPT_DIR/merge-hooks.py" "$file" --check 2> /dev/null
+        HANDOFF_TOOL="$name" HANDOFF_PRIMARY="$is_primary" \
+          python3 "$SCRIPT_DIR/merge-hooks.py" "$file" --board "$HDREL" --check 2> /dev/null
         rc=$?
       fi
       case $rc in
