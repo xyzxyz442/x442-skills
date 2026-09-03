@@ -47,6 +47,18 @@ HOME_FOR = {"third-party": "third-party", "tier-routing": "tiered"}
 _HOME = {"path": None}
 
 
+# Warnings a correct install still legitimately emits, so no_findings_at can assert the rest.
+# Keep this list SHORT and justified -- every entry is a check nobody is watching any more.
+ADVISORY_OK = {
+    # Machine-dependent, not install-dependent: macOS ships no GNU timeout and the pure-bash
+    # watchdog is a supported path, so this fires on a perfectly healthy install.
+    "dep.timeout",
+    # Capability gaps the adapters genuinely have (schema forcing, tool-level scoping). The
+    # cascade reports them so a caller knows what it is getting; they are not defects.
+    "cascade.warning",
+}
+
+
 def _home(eval_id):
     return str(_HOME["path"] or (HOMES / HOME_FOR.get(eval_id, "on-machine")))
 
@@ -108,6 +120,15 @@ def _grade(target, eval_id):
         )
     ]
     exps.append(gc.run_verify_script(VERIFY, target, env=_env(eval_id)))
+    # The advisory half of the verifier. A resolver copy that has silently drifted from the
+    # skill's, and a payload stamp that no longer matches, are both WARNINGS -- they never move the
+    # exit code, so run_verify_script above passes whether they fired or not. Both are exactly the
+    # "installed once, never resynced" drift this skill exists to prevent, so assert them on the
+    # --json channel or they ship untested.
+    findings = gc.verify_findings(VERIFY, target, env=_env(eval_id))
+    exps.append(gc.finding(findings, "resolver.in_sync", "pass"))
+    exps.append(gc.finding(findings, "payload.version", "pass"))
+    exps.append(gc.no_findings_at(findings, "warn", ignore=ADVISORY_OK))
 
     for rel in (
         ".agents/bin/delegate-run",

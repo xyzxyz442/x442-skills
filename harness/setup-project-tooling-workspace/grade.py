@@ -65,9 +65,19 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         exps.append(gc.git_diff_empty(target))
         exps.append(gc.file_exists(target, COMMITLINT_CONFIG))
         exps.append(gc.file_exists(target, EDITORCONFIG))
-        # Git hygiene is warn-only in the verifier (an unmigrated repo must not fail CI), so the
-        # post-state asserts the file itself here.
+        # Git hygiene, the payload stamp and the release-it wiring are all warn-only in the
+        # verifier (an unmigrated repo must not fail CI), so run_verify_script above passes
+        # whether they fired or not. Assert them on the --json channel: file_exists could only
+        # ever say .gitattributes EXISTS, where gitattributes.eol_lf says it actually forces LF —
+        # which is the property that keeps a CRLF checkout from breaking the shipped hooks.
+        findings = gc.verify_findings(VERIFY, target)
         exps.append(gc.file_exists(target, GITATTRIBUTES))
+        exps.append(gc.finding(findings, "gitattributes.eol_lf", "pass"))
+        exps.append(gc.finding(findings, "gitignore.husky", "pass"))
+        exps.append(gc.finding(findings, "payload.version", "pass"))
+        # release-it is optional per profile and this fixture deliberately omits it; everything
+        # else advisory must be silent.
+        exps.append(gc.no_findings_at(findings, "warn", ignore={"releaseit.present"}))
     elif eval_id == "fresh":
         # Pre-state: the post-scaffold markers must appear. Both fail on the raw fixture by design.
         exps.append(gc.file_exists(target, COMMITLINT_CONFIG))

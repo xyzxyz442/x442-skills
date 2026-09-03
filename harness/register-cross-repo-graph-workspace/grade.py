@@ -61,6 +61,17 @@ def _sandbox_home(base: Path) -> tuple[Path, dict]:
     return home, {**os.environ, "HOME": str(home)}
 
 
+# Warnings a correctly synced sandbox still legitimately emits, so no_findings_at can assert the
+# rest. Keep this list SHORT and justified -- every entry is a check nobody is watching any more.
+ADVISORY_OK = {
+    # Machine-dependent, not sync-dependent: the sandbox siblings are throwaway checkouts that
+    # nobody gitignored, and graphify may not be installed at all on this machine.
+    "repo.gitignored",
+    "gitignore.graphify_out",
+    "tool.graphify",
+}
+
+
 def _run_verify(
     target: Path, env: dict
 ) -> tuple[subprocess.CompletedProcess, gc.Expectation]:
@@ -101,14 +112,24 @@ def grade_not_configured(fixture: Path) -> list[gc.Expectation]:
             sandbox
         )  # throwaway HOME guarantees no user-layer manifest leaks in
         proc, summary_exp = _run_verify(graded, env)
-        not_configured = "not configured" in proc.stdout and proc.returncode == 0
+        # Assert the FINDING ID, not the prose. "not configured" is a phrase in a summary line
+        # that any rewording breaks; cascade.not_configured is the stable contract, and it also
+        # distinguishes a real skip from a verifier that happened to print nothing.
+        findings = gc.verify_findings(VERIFY, graded, env=env)
         return [
             summary_exp,
             gc.expectation(
                 "an unconfigured repo is a clean skip (exit 0), not a FAIL",
-                not_configured,
-                f"exit {proc.returncode}; 'not configured' in output: {'not configured' in proc.stdout}",
+                proc.returncode == 0,
+                f"exit {proc.returncode}",
             ),
+            gc.finding(
+                findings,
+                "cascade.not_configured",
+                "skip",
+                label="the cascade reports 'not configured', not a failure",
+            ),
+            gc.no_findings_at(findings, "fail"),
         ]
     finally:
         cleanup()
@@ -217,19 +238,26 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
                 )
             )
         # Behavioral proof: the verifier's end-to-end steering check answered a grep into the
-        # sibling from its graph, tagged with the alias, instead of leaving it to grep.
-        steered = "answered from its graph" in proc.stdout and ALIAS in proc.stdout
+        # sibling from its graph, tagged with the alias, instead of leaving it to grep. Asserted on
+        # the finding ID rather than on the sentence -- steer.end_to_end.silent and
+        # .local_only are the two ways this fails, and each carries its own id, so a miss now says
+        # WHICH failure happened instead of just "no steering line in the output".
+        findings = gc.verify_findings(VERIFY, consumer, env=env)
         exps.append(
-            gc.expectation(
-                "grep into the sibling is answered from its graph, not left to grep",
-                steered,
-                (
-                    "steering line present"
-                    if steered
-                    else "no cross-repo steering hit in verifier output"
-                ),
+            gc.finding(
+                findings,
+                "steer.end_to_end",
+                "pass",
+                label="grep into the sibling is answered from its graph, not left to grep",
             )
         )
+        # The advisory half: a sibling whose graph has gone stale, a merged graph older than its
+        # sources, and hooks that predate cross-repo support are all WARNINGS -- they never move
+        # the exit code, so _run_verify above passes whether they fired or not. A freshly synced
+        # sandbox must be clean of every one of them.
+        exps.append(gc.finding(findings, "steer.cross_repo_scope", "pass"))
+        exps.append(gc.finding(findings, "block.aliases", "pass"))
+        exps.append(gc.no_findings_at(findings, "warn", ignore=ADVISORY_OK))
         return exps
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
