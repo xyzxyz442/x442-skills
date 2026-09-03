@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
-"""Grader for the shared AGENTS.md managed-block invariant.
+"""Grader for the invariants that hold where two skills write the SAME file.
 
-The first **cross-skill** workspace here: it grades an invariant no single skill owns. Five
-skills splice a managed block into the same AGENTS.md, through four separate implementations,
-and every one of them shipped the same defect — no blank line survived between a managed block
-and whatever followed it, and one of them deleted the tail outright on removal. Nothing caught
-it, because every workspace grades one skill against one repo and the defect is only reachable
-when two skills write the same file. See agents-md-splice-audit-handoff.
+The first **cross-skill** workspace here: it grades invariants no single skill owns. Five skills
+splice a managed block into the same AGENTS.md, through four separate implementations, and every
+one of them shipped the same defect — no blank line survived between a managed block and whatever
+followed it, and one of them deleted the tail outright on removal. Nothing caught it, because
+every other workspace grades one skill against one repo and the defect is only reachable when two
+skills write the same file. See agents-md-splice-audit-handoff.
+
+AGENTS.md is not the only such file. Three skills also merge hook groups into a tool's settings
+file — and on Gemini, setup-graph-hooks and setup-handoff merge into the same
+`.gemini/settings.json`. The same defect class was waiting there: setup-graph-hooks replaced the
+whole "hooks" subtree, so installing it after setup-handoff deleted every handoff enforcement
+hook, in an install that reported success. See hook-config-merge-clobber-handoff.
 
 The cases are ordered by how directly they name the failure:
 
-- `splice-selftests`            — does the assertion class even exist, in every copy?
+- `splice-selftests`            — does the assertion class even exist, in every AGENTS.md copy?
 - `sibling-blocks-stable`       — the unit-level invariant, all four implementations, one file
 - `graph-removal-keeps-siblings`— the data-loss half, which is not whitespace
 - `installer-sibling-blocks`    — the real installers, run for real, into one repo
+- `hook-merge-selftests`        — the same assertion-class question, for the settings-file merges
+- `installer-sibling-hooks`     — two installers, one settings file, nobody's hooks lost
 
 Read-only with respect to the repo and LLM-free: the pure-function cases operate on strings, and
-the installer case runs inside a temp copy produced by `grade_common.isolated_git_target`.
+the installer cases run inside a temp copy produced by `grade_common.isolated_git_target`.
 
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 """
 
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -45,6 +54,13 @@ MARKER = ":end -->"
 # The block asset files carry the markers as CONTENT. They are data, not implementations.
 ASSET_DIRS = ("/assets/",)
 
+# A file is a settings-file HOOK MERGE if it reads an existing JSON settings file, edits its
+# "hooks" object, and writes it back. Same discovery discipline as the splices above: matched on
+# what the code DOES, never on its filename, because one of the three copies lives inside a shell
+# heredoc where no filename convention would have found it.
+MERGE_SIGNS = ('"hooks"', "json.dump")
+MERGE_READ_SIGNS = ("json.load", "read_text")
+
 GRAPH_HOOKS = SKILLS / "engineering/setup-graph-hooks"
 SETUP_HANDOFF = SKILLS / "engineering/setup-handoff"
 
@@ -62,6 +78,23 @@ def find_splice_implementations() -> list[Path]:
         except (OSError, UnicodeDecodeError):
             continue
         if MARKER in text and any(s in text for s in SPLICE_SIGNS):
+            out.append(p)
+    return out
+
+
+def find_hook_merges() -> list[Path]:
+    """Every file under skills/ that merges hook groups into a tool's settings file."""
+    out = []
+    for p in sorted(SKILLS.rglob("*")):
+        if not p.is_file() or p.suffix not in (".py", ".sh", ".md"):
+            continue
+        if any(d in str(p) for d in ASSET_DIRS):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if all(s in text for s in MERGE_SIGNS) and any(s in text for s in MERGE_READ_SIGNS):
             out.append(p)
     return out
 
@@ -293,6 +326,124 @@ def _installer_expectations(target: Path) -> list[dict]:
         cleanup()
 
 
+def _hook_merge_selftest_expectations() -> list[dict]:
+    """Every settings-file hook merge must be reachable AND carry a passing --selftest.
+
+    `strip`/`replace` predicates decide what an installer is allowed to DELETE from a file the
+    user and other skills also write. None of the three had a unit assertion; the one that also
+    lacked a notion of ownership deleted every handoff hook on Gemini and said nothing.
+    """
+    merges = find_hook_merges()
+    exps = [gc.expectation(
+        "discovery found the settings-file hook merges",
+        len(merges) >= 3,
+        f"{len(merges)} found: " + ", ".join(str(p.relative_to(REPO)) for p in merges),
+    )]
+    for p in merges:
+        rel = str(p.relative_to(REPO))
+        text = p.read_text(encoding="utf-8")
+        if p.suffix != ".py":
+            exps.append(gc.expectation(
+                f"{rel} is reachable as a testable module", False,
+                "the merge is inline in shell or prose, so no assertion can reach it — that is "
+                "how the sibling copies diverged; extract it into a script that takes --selftest",
+            ))
+            continue
+        if "--selftest" not in text:
+            exps.append(gc.expectation(
+                f"{rel} carries a --selftest", False,
+                "no --selftest: nothing asserts which hook groups this merge owns, which is "
+                "exactly the gap that let it delete another skill's hooks",
+            ))
+            continue
+        r = subprocess.run([sys.executable, str(p), "--selftest"],
+                           capture_output=True, text=True, timeout=120)
+        exps.append(gc.expectation(
+            f"{rel} --selftest passes", r.returncode == 0,
+            (r.stdout.strip() or r.stderr.strip() or "no output")[-400:],
+        ))
+    return exps
+
+
+# Both skills wire Gemini to the SAME .gemini/settings.json, which is what makes this reachable.
+# On Claude they happen to write different files today — luck, not design.
+GEMINI_SETTINGS = ".gemini/settings.json"
+USER_GROUP = {"matcher": "custom", "hooks": [
+    {"type": "command", "command": "bash .gemini/my-own-guard.sh"}]}
+
+
+def _installer_hook_expectations(target: Path) -> list[dict]:
+    graded, cleanup = gc.isolated_git_target(target)
+    try:
+        settings = graded / GEMINI_SETTINGS
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        # Seed the file the way a real repo arrives: a setting of the user's own, and a hook of
+        # their own sitting in an event both installers also wire.
+        settings.write_text(json.dumps(
+            {"contextFileName": "AGENTS.md", "hooks": {"BeforeTool": [USER_GROUP]}}, indent=2) + "\n",
+            encoding="utf-8")
+        # setup-handoff FIRST, then setup-graph-hooks — the only order that was broken, and the
+        # one the documented install chain produces.
+        steps = [
+            ["bash", str(SETUP_HANDOFF / "scripts/setup-handoff.sh"), str(graded),
+             "--tools", "gemini", "--primary", "gemini"],
+            ["bash", str(GRAPH_HOOKS / "scripts/setup-graph-hooks.sh"), str(graded),
+             "--tools", "gemini", "--primary", "gemini"],
+        ]
+        for cmd in steps:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                return [gc.skipped(
+                    "both installers run into one settings file",
+                    f"{Path(cmd[1]).name} exited {r.returncode}: "
+                    f"{(r.stderr.strip() or r.stdout.strip())[-300:]}",
+                )]
+        after_install = settings.read_text(encoding="utf-8")
+        data = json.loads(after_install)
+        blob = json.dumps(data)
+
+        handoff_hooks = blob.count("/scripts/hooks.sh")
+        exps = [gc.expectation(
+            "every handoff enforcement hook survives the graph installer",
+            handoff_hooks == 4,
+            f"{handoff_hooks} handoff hook command(s) in {GEMINI_SETTINGS} (expected 4); "
+            f"events: {sorted(data.get('hooks', {}))}",
+        )]
+        graph_kinds = sorted(set(re.findall(r"--kind (\S+)", blob)) - {"sessionstart", "stop",
+                                                                      "pretool-edit", "posttool-edit"})
+        exps.append(gc.expectation(
+            "the graph hooks landed alongside them",
+            len(graph_kinds) >= 2, f"graph-only kinds wired: {graph_kinds}",
+        ))
+        exps.append(gc.expectation(
+            "a hook the USER wrote, in an event both installers wire, survives both",
+            USER_GROUP in data.get("hooks", {}).get("BeforeTool", []),
+            f"BeforeTool now holds {len(data.get('hooks', {}).get('BeforeTool', []))} group(s); "
+            f"the user's own present: {USER_GROUP in data.get('hooks', {}).get('BeforeTool', [])}",
+        ))
+        exps.append(gc.expectation(
+            "an unrelated top-level setting survives",
+            data.get("contextFileName") == "AGENTS.md",
+            f"contextFileName: {data.get('contextFileName')!r}",
+        ))
+        # Not "does the installer work" but "does running EITHER one again leave the file alone".
+        # Strip-and-re-append converges on content and never on order: two installers that both
+        # append walk their groups past each other forever, dirtying the tree on every install.
+        for cmd in steps:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            name = Path(cmd[1]).name
+            now = settings.read_text(encoding="utf-8")
+            exps.append(gc.expectation(
+                f"re-running {name} leaves {GEMINI_SETTINGS} byte-identical",
+                r.returncode == 0 and now == after_install,
+                "no change" if now == after_install
+                else f"changed on re-run ({len(after_install)} -> {len(now)} bytes)",
+            ))
+        return exps
+    finally:
+        cleanup()
+
+
 def grade(target: Path, eval_id: str | None) -> list[dict]:
     gc.pre_state_hint(HERE, eval_id)
     agents_md = target / "AGENTS.md"
@@ -308,6 +459,10 @@ def grade(target: Path, eval_id: str | None) -> list[dict]:
         return _removal_expectations(agents_md)
     if eval_id == "installer-sibling-blocks":
         return _installer_expectations(target)
+    if eval_id == "hook-merge-selftests":
+        return _hook_merge_selftest_expectations()
+    if eval_id == "installer-sibling-hooks":
+        return _installer_hook_expectations(target)
     return exps
 
 

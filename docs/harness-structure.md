@@ -146,6 +146,16 @@ removing its block. Every per-skill grader was green throughout, correctly — e
 against one repo, and the defect only exists once two skills write the same file. That is the test
 for whether a contract belongs here: **can any single-skill fixture express it at all?**
 
+`AGENTS.md` turned out not to be the only shared file, so `agents-md-blocks-workspace` now grades
+two instances of one invariant — _an installer must not clobber, in a file several skills write,
+what it did not itself write_ — and its directory name is narrower than its contents. The second
+instance is the tool settings file: three skills merge hook groups into one, and on Gemini
+`setup-graph-hooks` and `setup-handoff` merge into the same `.gemini/settings.json`, where the
+graph installer replaced the whole `hooks` subtree and deleted every handoff enforcement hook
+(`hook-merge-selftests`, `installer-sibling-hooks`; see `hook-config-merge-clobber-handoff`). Both
+instances follow the same two-case shape: does the assertion class exist in every copy, and do the
+real installers, run for real into one repo, leave each other's work alone.
+
 ## `lib/` API surface
 
 Three modules, shared by every workspace. All are read-only, make zero LLM calls, and are therefore

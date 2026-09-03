@@ -179,40 +179,10 @@ IFS=','
 for t in $TOOLS; do
   IFS="$OLDIFS"
   [ -n "$t" ] || continue
-  python3 - "$REPO" "$t" << 'PY'
-import json, pathlib, sys
-
-repo, tool = pathlib.Path(sys.argv[1]), sys.argv[2]
-CMD = ('bash "$CLAUDE_PROJECT_DIR/.agents/bin/consent-gate.sh" --tool ' + tool) if tool == "claude" \
-    else ('bash .agents/bin/consent-gate.sh --tool ' + tool)
-EVENT = {"claude": ("PreToolUse", ".claude/settings.json"),
-         "gemini": ("BeforeTool", ".gemini/settings.json"),
-         "copilot": ("preToolUse", ".github/hooks/delegate.json")}
-if tool not in EVENT:
-    sys.exit(f"  ! unknown tool {tool} — skipped")
-event, rel = EVENT[tool]
-path = repo / rel
-path.parent.mkdir(parents=True, exist_ok=True)
-data = {}
-if path.exists():
-    try:
-        data = json.loads(path.read_text())
-    except Exception as e:
-        sys.exit(f"  ! {rel} is not valid JSON ({e}) — refusing to rewrite it")
-hooks = data.setdefault("hooks", {}) if tool != "copilot" else data
-# Strip only OUR managed group, matched on the script name. Anything else in this file belongs to
-# another skill or to the user, and rewriting it would make this installer a source of data loss.
-groups = [g for g in hooks.get(event, [])
-          if not any("consent-gate.sh" in (h.get("command") or "") for h in g.get("hooks", []))]
-groups.append({"matcher": "Bash|Read", "hooks": [{"type": "command", "command": CMD}]})
-hooks[event] = groups
-new = json.dumps(data, indent=2) + "\n"
-if not path.exists() or path.read_text() != new:
-    path.write_text(new)
-    print(f"  + {rel} ({event} consent gate)")
-else:
-    print(f"  = {rel} up to date")
-PY
+  # The merge itself lives in merge-consent-hook.py so it can carry a --selftest: it decides
+  # what this installer is allowed to delete from a settings file setup-handoff also writes,
+  # and inline in a heredoc no assertion could reach it. See hook-config-merge-clobber-handoff.
+  python3 "${SKILL}/scripts/merge-consent-hook.py" "$REPO" "$t"
   IFS=','
 done
 IFS="$OLDIFS"
