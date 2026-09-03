@@ -93,6 +93,20 @@
       "prompt": "A teammate's board upgraded before yours. Work the board anyway.",
       "fixture": "fixtures/claude-wired",
       "expected_output": "A doc stamped at a schema this CLI does not understand must still be LISTED, with one warning naming both versions and printed once for the whole run — and every mutating command (claim, release, export) must REFUSE it, because an older CLI that writes a newer doc silently drops every field it cannot represent. Fields it does not know survive untouched, an ordinary doc on the same board is unaffected, and verify reports doc.schema.ahead as warn."
+    },
+    {
+      "id": "schema-board-ahead",
+      "kind": "post-state",
+      "prompt": "Your board is behind a teammate's. File a new handoff on it anyway.",
+      "fixture": "fixtures/claude-wired",
+      "expected_output": "The per-doc write gate cannot see this case: `new` and plain `import` CREATE the document and stamp it with the CLI's own schema, so it is writable by construction no matter how far behind the CLI is. On a board stamped NEWER than the CLI, both must be REFUSED naming both versions, and neither may leave a file behind — otherwise a downlevel doc is filed among current ones and no later reader, `migrate` included, can tell it apart from one that genuinely predates the migration. Reads are unaffected, and an existing doc the CLI does understand is still claimable."
+    },
+    {
+      "id": "payload-downgrade",
+      "kind": "post-state",
+      "prompt": "Install the handoff protocol here from a checkout older than the board.",
+      "fixture": "fixtures/claude-wired",
+      "expected_output": "install_file byte-compares and copies with no notion of newer, so on a shared board the stalest checkout wins and the stamp is rewritten to match — leaving no trace that anything was rolled back. Installing over a board stamped NEWER must be REFUSED, naming both versions; the board's CLI must be byte-unchanged and its stamp must NOT be rewritten. `--force-downgrade` is the deliberate override and does roll it back."
     }
   ]
 }

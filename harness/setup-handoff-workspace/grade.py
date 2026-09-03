@@ -15,6 +15,7 @@ script-behavior}. Exits 0 iff nothing failed.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,14 @@ HD = ".agents/handoff"
 # does not exist, and must NOT fire for one that is only in another section of a grouped board.
 NO_SUCH = "no such handoff"
 CLAUDE_CFG = ".claude/settings.json"
+
+# Fixture boards carry no CLI copy of their own. <board>/handoff is a small dispatcher that execs
+# the CLI named by $HANDOFF_BIN (then a user-level install, then a vendored copy), so pointing it
+# at the skill's payload here is what puts the binary under test in front of every fixture. Without
+# it this workspace graded whatever `handoff` happened to be installed on the machine running it —
+# a green run proved the MACHINE was current, not the payload. The other three handoff workspaces
+# already pinned it; this one was missed. Set once, for every subprocess this grader spawns.
+os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
 
 # Legacy shell key -> camelCase JSON key. Mirrors the installer's own migration map; kept here
 # rather than imported because the grader must be able to disagree with the code under test.
@@ -238,6 +247,100 @@ def grade_schema_forward(target):
     findings = gc.verify_findings(VERIFY, target)
     e.append(gc.finding(findings, "doc.schema.ahead", "warn",
                         label="verify reports the doc as ahead — a warn, since reading still works"))
+    return e
+
+
+def grade_schema_board_ahead(target):
+    """Refuse to CREATE on a board newer than this CLI — the gap require_writable cannot see.
+
+    require_writable compares a doc that ALREADY EXISTS, so it covers claim/release/export and
+    nothing else. `new` and plain `import` CREATE the doc and stamp it with this CLI's own
+    SCHEMA_VERSION, which makes it writable by construction however far behind the CLI is. On a
+    board a teammate already migrated, that files a downlevel document among current ones — and no
+    later reader can tell it apart from one that genuinely predates the migration, so the next
+    `migrate` "upgrades" a file that was written wrong today. The board's own stamp is the only
+    thing that knows, which is why this gate reads it and the per-doc gate cannot.
+    """
+    e = []
+    board = Path(target) / HD
+    _handoff(target, "new", "ordinary", "--title", "Filed before the board moved")
+
+    cfg = board / "handoff.json"
+    d = json.loads(cfg.read_text(encoding="utf-8"))
+    d["schema"] = 99
+    cfg.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    r = _handoff(target, "list")
+    e.append(gc.expectation("reads still work on a board from the future",
+                            r.returncode == 0, f"exit {r.returncode}"))
+
+    r = _handoff(target, "new", "downlevel", "--title", "Would be stamped wrong")
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("new is REFUSED, naming both versions",
+                            r.returncode != 0 and "is schema 99" in out and "understands 1" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("and nothing was created",
+                            not (board / "downlevel-handoff.md").exists(),
+                            "downlevel-handoff.md absent"))
+
+    brief = Path(target) / "inbound-brief.md"
+    brief.write_text("# Inbound\n\nA brief from outside the board.\n", encoding="utf-8")
+    r = _handoff(target, "import", str(brief), "--id", "inbound", "--title", "Inbound")
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("import is REFUSED for the same reason — it creates a doc too",
+                            r.returncode != 0 and "is schema 99" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("and nothing was imported",
+                            not (board / "inbound-handoff.md").exists(),
+                            "inbound-handoff.md absent"))
+
+    # The blast radius stops at creation: a doc this CLI can represent is still fully writable.
+    r = _handoff(target, "claim", "ordinary", "fine")
+    e.append(gc.expectation("an existing doc this CLI understands is still claimable",
+                            r.returncode == 0, f"exit {r.returncode}"))
+    return e
+
+
+def grade_payload_downgrade(target):
+    """Refuse to install OVER a newer board — the silent-downgrade bug.
+
+    install_file byte-compares and copies; it has no notion of newer. On a shared board that means
+    whoever runs the installer from the stalest checkout wins, and write_board_config then rewrites
+    the stamp to match what was just installed — so the rollback leaves no trace at all, and the one
+    reader that could have noticed (verify-setup-handoff.sh) blames the wrong side, telling the
+    person who ran it that THEIR copy is stale.
+    """
+    e = []
+    board = Path(target) / HD
+    # Isolate the user-level CLI: this case manipulates payload stamps, and the real one is shared
+    # by every board on the machine running the harness.
+    env = {"XDG_DATA_HOME": str(Path(target) / ".harness-xdg")}
+
+    cfg = board / "handoff.json"
+    d = json.loads(cfg.read_text(encoding="utf-8"))
+    d.setdefault("_generated", {})["payloadVersion"] = "setup-handoff 999"
+    cfg.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    before = (board / "handoff").read_bytes()
+
+    r = _run(["bash", str(SETUP), str(target), "--tools", "claude"], target, env)
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("installing over a newer board is REFUSED",
+                            r.returncode != 0 and "refusing to install" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("naming both versions, so the operator knows which side is stale",
+                            "v999" in out, f"out: {out.strip()[-140:]}"))
+    e.append(gc.expectation("the board's CLI is byte-unchanged",
+                            (board / "handoff").read_bytes() == before, "dispatcher identical"))
+    stamp = json.loads(cfg.read_text(encoding="utf-8")).get("_generated", {}).get("payloadVersion")
+    e.append(gc.expectation("and its stamp was NOT rewritten to hide the rollback",
+                            stamp == "setup-handoff 999", f"stamp: {stamp}"))
+
+    r = _run(["bash", str(SETUP), str(target), "--tools", "claude", "--force-downgrade"], target, env)
+    e.append(gc.expectation("--force-downgrade is the deliberate override",
+                            r.returncode == 0, f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-140:]}"))
+    stamp = json.loads(cfg.read_text(encoding="utf-8")).get("_generated", {}).get("payloadVersion")
+    e.append(gc.expectation("and it does roll the stamp back",
+                            stamp != "setup-handoff 999", f"stamp: {stamp}"))
     return e
 
 
@@ -1105,6 +1208,12 @@ def _grade(target, eval_id):
 
     if eval_id == "schema-forward":
         return grade_schema_forward(target)
+
+    if eval_id == "schema-board-ahead":
+        return grade_schema_board_ahead(target)
+
+    if eval_id == "payload-downgrade":
+        return grade_payload_downgrade(target)
 
     if eval_id == "layout-migration":
         return grade_layout_migration(target)

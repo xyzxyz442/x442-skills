@@ -58,12 +58,77 @@ install_file() {
   if [ ! -f "$d" ] || ! cmp -s "$s" "$d"; then cp "$s" "$d"; fi
 }
 
+# --- downgrade guard -------------------------------------------------------------------
+# install_file is deliberately version-blind: byte-compare, then copy. That is correct for one
+# writer and wrong for a SHARED board, where the writer may be on a stale checkout. Nothing looks
+# broken afterwards either — write_board_config rewrites the stamp to match what was just
+# installed, so the only reader that could notice is verify-setup-handoff.sh, and it blames the
+# wrong side ("this copy is stale"). Everyone else is silently rolled back.
+#
+# Since the CLI moved out of the board, this got wider, not narrower: a stale run also overwrites
+# the machine-wide user-level copy that every OTHER board on this machine resolves through.
+#
+# So compare before writing. Behind-or-equal installs freely — re-running an older skill against a
+# newer board is only a problem when it WRITES backwards. Strictly newer refuses, naming both
+# versions and the flag. The two stamps are checked independently because they have different
+# blast radii and different right answers:
+#
+#   the board    — shared with other people through git. Refuse the whole run.
+#   the user CLI — machine-local, shared by every board here. Skip that copy alone and say so.
+#                  Aborting an otherwise legitimate board install over a machine-local convenience
+#                  would train people to pass --force-downgrade by reflex, disarming both checks.
+shipped_payload_version() { # -> integer, or empty when unreadable
+  awk 'NR==1{print $2}' "$SKILL_DIR/scripts/payload.version" 2> /dev/null
+}
+
+# An absent stamp is EMPTY, never zero: a pre-versioning install reads as "behind" and installs
+# freely, which is what lets this skill upgrade the boards that predate the stamp.
+read_payload_stamp() { # file-holding-"setup-handoff N" -> integer or empty
+  local v
+  v="$(awk 'NR==1{print $2}' "$1" 2> /dev/null)"
+  case "$v" in '' | *[!0-9]*) printf '' ;; *) printf '%s' "$v" ;; esac
+}
+
+# The board's stamp lives in handoff.json's _generated.payloadVersion, falling back to the legacy
+# .version file it replaced — a board still on the old layout is exactly the kind of stale install
+# this guard protects, so it must be read, not skipped.
+board_payload_version() { # board-dir -> integer or empty
+  local b="$1" v=""
+  if [ -f "$b/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+    v="$(python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+g = d.get("_generated")
+s = g.get("payloadVersion", "") if isinstance(g, dict) else ""
+s = str(s).split()
+print(s[-1] if s else "")' "$b/handoff.json" 2> /dev/null)"
+  fi
+  case "$v" in '' | *[!0-9]*) read_payload_stamp "$b/.version" ;; *) printf '%s' "$v" ;; esac
+}
+
+# True only when both numbers are known AND the installed one is strictly newer. Unknown on either
+# side is not a downgrade — refusing on missing information would block every pre-versioning board.
+is_downgrade() { # installed shipped
+  [ -n "$1" ] && [ -n "$2" ] || return 1
+  [ "$1" -gt "$2" ] 2> /dev/null
+}
+
 # The CLI, in its three possible homes. Board and binary are separate (see payload/dispatcher):
 # what every board gets is the small dispatcher at <board>/handoff, which is what all the wired
 # hook commands and every README already point at. The CLI it execs comes from $HANDOFF_BIN, the
 # user-level install this function writes, or the board's vendored copy — in that order.
 install_cli() { # board-dir
-  local b="$1" home
+  local b="$1" home shipped installed
+  shipped="$(shipped_payload_version)"
+  installed="$(board_payload_version "$b")"
+  if is_downgrade "$installed" "$shipped" && [ "$FORCE_DOWNGRADE" != 1 ]; then
+    die "$b is on payload v$installed and this checkout ships v$shipped — refusing to install.
+       This would overwrite a newer board with older machinery and rewrite its stamp to match, so
+       nobody downstream would be told it happened. Update this checkout (git pull), or pass
+       --force-downgrade if rolling the board back is what you actually mean."
+  fi
   install_file "$PAYLOAD/dispatcher" "$b/handoff"
   chmod +x "$b/handoff"
   if [ "$VENDOR_CLI" = "1" ]; then
@@ -78,9 +143,17 @@ install_cli() { # board-dir
   # Best-effort — a read-only or unset HOME is not a reason to fail an install whose board half
   # just succeeded, and the vendored copy (or $HANDOFF_BIN) still answers.
   home="$(handoff_cli_home)"
-  if mkdir -p "$home" 2> /dev/null; then
+  installed="$(read_payload_stamp "$home/.payload-version")"
+  if is_downgrade "$installed" "$shipped" && [ "$FORCE_DOWNGRADE" != 1 ]; then
+    # Not fatal: the board half above already succeeded, and every board on this machine resolving
+    # through a NEWER user-level CLI is the good outcome, not the broken one.
+    echo "setup-handoff: $home/handoff is on payload v$installed and this checkout ships v$shipped — left alone (--force-downgrade overrides). The board install is unaffected."
+  elif mkdir -p "$home" 2> /dev/null; then
     if install_file "$PAYLOAD/handoff" "$home/handoff" 2> /dev/null; then
       chmod +x "$home/handoff" 2> /dev/null || true
+      # Stamped beside the binary because the CLI carries no version of its own, and this is the
+      # only copy with no board next to it to record one for it.
+      install_file "$SKILL_DIR/scripts/payload.version" "$home/.payload-version" 2> /dev/null || true
     else
       echo "setup-handoff: could not write the user-level CLI to $home/handoff — boards will use their vendored copy."
     fi
@@ -212,6 +285,9 @@ REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" HANDOFF_DIR="" MIGRATE=""
 # fixtures, where a committed byte-copy of a 180 KB script is 15 files to re-sync on every bugfix
 # and the exact drift the split was made to end.
 VENDOR_CLI=1
+# Roll a board (or the user-level CLI) BACKWARDS to what this checkout ships. Off by default: the
+# guard exists because the rollback is otherwise silent, so the override has to be typed.
+FORCE_DOWNGRADE=0
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
 GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE=""
@@ -220,7 +296,7 @@ GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE=""
 # "override with empty" (flag passed as "") apart from "leave alone" (flag absent) — a plain
 # ${VAR:-} check on GROUP_LIST/LAYOUT can't make that distinction since both collapse to "".
 GROUP_LIST_SET="" LAYOUT_SET=""
-[ $# -gt 0 ] || die "usage: setup-handoff.sh <repo> --tools <list> --primary <tool|none> [opts] | --board-only <path> [--groups <csv>] [--layout ...] [--remote <url>]"
+[ $# -gt 0 ] || die "usage: setup-handoff.sh <repo> --tools <list> --primary <tool|none> [--force-downgrade] [opts] | --board-only <path> [--groups <csv>] [--layout ...] [--remote <url>]"
 # --board-only is a distinct mode (no <repo> positional): scaffold a standalone board and exit.
 if [ "$1" = "--board-only" ]; then
   BOARD_ONLY="${2:-}"
@@ -254,6 +330,10 @@ while [ $# -gt 0 ]; do
       ;;
     --no-vendor-cli)
       VENDOR_CLI=0
+      shift
+      ;;
+    --force-downgrade)
+      FORCE_DOWNGRADE=1
       shift
       ;;
     --group)

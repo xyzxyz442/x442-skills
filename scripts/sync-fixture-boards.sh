@@ -18,6 +18,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PAYLOAD="$ROOT/skills/engineering/setup-handoff/scripts/payload"
 ASSETS="$ROOT/skills/engineering/setup-handoff/assets"
+PAYLOAD_VERSION_FILE="$ROOT/skills/engineering/setup-handoff/scripts/payload.version"
 
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
@@ -41,6 +42,35 @@ sync_one() { # src dest
   fi
 }
 
+# The payload STAMP is a mirror too, and a less obvious one: it lives inside the fixture's
+# handoff.json rather than in a file the installer copies, so sync_one never sees it. Left behind on
+# a version bump it fails the idempotency evals with "re-run produces an empty diff" naming
+# handoff.json — the installer rewrites the stamp to the version it ships, which IS the drift.
+# Rewritten in place (key by key, not regenerated) so every other value the fixture encodes as its
+# scenario -- ttlHours, groups, topology, schema -- survives untouched.
+sync_stamp() { # board-dir
+  local cfg="$1/handoff.json" shipped
+  [ -f "$cfg" ] || return 0
+  shipped="$(head -1 "$PAYLOAD_VERSION_FILE" 2> /dev/null)"
+  [ -n "$shipped" ] || return 0
+  python3 - "$cfg" "$shipped" "$CHECK" "${cfg#"$ROOT"/}" << 'PYEOF' || changed=$((changed + 1))
+import json, sys
+cfg, shipped, check, label = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(cfg) as fh:
+    d = json.load(fh)
+gen = d.get("_generated")
+if not isinstance(gen, dict) or gen.get("payloadVersion") in (None, shipped):
+    sys.exit(0)  # no stamp to keep current, or already current
+print(f"  {'drift' if check == '1' else 'synced'}: {label} ({gen['payloadVersion']} -> {shipped})")
+if check != "1":
+    gen["payloadVersion"] = shipped
+    with open(cfg, "w") as fh:
+        json.dump(d, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+sys.exit(1)  # signal "this one changed" to the caller's counter
+PYEOF
+}
+
 for board in $(find "$ROOT/harness" -type d -name handoff -path '*/fixtures/*' | sort); do
   skip=0
   for pat in $SKIP_FIXTURES; do
@@ -58,6 +88,7 @@ for board in $(find "$ROOT/harness" -type d -name handoff -path '*/fixtures/*' |
   for t in handoff-doc-template handoff-standalone-template handoff-orchestrator-template handoff-brief-template; do
     sync_one "$ASSETS/$t.md" "$board/templates/$t.md"
   done
+  sync_stamp "$board"
 done
 
 if [ "$CHECK" = "1" ]; then
