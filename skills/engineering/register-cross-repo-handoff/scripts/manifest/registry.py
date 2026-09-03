@@ -23,15 +23,23 @@
 # --write emits the file (atomically, and only when the bytes differ, so a no-op re-sync leaves
 # `git status` clean); --check compares without writing and exits 1 on drift. Both go through
 # build(), so the sync and the verifier can never disagree about what the file should contain.
+#
+# Self-test:  python3 registry.py --selftest
 import argparse
 import json
 import os
 import sys
 
 # ONE file on the board. The registry used to be its own `repos.json`; it is now a key inside the
-# board's `handoff.json`, under `_generated` — the block the sync owns and rewrites wholesale, kept
-# apart from the hand-edited keys beside it so a re-sync can never clobber somebody's `ttlHours` and
-# a hand-edit can never masquerade as a projection of the manifest.
+# board's `handoff.json`, under `_generated` — the block generated state lives in, kept apart from
+# the hand-edited keys beside it so a re-sync can never clobber somebody's `ttlHours` and a
+# hand-edit can never masquerade as a projection of the manifest.
+#
+# `_generated` is SHARED, and this file rewrites only the two keys it owns. setup-handoff.sh is the
+# co-tenant: it stamps `payloadVersion` there, which verify-setup-handoff.sh reads to detect payload
+# drift. Rewriting the block wholesale would erase that stamp on every synced board and report every
+# one of them as a pre-versioning install. The selftest pins this; do not "tidy" it into a
+# wholesale rewrite.
 FILENAME = "handoff.json"
 LEGACY_FILENAME = "repos.json"
 GENERATED_KEY = "_generated"
@@ -114,10 +122,175 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
     # NOT `schema`: that key now belongs to the board's DOCUMENT schema, which is what triggers a
     # migration. Two meanings for one key inside one file is exactly the kind of trap this
     # consolidation was supposed to remove.
+    # Exactly these two keys, merged into whatever else `_generated` holds — see the module
+    # header on the shared block.
     gen["registrySchema"] = 2
     gen["repos"] = sorted(entries, key=lambda e: (e["group"], e["alias"]))
     data[GENERATED_KEY] = gen
     return json.dumps(data, indent=2, sort_keys=True) + "\n", warnings
+
+
+def _selftest() -> int:
+    """python3 registry.py --selftest
+
+    The missing assertion class: NOTHING asserted the PROJECTION itself. Every defect this file
+    exists to prevent is a wrong projection that still produces valid JSON -- an entry for a repo
+    whose identity could not be attested, a path field that re-pins the board to one disk, a
+    clobbered hand-edited key, an audience claimed twice. The sync writes the file, the CLI reads
+    it on another machine, and the failure surfaces there as a brief confidently stamped for the
+    wrong repo. No integration test in this repo spans that gap.
+
+    build() is the single source for both --write and --check, so asserting build() asserts both.
+    """
+    import tempfile
+
+    def resolved(board, groups):
+        return {"groups": [dict(g, board=board) for g in groups]}
+
+    def member(alias, audience, root_commit="c0ffee", **kw):
+        base = {
+            "alias": alias,
+            "audience": audience,
+            "root_commit": root_commit,
+            "exists": True,
+            "is_git": True,
+        }
+        base.update(kw)
+        return base
+
+    with tempfile.TemporaryDirectory() as board:
+        other = os.path.join(board, "other-board")
+        os.makedirs(other)
+
+        # ---- only THIS board's groups are projected -------------------------------------------
+        doc = {
+            "groups": [
+                {"group": "g1", "board": board, "members": [member("a", "acme-api")]},
+                {"group": "g2", "board": other, "members": [member("b", "acme-lib")]},
+            ]
+        }
+        text, warns = build(doc, board)
+        repos = json.loads(text)[GENERATED_KEY]["repos"]
+        assert [e["alias"] for e in repos] == ["a"], repos
+        assert not warns, warns
+
+        # ---- schema 2 records IDENTITY ONLY ---------------------------------------------------
+        # ADR 0002: a path -- even a relative one -- encodes the authoring machine's checkout
+        # layout, and that single field is what pinned a board to one disk. Re-adding it would be
+        # invisible until someone cloned the board somewhere else.
+        assert set(repos[0]) == {"group", "alias", "audience", "rootCommit"}, repos[0]
+        assert json.loads(text)[GENERATED_KEY]["registrySchema"] == 2
+        assert "path" not in text, "a path field re-pins the board to one machine"
+
+        # ---- an unattestable member gets NO entry, and says why -------------------------------
+        # An entry without an attestable root commit is exactly the guess this file replaced.
+        for kw, reason in (
+            ({"root_commit": "", "exists": False}, "not on disk"),
+            ({"root_commit": "", "is_git": False}, "not a git repo"),
+            ({"root_commit": ""}, "has no commits"),
+        ):
+            text2, warns2 = build(
+                resolved(
+                    board, [{"group": "g", "members": [member("x", "acme-x", **kw)]}]
+                ),
+                board,
+            )
+            assert json.loads(text2)[GENERATED_KEY]["repos"] == [], kw
+            assert len(warns2) == 1 and reason in warns2[0], (kw, warns2)
+
+        # ---- audience clashes are scoped to a GROUP -------------------------------------------
+        # Two groups sharing one board may each have their own "api": the CLI only ever resolves
+        # within the caller's section. A clash INSIDE one group is the real defect.
+        _, warns3 = build(
+            resolved(
+                board,
+                [
+                    {"group": "g1", "members": [member("a", "same")]},
+                    {"group": "g2", "members": [member("b", "same")]},
+                ],
+            ),
+            board,
+        )
+        assert not warns3, warns3
+        _, warns4 = build(
+            resolved(
+                board,
+                [
+                    {
+                        "group": "g1",
+                        "members": [member("a", "same"), member("b", "same")],
+                    }
+                ],
+            ),
+            board,
+        )
+        assert len(warns4) == 1 and "claimed twice" in warns4[0], warns4
+
+        # ---- this file owns exactly two keys ---------------------------------------------------
+        # The clobber class, in both directions. OUTSIDE `_generated`: hand-edited policy and the
+        # board's DOCUMENT schema belong to whoever wrote them. INSIDE it: `_generated` is SHARED
+        # with setup-handoff.sh, which stamps payloadVersion there and whose verifier reads it to
+        # detect payload drift. A "tidy up _generated" refactor that rebuilt the block wholesale
+        # would erase that stamp on every synced board and report each as a pre-versioning
+        # install -- valid JSON, silent damage, surfacing only as a wrong warning much later.
+        with open(os.path.join(board, FILENAME), "w") as fh:
+            json.dump(
+                {
+                    "ttlHours": 4,
+                    "schema": 1,
+                    GENERATED_KEY: {
+                        "payloadVersion": "setup-handoff 7",
+                        "registrySchema": 1,
+                        "repos": [{"alias": "old", "path": "acme-old"}],
+                    },
+                },
+                fh,
+            )
+        text5, _ = build(
+            resolved(board, [{"group": "g", "members": [member("a", "acme-api")]}]),
+            board,
+        )
+        got = json.loads(text5)
+        assert got["ttlHours"] == 4, "a hand-edited key must survive the projection"
+        assert got["schema"] == 1, "the DOCUMENT schema key is not ours to touch"
+        assert (
+            got[GENERATED_KEY]["payloadVersion"] == "setup-handoff 7"
+        ), "the co-tenant's payload stamp must survive"
+        # ...and the two keys we DO own are replaced, not merged: the stale schema-1 entry (with
+        # its ADR-0002 path) is gone rather than accumulating beside the new one.
+        assert got[GENERATED_KEY]["registrySchema"] == 2
+        assert [e["alias"] for e in got[GENERATED_KEY]["repos"]] == ["a"]
+        assert "acme-old" not in text5
+
+        # ---- byte-stability: no timestamp, deterministic order --------------------------------
+        # A re-projection that changes nothing must be byte-identical, or every board shows dirty
+        # on each sync -- which is how a generated file stops being trusted.
+        doc6 = resolved(
+            board,
+            [
+                {
+                    "group": "g",
+                    "members": [member("z", "acme-z"), member("a", "acme-a")],
+                }
+            ],
+        )
+        first, _ = build(doc6, board)
+        assert build(doc6, board) == (first, []), "build must be deterministic"
+        assert [e["alias"] for e in json.loads(first)[GENERATED_KEY]["repos"]] == [
+            "a",
+            "z",
+        ], "entries sort by (group, alias)"
+
+        # A board dir given by a non-canonical path must project the same groups: the board match
+        # is by realpath, and a trailing "/." or a symlinked parent is a normal way to invoke it.
+        text7, _ = build(doc6, os.path.join(board, "."))
+        assert (
+            json.loads(text7)[GENERATED_KEY]["repos"]
+            == json.loads(first)[GENERATED_KEY]["repos"]
+        )
+
+    print("registry.py selftest: OK")
+    return 0
 
 
 def main() -> int:
@@ -194,4 +367,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())

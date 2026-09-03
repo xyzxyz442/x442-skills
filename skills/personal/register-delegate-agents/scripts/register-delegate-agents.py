@@ -15,6 +15,8 @@ what changed; the caller decides which layer, and the default is your home direc
 
 Refuses to write `agents` into a layer inside a git work tree — the same rule the resolver
 enforces, applied at the point of writing so the error arrives before the commit rather than after.
+
+Self-test:  python3 register-delegate-agents.py --selftest
 """
 
 import argparse
@@ -203,12 +205,149 @@ def cmd_add(args) -> int:
     return 0
 
 
+def parse_csv(raw: str) -> list:
+    """Comma-separated CLI list -> stripped, non-empty items, order preserved.
+
+    Empty items are dropped rather than kept as "": an empty agent name in `allow` would narrow
+    the roster to something no agent can match, and an empty path in `neverDelegate` is a pattern
+    that matches nothing while looking like a rule.
+    """
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def mutate_remove(data: dict, name: str) -> None:
+    """Drop one agent. Idempotent: removing what is not there is not an error."""
+    data.get("agents", {}).pop(name, None)
+
+
+def mutate_allow(data: dict, names: list) -> None:
+    """REPLACE the allow-list. Narrowing is a statement of the whole set, not an addition."""
+    data["allow"] = names
+
+
+def mutate_never(data: dict, paths: list) -> None:
+    """UNION into neverDelegate, sorted. This one accumulates on purpose: it is a safety floor,
+    and an edit that silently dropped a path someone added earlier would widen egress.
+    """
+    data["neverDelegate"] = sorted(set(data.get("neverDelegate", [])) | set(paths))
+
+
 def _edit(args, mutate, describe) -> int:
     path = manifest_path(args.layer)
     data = load(path)
     mutate(data)
     save(path, data)
     print(f"{describe} in {path}")
+    return 0
+
+
+def _selftest() -> int:
+    """python3 register-delegate-agents.py --selftest
+
+    The missing assertion class: NOTHING asserted the two rules that make this file a SECURITY
+    boundary rather than a config editor.
+
+      1. `agents` entries name egress targets -- an endpoint your source is shipped to. The layer
+         that declares them must sit OUTSIDE a git work tree, or a commit adds an egress target to
+         every clone. cmd_add refuses; nothing tested that it refuses.
+      2. The manifest is written 0600. It names those endpoints, and on a shared machine a
+         group-readable roster tells anyone where the code goes.
+
+    Both fail SILENTLY in the permissive direction -- a dropped check writes a perfectly valid
+    manifest -- and neither is visible to the setup-delegate-agent workspace, which grades a repo
+    that is already correctly configured.
+    """
+    import stat
+    import tempfile
+
+    # ---- parse_csv: empties dropped, order and inner spacing preserved ------------------------
+    assert parse_csv("a,b") == ["a", "b"]
+    assert parse_csv(" a , b ") == ["a", "b"]
+    assert parse_csv("a,,b,") == [
+        "a",
+        "b",
+    ], "an empty item is a rule that matches nothing"
+    assert parse_csv("") == []
+    assert parse_csv(",") == []
+    assert parse_csv("z,a") == ["z", "a"], "order is the caller's, not sorted"
+
+    # ---- allow REPLACES, neverDelegate UNIONS --------------------------------------------------
+    # The asymmetry is deliberate and worth pinning: narrowing states the whole permitted set, so
+    # a second `allow` must not accumulate the first; the never-list is a safety floor, so an edit
+    # that dropped an earlier path would WIDEN egress.
+    d = {"allow": ["old"]}
+    mutate_allow(d, ["new"])
+    assert d["allow"] == ["new"], "allow replaces"
+
+    d = {"neverDelegate": ["b", "a"]}
+    mutate_never(d, ["c", "a"])
+    assert d["neverDelegate"] == ["a", "b", "c"], "never unions, de-dupes and sorts"
+    mutate_never(d, [])
+    assert d["neverDelegate"] == [
+        "a",
+        "b",
+        "c",
+    ], "an empty edit never shrinks the floor"
+
+    # ---- remove is idempotent, and tolerant of a manifest with no agents at all -----------------
+    d = {"agents": {"x": {}, "y": {}}}
+    mutate_remove(d, "x")
+    mutate_remove(d, "x")
+    assert d["agents"] == {"y": {}}
+    mutate_remove({}, "nothing-here")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # ---- load(): a missing manifest is a NEW one; a corrupt one is never silently emptied ---
+        # Returning {} on malformed JSON would let the next save() overwrite a hand-edited file
+        # with a fresh, empty roster -- data loss disguised as a successful edit.
+        missing = os.path.join(tmp, "nope", "delegate.json")
+        assert load(missing) == {"version": 1}
+        corrupt = os.path.join(tmp, "corrupt.json")
+        open(corrupt, "w").write("{not json")
+        try:
+            load(corrupt)
+        except SystemExit as e:
+            assert "invalid JSON" in str(e), e
+        else:
+            raise AssertionError("load() must refuse a corrupt manifest, not empty it")
+
+        # ---- save(): 0600, atomic, and no .tmp left behind -------------------------------------
+        path = os.path.join(tmp, "layer", ".agents", "delegate.json")
+        save(path, {"version": 1, "agents": {"a": {"adapter": "claude"}}})
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        assert mode == 0o600, "manifest names egress endpoints: %o" % mode
+        assert not os.path.exists(
+            path + ".tmp"
+        ), "the temp file must be replaced, not left"
+        assert load(path)["agents"]["a"]["adapter"] == "claude", "round-trips"
+        # Re-saving keeps the mode: an edit must not widen a file it already narrowed.
+        save(path, load(path))
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+        # ---- manifest_path(): expands ~ and canonicalizes ---------------------------------------
+        assert manifest_path("~").startswith(os.path.realpath(os.path.expanduser("~")))
+        assert manifest_path(tmp) == os.path.join(os.path.realpath(tmp), MANIFEST)
+        assert manifest_path(os.path.join(tmp, ".")) == manifest_path(tmp)
+
+        # ---- THE rule: a layer inside a git work tree may not define agents ---------------------
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(repo)
+        r = subprocess.run(
+            ["git", "init", "-q", repo], capture_output=True, text=True, timeout=30
+        )
+        if r.returncode == 0:
+            assert in_git_worktree(repo), "a git repo must read as a work tree"
+            # A subdirectory of the repo is still inside it -- the check must not be root-only.
+            sub = os.path.join(repo, "nested", "deep")
+            os.makedirs(sub)
+            assert in_git_worktree(sub)
+        else:  # pragma: no cover - git absent
+            print("  (git unavailable — work-tree assertions skipped)")
+        # A plain directory outside any repo is where agents belong. tempfile dirs are not
+        # inside this checkout, so this also proves the check is not answering from CWD.
+        assert not in_git_worktree(tmp), "a bare temp dir must not read as a work tree"
+
+    print("register-delegate-agents.py selftest: OK")
     return 0
 
 
@@ -256,9 +395,7 @@ def main() -> int:
         return cmd_add(args)
     if args.cmd == "remove":
         return _edit(
-            args,
-            lambda d: d.get("agents", {}).pop(args.name, None),
-            f"removed {args.name!r}",
+            args, lambda d: mutate_remove(d, args.name), f"removed {args.name!r}"
         )
     if args.cmd == "set-primary":
         return _edit(
@@ -269,19 +406,17 @@ def main() -> int:
             args, lambda d: d.update(default=args.name), f"default = {args.name!r}"
         )
     if args.cmd == "allow":
-        names = [n.strip() for n in args.names.split(",") if n.strip()]
-        return _edit(args, lambda d: d.update(allow=names), f"allow = {names}")
+        names = parse_csv(args.names)
+        return _edit(args, lambda d: mutate_allow(d, names), f"allow = {names}")
     if args.cmd == "never":
-        paths = [p.strip() for p in args.paths.split(",") if p.strip()]
+        paths = parse_csv(args.paths)
         return _edit(
-            args,
-            lambda d: d.update(
-                neverDelegate=sorted(set(d.get("neverDelegate", [])) | set(paths))
-            ),
-            f"neverDelegate += {paths}",
+            args, lambda d: mutate_never(d, paths), f"neverDelegate += {paths}"
         )
     return 2
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())
