@@ -348,11 +348,11 @@ so it must never carry any one repo's identity.
 
 **`<repo>/.agents/handoff.json`** — per-consumer, written only for cross-repo installs.
 
-| Key         | Meaning                                                                            |
-| ----------- | ---------------------------------------------------------------------------------- |
-| `repo`      | This repo's identity on the board (its `audience` name).                           |
-| `group`     | This repo's section, on a grouped board.                                            |
-| `board`     | Path from this repo to the shared board. `boardPath` is a legacy alias, still read. |
+| Key     | Meaning                                                                             |
+| ------- | ----------------------------------------------------------------------------------- |
+| `repo`  | This repo's identity on the board (its `audience` name).                            |
+| `group` | This repo's section, on a grouped board.                                            |
+| `board` | Path from this repo to the shared board. `boardPath` is a legacy alias, still read. |
 
 **Environment overrides** keep the `HANDOFF_` prefix, so the two are never confused: a `HANDOFF_`
 name always means "override this run", a camelCase key always means "configured".
@@ -363,30 +363,30 @@ here as a defect rather than an omission.
 
 **Public — set these yourself.**
 
-| Name                       | Overrides                                                             |
-| -------------------------- | --------------------------------------------------------------------- |
-| `HANDOFF_BOARD_PATH`       | Which board this CLI acts on. Beats every config layer.               |
-| `HANDOFF_BIN`              | Which `handoff` binary the dispatcher runs.                           |
-| `HANDOFF_REPO`             | This repo's identity on the board (config key `repo`).                |
-| `HANDOFF_GROUP`            | This repo's section on a grouped board (config key `group`).          |
-| `HANDOFF_GROUPS`           | The board's sections (board config key `groups`).                     |
-| `HANDOFF_GROUP_LAYOUT`     | `subfolder` or `prefix` (board config key `groupLayout`).             |
-| `HANDOFF_TTL_HOURS`        | Lease lifetime (board config key `ttlHours`).                         |
-| `HANDOFF_ALLOW_VERIFY_CMD` | Permit `release --run-verify` (board config key `allowVerifyCmd`).    |
-| `HANDOFF_ENVIRONMENTS`     | The environment ladder (board config key `environments`).             |
+| Name                       | Overrides                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------- |
+| `HANDOFF_BOARD_PATH`       | Which board this CLI acts on. Beats every config layer.                          |
+| `HANDOFF_BIN`              | Which `handoff` binary the dispatcher runs.                                      |
+| `HANDOFF_REPO`             | This repo's identity on the board (config key `repo`).                           |
+| `HANDOFF_GROUP`            | This repo's section on a grouped board (config key `group`).                     |
+| `HANDOFF_GROUPS`           | The board's sections (board config key `groups`).                                |
+| `HANDOFF_GROUP_LAYOUT`     | `subfolder` or `prefix` (board config key `groupLayout`).                        |
+| `HANDOFF_TTL_HOURS`        | Lease lifetime (board config key `ttlHours`).                                    |
+| `HANDOFF_ALLOW_VERIFY_CMD` | Permit `release --run-verify` (board config key `allowVerifyCmd`).               |
+| `HANDOFF_ENVIRONMENTS`     | The environment ladder (board config key `environments`).                        |
 | `HANDOFF_SESSION_ID`       | Who is acting. Falls back to `CLAUDE_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`. |
-| `HANDOFF_NONINTERACTIVE`   | Never prompt. Set it in CI, where a prompt is a hang.                 |
-| `HANDOFF_ROSTER_LIMIT`     | How many roster entries a bundle prints before eliding (default 5).   |
+| `HANDOFF_NONINTERACTIVE`   | Never prompt. Set it in CI, where a prompt is a hang.                            |
+| `HANDOFF_ROSTER_LIMIT`     | How many roster entries a bundle prints before eliding (default 5).              |
 
 **Internal — set by the machinery. Reading them is fine; setting them is not supported.**
 
-| Name                    | Set by                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| `HANDOFF_BOARD_SOURCE`  | The dispatcher, so `--which` can say how the board was resolved.              |
-| `HANDOFF_CLI_PATH`      | The dispatcher, naming the binary it chose.                                    |
-| `HANDOFF_CLI_SOURCE`    | The dispatcher, naming which rung of the ladder answered.                      |
-| `HANDOFF_NO_MAIN`       | The self-test alone, to source the CLI without running its dispatch block.     |
-| `HANDOFF_HDPATH`        | **Legacy.** The relative board path that payloads before 22 baked into each tool's hook command. `hooks.sh` still reads it so those installs keep printing the right path in a deny message; nothing sets it any more. Not a board override — that is `HANDOFF_BOARD_PATH`. |
+| Name                   | Set by                                                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HANDOFF_BOARD_SOURCE` | The dispatcher, so `--which` can say how the board was resolved.                                                                                                                                                                                                            |
+| `HANDOFF_CLI_PATH`     | The dispatcher, naming the binary it chose.                                                                                                                                                                                                                                 |
+| `HANDOFF_CLI_SOURCE`   | The dispatcher, naming which rung of the ladder answered.                                                                                                                                                                                                                   |
+| `HANDOFF_NO_MAIN`      | The self-test alone, to source the CLI without running its dispatch block.                                                                                                                                                                                                  |
+| `HANDOFF_HDPATH`       | **Legacy.** The relative board path that payloads before 22 baked into each tool's hook command. `hooks.sh` still reads it so those installs keep printing the right path in a deny message; nothing sets it any more. Not a board override — that is `HANDOFF_BOARD_PATH`. |
 
 `CLAUDE_SESSION_ID` and `CLAUDE_CODE_SESSION_ID` are **vendor-owned** and read as fallbacks only.
 They are never renamed or aliased here, and neither is `USER`.
