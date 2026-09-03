@@ -271,6 +271,17 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         cleanup()
 
 
+# Warnings a correctly wired fixture still legitimately emits, so no_findings_at can assert the
+# rest. Keep this list SHORT and justified -- every entry is a check nobody is watching any more.
+ADVISORY_OK = {
+    # Fixture-shaped, not install-shaped: the fixtures carry no committed git hook, and the
+    # graders run them without building a CRG or graphify graph first.
+    "git.post_commit.missing",
+    "graph.built",
+    "graphify.built",
+}
+
+
 def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     if eval_id == "no-agents-md":
         # Precondition case: the skill must refuse and fabricate nothing. The verifier is NOT
@@ -285,6 +296,16 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         )
 
     exps = [gc.run_verify_script(VERIFY, target)]
+    # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder
+    # or the search_mode honesty rule, a payload stamp that no longer matches, an un-excluded
+    # .code-review-graph/ -- all WARNINGS, none of which move the exit code, so run_verify_script
+    # above passes whether they fired or not. These are precisely the "installed once, never
+    # refreshed" drifts this skill exists to prevent, so assert them on the --json channel.
+    findings = gc.verify_findings(VERIFY, target)
+    exps.append(gc.finding(findings, "payload.version", "pass"))
+    exps.append(gc.finding(findings, "block.search_tier", "pass"))
+    exps.append(gc.finding(findings, "block.search_mode", "pass"))
+    exps.append(gc.no_findings_at(findings, "warn", ignore=ADVISORY_OK))
     if eval_id == "fresh-wired":
         exps.append(gc.contains(target, "AGENTS.md", "graph-hooks"))
         exps.append(gc.file_exists(target, f"{GRAPH_HOOKS_DIR}/hook.sh"))
