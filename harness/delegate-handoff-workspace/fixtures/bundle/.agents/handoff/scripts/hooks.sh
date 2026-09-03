@@ -139,9 +139,12 @@ TOPOLOGY="$HC_TOPOLOGY"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
-# Relative board path used in every hint/deny message. HANDOFF_HDPATH (baked into older
-# hook commands) wins; otherwise the consumer's own .agents/handoff.json `board`, which is
-# what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
+# Relative board path used in every hint/deny message. HANDOFF_HDPATH is LEGACY and nothing sets
+# it any more: payloads before 22 baked it into each tool's hook command, and those installs are
+# still out there, so it wins where it is present. Otherwise the consumer's own
+# .agents/handoff.json `board`, which is what a cross-repo install records. Falls back to the
+# in-repo default for single-repo boards. This is a hint path, not a board override — the board
+# override is HANDOFF_BOARD_PATH and it is read by the CLI, not by this gate.
 hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
 
 # --- is there a CLI at all? ------------------------------------------------------------

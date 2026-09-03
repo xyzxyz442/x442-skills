@@ -225,8 +225,8 @@ because each depends on the relationship between the board's parts rather than o
   shape the skill stopped writing. Compare content per wired tool:
 
   ```bash
-  HANDOFF_HDPATH="$HDREL" HANDOFF_TOOL=claude HANDOFF_PRIMARY=0 \
-    python3 "$HANDOFF_SKILL/scripts/merge-hooks.py" TOOL_CONFIG --check
+  HANDOFF_TOOL=claude HANDOFF_PRIMARY=0 \
+    python3 "$HANDOFF_SKILL/scripts/merge-hooks.py" TOOL_CONFIG --board "$HDREL" --check
   # 0 current  2 drifted  3 not wired
   ```
 

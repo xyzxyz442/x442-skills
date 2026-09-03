@@ -190,11 +190,13 @@ drive this installer from a manifest with
 hand per repo; a worked install is recorded in
 [docs/cross-repo-handoff-usage-record.md](../../../docs/cross-repo-handoff-usage-record.md).
 
-**Per-repo identity (shared board).** The shared `config` is repo-neutral — it carries no
-`REPO_NAME`, so no sibling's install clobbers another's identity. Each consuming repo's identity is
-baked into its **own** hook command as `HANDOFF_REPO=<repo>` (plus `HANDOFF_HDPATH` so the
-session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer `$HANDOFF_REPO` over
-the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
+**Per-repo identity (shared board).** The shared board config is repo-neutral — it carries no
+repo name, so no sibling's install clobbers another's identity. Each consuming repo records its own
+identity in its own `.agents/handoff.json` (`repo`, `group`, `board`), written by `merge-hooks.py`
+at install time. It is deliberately **not** baked into the hook command: a command string goes
+stale on a rename and nothing on the board can see that it has. `hooks.sh`/`handoff` prefer
+`$HANDOFF_REPO` over that config when it is set, and the `AGENTS.md` routing block is
+path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
 ## Two version numbers — payload and schema

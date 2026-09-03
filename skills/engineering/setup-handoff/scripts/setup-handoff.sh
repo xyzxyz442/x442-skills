@@ -279,7 +279,7 @@ with open(dest, "w") as fh:
 PY
 }
 
-REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" HANDOFF_DIR="" MIGRATE="" ALLOW_VERIFY=0
+REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0
 # Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
 # works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
 # fixtures, where a committed byte-copy of a 180 KB script is 15 files to re-sync on every bugfix
@@ -325,7 +325,7 @@ while [ $# -gt 0 ]; do
       ;;
     --handoff-dir)
       require_value --handoff-dir "$#" "${2:-}"
-      HANDOFF_DIR="${2:-}"
+      BOARD_ARG="${2:-}"
       shift 2
       ;;
     --no-vendor-cli)
@@ -529,20 +529,20 @@ fi
 
 # --- resolve the handoff dir + the path tools use to reach hooks.sh --------------------
 if [ "$TOPOLOGY" = "cross-repo" ]; then
-  [ -n "$HANDOFF_DIR" ] || HANDOFF_DIR="$(cd "$REPO/.." && pwd)/.agents/handoff"
-  case "$HANDOFF_DIR" in /*) ;; *) HANDOFF_DIR="$(cd "$REPO/$HANDOFF_DIR" 2> /dev/null && pwd || echo "$REPO/$HANDOFF_DIR")" ;; esac
-  HDEST="$HANDOFF_DIR"
+  [ -n "$BOARD_ARG" ] || BOARD_ARG="$(cd "$REPO/.." && pwd)/.agents/handoff"
+  case "$BOARD_ARG" in /*) ;; *) BOARD_ARG="$(cd "$REPO/$BOARD_ARG" 2> /dev/null && pwd || echo "$REPO/$BOARD_ARG")" ;; esac
+  HDEST="$BOARD_ARG"
   # path recorded in tool configs, relative to the repo when possible
   HDPATH="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$HDEST" "$REPO" 2> /dev/null || echo "$HDEST")"
 else
   # single-repo (repo-level board). Location is configurable via --handoff-dir, but must live
   # INSIDE the repo (a shared parent dir is what --topology cross-repo is for).
-  if [ -n "$HANDOFF_DIR" ]; then
-    HDPATH="${HANDOFF_DIR#./}"
+  if [ -n "$BOARD_ARG" ]; then
+    HDPATH="${BOARD_ARG#./}"
     HDPATH="${HDPATH%/}"
     case "$HDPATH" in
-      /*) die "single-repo --handoff-dir must be a path inside the repo (e.g. .claude/handoff), got absolute: $HANDOFF_DIR — use --topology cross-repo for a shared parent dir" ;;
-      "" | ../* | */../*) die "single-repo --handoff-dir must be inside the repo, got: $HANDOFF_DIR" ;;
+      /*) die "single-repo --handoff-dir must be a path inside the repo (e.g. .claude/handoff), got absolute: $BOARD_ARG — use --topology cross-repo for a shared parent dir" ;;
+      "" | ../* | */../*) die "single-repo --handoff-dir must be inside the repo, got: $BOARD_ARG" ;;
     esac
     HDEST="$REPO/$HDPATH"
   else
@@ -703,8 +703,8 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   # writes no repo config there and the command stays byte-identical to a pre-existing one.
   local repo_id=""
   [ "$TOPOLOGY" = "cross-repo" ] && repo_id="$(basename "$REPO")"
-  HANDOFF_HDPATH="$HDPATH" HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \
-    python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" --repo-root "$REPO" \
+  HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \
+    python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" --board "$HDPATH" --repo-root "$REPO" \
     && echo "  wired $tool ($([ "$primary" = 1 ] && echo 'hard enforcement' || echo advisory)): $cfg" \
     || echo "  WARN: could not wire $tool config: $cfg" >&2
 }
@@ -718,7 +718,7 @@ done
 # cross-repo: grant the current repo read/exec access to the shared handoff dir via
 # Claude's additionalDirectories (best-effort; only when claude is wired).
 if [ "$TOPOLOGY" = "cross-repo" ] && printf '%s' "$TOOLS" | grep -q claude; then
-  HANDOFF_HDPATH="$HDPATH" python3 "$SKILL_DIR/scripts/merge-hooks.py" "$REPO/.claude/settings.json" --add-dir || true
+  python3 "$SKILL_DIR/scripts/merge-hooks.py" "$REPO/.claude/settings.json" --board "$HDPATH" --add-dir || true
 fi
 
 # --- AGENTS.md routing block (idempotent) ---------------------------------------------
