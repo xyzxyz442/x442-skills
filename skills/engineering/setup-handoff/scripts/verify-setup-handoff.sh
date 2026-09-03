@@ -311,16 +311,16 @@ HDREL="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[
 if [ ! -f "$SCRIPT_DIR/splice-agents-block.py" ]; then
   warn agents.block.checkable "cannot check the AGENTS.md block: splice-agents-block.py not found beside this verifier"
 else
-python3 "$SCRIPT_DIR/splice-agents-block.py" --check \
-  --file "$ROOT/AGENTS.md" \
-  --template "$SCRIPT_DIR/../assets/agents-handoff.md" \
-  --handoff-dir "$HDREL" 2> /dev/null
-case $? in
-  0) ok agents.block "AGENTS.md routing block present and matches the asset" ;;
-  2) warn agents.block.drift "AGENTS.md routing block has drifted from the asset — re-run setup-handoff to refresh it" ;;
-  3) bad agents.block "AGENTS.md routing block missing" ;;
-  *) bad agents.block.malformed "AGENTS.md routing block malformed (duplicated/unbalanced markers) — fix by hand" ;;
-esac
+  python3 "$SCRIPT_DIR/splice-agents-block.py" --check \
+    --file "$ROOT/AGENTS.md" \
+    --template "$SCRIPT_DIR/../assets/agents-handoff.md" \
+    --handoff-dir "$HDREL" 2> /dev/null
+  case $? in
+    0) ok agents.block "AGENTS.md routing block present and matches the asset" ;;
+    2) warn agents.block.drift "AGENTS.md routing block has drifted from the asset — re-run setup-handoff to refresh it" ;;
+    3) bad agents.block "AGENTS.md routing block missing" ;;
+    *) bad agents.block.malformed "AGENTS.md routing block malformed (duplicated/unbalanced markers) — fix by hand" ;;
+  esac
 fi
 
 section "3. Wired tools + hard-enforcement primary"
@@ -335,7 +335,10 @@ check_tool() { # name file marker_event
       WIRED="${WIRED:+$WIRED }$name"
       # hard enforcement = a pretool-edit (deny) hook is wired for this tool
       local is_primary=0
-      grep -q 'pretool-edit' "$file" 2> /dev/null && { HARD="${HARD:+$HARD }$name"; is_primary=1; }
+      grep -q 'pretool-edit' "$file" 2> /dev/null && {
+        HARD="${HARD:+$HARD }$name"
+        is_primary=1
+      }
       # Content, not presence: the installer rewrites these on every run, so they only go stale
       # when nobody re-runs it — and the payload stamp cannot see that, because it covers the
       # payload FILES, not the wiring written around them. Compare against what the skill would
@@ -351,7 +354,7 @@ check_tool() { # name file marker_event
       case $rc in
         0) ok tool.hook.current "$name hook commands match what setup-handoff writes now" ;;
         2) warn tool.hook.current "$name hook commands have drifted — re-run setup-handoff to refresh them" ;;
-        *) : ;;   # 3 (not wired) is unreachable here; 99 = helper absent, stay silent
+        *) : ;; # 3 (not wired) is unreachable here; 99 = helper absent, stay silent
       esac
     else bad tool.config.json_valid "$name config invalid JSON: ${file#$ROOT/}"; fi
   fi

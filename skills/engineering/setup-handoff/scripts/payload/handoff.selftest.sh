@@ -1083,7 +1083,10 @@ chk "a board with no fleet reports no-registry, not bad-registry" "no-registry||
 printf '{ nope\n' > "$OF/.agents/handoff/handoff.json"
 OF_BAD="$(cd "$OF" && ./.agents/handoff/handoff list 2>&1)"
 chk "a corrupt board config is fatal, not a silent degrade" "3" \
-  "$(cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1; echo $?)"
+  "$(
+    cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1
+    echo $?
+  )"
 chk_contains "and it names the file that could not be read" "$OF_BAD" "cannot read"
 chk_contains "and the parse error itself" "$OF_BAD" "handoff.json"
 
@@ -1091,7 +1094,10 @@ printf '{ "topology": "cross-repo", "ttlHours": 4 }\n' > "$OF/.agents/handoff/ha
 printf '{ nope\n' > "$OF/.agents/handoff/repos.json"
 OF_LEG="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/.agents/handoff" board_repo_entry "acme-lib-$$")"
 chk "a corrupt LEGACY repos.json still only degrades brief resolution" "bad-registry||" "$OF_LEG"
-chk "and the board still lists" "0" "$(cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1; echo $?)"
+chk "and the board still lists" "0" "$(
+  cd "$OF" && ./.agents/handoff/handoff list > /dev/null 2>&1
+  echo $?
+)"
 export HOME="$OF_HOME_SAVE"
 
 printf '\nbundle rosters are bounded, and a dangling one can be closed\n'
@@ -1147,14 +1153,23 @@ GHKEY="ghp_""abcdefghijklmnopqrstuvwxyz1234"
 chk "a plausible AWS key id trips its rule" "aws-access-key-id" "$(printf '%s\n' "$AWSKEY" | scan_secrets)"
 chk "and a GitHub token trips its own" "github-token" "$(printf '%s\n' "$GHKEY" | scan_secrets)"
 chk "a clean line trips nothing, and says so by exit status" "1" \
-  "$(printf 'nothing here\n' | scan_secrets > /dev/null; echo $?)"
+  "$(
+    printf 'nothing here\n' | scan_secrets > /dev/null
+    echo $?
+  )"
 # The single most important false-negative case and the single most important false-positive case.
 # A security handoff is MOSTLY prose about credentials; a scanner that fires on the word is a
 # scanner that gets bypassed with --force-secret on every write, which is the same as no scanner.
 chk "prose about secrets is not a secret" "1" \
-  "$(printf 'rotate the deploy token and the db password before Friday\n' | scan_secrets > /dev/null; echo $?)"
+  "$(
+    printf 'rotate the deploy token and the db password before Friday\n' | scan_secrets > /dev/null
+    echo $?
+  )"
 chk "and neither is a redaction placeholder" "1" \
-  "$(printf 'password = <redacted len=25 sha256:585c2252>\n' | scan_secrets > /dev/null; echo $?)"
+  "$(
+    printf 'password = <redacted len=25 sha256:585c2252>\n' | scan_secrets > /dev/null
+    echo $?
+  )"
 
 SEC="$(mkboard)"
 NEW_OUT="$(hb "$SEC" new leak-probe --title "probe" --note "key $AWSKEY here")"
@@ -1247,7 +1262,10 @@ hb "$SN" new key-rotation --title "Key rotation inventory" --sensitivity restric
 SN_DOC="$SN/.agents/handoff/key-rotation-handoff.md"
 chk "restricted is recorded in frontmatter" "restricted" "$(sed -n 's/^sensitivity: //p' "$SN_DOC" | head -1)"
 chk "an ordinary doc records the default explicitly, so the field is discoverable" "normal" \
-  "$(hb "$SN" new ordinary --title "ordinary" > /dev/null; sed -n 's/^sensitivity: //p' "$SN/.agents/handoff/ordinary-handoff.md" | head -1)"
+  "$(
+    hb "$SN" new ordinary --title "ordinary" > /dev/null
+    sed -n 's/^sensitivity: //p' "$SN/.agents/handoff/ordinary-handoff.md" | head -1
+  )"
 chk_contains "a bad value is refused rather than silently read as normal" \
   "$(hb "$SN" new typo-doc --title "t" --sensitivity restrcted)" "bad --sensitivity"
 chk_contains "and it is refused on a standalone doc, which is never exported anyway" \
@@ -1459,7 +1477,6 @@ chk "the losing commit is rolled back, so the next fetch still fast-forwards" ""
   "$(git -C "$SB4" log --oneline | grep -c 'claim lost-case' | grep -v '^0$')"
 chk "and the rollback used no hard reset — the doc it wrote is still on disk" "yes" \
   "$([ -f "$SB4/lost-case-handoff.md" ] && echo yes || echo no)"
-
 
 printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
 # The registry carries no path at all. Resolution goes through the per-machine location map, which

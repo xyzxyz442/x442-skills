@@ -2244,7 +2244,7 @@ brief_dependencies() { # doc-path -> markdown lines
   printf '%s' "$out"
 }
 
-export_one() { # id doc to outdir branch do_claim force-secret-reason
+export_one() {               # id doc to outdir branch do_claim force-secret-reason
   require_writable "$2" "$1" # stamps delegated_to/delegated_at on the doc
   local id="$1" f="$2" to="$3" outdir="$4" branch="$5" do_claim="$6" force_secret="${7:-}"
   local name provider origin root note
