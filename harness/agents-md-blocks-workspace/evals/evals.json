@@ -1,0 +1,34 @@
+{
+  "skill_name": "x442-agents-md-blocks",
+  "skill_path": "",
+  "evals": [
+    {
+      "id": "splice-selftests",
+      "kind": "post-state",
+      "prompt": "Every implementation in this repo that splices a managed block into AGENTS.md must carry a --selftest, and it must pass.",
+      "fixture": "fixtures/two-skills-wired",
+      "expected_output": "Assertion-class case. Discovers every AGENTS.md splice implementation under skills/ by its head/tail surgery (not by filename), then requires each to expose --selftest and to exit 0 when run. A splice that exists without one FAILS this case — that absence, not a wrong check, is how all four copies shipped the same defect."
+    },
+    {
+      "id": "sibling-blocks-stable",
+      "kind": "post-state",
+      "prompt": "Splice every managed block into one AGENTS.md, then splice each again. The file must not change on the second pass.",
+      "fixture": "fixtures/two-skills-wired",
+      "expected_output": "Cross-skill case. Drives all four splice implementations against one AGENTS.md and asserts exactly one blank line between adjacent managed blocks, byte-stability when each is re-applied, and that the repo's own prose above and below survives byte-identical."
+    },
+    {
+      "id": "graph-removal-keeps-siblings",
+      "kind": "post-state",
+      "prompt": "Un-declare this repo from the cross-repo graph manifest. Only that block may disappear.",
+      "fixture": "fixtures/two-skills-wired",
+      "expected_output": "Data-loss case. register-cross-repo-graph's removal path used to return the head and discard every byte after its end marker, so un-declaring a repo deleted the handoff routing block below it. Asserts removal restores the file to exactly its pre-splice bytes and leaves sibling blocks intact."
+    },
+    {
+      "id": "installer-sibling-blocks",
+      "kind": "post-state",
+      "prompt": "Wire this repo for both the knowledge graph and the handoff board, then run each installer again.",
+      "fixture": "fixtures/plain-agents-md",
+      "expected_output": "Integration case. Runs setup-graph-hooks and setup-handoff for real into one isolated repo, asserts both blocks land with exactly one blank line between them, and that a second run of each leaves AGENTS.md byte-identical. Skipped when a prerequisite (git, bash) is unavailable."
+    }
+  ]
+}

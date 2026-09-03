@@ -92,8 +92,14 @@ install_file "${SKILL}/scripts/payload.version" "${BIN}/.version"
 chmod +x "${BIN}/delegate-agent" "${BIN}/delegate-run" "${BIN}/consent-gate.sh" "${BIN}"/adapters/*.sh
 install_file "${ASSETS}/delegate-to-agent.md" "${REPO}/.claude/agents/delegate-to-agent.md"
 
-python3 - "$REPO/AGENTS.md" "$ASSETS/agents-delegate.md" "$RESOLVED" << 'PY'
+python3 - "$REPO/AGENTS.md" "$ASSETS/agents-delegate.md" "$RESOLVED" "${SKILL}/scripts/manifest" << 'PY'
 import json, pathlib, sys
+
+# The splice itself lives in manifest/splice.py so it can carry a --selftest: it used to
+# be eight lines here and silently dropped the blank line between this block and a
+# sibling skill's. Rendering stays here, where the resolved cascade is.
+sys.path.insert(0, sys.argv[4])
+from splice import splice  # noqa: E402
 
 agents_md = pathlib.Path(sys.argv[1])
 block = pathlib.Path(sys.argv[2]).read_text()
@@ -157,15 +163,10 @@ block = (block
          .replace("PLACEHOLDER_NEVER", never_txt))
 
 text = agents_md.read_text() if agents_md.exists() else ""
-BEG, END = "<!-- delegate:begin", "<!-- delegate:end -->"
-nb, ne = text.count(BEG), text.count(END)
-if nb != ne or nb > 1:
-    sys.exit(f"malformed managed block in AGENTS.md ({nb} begin / {ne} end markers) — fix by hand")
-if nb == 0:
-    new = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block
-else:
-    i, j = text.index(BEG), text.index(END) + len(END)
-    new = text[:i] + block.strip() + "\n" + text[j:].lstrip("\n")
+try:
+    new = splice(text, block)
+except ValueError as e:
+    sys.exit(str(e))
 if new != text:
     agents_md.write_text(new)
     print("  + AGENTS.md delegate block")

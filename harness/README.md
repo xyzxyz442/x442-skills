@@ -31,13 +31,24 @@ harness/
 ├── repair-handoff-workspace/
 ├── register-cross-repo-handoff-workspace/
 ├── setup-delegate-agent-workspace/
-└── release-announcement-workspace/
+├── release-announcement-workspace/
+└── agents-md-blocks-workspace/     # cross-skill: the shared AGENTS.md managed-block invariant
 ```
 
 Each `<skill>-workspace/` holds `evals/evals.json`, `fixtures/`, `grade.py`, and
 `iterations/` (results). Workspace directories use the skill's **unprefixed** folder name;
 the `x442-` prefix lives only in the skill's frontmatter `name` and in `evals.json`'s
 `skill_name`.
+
+`agents-md-blocks-workspace/` is the exception and names an invariant instead of a skill: five
+skills splice a managed block into the same `AGENTS.md` through five separate implementations,
+and every one of them shipped the same defect — no blank line survived between a managed block
+and whatever followed it, and one deleted every byte after its own end marker on removal. No
+per-skill workspace could have caught it, because each grades one skill against one repo and the
+defect is only reachable once two skills write the same file. Its `evals.json` carries no
+`skill_path` and no `verify_script`; it discovers every splice implementation under `skills/` by its head/tail surgery and grades each directly and then
+runs `setup-graph-hooks` and `setup-handoff` for real into one isolated repo. Put a case here
+whenever the thing under test is a contract _between_ skills.
 
 ## Two layers: `verify-*.sh` vs `grade.py`
 

@@ -15,6 +15,7 @@ Usage:
   merge-hooks.py <settings.json>            # wire hooks for HANDOFF_TOOL
   merge-hooks.py <settings.json> --add-dir  # add the handoff dir to additionalDirectories (claude)
   merge-hooks.py <settings.json> --check    # 0 current, 2 drifted, 3 not wired; writes nothing
+  merge-hooks.py --selftest                 # unit-check the managed-group predicate; writes nothing
 
 No eval, no network — reads/writes one JSON file. Claude's schema is wired precisely;
 Gemini/Copilot use their documented event names on a best-effort basis (the AGENTS.md
@@ -314,6 +315,71 @@ def add_dir(path: Path, hdpath: str) -> None:
     dump(path, data)
 
 
+def _selftest() -> int:
+    """python3 merge-hooks.py --selftest
+
+    `strip_managed` decides what an installer is allowed to delete from a settings file the user
+    and other skills also write. That predicate is a pure function over strings and it had no
+    unit coverage; the sibling installer that answers the same question by replacing the whole
+    "hooks" subtree destroys both — see hook-config-merge-clobber-handoff. These assertions pin
+    the two halves that matter: ours is always recognized (whatever the board is named), and
+    nobody else's ever is.
+    """
+    ours_claude = command("../.agents/handoff", "claude", "pretool-edit")
+    ours_gemini = command(".agents/handoff", "gemini", "sessionstart")
+    ours_named = command("../workspace/handoff-auth", "copilot", "stop")
+    for cmd in (ours_claude, ours_gemini, ours_named):
+        assert is_managed(cmd), f"must recognize our own hook: {cmd!r}"
+    assert is_managed("bash handoff/hooks.sh --tool claude"), "legacy flat board must be recognized"
+
+    # Nobody else's. A hook that merely lives under some scripts/hooks.sh, or merely says
+    # "handoff", is NOT ours — deleting it would make this installer a source of data loss.
+    for foreign in (
+        'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind pretool-shell',
+        "bash tools/scripts/hooks.sh --stage pre-commit",
+        "bash .agents/bin/consent-gate.sh --tool claude",
+        "echo handoff",
+        "",
+    ):
+        assert not is_managed(foreign), f"must NOT claim another tool's hook: {foreign!r}"
+
+    # strip_managed removes only the groups carrying our commands, and preserves order + identity
+    # of everything else — including a user's own group sitting in the same event.
+    mine = {"matcher": EDIT_MATCHER, "hooks": [{"type": "command", "command": ours_claude}]}
+    theirs = {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash .claude/mine.sh"}]}
+    graph = {"hooks": [{"type": "command", "command":
+                        'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind endturn'}]}
+    assert strip_managed([theirs, mine, graph]) == [theirs, graph], "strips ours, keeps theirs"
+    assert strip_managed([theirs, graph]) == [theirs, graph], "nothing of ours, nothing removed"
+    assert strip_managed([mine]) == [], "ours alone leaves an empty event"
+    assert strip_managed([]) == [] and strip_managed(None) == [], "empty input is not an error"
+    # Malformed entries are skipped, never crashed on: this runs against files humans hand-edit.
+    assert strip_managed(["not-a-dict", {"no": "hooks"}]) == ["not-a-dict", {"no": "hooks"}]
+
+    assert sorted(collect_managed_commands({"hooks": {"PreToolUse": [mine, theirs],
+                                                      "SessionStart": [graph]}})) == [ours_claude]
+    assert collect_managed_commands({}) == [] and collect_managed_commands({"hooks": []}) == []
+
+    # A re-run must be a fixed point: wiring on top of an already-wired event replaces our group
+    # rather than appending a second copy. (wire() strips before it appends; assert the pieces.)
+    for tool in SCHEMAS:
+        soft = events_for(tool, False)
+        both = events_for(tool, True)
+        assert len(both) > len(soft), f"{tool}: the primary must wire more than a bystander"
+        assert soft == both[: len(soft)], f"{tool}: primary must ADD to the soft set, not reshape it"
+        for ev, kind, matcher in both:
+            g = group(".agents/handoff", tool, kind, matcher)
+            assert strip_managed([g]) == [], f"{tool}/{kind}: we must recognize what we just wrote"
+            assert ("matcher" in g) == bool(matcher), f"{tool}/{kind}: matcher presence"
+
+    assert parse_legacy_prefix('HANDOFF_REPO=acme-api bash x/scripts/hooks.sh --kind stop') \
+        == {"HANDOFF_REPO": "acme-api"}
+    assert parse_legacy_prefix("bash x/scripts/hooks.sh --kind stop") == {}
+
+    print("merge-hooks selftest OK")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
@@ -366,4 +432,6 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main(sys.argv[1:]))

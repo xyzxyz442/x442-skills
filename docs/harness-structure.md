@@ -16,7 +16,9 @@ This document is the **contract**; [harness/](../harness/README.md) is the imple
   `repair-handoff-workspace/`, `register-cross-repo-handoff-workspace/`),
   `setup-delegate-agent-workspace/` (which also grades `register-delegate-agents` and
   `run-delegate-agent`), and `release-announcement-workspace/`, the first workspace for a
-  productivity skill and the first text-output grader (step 9 below). Every grader has been
+  productivity skill and the first text-output grader (step 9 below). A **thirteenth**
+  workspace, `agents-md-blocks-workspace/`, is the first that names an INVARIANT rather than
+  a skill — see [Cross-skill workspaces](#cross-skill-workspaces). Every grader has been
   exercised against its fixtures — post-state fixtures score 1.00, the unwired pre-states and
   drifted repair targets score 0.00.
   A first **deterministic** benchmark is committed (`setup-graph-hooks` and `setup-project-tooling`
@@ -121,11 +123,28 @@ harness/
 ```
 
 The workspace directory uses the skill's **unprefixed** folder name plus `-workspace`
-(`initial-project` → `initial-project-workspace`). The `x442-` prefix lives only in the skill's
+(`initial-project` → `initial-project-workspace`), or the invariant's name when the workspace is
+cross-skill (see below). The `x442-` prefix lives only in the skill's
 frontmatter `name` and in the dev-loop symlinks — never in repo paths.
 
 Keeping `iterations/` as a wrapper (rather than leaving `iteration-1/` loose at the workspace root)
 holds the workspace root to exactly four entries.
+
+### Cross-skill workspaces
+
+A workspace may name an **invariant** instead of a skill when the contract under test is one that
+several skills share and none of them owns. It has the same shape — `evals/evals.json`,
+`fixtures/`, `grade.py` — and differs only in what its metadata can say: `skill_path` is empty and
+`verify_script` is omitted, because there is no one skill to verify. Name the directory after the
+invariant (`agents-md-blocks-workspace`), not after any of its participants.
+
+Reach for this only when a defect is unreachable from a per-skill workspace by construction. The
+first one exists because five skills splice a managed block into the same `AGENTS.md` through five
+separate implementations, and all five shipped the same defect: no blank line survived between a
+managed block and whatever followed it, and one discarded every byte after its own end marker when
+removing its block. Every per-skill grader was green throughout, correctly — each grades one skill
+against one repo, and the defect only exists once two skills write the same file. That is the test
+for whether a contract belongs here: **can any single-skill fixture express it at all?**
 
 ## `lib/` API surface
 

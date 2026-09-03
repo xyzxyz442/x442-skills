@@ -14,8 +14,11 @@
 #   GitHub Copilot .github/hooks/graph.json version:1, events agentStop / preToolUse / sessionStart,
 #                  command hooks use a "bash" SCRIPT PATH -> per-kind wrappers in .graph-hooks/copilot/
 #   Antigravity   .agents/hooks.json  UNVERIFIED — emitted as an inert example, not activated.
+#
+# Self-test:  python3 render.py --selftest
 import argparse
 import json
+import sys
 
 # Inline resolver: find .graph-hooks/hook.sh repo-first (via the tool's project-dir env var
 # when set, else git root, else PWD), then $HOME. Kept byte-identical across installs so
@@ -125,6 +128,62 @@ RENDERERS = {
 }
 
 
+# The event each tool fires at end of turn. The single-refresh-owner invariant is stated once,
+# here, so the selftest below asserts it per tool instead of restating four event names.
+ENDTURN_EVENT = {
+    "claude": "Stop",
+    "gemini": "AfterAgent",
+    "copilot": "agentStop",
+    "antigravity": "Stop",
+}
+
+
+def _selftest() -> int:
+    """python3 render.py --selftest
+
+    The single-refresh-owner invariant is the whole reason --primary exists: N wired tools must
+    trigger ONE graph build per turn, not N. verify-graph-hooks.sh asserts it against an installed
+    repo, which means it can only ever catch it after a real install, on one machine, for whatever
+    combination that repo happens to have. These are the same assertion over every tool and every
+    primary, in milliseconds.
+    """
+    for tool, renderer in RENDERERS.items():
+        ev = ENDTURN_EVENT[tool]
+
+        owner = renderer(True)["hooks"]
+        assert ev in owner and owner[ev], f"{tool} as primary must own the end-of-turn refresh"
+        assert "endturn" in json.dumps(owner[ev]), f"{tool} primary {ev} must run the endturn kind"
+
+        bystander = renderer(False)["hooks"]
+        assert not bystander.get(ev), f"{tool} not primary must NOT own the end-of-turn refresh"
+        assert "endturn" not in json.dumps(bystander), \
+            f"{tool} not primary must emit no endturn hook anywhere ({ev} is not the only way in)"
+
+        # The read-side hooks are cheap and every wired tool gets them, primary or not — dropping
+        # them for bystanders would silently un-steer every tool but one.
+        # Every wired tool keeps the cheap read-side hooks whether or not it owns the refresh;
+        # dropping them for bystanders would silently un-steer every tool but one. (Only the
+        # shell + session hooks are universal — antigravity has no read matcher — and the
+        # equality below covers the rest.)
+        for kind in ("pretool-shell", "sessionstart"):
+            assert kind in json.dumps(bystander), f"{tool} not primary still needs {kind}"
+
+        # Whatever else differs, the ONLY difference between owner and bystander is the endturn
+        # event. Anything else diverging means --primary is changing more than refresh ownership.
+        assert {k: v for k, v in owner.items() if k != ev} == \
+               {k: v for k, v in bystander.items() if k != ev}, \
+            f"{tool}: --primary changed more than the {ev} event"
+
+    # main()'s primary test is string equality, so a --primary naming an unwired tool leaves every
+    # renderer a bystander — "none" and a typo both mean the git post-commit hook is the only owner.
+    for primary in ("none", "not-a-tool", ""):
+        owners = [t for t in RENDERERS if primary == t]
+        assert owners == [], f"--primary {primary!r} must name no owner, got {owners}"
+
+    print("render (graph-hooks config) selftest OK")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tool", required=True, choices=list(RENDERERS))
@@ -136,4 +195,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())
