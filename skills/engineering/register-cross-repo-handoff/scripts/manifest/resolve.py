@@ -40,6 +40,11 @@ DEFAULT_LAYOUT = "subfolder"
 VALID_LAYOUTS = ("subfolder", "prefix")
 
 
+def _escapes(rel: str) -> bool:
+    """True when a relative path leaves the directory it was computed against."""
+    return rel == os.pardir or rel.startswith(os.pardir + os.sep)
+
+
 def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
     """(layer-name, manifest-path, committed?) lowest precedence first.
 
@@ -52,8 +57,12 @@ def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
     out.append(("scope", os.path.join(scope, LEGACY_MANIFEST), True))
     out.append(("scope", os.path.join(scope, MANIFEST), True))
     # every directory strictly between scope and `from`, scope -> leaf (deepest wins)
+    #
+    # A `from` OUTSIDE the scope contributes no directory layers at all. Skipping `..` components
+    # and carrying on would rebuild the tail UNDER scope, so the cascade would read manifests out
+    # of a tree the caller never named, silently and with no layer marked absent.
     rel = os.path.relpath(frm, scope)
-    if rel not in (".", ""):
+    if rel not in (".", "") and not _escapes(rel):
         cur = scope
         for part in rel.split(os.sep):
             if part in ("", os.pardir):
@@ -192,6 +201,61 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
     return groups, default_board, default_remote, layout
 
 
+def _selftest() -> int:
+    """python3 resolve.py --selftest
+
+    The cascade decides which repos share a board and which section each one writes to, so an
+    ordering or containment bug puts a repo's handoffs in another group's section — visible only
+    as "my handoff vanished", long after the sync that did it.
+
+    Deliberately the SAME cases as the other two cascade resolvers
+    (register-cross-repo-graph, setup-delegate-agent): one shared contract, so a fix to any of the
+    three should be mirrored to all three. The legacy-filename case is this module's own — it is
+    the only one of the three carrying a pre-rename manifest name.
+    """
+    import tempfile
+
+    # --- order: user is lowest, the deepest directory is highest -----------------------------
+    got = layer_files("/ws", "/ws/a/b")
+    assert [n for n, _, _ in got] == ["user", "user", "scope", "scope", "a", "a", "a/b", "a/b"], got
+
+    # --- legacy filename first, current second, WITHIN each directory ------------------------
+    # A directory holding both resolves to the current file; one holding only the old name keeps
+    # working. That only holds if legacy sorts LOWER, never higher.
+    for i in range(0, len(got), 2):
+        assert got[i][1].endswith(LEGACY_MANIFEST) or got[i][1].endswith(
+            os.path.basename(LEGACY_USER_MANIFEST)), got[i]
+        assert got[i + 1][1].endswith(MANIFEST) or got[i + 1][1].endswith(
+            os.path.basename(USER_MANIFEST)), got[i + 1]
+
+    # --- committed flags: only the user layers are uncommittable -----------------------------
+    assert [c for _, _, c in got[:2]] == [False, False], "user layers are never committed"
+    assert all(c is True for _, _, c in got[2:]), got
+
+    # --- from == scope contributes no directory layers ---------------------------------------
+    assert [n for n, _, _ in layer_files("/ws", "/ws")] == ["user", "user", "scope", "scope"]
+
+    # --- THE REGRESSION: a `from` outside the scope fabricates nothing ------------------------
+    # `..` components used to be dropped and the tail rebuilt UNDER scope, so this returned
+    # /other/sibling/repo — a manifest path in a tree nobody named.
+    esc = layer_files("/other/sibling", "/repo")
+    assert [n for n, _, _ in esc] == ["user", "user", "scope", "scope"], esc
+    assert not any("/repo" in p for _, p, _ in esc), esc
+
+    # --- resolve_path: relative resolves against the DECLARING manifest, not CWD --------------
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        os.makedirs(os.path.join(td, "ws", "member"))
+        os.makedirs(os.path.join(td, "ws", "acme-lib"))
+        decl = os.path.join(td, "ws", "member")
+        assert resolve_path("../acme-lib", decl) == os.path.join(td, "ws", "acme-lib")
+        assert resolve_path(os.path.join(td, "ws"), decl) == os.path.join(td, "ws")
+        assert resolve_path("~", decl) == os.path.realpath(os.path.expanduser("~"))
+
+    print("register-cross-repo-handoff resolve selftest OK")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", required=True)
@@ -313,4 +377,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())

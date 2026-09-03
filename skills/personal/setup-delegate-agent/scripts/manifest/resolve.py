@@ -313,6 +313,64 @@ def tighten(agent, pol, where, errors):
             agent["require_party"] = v if cur is None or PARTY_RANK[v] < PARTY_RANK[cur] else cur
 
 
+def _selftest() -> int:
+    """python3 resolve.py --selftest
+
+    The cascade decides which agents a repo may delegate to, so an ordering bug is a SECURITY
+    outcome: a repo inherits an agent its own manifest meant to narrow away, and nothing reports
+    it. Every check that existed graded the rendered result, which cannot name the layer at fault.
+
+    Deliberately the SAME contract as the other two cascade resolvers
+    (register-cross-repo-graph, register-cross-repo-handoff): user/outermost lowest, nearest wins,
+    the machine-local layer uncommittable. This one walks ancestors() instead of layer_files()
+    because its scope is not anchored to a root, so the shared cases are expressed against that.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        home = os.path.join(td, "home")
+        deep = os.path.join(td, "ws", "repo", "pkg")
+        os.makedirs(home)
+        os.makedirs(deep)
+
+        got = ancestors(deep, home)
+
+        # --- order: outermost first, the scope itself last (nearest wins) --------------------
+        assert got[-1] == deep, got[-3:]
+        assert got.index(os.path.dirname(deep)) < got.index(deep), "parents precede children"
+        assert got[0] == os.sep or got[0] == home, got[:2]
+
+        # --- every ancestor of the scope is present, none skipped ----------------------------
+        cur = deep
+        while True:
+            assert cur in got, f"missing ancestor {cur}"
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+        # --- $HOME is always a layer, even when it is nowhere near the scope ------------------
+        # It is the uncommittable, machine-local layer — the equivalent of the other two
+        # resolvers' "user" layer — so a cascade that omitted it would silently drop personal
+        # agent declarations.
+        assert home in got, got
+        assert got.count(home) == 1, "no layer may appear twice, or it would be applied twice"
+
+        # A $HOME that IS an ancestor is not duplicated, and keeps its natural position.
+        inside = ancestors(deep, os.path.join(td, "ws"))
+        assert inside.count(os.path.join(td, "ws")) == 1, inside
+
+        # --- the scope itself is a layer -----------------------------------------------------
+        assert ancestors(home, home)[-1] == home
+
+        # --- no duplicates anywhere ----------------------------------------------------------
+        assert len(got) == len(set(got)), got
+
+    print("setup-delegate-agent resolve selftest OK")
+    return 0
+
+
 def main() -> int:  # noqa: C901
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", required=True)
@@ -472,4 +530,6 @@ def main() -> int:  # noqa: C901
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())
