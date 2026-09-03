@@ -33,10 +33,14 @@ def splice(existing: str, block: str) -> str:
             f"malformed managed block in AGENTS.md ({n_begin} begin / {n_end} end markers) — fix by hand"
         )
     if n_begin == 0:
-        sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+        sep = (
+            ""
+            if existing.endswith("\n\n")
+            else ("\n" if existing.endswith("\n") else "\n\n")
+        )
         return (existing + sep + block) if existing.strip() else block
     head = existing[: existing.index(BEGIN)]
-    tail = existing[existing.index(END) + len(END):]
+    tail = existing[existing.index(END) + len(END) :]
     rest = tail.lstrip("\n")
     # The separator is owned HERE, not by the tail. The SKILL.md version returned
     # `text[j + len(END):].lstrip("\n")` bare, so no blank line survived between this block and a
@@ -72,17 +76,25 @@ def _selftest() -> int:
     got = splice(two, blk)
     assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
     assert splice(got, blk) == got, "idempotent with a sibling block below"
-    assert splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    )
 
     # A block whose asset ends in a trailing blank line must not widen the gap on every run.
     assert splice(two, blk + "\n") == got
 
     # Ordinary prose below the block gets the same one blank line.
-    assert splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk) \
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk)
         == "# A\n\n" + blk + "\nprose\n"
+    )
 
     # Malformed marker sets are refused, never guessed at.
-    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+    for bad in (
+        BEGIN + " -->\n",
+        END + "\n",
+        BEGIN + " -->\n" + BEGIN + " -->\n" + END + END,
+    ):
         try:
             splice(bad, blk)
         except ValueError:
@@ -137,8 +149,11 @@ def main() -> int:
         print(f"setup-graph-hooks: cannot write {a.file}: {e}", file=sys.stderr)
         return 1
 
-    print("  + AGENTS.md routing block injected" if BEGIN not in existing
-          else "  ~ AGENTS.md routing block refreshed")
+    print(
+        "  + AGENTS.md routing block injected"
+        if BEGIN not in existing
+        else "  ~ AGENTS.md routing block refreshed"
+    )
     return 0
 
 

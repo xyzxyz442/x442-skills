@@ -23,6 +23,7 @@ No eval, no network — reads/writes one JSON file. Claude's schema is wired pre
 Gemini/Copilot use their documented event names on a best-effort basis (the AGENTS.md
 routing block is the behavioral guarantee for non-primary tools).
 """
+
 from __future__ import annotations
 
 import json
@@ -58,7 +59,9 @@ def load(path: Path) -> dict:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            raise SystemExit(f"merge-hooks: {path} is not valid JSON; refusing to overwrite")
+            raise SystemExit(
+                f"merge-hooks: {path} is not valid JSON; refusing to overwrite"
+            )
     return {}
 
 
@@ -171,8 +174,10 @@ def write_repo_config(repo_root: str, cfg: dict) -> None:
     if os.path.isfile(legacy):
         try:
             os.replace(legacy, legacy + ".superseded")
-            print("  repo config moved to .agents/handoff.json "
-                  "(.agents/handoff.config.json.superseded is safe to delete)")
+            print(
+                "  repo config moved to .agents/handoff.json "
+                "(.agents/handoff.config.json.superseded is safe to delete)"
+            )
         except OSError:
             pass
 
@@ -237,7 +242,9 @@ def replace_managed(groups: list, ours: list) -> list:
             out.append(g)
         elif queue:
             out.append(queue.pop(0))
-    out.extend(queue)  # more groups than last time (a switch to primary) -> the rest go at the end
+    out.extend(
+        queue
+    )  # more groups than last time (a switch to primary) -> the rest go at the end
     return out
 
 
@@ -247,18 +254,33 @@ EDIT_MATCHER = "Edit|Write|MultiEdit"
 
 SCHEMAS = {
     "claude": {
-        "soft": [("SessionStart", "sessionstart", None), ("PostToolUse", "posttool-edit", EDIT_MATCHER)],
+        "soft": [
+            ("SessionStart", "sessionstart", None),
+            ("PostToolUse", "posttool-edit", EDIT_MATCHER),
+        ],
         "hard": [("PreToolUse", "pretool-edit", EDIT_MATCHER), ("Stop", "stop", None)],
     },
     # Gemini CLI: BeforeTool / AfterTool / SessionStart / AfterAgent (documented names).
     "gemini": {
-        "soft": [("SessionStart", "sessionstart", None), ("AfterTool", "posttool-edit", EDIT_MATCHER)],
-        "hard": [("BeforeTool", "pretool-edit", EDIT_MATCHER), ("AfterAgent", "stop", None)],
+        "soft": [
+            ("SessionStart", "sessionstart", None),
+            ("AfterTool", "posttool-edit", EDIT_MATCHER),
+        ],
+        "hard": [
+            ("BeforeTool", "pretool-edit", EDIT_MATCHER),
+            ("AfterAgent", "stop", None),
+        ],
     },
     # GitHub Copilot: sessionStart / preToolUse / postToolUse / agentStop.
     "copilot": {
-        "soft": [("sessionStart", "sessionstart", None), ("postToolUse", "posttool-edit", EDIT_MATCHER)],
-        "hard": [("preToolUse", "pretool-edit", EDIT_MATCHER), ("agentStop", "stop", None)],
+        "soft": [
+            ("sessionStart", "sessionstart", None),
+            ("postToolUse", "posttool-edit", EDIT_MATCHER),
+        ],
+        "hard": [
+            ("preToolUse", "pretool-edit", EDIT_MATCHER),
+            ("agentStop", "stop", None),
+        ],
     },
 }
 
@@ -295,7 +317,9 @@ def check(path: Path, hdpath: str, tool: str, primary: bool) -> int:
     actual = sorted(collect_managed_commands(load(path)))
     if not actual:
         return 3
-    wanted = sorted(command(hdpath, tool, kind) for _ev, kind, _m in events_for(tool, primary))
+    wanted = sorted(
+        command(hdpath, tool, kind) for _ev, kind, _m in events_for(tool, primary)
+    )
     return 0 if actual == wanted else 2
 
 
@@ -347,7 +371,9 @@ def _selftest() -> int:
     ours_named = command("../workspace/handoff-auth", "copilot", "stop")
     for cmd in (ours_claude, ours_gemini, ours_named):
         assert is_managed(cmd), f"must recognize our own hook: {cmd!r}"
-    assert is_managed("bash handoff/hooks.sh --tool claude"), "legacy flat board must be recognized"
+    assert is_managed(
+        "bash handoff/hooks.sh --tool claude"
+    ), "legacy flat board must be recognized"
 
     # Nobody else's. A hook that merely lives under some scripts/hooks.sh, or merely says
     # "handoff", is NOT ours — deleting it would make this installer a source of data loss.
@@ -358,41 +384,83 @@ def _selftest() -> int:
         "echo handoff",
         "",
     ):
-        assert not is_managed(foreign), f"must NOT claim another tool's hook: {foreign!r}"
+        assert not is_managed(
+            foreign
+        ), f"must NOT claim another tool's hook: {foreign!r}"
 
     # replace_managed touches only the groups carrying our commands, and preserves order + identity
     # of everything else — including a user's own group sitting in the same event.
     # replace_managed with nothing of ours to put back is the delete path -- how dropping to
     # advisory, or handing over primary, removes our old deny/stop groups.
-    mine = {"matcher": EDIT_MATCHER, "hooks": [{"type": "command", "command": ours_claude}]}
-    theirs = {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash .claude/mine.sh"}]}
-    graph = {"hooks": [{"type": "command", "command":
-                        'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind endturn'}]}
-    assert replace_managed([theirs, mine, graph], []) == [theirs, graph], "drops ours, keeps theirs"
-    assert replace_managed([theirs, graph], []) == [theirs, graph], "nothing of ours, nothing removed"
+    mine = {
+        "matcher": EDIT_MATCHER,
+        "hooks": [{"type": "command", "command": ours_claude}],
+    }
+    theirs = {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash .claude/mine.sh"}],
+    }
+    graph = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": 'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind endturn',
+            }
+        ]
+    }
+    assert replace_managed([theirs, mine, graph], []) == [
+        theirs,
+        graph,
+    ], "drops ours, keeps theirs"
+    assert replace_managed([theirs, graph], []) == [
+        theirs,
+        graph,
+    ], "nothing of ours, nothing removed"
     assert replace_managed([mine], []) == [], "ours alone leaves an empty event"
-    assert replace_managed([theirs, mine, graph], [mine]) == [theirs, mine, graph], \
-        "ours keeps its slot, and so does everyone else's"
-    assert replace_managed([theirs], [mine]) == [theirs, mine], "a first install appends"
-    assert replace_managed([], []) == [] and replace_managed(None, []) == [], \
-        "empty input is not an error"
+    assert replace_managed([theirs, mine, graph], [mine]) == [
+        theirs,
+        mine,
+        graph,
+    ], "ours keeps its slot, and so does everyone else's"
+    assert replace_managed([theirs], [mine]) == [
+        theirs,
+        mine,
+    ], "a first install appends"
+    assert (
+        replace_managed([], []) == [] and replace_managed(None, []) == []
+    ), "empty input is not an error"
     # Malformed entries are skipped, never crashed on: this runs against files humans hand-edit.
-    assert replace_managed(["not-a-dict", {"no": "hooks"}], []) == ["not-a-dict", {"no": "hooks"}]
+    assert replace_managed(["not-a-dict", {"no": "hooks"}], []) == [
+        "not-a-dict",
+        {"no": "hooks"},
+    ]
 
-    assert sorted(collect_managed_commands({"hooks": {"PreToolUse": [mine, theirs],
-                                                      "SessionStart": [graph]}})) == [ours_claude]
-    assert collect_managed_commands({}) == [] and collect_managed_commands({"hooks": []}) == []
+    assert sorted(
+        collect_managed_commands(
+            {"hooks": {"PreToolUse": [mine, theirs], "SessionStart": [graph]}}
+        )
+    ) == [ours_claude]
+    assert (
+        collect_managed_commands({}) == []
+        and collect_managed_commands({"hooks": []}) == []
+    )
 
     # A re-run must be a fixed point: wiring on top of an already-wired event replaces our group
     # rather than appending a second copy. (wire() strips before it appends; assert the pieces.)
     for tool in SCHEMAS:
         soft = events_for(tool, False)
         both = events_for(tool, True)
-        assert len(both) > len(soft), f"{tool}: the primary must wire more than a bystander"
-        assert soft == both[: len(soft)], f"{tool}: primary must ADD to the soft set, not reshape it"
+        assert len(both) > len(
+            soft
+        ), f"{tool}: the primary must wire more than a bystander"
+        assert (
+            soft == both[: len(soft)]
+        ), f"{tool}: primary must ADD to the soft set, not reshape it"
         for ev, kind, matcher in both:
             g = group(".agents/handoff", tool, kind, matcher)
-            assert replace_managed([g], []) == [], f"{tool}/{kind}: we must recognize what we just wrote"
+            assert (
+                replace_managed([g], []) == []
+            ), f"{tool}/{kind}: we must recognize what we just wrote"
             assert ("matcher" in g) == bool(matcher), f"{tool}/{kind}: matcher presence"
 
     # A re-run must ALSO be a fixed point when another installer has written the same file since.
@@ -400,22 +468,33 @@ def _selftest() -> int:
     # re-appends them, the two walk past each other forever and every install dirties the tree
     # with a diff that changes nothing -- see hook-config-merge-clobber-handoff.
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Path(tmp) / "settings.json"
         wire(cfg, ".agents/handoff", "gemini", True)
         data = json.loads(cfg.read_text())
         # Appended AFTER ours -- the real ordering, since setup-graph-hooks installs second in
         # the documented chain and lands after us. Re-appending would jump us past the newcomer.
-        data["hooks"]["SessionStart"].append({"hooks": [{"type": "command", "command":
-            'bash "$R/.graph-hooks/hook.sh" --tool gemini --kind sessionstart'}]})
+        data["hooks"]["SessionStart"].append(
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": 'bash "$R/.graph-hooks/hook.sh" --tool gemini --kind sessionstart',
+                    }
+                ]
+            }
+        )
         cfg.write_text(json.dumps(data, indent=2) + "\n")
         before = cfg.read_text()
         wire(cfg, ".agents/handoff", "gemini", True)
-        assert cfg.read_text() == before, \
-            "a re-run must not reorder groups another installer placed around ours"
+        assert (
+            cfg.read_text() == before
+        ), "a re-run must not reorder groups another installer placed around ours"
 
-    assert parse_legacy_prefix('HANDOFF_REPO=acme-api bash x/scripts/hooks.sh --kind stop') \
-        == {"HANDOFF_REPO": "acme-api"}
+    assert parse_legacy_prefix(
+        "HANDOFF_REPO=acme-api bash x/scripts/hooks.sh --kind stop"
+    ) == {"HANDOFF_REPO": "acme-api"}
     assert parse_legacy_prefix("bash x/scripts/hooks.sh --kind stop") == {}
 
     print("merge-hooks selftest OK")
@@ -432,8 +511,12 @@ def main(argv: list[str]) -> int:
         add_dir(path, hdpath)
         return 0
     if "--check" in argv:
-        return check(path, hdpath, os.environ.get("HANDOFF_TOOL", "claude"),
-                     os.environ.get("HANDOFF_PRIMARY", "0") == "1")
+        return check(
+            path,
+            hdpath,
+            os.environ.get("HANDOFF_TOOL", "claude"),
+            os.environ.get("HANDOFF_PRIMARY", "0") == "1",
+        )
     repo_root = None
     if "--repo-root" in argv:
         idx = argv.index("--repo-root")
@@ -458,7 +541,10 @@ def main(argv: list[str]) -> int:
         if refusals:
             for r in refusals:
                 print(f"merge-hooks: refusing to migrate {path}: {r}", file=sys.stderr)
-            print(f"merge-hooks: leaving {path} untouched -- resolve the conflict by hand, then re-run", file=sys.stderr)
+            print(
+                f"merge-hooks: leaving {path} untouched -- resolve the conflict by hand, then re-run",
+                file=sys.stderr,
+            )
             return 1
         # Live env (this run's actual installer knowledge) wins over migrated history for the
         # same key, but a migrated key the live env has no value for must survive the merge --

@@ -32,49 +32,105 @@ RESOLVE = (
 
 
 def cmd(tool: str, kind: str) -> str:
-    return f'{RESOLVE} --tool {tool} --kind {kind} || true'
+    return f"{RESOLVE} --tool {tool} --kind {kind} || true"
 
 
 def claude(primary: bool) -> dict:
     hooks: dict = {
         "PostToolUse": [],
         "PreToolUse": [
-            {"matcher": "Bash", "hooks": [
-                {"type": "command", "command": cmd("claude", "pretool-shell"), "timeout": 6}]},
-            {"matcher": "Read|Glob", "hooks": [
-                {"type": "command", "command": cmd("claude", "pretool-read")}]},
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("claude", "pretool-shell"),
+                        "timeout": 6,
+                    }
+                ],
+            },
+            {
+                "matcher": "Read|Glob",
+                "hooks": [
+                    {"type": "command", "command": cmd("claude", "pretool-read")}
+                ],
+            },
         ],
         "SessionStart": [
-            {"hooks": [
-                {"type": "command", "command": cmd("claude", "sessionstart"), "timeout": 10}]},
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("claude", "sessionstart"),
+                        "timeout": 10,
+                    }
+                ]
+            },
         ],
     }
     if primary:
         hooks["Stop"] = [
-            {"hooks": [
-                {"type": "command", "command": cmd("claude", "endturn"), "timeout": 5}]},
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("claude", "endturn"),
+                        "timeout": 5,
+                    }
+                ]
+            },
         ]
     return {"hooks": hooks}
 
 
 def gemini(primary: bool) -> dict:
     before = [
-        {"matcher": "run_shell_command", "hooks": [
-            {"type": "command", "command": cmd("gemini", "pretool-shell"), "timeout": 6000}]},
-        {"matcher": "read_file|read_many_files|glob", "hooks": [
-            {"type": "command", "command": cmd("gemini", "pretool-read"), "timeout": 6000}]},
+        {
+            "matcher": "run_shell_command",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": cmd("gemini", "pretool-shell"),
+                    "timeout": 6000,
+                }
+            ],
+        },
+        {
+            "matcher": "read_file|read_many_files|glob",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": cmd("gemini", "pretool-read"),
+                    "timeout": 6000,
+                }
+            ],
+        },
     ]
     hooks: dict = {
         "BeforeTool": before,
         "SessionStart": [
-            {"hooks": [
-                {"type": "command", "command": cmd("gemini", "sessionstart"), "timeout": 10000}]},
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("gemini", "sessionstart"),
+                        "timeout": 10000,
+                    }
+                ]
+            },
         ],
     }
     if primary:
         hooks["AfterAgent"] = [
-            {"hooks": [
-                {"type": "command", "command": cmd("gemini", "endturn"), "timeout": 5000}]},
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("gemini", "endturn"),
+                        "timeout": 5000,
+                    }
+                ]
+            },
         ]
     return {"hooks": hooks}
 
@@ -104,18 +160,24 @@ def antigravity(primary: bool) -> dict:
     hooks: dict = {
         "_UNVERIFIED": "Antigravity hook contract is not yet confirmed; do not activate as-is.",
         "PreToolUse": [
-            {"matcher": "run_command", "hooks": [
-                {"type": "command", "command": cmd("antigravity", "pretool-shell")}]},
+            {
+                "matcher": "run_command",
+                "hooks": [
+                    {"type": "command", "command": cmd("antigravity", "pretool-shell")}
+                ],
+            },
         ],
         "SessionStart": [
-            {"hooks": [
-                {"type": "command", "command": cmd("antigravity", "sessionstart")}]},
+            {
+                "hooks": [
+                    {"type": "command", "command": cmd("antigravity", "sessionstart")}
+                ]
+            },
         ],
     }
     if primary:
         hooks["Stop"] = [
-            {"hooks": [
-                {"type": "command", "command": cmd("antigravity", "endturn")}]},
+            {"hooks": [{"type": "command", "command": cmd("antigravity", "endturn")}]},
         ]
     return {"hooks": hooks}
 
@@ -151,13 +213,20 @@ def _selftest() -> int:
         ev = ENDTURN_EVENT[tool]
 
         owner = renderer(True)["hooks"]
-        assert ev in owner and owner[ev], f"{tool} as primary must own the end-of-turn refresh"
-        assert "endturn" in json.dumps(owner[ev]), f"{tool} primary {ev} must run the endturn kind"
+        assert (
+            ev in owner and owner[ev]
+        ), f"{tool} as primary must own the end-of-turn refresh"
+        assert "endturn" in json.dumps(
+            owner[ev]
+        ), f"{tool} primary {ev} must run the endturn kind"
 
         bystander = renderer(False)["hooks"]
-        assert not bystander.get(ev), f"{tool} not primary must NOT own the end-of-turn refresh"
-        assert "endturn" not in json.dumps(bystander), \
-            f"{tool} not primary must emit no endturn hook anywhere ({ev} is not the only way in)"
+        assert not bystander.get(
+            ev
+        ), f"{tool} not primary must NOT own the end-of-turn refresh"
+        assert "endturn" not in json.dumps(
+            bystander
+        ), f"{tool} not primary must emit no endturn hook anywhere ({ev} is not the only way in)"
 
         # The read-side hooks are cheap and every wired tool gets them, primary or not — dropping
         # them for bystanders would silently un-steer every tool but one.
@@ -166,13 +235,15 @@ def _selftest() -> int:
         # shell + session hooks are universal — antigravity has no read matcher — and the
         # equality below covers the rest.)
         for kind in ("pretool-shell", "sessionstart"):
-            assert kind in json.dumps(bystander), f"{tool} not primary still needs {kind}"
+            assert kind in json.dumps(
+                bystander
+            ), f"{tool} not primary still needs {kind}"
 
         # Whatever else differs, the ONLY difference between owner and bystander is the endturn
         # event. Anything else diverging means --primary is changing more than refresh ownership.
-        assert {k: v for k, v in owner.items() if k != ev} == \
-               {k: v for k, v in bystander.items() if k != ev}, \
-            f"{tool}: --primary changed more than the {ev} event"
+        assert {k: v for k, v in owner.items() if k != ev} == {
+            k: v for k, v in bystander.items() if k != ev
+        }, f"{tool}: --primary changed more than the {ev} event"
 
     # main()'s primary test is string equality, so a --primary naming an unwired tool leaves every
     # renderer a bystander — "none" and a typo both mean the git post-commit hook is the only owner.

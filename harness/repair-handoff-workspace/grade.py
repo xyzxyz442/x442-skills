@@ -53,7 +53,6 @@ ORPHAN_LOCK = f"{BOARD}/.locks/deleted-doc-handoff"
 SAMPLE_DOC = f"{BOARD}/sample-repair-handoff.md"
 
 
-
 def stamp_current(findings: dict) -> gc.Expectation:
     """The installed payload stamp matches what the skill ships.
 
@@ -67,14 +66,20 @@ def stamp_current(findings: dict) -> gc.Expectation:
     failing on a perfectly healthy board. A grader that re-derives what the tool already computes
     is a second implementation to keep in sync, and it will drift — this one did.
     """
-    return gc.finding(findings, "payload.version", "pass",
-                      label="payload stamp matches the shipped version")
+    return gc.finding(
+        findings,
+        "payload.version",
+        "pass",
+        label="payload stamp matches the shipped version",
+    )
 
 
 def path_absent(root: Path, rel: str, label: str) -> gc.Expectation:
     """Nothing exists at `rel` — used for both the cleared orphan and the refusal case."""
     p = root / rel
-    return gc.expectation(label, not p.exists(), "absent" if not p.exists() else f"{rel} still present")
+    return gc.expectation(
+        label, not p.exists(), "absent" if not p.exists() else f"{rel} still present"
+    )
 
 
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
@@ -91,7 +96,9 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         ]
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
@@ -116,8 +123,14 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         # warning would still exit 0 today, which is the blind spot this closes.
         exps.append(gc.no_findings_at(findings, "fail"))
         exps.append(gc.finding(findings, "cli.list", "pass"))
-        exps.append(gc.finding(findings, "hook.pretool.deny_index", "pass",
-                               label="the edit gate still denies edits to the generated index"))
+        exps.append(
+            gc.finding(
+                findings,
+                "hook.pretool.deny_index",
+                "pass",
+                label="the edit gate still denies edits to the generated index",
+            )
+        )
     elif eval_id == "stale-stamp":
         # Post-repair, the board carries the version the skill ships.
         # Graded raw this fixture reports payload.version.behind; after repair that finding is gone
@@ -127,12 +140,24 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     elif eval_id == "dangling-children":
         # Pure advisory drift: the verifier exits 0 both before and after repair, so the exit code
         # cannot tell the two states apart. This assertion is the whole case.
-        exps.append(gc.finding(findings, "bundle.children.dangling", "pass",
-                               label="every child on the bundle's roster is a real doc"))
+        exps.append(
+            gc.finding(
+                findings,
+                "bundle.children.dangling",
+                "pass",
+                label="every child on the bundle's roster is a real doc",
+            )
+        )
         # And the fix must be to FILE the missing docs, not to quietly shorten the roster —
         # declaring a bundle before authoring its children is legitimate planning.
-        exps.append(gc.contains(target, BUNDLE_DOC, "ghost-one-handoff",
-                                label="the roster still names every child it declared"))
+        exps.append(
+            gc.contains(
+                target,
+                BUNDLE_DOC,
+                "ghost-one-handoff",
+                label="the roster still names every child it declared",
+            )
+        )
         for child in ("ghost-one-handoff", "ghost-two-handoff", "ghost-three-handoff"):
             exps.append(gc.file_exists(target, f"{BOARD}/{child}.md"))
     elif eval_id == "orphaned-lease":

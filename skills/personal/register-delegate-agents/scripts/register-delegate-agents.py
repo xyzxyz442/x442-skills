@@ -29,8 +29,10 @@ from urllib.request import urlopen
 MANIFEST = os.path.join(".agents", "delegate.json")
 ADAPTERS = ("claude", "codex", "copilot", "gemini")
 # Where each known local runtime listens, and what to ask it for a model list.
-LOCAL_ENDPOINTS = (("lmstudio", "http://127.0.0.1:1234/v1/models"),
-                   ("ollama", "http://127.0.0.1:11434/api/tags"))
+LOCAL_ENDPOINTS = (
+    ("lmstudio", "http://127.0.0.1:1234/v1/models"),
+    ("ollama", "http://127.0.0.1:11434/api/tags"),
+)
 
 
 def manifest_path(layer: str) -> str:
@@ -39,8 +41,12 @@ def manifest_path(layer: str) -> str:
 
 def in_git_worktree(d: str) -> bool:
     try:
-        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
-                           capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            ["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         return r.returncode == 0 and r.stdout.strip() == "true"
     except Exception:  # noqa: BLE001
         return False
@@ -79,8 +85,10 @@ def cmd_probe(_args) -> int:
         try:
             with urlopen(url, timeout=2) as r:  # noqa: S310
                 body = json.loads(r.read().decode())
-            ids = [m.get("id") or m.get("name") for m in
-                   (body.get("data") or body.get("models") or [])]
+            ids = [
+                m.get("id") or m.get("name")
+                for m in (body.get("data") or body.get("models") or [])
+            ]
             print(f"  {name:<9} up — {len(ids)} model(s)")
             for i in ids[:8]:
                 print(f"    - {i}")
@@ -92,7 +100,10 @@ def cmd_probe(_args) -> int:
     found = False
     for entry in sorted(os.listdir(home)):
         d = os.path.join(home, entry)
-        if not (entry.startswith(".claude") and os.path.isfile(os.path.join(d, "settings.json"))):
+        if not (
+            entry.startswith(".claude")
+            and os.path.isfile(os.path.join(d, "settings.json"))
+        ):
             continue
         # ~/.claude is the PRIMARY session's own config. Registering it as a delegate would point
         # the sub-agent at the session you are already in — same weights, same quota, no isolation.
@@ -109,15 +120,22 @@ def cmd_probe(_args) -> int:
 
 def cmd_list(args) -> int:
     here = os.path.dirname(os.path.realpath(__file__))
-    resolver = os.path.join(here, "..", "..", "setup-delegate-agent", "scripts", "manifest", "resolve.py")
+    resolver = os.path.join(
+        here, "..", "..", "setup-delegate-agent", "scripts", "manifest", "resolve.py"
+    )
     resolver = os.path.realpath(resolver)
     if not os.path.isfile(resolver):
         sys.exit(f"resolver not found at {resolver}")
-    r = subprocess.run([sys.executable, resolver, "--scope", args.scope],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        [sys.executable, resolver, "--scope", args.scope],
+        capture_output=True,
+        text=True,
+    )
     data = json.loads(r.stdout or "{}")
     print(f"scope: {data.get('scope')}")
-    print(f"primary: {data.get('primary') or 'unset'}   default: {data.get('default') or 'none'}")
+    print(
+        f"primary: {data.get('primary') or 'unset'}   default: {data.get('default') or 'none'}"
+    )
     if data.get("default_reason"):
         print(f"  note: {data['default_reason']}")
     print("\nlayers (nearest last):")
@@ -127,8 +145,10 @@ def cmd_list(args) -> int:
     print("\neffective agents:")
     for a in data.get("agents", []):
         print(f"  {a['name']:<14} {a['adapter']:<8} {a['party']:<12} {a['model']}")
-        print(f"  {'':<14} tools={a['allow_tools']}  rounds={a['max_question_rounds']}  "
-              f"declared in {a['layer']}")
+        print(
+            f"  {'':<14} tools={a['allow_tools']}  rounds={a['max_question_rounds']}  "
+            f"declared in {a['layer']}"
+        )
     for n in data.get("narrowed", []):
         print(f"\nnarrowed: {json.dumps(n)}")
     for w in data.get("warnings", []):
@@ -151,14 +171,21 @@ def cmd_add(args) -> int:
     if args.adapter not in ADAPTERS:
         sys.exit(f"--adapter must be one of {', '.join(ADAPTERS)}")
     if not (args.model or args.config_dir):
-        sys.exit("give --model, or --config-dir pointing at a settings.json that supplies one")
+        sys.exit(
+            "give --model, or --config-dir pointing at a settings.json that supplies one"
+        )
 
     data = load(path)
     agents = data.setdefault("agents", {})
     entry = {"adapter": args.adapter}
-    for key, val in (("model", args.model), ("baseUrl", args.base_url),
-                     ("configDir", args.config_dir), ("localProvider", args.local_provider),
-                     ("vendor", args.vendor), ("notes", args.notes)):
+    for key, val in (
+        ("model", args.model),
+        ("baseUrl", args.base_url),
+        ("configDir", args.config_dir),
+        ("localProvider", args.local_provider),
+        ("vendor", args.vendor),
+        ("notes", args.notes),
+    ):
         if val:
             entry[key] = val
     if args.allow_tools:
@@ -169,8 +196,10 @@ def cmd_add(args) -> int:
     save(path, data)
     print(f"{verb} {args.name!r} in {path}")
     print(json.dumps(entry, indent=2))
-    print("\nRun the setup-delegate-agent skill in a repo to wire it, or `list` to see the "
-          "effective roster there.")
+    print(
+        "\nRun the setup-delegate-agent skill in a repo to wire it, or `list` to see the "
+        "effective roster there."
+    )
     return 0
 
 
@@ -184,8 +213,9 @@ def _edit(args, mutate, describe) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("probe")
@@ -225,20 +255,31 @@ def main() -> int:
     if args.cmd == "add":
         return cmd_add(args)
     if args.cmd == "remove":
-        return _edit(args, lambda d: d.get("agents", {}).pop(args.name, None),
-                     f"removed {args.name!r}")
+        return _edit(
+            args,
+            lambda d: d.get("agents", {}).pop(args.name, None),
+            f"removed {args.name!r}",
+        )
     if args.cmd == "set-primary":
-        return _edit(args, lambda d: d.update(primary=args.name), f"primary = {args.name!r}")
+        return _edit(
+            args, lambda d: d.update(primary=args.name), f"primary = {args.name!r}"
+        )
     if args.cmd == "set-default":
-        return _edit(args, lambda d: d.update(default=args.name), f"default = {args.name!r}")
+        return _edit(
+            args, lambda d: d.update(default=args.name), f"default = {args.name!r}"
+        )
     if args.cmd == "allow":
         names = [n.strip() for n in args.names.split(",") if n.strip()]
         return _edit(args, lambda d: d.update(allow=names), f"allow = {names}")
     if args.cmd == "never":
         paths = [p.strip() for p in args.paths.split(",") if p.strip()]
-        return _edit(args, lambda d: d.update(
-            neverDelegate=sorted(set(d.get("neverDelegate", [])) | set(paths))),
-            f"neverDelegate += {paths}")
+        return _edit(
+            args,
+            lambda d: d.update(
+                neverDelegate=sorted(set(d.get("neverDelegate", [])) | set(paths))
+            ),
+            f"neverDelegate += {paths}",
+        )
     return 2
 
 

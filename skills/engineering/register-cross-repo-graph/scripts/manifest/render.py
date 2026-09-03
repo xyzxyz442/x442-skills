@@ -46,12 +46,17 @@ GRAPHIFY_BLOCK = (
 
 
 def render(data: dict, template: str, confirmed: set[str], merged: set[str]) -> str:
-    listed = [e for e in data["effective"] if e["alias"] in confirmed or e["alias"] in merged]
+    listed = [
+        e for e in data["effective"] if e["alias"] in confirmed or e["alias"] in merged
+    ]
     listed.sort(key=lambda e: e["alias"])
     if not listed:
         return ""
 
-    rows = ["| Alias | Repo path | What lives there |", "| ----- | --------- | ---------------- |"]
+    rows = [
+        "| Alias | Repo path | What lives there |",
+        "| ----- | --------- | ---------------- |",
+    ]
     for e in listed:
         notes = e.get("notes") or "—"
         rows.append(f"| `{e['alias']}` | `{e['path']}` | {notes} |")
@@ -59,7 +64,9 @@ def render(data: dict, template: str, confirmed: set[str], merged: set[str]) -> 
     body = template
     body = body.replace("{{SCOPE}}", data.get("scope_rel") or ".")
     body = body.replace("{{REPO_TABLE}}", "\n".join(rows))
-    body = body.replace("{{IN_SCOPE_ALIASES}}", ", ".join(f"`{e['alias']}`" for e in listed))
+    body = body.replace(
+        "{{IN_SCOPE_ALIASES}}", ", ".join(f"`{e['alias']}`" for e in listed)
+    )
     # Never advertise a tool that no in-scope repo actually uses.
     body = body.replace("{{GRAPHIFY_BLOCK}}", GRAPHIFY_BLOCK if merged else "")
     # The empty branch leaves the placeholder's blank lines behind; collapse them.
@@ -75,10 +82,14 @@ def splice(existing: str, block: str) -> str:
     if n_begin == 0:
         if not block:
             return existing
-        sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+        sep = (
+            ""
+            if existing.endswith("\n\n")
+            else ("\n" if existing.endswith("\n") else "\n\n")
+        )
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
-    tail = existing[existing.index(END) + len(END):]
+    tail = existing[existing.index(END) + len(END) :]
     rest = tail.lstrip("\n")
     if not block:
         # The removal path used to be `head.rstrip("\n") + "\n" if head.strip() else head` — it
@@ -126,14 +137,18 @@ def _selftest() -> int:
     got = splice(two, blk)
     assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
     assert splice(got, blk) == got, "idempotent with a sibling block below"
-    assert splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    )
 
     # A block whose template left a trailing blank line must not widen the gap on every run.
     assert splice(two, blk + "\n") == got
 
     # Ordinary prose below the block gets the same one blank line.
-    assert splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk) \
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk)
         == "# A\n\n" + blk + "\nprose\n"
+    )
 
     # REMOVAL keeps every byte outside the markers. Returning `head` alone deleted the tail — and
     # the tail is a sibling skill's routing block in any repo that ran more than one skill.
@@ -143,7 +158,11 @@ def _selftest() -> int:
     assert splice("# A\n", "") == "# A\n", "no block, nothing to remove"
 
     # Malformed marker sets are refused, never guessed at.
-    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+    for bad in (
+        BEGIN + " -->\n",
+        END + "\n",
+        BEGIN + " -->\n" + BEGIN + " -->\n" + END + END,
+    ):
         try:
             splice(bad, blk)
         except ValueError:
@@ -180,7 +199,10 @@ def main() -> int:
         with open(args.file) as f:
             existing = f.read()
     elif not args.dry_run:
-        print(f"render: {args.file} does not exist — run initial-project first", file=sys.stderr)
+        print(
+            f"render: {args.file} does not exist — run initial-project first",
+            file=sys.stderr,
+        )
         return 1
 
     try:

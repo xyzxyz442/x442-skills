@@ -73,7 +73,10 @@ def _fire_hook(repo: Path, tool: str, kind: str, payload: dict) -> dict | None:
     hook = repo / GRAPH_HOOKS_DIR / "hook.sh"
     proc = subprocess.run(
         ["bash", str(hook), "--tool", tool, "--kind", kind],
-        cwd=str(repo), input=json.dumps(payload), capture_output=True, text=True,
+        cwd=str(repo),
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
     )
     out = proc.stdout.strip()
     if not out:
@@ -100,63 +103,122 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
     """
     hook = target / GRAPH_HOOKS_DIR / "hook.sh"
     if not hook.is_file():
-        return [gc.expectation("graph hooks dispatcher present for behavior test", False,
-                               f"{GRAPH_HOOKS_DIR}/hook.sh missing")]
+        return [
+            gc.expectation(
+                "graph hooks dispatcher present for behavior test",
+                False,
+                f"{GRAPH_HOOKS_DIR}/hook.sh missing",
+            )
+        ]
 
     exps: list[gc.Expectation] = []
 
     session = _fire_hook(target, "claude", "sessionstart", {})
     ctx = _context(session)
-    exps.append(gc.expectation(
-        "session start injects a graph cheatsheet (CRG + graphify + routing tools)",
-        bool(session) and "CRG" in ctx and "graphify" in ctx and "semantic_search_nodes_tool" in ctx,
-        f"additionalContext: {ctx[:200]!r}" if session else NO_HOOK_OUTPUT,
-    ))
+    exps.append(
+        gc.expectation(
+            "session start injects a graph cheatsheet (CRG + graphify + routing tools)",
+            bool(session)
+            and "CRG" in ctx
+            and "graphify" in ctx
+            and "semantic_search_nodes_tool" in ctx,
+            f"additionalContext: {ctx[:200]!r}" if session else NO_HOOK_OUTPUT,
+        )
+    )
 
-    read_out = _fire_hook(target, "claude", "pretool-read",
-                          {"tool_input": {"file_path": "src/billing.ts"}})
+    read_out = _fire_hook(
+        target,
+        "claude",
+        "pretool-read",
+        {"tool_input": {"file_path": "src/billing.ts"}},
+    )
     ctx = _context(read_out)
-    exps.append(gc.expectation(
-        "reading a source file is nudged toward the graph instead of reading one-by-one",
-        bool(read_out) and ("semantic_search_nodes_tool" in ctx or "graphify" in ctx),
-        f"additionalContext: {ctx[:200]!r}" if read_out else NO_HOOK_OUTPUT,
-    ))
+    exps.append(
+        gc.expectation(
+            "reading a source file is nudged toward the graph instead of reading one-by-one",
+            bool(read_out)
+            and ("semantic_search_nodes_tool" in ctx or "graphify" in ctx),
+            f"additionalContext: {ctx[:200]!r}" if read_out else NO_HOOK_OUTPUT,
+        )
+    )
 
     _reset_slot(target)
-    bypass_out = _fire_hook(target, "claude", "pretool-shell", {
-        "tool_input": {"command": "grep -rn calculateInvoiceTotal src/ --graph-tried"}})
-    exps.append(gc.expectation(
-        "--graph-tried bypass is honored (no steering, even with a graph hit available)",
-        bypass_out is None,
-        "no output (bypassed)" if bypass_out is None else f"unexpected output: {json.dumps(bypass_out)[:200]}",
-    ))
+    bypass_out = _fire_hook(
+        target,
+        "claude",
+        "pretool-shell",
+        {
+            "tool_input": {
+                "command": "grep -rn calculateInvoiceTotal src/ --graph-tried"
+            }
+        },
+    )
+    exps.append(
+        gc.expectation(
+            "--graph-tried bypass is honored (no steering, even with a graph hit available)",
+            bypass_out is None,
+            (
+                "no output (bypassed)"
+                if bypass_out is None
+                else f"unexpected output: {json.dumps(bypass_out)[:200]}"
+            ),
+        )
+    )
 
-    md_out = _fire_hook(target, "claude", "pretool-shell",
-                        {"tool_input": {"command": "grep -rn calculateInvoiceTotal README.md"}})
-    exps.append(gc.expectation(
-        "grep against non-code files (.md) is never intercepted",
-        md_out is None,
-        "no output (ignored)" if md_out is None else f"unexpected output: {json.dumps(md_out)[:200]}",
-    ))
+    md_out = _fire_hook(
+        target,
+        "claude",
+        "pretool-shell",
+        {"tool_input": {"command": "grep -rn calculateInvoiceTotal README.md"}},
+    )
+    exps.append(
+        gc.expectation(
+            "grep against non-code files (.md) is never intercepted",
+            md_out is None,
+            (
+                "no output (ignored)"
+                if md_out is None
+                else f"unexpected output: {json.dumps(md_out)[:200]}"
+            ),
+        )
+    )
 
     _reset_slot(target)
-    first = _fire_hook(target, "claude", "pretool-shell",
-                       {"tool_input": {"command": "grep -rn calculateInvoiceTotal src/"}})
+    first = _fire_hook(
+        target,
+        "claude",
+        "pretool-shell",
+        {"tool_input": {"command": "grep -rn calculateInvoiceTotal src/"}},
+    )
     first_ctx = _context(first)
-    exps.append(gc.expectation(
-        "first grep for a real symbol is pre-answered from the graph and still allowed",
-        bool(first) and "calculateInvoiceTotal" in first_ctx and "src/billing.ts" in first_ctx
-        and _decision(first) != "block",
-        f"additionalContext: {first_ctx[:200]!r}" if first else NO_HOOK_OUTPUT,
-    ))
+    exps.append(
+        gc.expectation(
+            "first grep for a real symbol is pre-answered from the graph and still allowed",
+            bool(first)
+            and "calculateInvoiceTotal" in first_ctx
+            and "src/billing.ts" in first_ctx
+            and _decision(first) != "block",
+            f"additionalContext: {first_ctx[:200]!r}" if first else NO_HOOK_OUTPUT,
+        )
+    )
 
-    second = _fire_hook(target, "claude", "pretool-shell",
-                        {"tool_input": {"command": "grep -rn calculateInvoiceTotal src/"}})
-    exps.append(gc.expectation(
-        "repeating the same grep is BLOCKED once the graph already answered it",
-        _decision(second) == "block",
-        f"second grep output: {json.dumps(second)[:200]}" if second else NO_HOOK_OUTPUT,
-    ))
+    second = _fire_hook(
+        target,
+        "claude",
+        "pretool-shell",
+        {"tool_input": {"command": "grep -rn calculateInvoiceTotal src/"}},
+    )
+    exps.append(
+        gc.expectation(
+            "repeating the same grep is BLOCKED once the graph already answered it",
+            _decision(second) == "block",
+            (
+                f"second grep output: {json.dumps(second)[:200]}"
+                if second
+                else NO_HOOK_OUTPUT
+            ),
+        )
+    )
     _reset_slot(target)
 
     # A miss must be tested in a throwaway copy: the miss itself consumes the one-shot
@@ -165,15 +227,24 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
     try:
         shutil.copytree(target, miss_copy, dirs_exist_ok=True)
         _reset_slot(miss_copy)
-        miss = _fire_hook(miss_copy, "claude", "pretool-shell",
-                          {"tool_input": {"command": "grep -rn totallyMissingSymbolXyz src/"}})
+        miss = _fire_hook(
+            miss_copy,
+            "claude",
+            "pretool-shell",
+            {"tool_input": {"command": "grep -rn totallyMissingSymbolXyz src/"}},
+        )
         miss_ctx = _context(miss)
-        exps.append(gc.expectation(
-            "a first-time miss still allows the grep, pointing at the graph tool for next time",
-            bool(miss) and _decision(miss) != "block"
-            and ("graphify" in miss_ctx or "semantic_search_nodes_tool" in miss_ctx),
-            f"additionalContext: {miss_ctx[:200]!r}" if miss else NO_HOOK_OUTPUT,
-        ))
+        exps.append(
+            gc.expectation(
+                "a first-time miss still allows the grep, pointing at the graph tool for next time",
+                bool(miss)
+                and _decision(miss) != "block"
+                and (
+                    "graphify" in miss_ctx or "semantic_search_nodes_tool" in miss_ctx
+                ),
+                f"additionalContext: {miss_ctx[:200]!r}" if miss else NO_HOOK_OUTPUT,
+            )
+        )
     finally:
         _reset_slot(miss_copy)
         shutil.rmtree(miss_copy, ignore_errors=True)
@@ -191,7 +262,9 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
@@ -207,7 +280,9 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
             gc.no_fabrication(target, GRAPH_HOOKS_DIR),
         ]
     if eval_id == "graph-search-behavior":
-        return [gc.run_verify_script(VERIFY, target)] + grade_graph_search_behavior(target)
+        return [gc.run_verify_script(VERIFY, target)] + grade_graph_search_behavior(
+            target
+        )
 
     exps = [gc.run_verify_script(VERIFY, target)]
     if eval_id == "fresh-wired":
@@ -228,8 +303,14 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         exps.append(gc.contains(target, COPILOT_CONFIG, "agentStop"))
         # Single-refresh-owner invariant: copilot owns end-of-turn, so claude must NOT also
         # carry a Stop hook even though it is wired.
-        exps.append(gc.not_contains(target, CLAUDE_CONFIG, "Stop",
-                                    label="claude config has no end-of-turn Stop hook (copilot owns refresh)"))
+        exps.append(
+            gc.not_contains(
+                target,
+                CLAUDE_CONFIG,
+                "Stop",
+                label="claude config has no end-of-turn Stop hook (copilot owns refresh)",
+            )
+        )
         exps.append(gc.git_diff_empty(target))
     return exps
 

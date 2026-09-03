@@ -39,7 +39,9 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
@@ -56,8 +58,14 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         # Existing CLAUDE.md notes: AGENTS.md created, import added, notes preserved.
         exps.append(gc.file_exists(target, "AGENTS.md"))
         exps.append(gc.contains(target, "CLAUDE.md", "@AGENTS.md"))
-        exps.append(gc.contains(target, "CLAUDE.md", NEST_EXISTING_NOTE,
-                                label="CLAUDE.md preserves the existing service notes"))
+        exps.append(
+            gc.contains(
+                target,
+                "CLAUDE.md",
+                NEST_EXISTING_NOTE,
+                label="CLAUDE.md preserves the existing service notes",
+            )
+        )
     elif eval_id == "ts-library":
         # Already fully wired: re-running must change nothing.
         exps.append(gc.git_diff_empty(target))

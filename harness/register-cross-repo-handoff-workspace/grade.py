@@ -48,14 +48,17 @@ MEMBERS = ("api", "web", "kubernetes", "monolith")
 # Legacy KEY=value board config -> the handoff.json key each name became. Only the keys a board ever
 # wrote are mapped, matching the payload's own resolver (payload/config.sh).
 _LEGACY_BOARD_KEYS = {
-    "TOPOLOGY": "topology", "REPO_NAME": "repoName",
-    "HANDOFF_GROUPS": "groups", "HANDOFF_GROUP_LAYOUT": "groupLayout",
+    "TOPOLOGY": "topology",
+    "REPO_NAME": "repoName",
+    "HANDOFF_GROUPS": "groups",
+    "HANDOFF_GROUP_LAYOUT": "groupLayout",
 }
 
 
 def _read_json(path: Path) -> dict:
     """Parse a JSON object, or {} when absent/unreadable. Callers assert on the VALUES — never on
-    the {} itself, which is exactly how the pre-consolidation filenames went unnoticed here."""
+    the {} itself, which is exactly how the pre-consolidation filenames went unnoticed here.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -106,8 +109,12 @@ def _groups_csv(cfg: dict) -> str:
 def _member_group(repo: Path) -> str:
     """The section a member repo resolves to. It lives in the repo's own .agents/handoff.json
     (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
-    literal was deliberately removed so a rename cannot strand a stale copy inside a tool config."""
-    for name in ("handoff.json", "handoff.config.json"):  # current first, then the pre-consolidation name
+    literal was deliberately removed so a rename cannot strand a stale copy inside a tool config.
+    """
+    for name in (
+        "handoff.json",
+        "handoff.config.json",
+    ):  # current first, then the pre-consolidation name
         js = repo / ".agents" / name
         if not js.is_file():
             continue
@@ -120,20 +127,31 @@ def _member_group(repo: Path) -> str:
 
 def _sandbox_home(base: Path) -> dict:
     """Env with a redirected $HOME so the user-layer manifest (~/.agents/handoff-repos.json) and any
-    real board state never leak into the graded run. The rest of the environment is inherited."""
+    real board state never leak into the graded run. The rest of the environment is inherited.
+    """
     home = base / "home"
     (home / ".agents").mkdir(parents=True)
     return {**os.environ, "HOME": str(home)}
 
 
-def _run_verify(scope: Path, env: dict) -> tuple[subprocess.CompletedProcess, gc.Expectation]:
-    proc = subprocess.run(["bash", str(VERIFY), "--scope", str(scope)],
-                          capture_output=True, text=True, env=env)
+def _run_verify(
+    scope: Path, env: dict
+) -> tuple[subprocess.CompletedProcess, gc.Expectation]:
+    proc = subprocess.run(
+        ["bash", str(VERIFY), "--scope", str(scope)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
     m = gc._SUMMARY_RE.search(proc.stdout)
     summary = m.group(0) if m else "(no Summary line)"
     failed = int(m.group(3)) if m else None
     passed = proc.returncode == 0 and failed == 0
-    exp = gc.expectation("verify-cross-repo-handoff.sh passes", passed, f"{summary} (exit {proc.returncode})")
+    exp = gc.expectation(
+        "verify-cross-repo-handoff.sh passes",
+        passed,
+        f"{summary} (exit {proc.returncode})",
+    )
     return proc, exp
 
 
@@ -144,7 +162,9 @@ def grade_not_configured(fixture: Path) -> list:
     try:
         work = sandbox / "work"
         shutil.copytree(fixture, work, symlinks=True)
-        env = _sandbox_home(sandbox)  # guarantees no user-layer manifest makes it "configured"
+        env = _sandbox_home(
+            sandbox
+        )  # guarantees no user-layer manifest makes it "configured"
         proc, summary_exp = _run_verify(work, env)
         not_configured = "not configured" in proc.stdout and proc.returncode == 0
         # Asserted on the FINDING, not on the exit code. "Not configured" and "the verifier
@@ -158,8 +178,12 @@ def grade_not_configured(fixture: Path) -> list:
                 not_configured,
                 f"exit {proc.returncode}; 'not configured' in output: {'not configured' in proc.stdout}",
             ),
-            gc.finding(findings, "manifest.not_configured", "pass",
-                       label="the verifier SAYS it is unconfigured, rather than merely exiting 0"),
+            gc.finding(
+                findings,
+                "manifest.not_configured",
+                "pass",
+                label="the verifier SAYS it is unconfigured, rather than merely exiting 0",
+            ),
         ]
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -183,11 +207,32 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
 
         env = _sandbox_home(sandbox)
         sync = subprocess.run(
-            ["bash", str(SYNC), "--scope", str(work), "--tools", "claude", "--primary", "claude"],
-            capture_output=True, text=True, env=env,
+            [
+                "bash",
+                str(SYNC),
+                "--scope",
+                str(work),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
         )
-        last = (sync.stdout or sync.stderr).strip().splitlines()[-1] if (sync.stdout or sync.stderr).strip() else "no output"
-        exps = [gc.expectation(f"{tag} sync-cross-repo-handoff.sh completes (exit 0)", sync.returncode == 0, last)]
+        last = (
+            (sync.stdout or sync.stderr).strip().splitlines()[-1]
+            if (sync.stdout or sync.stderr).strip()
+            else "no output"
+        )
+        exps = [
+            gc.expectation(
+                f"{tag} sync-cross-repo-handoff.sh completes (exit 0)",
+                sync.returncode == 0,
+                last,
+            )
+        ]
 
         _, summary_exp = _run_verify(work, env)
         summary_exp["text"] = f"{tag} {summary_exp['text']}"
@@ -202,7 +247,10 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             ("board.groups", "each board records its groups"),
             ("board.layout", "each board records its layout"),
             ("member.section", "each member resolves to its section"),
-            ("registry.projection", "each board's registry still projects the manifest"),
+            (
+                "registry.projection",
+                "each board's registry still projects the manifest",
+            ),
         ):
             e = gc.finding(findings, fid, "pass")
             e["text"] = f"{tag} {label}"
@@ -214,39 +262,66 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         # boards scaffolded with the right group facts
         shared_cfg = _board_config(work / ".agents/handoff")
         legacy_cfg = _board_config(work / ".agents/handoff-legacy")
-        exps.append(gc.expectation(
-            f"{tag} shared board config records both co-located groups + layout",
-            _groups_csv(shared_cfg) == "auth-suite,infra" and shared_cfg.get("groupLayout") == layout,
-            f"groups={_groups_csv(shared_cfg) or 'unset'} layout={shared_cfg.get('groupLayout') or 'unset'}"
-            if shared_cfg else "missing",
-        ))
-        exps.append(gc.expectation(
-            f"{tag} legacy group is on its own separate board",
-            _groups_csv(legacy_cfg) == "legacy",
-            f"groups={_groups_csv(legacy_cfg) or 'unset'}" if legacy_cfg else "missing",
-        ))
+        exps.append(
+            gc.expectation(
+                f"{tag} shared board config records both co-located groups + layout",
+                _groups_csv(shared_cfg) == "auth-suite,infra"
+                and shared_cfg.get("groupLayout") == layout,
+                (
+                    f"groups={_groups_csv(shared_cfg) or 'unset'} layout={shared_cfg.get('groupLayout') or 'unset'}"
+                    if shared_cfg
+                    else "missing"
+                ),
+            )
+        )
+        exps.append(
+            gc.expectation(
+                f"{tag} legacy group is on its own separate board",
+                _groups_csv(legacy_cfg) == "legacy",
+                (
+                    f"groups={_groups_csv(legacy_cfg) or 'unset'}"
+                    if legacy_cfg
+                    else "missing"
+                ),
+            )
+        )
 
         # each member wired to its own section (AGENTS.md block + HANDOFF_GROUP in the hook command)
-        for name, group in (("api", "auth-suite"), ("kubernetes", "infra"), ("monolith", "legacy")):
+        for name, group in (
+            ("api", "auth-suite"),
+            ("kubernetes", "infra"),
+            ("monolith", "legacy"),
+        ):
             agents = (work / name / "AGENTS.md").read_text(encoding="utf-8")
-            block_ok = "cross-repo-handoff:begin" in agents and f"`{group}` section" in agents
-            exps.append(gc.expectation(
-                f"{tag} {name} AGENTS.md block scoped to {group}", block_ok,
-                f"block present + names {group}: {block_ok}",
-            ))
+            block_ok = (
+                "cross-repo-handoff:begin" in agents and f"`{group}` section" in agents
+            )
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} AGENTS.md block scoped to {group}",
+                    block_ok,
+                    f"block present + names {group}: {block_ok}",
+                )
+            )
             # Wired and scoped are separate facts: the hook command invokes the board, and the
             # member's own config names its section.
             settings = work / name / ".claude/settings.json"
             hook_ok = settings.is_file() and "/scripts/hooks.sh" in settings.read_text()
-            exps.append(gc.expectation(
-                f"{tag} {name} hooks invoke the board", hook_ok,
-                f"handoff hook in settings.json: {hook_ok}",
-            ))
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} hooks invoke the board",
+                    hook_ok,
+                    f"handoff hook in settings.json: {hook_ok}",
+                )
+            )
             got_group = _member_group(work / name)
-            exps.append(gc.expectation(
-                f"{tag} {name} resolves to section {group}", got_group == group,
-                f".agents/handoff.json group={got_group or 'unset'}",
-            ))
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} resolves to section {group}",
+                    got_group == group,
+                    f".agents/handoff.json group={got_group or 'unset'}",
+                )
+            )
 
         # ledger recorded
         # The ledger moved INSIDE the workspace's own handoff.json, under `_generated`, when every
@@ -256,21 +331,38 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         ledger = _read_json(work / ".agents/handoff.json").get("_generated") or {}
         # Keyed on PATH, not alias: an alias is the manifest's short name for a repo (`k8s` for
         # `kubernetes/`) and comparing it to a directory name asserts a coincidence, not a fact.
-        got_paths = sorted({os.path.basename(str(m.get("path", "")).rstrip("/"))
-                            for m in ledger.get("members") or []})
-        exps.append(gc.expectation(
-            f"{tag} ledger records every member under _generated",
-            got_paths == sorted(MEMBERS),
-            f"members={got_paths or 'unset'}",
-        ))
+        got_paths = sorted(
+            {
+                os.path.basename(str(m.get("path", "")).rstrip("/"))
+                for m in ledger.get("members") or []
+            }
+        )
+        exps.append(
+            gc.expectation(
+                f"{tag} ledger records every member under _generated",
+                got_paths == sorted(MEMBERS),
+                f"members={got_paths or 'unset'}",
+            )
+        )
 
         # idempotency: commit the FIRST sync's output as the baseline, then re-sync and assert every
         # member repo's git status is clean (the second sync changed nothing).
         for name in MEMBERS:
             gc.git_init_commit(work / name, "post-sync baseline")
         subprocess.run(
-            ["bash", str(SYNC), "--scope", str(work), "--tools", "claude", "--primary", "claude"],
-            capture_output=True, text=True, env=env,
+            [
+                "bash",
+                str(SYNC),
+                "--scope",
+                str(work),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
         )
         for name in MEMBERS:
             e = gc.git_diff_empty(work / name)
@@ -295,12 +387,19 @@ def grade(target: Path, eval_id: str | None) -> list:
     if eval_id == "fleet":
         return grade_fleet(target)
     # Default: wrap the verifier against `target` in place (its own scope).
-    proc = subprocess.run(["bash", str(VERIFY), "--scope", str(target)], capture_output=True, text=True)
+    proc = subprocess.run(
+        ["bash", str(VERIFY), "--scope", str(target)], capture_output=True, text=True
+    )
     m = gc._SUMMARY_RE.search(proc.stdout)
     summary = m.group(0) if m else "(no Summary line)"
     failed = int(m.group(3)) if m else None
-    return [gc.expectation("verify-cross-repo-handoff.sh passes",
-                           proc.returncode == 0 and failed == 0, f"{summary} (exit {proc.returncode})")]
+    return [
+        gc.expectation(
+            "verify-cross-repo-handoff.sh passes",
+            proc.returncode == 0 and failed == 0,
+            f"{summary} (exit {proc.returncode})",
+        )
+    ]
 
 
 if __name__ == "__main__":
