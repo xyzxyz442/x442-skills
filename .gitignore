@@ -490,5 +490,10 @@ harness/**/iterations/**/run-*/transcript.md
 # `git add -f` instead, which keeps working because .gitignore only governs UNtracked files.
 # If you ever regenerate that fixture, force-add its .locks/ again or the eval passes vacuously.
 
-# Per-machine handoff board wiring — install output, never committed
+# Per-machine handoff board wiring — install output, never committed. This repo is a member
+# of a board it does not own, and the standalone rule forbids committing that membership;
+# the installer's tracked-file writes (.claude/settings.json, AGENTS.md) are reverted by hand
+# and the wiring lives in .claude/settings.local.json instead. Both config filenames are
+# listed: payload 21 renamed handoff.config.json to handoff.json.
+.agents/handoff.json
 .agents/handoff.config.json
