@@ -88,6 +88,13 @@
       "expected_output": "Multi-group payload case (self-contained; ignores the fixture). Scaffolds a board with `setup-handoff.sh --board-only --groups auth,infra --layout <l>` under BOTH subfolder and prefix layouts and drives the `handoff` CLI + hooks.sh directly to prove the section layer: the board config records HANDOFF_GROUPS + HANDOFF_GROUP_LAYOUT; a `new` in each group lands its doc in the group's section (a `<group>/` subfolder or `<group>--` prefixed file); the same id used in two groups yields two distinct docs with no lease clash; each group gets its own sub-index and the board root INDEX.md is a roll-up listing every section; `list` from one group shows only that section; and the pretool edit gate, scoped to the section, denies a stranger editing a claimed section doc. Regression for flat boards is covered by the script-behavior case, which drives an ungrouped board unchanged."
     },
     {
+      "id": "schema-behind",
+      "kind": "post-state",
+      "prompt": "Your board has closed handoffs that predate the current document schema. Check the install.",
+      "fixture": "fixtures/fresh",
+      "expected_output": "Archived documents below the board's schema must be COUNTED, not skipped. Regression for a `continue` written inside a `case` arm that was meant to skip one check for archived docs and instead exited the whole loop iteration, taking the schema count with it \u2014 it reported \"4 of 47 doc(s) predate schema 1\" on a board where the true number was 41. The two boards are built so the FINDING ID discriminates rather than the prose: with only an archived COORDINATION doc below schema the buggy verifier counts zero and reports the all-clear `doc.schema`, while the fixed one reports `doc.schema.behind`; with only an archived STANDALONE doc below schema both report `doc.schema.behind`, since a standalone never enters the case arm \u2014 that is the control, and a fix that simply exempts everything archived fails it. A third board with nothing stripped must still report the all-clear, so a warn is evidence of a real condition and not a check that always fires."
+    },
+    {
       "id": "schema-forward",
       "kind": "post-state",
       "prompt": "A teammate's board upgraded before yours. Work the board anyway.",
