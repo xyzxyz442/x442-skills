@@ -111,6 +111,36 @@ is_json_str() { printf '%s' "$1" | python3 -c "import json,sys; json.load(sys.st
 # Locate the handoff dir: the default repo-level path, else derive the configured location
 # from any wired tool config (honors a custom --handoff-dir and any primary tool).
 HD="$ROOT/.agents/handoff"
+# The repo's own config DECLARES its board, so prefer it over reverse-engineering the path out of
+# a hook command string. The grep below still runs as a fallback -- it is what recovers a board
+# from a repo wired before the config layer existed -- but it can only find a board whose
+# directory is named *handoff, since that name is what its pattern anchors on. A board reached
+# through --handoff-dir under any other name resolves from here or not at all.
+if [ ! -d "$HD" ]; then
+  D="$(python3 - "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
+import json, os, sys
+
+for path in sys.argv[1:]:
+    if not os.path.isfile(path):
+        continue
+    try:
+        with open(path) as fh:
+            cfg = json.load(fh)
+    except (ValueError, OSError):
+        continue
+    if not isinstance(cfg, dict):
+        continue
+    # `board` is canonical; `boardPath` is the legacy spelling and means the same thing.
+    board = cfg.get("board") or cfg.get("boardPath")
+    if board:
+        print(board)
+        break
+PYEOF
+  )"
+  if [ -n "$D" ]; then
+    case "$D" in /*) HD="$D" ;; *) HD="$ROOT/$D" ;; esac
+  fi
+fi
 if [ ! -d "$HD" ]; then
   for CF in .claude/settings.json .claude/settings.local.json .gemini/settings.json .github/hooks/handoff.json; do
     [ -f "$ROOT/$CF" ] || continue
@@ -315,10 +345,35 @@ else
     --file "$ROOT/AGENTS.md" \
     --template "$SCRIPT_DIR/../assets/agents-handoff.md" \
     --handoff-dir "$HDREL" 2> /dev/null
-  case $? in
+  rc=$?
+  # A repo installed with --local-wiring has no routing block ON PURPOSE, and reporting that as a
+  # hard failure is worse than not checking: a FAIL nobody can clear is a FAIL everybody learns to
+  # scroll past, and it takes the real ones with it. The installer records the choice on every run
+  # (true or false), so this reads a declaration rather than inferring one from an absence.
+  LOCAL_WIRING="$(python3 - "$ROOT/.agents/handoff.json" 2> /dev/null << 'PYEOF'
+import json, os, sys
+
+path = sys.argv[1]
+if os.path.isfile(path):
+    try:
+        with open(path) as fh:
+            cfg = json.load(fh)
+        if isinstance(cfg, dict) and cfg.get("localWiring") is True:
+            print("1")
+    except (ValueError, OSError):
+        pass
+PYEOF
+  )"
+  case $rc in
     0) ok agents.block "AGENTS.md routing block present and matches the asset" ;;
     2) warn agents.block.drift "AGENTS.md routing block has drifted from the asset — re-run setup-handoff to refresh it" ;;
-    3) bad agents.block "AGENTS.md routing block missing" ;;
+    3)
+      if [ "$LOCAL_WIRING" = 1 ]; then
+        ok agents.block.local_wiring "AGENTS.md routing block deliberately absent (--local-wiring) — agents here read the protocol from $HDREL/README.md instead"
+      else
+        bad agents.block "AGENTS.md routing block missing"
+      fi
+      ;;
     *) bad agents.block.malformed "AGENTS.md routing block malformed (duplicated/unbalanced markers) — fix by hand" ;;
   esac
 fi

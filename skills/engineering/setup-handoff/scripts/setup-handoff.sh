@@ -9,7 +9,15 @@
 #   setup-handoff.sh <repo> --tools claude,gemini,copilot --primary claude \
 #       [--topology single-repo|cross-repo] [--handoff-dir <path>] \
 #       [--group <section>] [--groups <csv>] [--layout subfolder|prefix] \
-#       [--migrate <legacy-dir>] [--allow-verify-cmd]
+#       [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring]
+#
+#   --local-wiring writes NOTHING the repo would commit: claude's hooks go to
+#   .claude/settings.local.json and the AGENTS.md routing block is skipped. For a repo that is a
+#   member of a board it does not own, and whose own rules forbid committing a path outside
+#   itself, the ordinary install is not a supported configuration -- it writes two tracked files
+#   that then have to be reverted by hand after every run, which is a step that gets skipped once
+#   and committed forever. gemini and copilot have no uncommitted config location, so they are
+#   skipped with a notice rather than written to a file the flag promised not to touch.
 #
 #   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
@@ -280,6 +288,7 @@ PY
 }
 
 REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0
+LOCAL_WIRING=0
 # Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
 # works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
 # fixtures, where a committed byte-copy of a 180 KB script is 15 files to re-sync on every bugfix
@@ -330,6 +339,10 @@ while [ $# -gt 0 ]; do
       ;;
     --no-vendor-cli)
       VENDOR_CLI=0
+      shift
+      ;;
+    --local-wiring)
+      LOCAL_WIRING=1
       shift
       ;;
     --force-downgrade)
@@ -679,16 +692,33 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   local tool="$1" primary="$2" cfg=""
   case "$tool" in
     claude)
-      cfg="$REPO/.claude/settings.json"
+      # --local-wiring: settings.local.json is claude's per-machine file and is gitignored by
+      # convention, so hooks land there and nothing tracked changes.
+      if [ "$LOCAL_WIRING" = 1 ]; then
+        cfg="$REPO/.claude/settings.local.json"
+      else
+        cfg="$REPO/.claude/settings.json"
+      fi
       mkdir -p "$REPO/.claude"
       ;;
-    gemini)
-      cfg="$REPO/.gemini/settings.json"
-      mkdir -p "$REPO/.gemini"
-      ;;
-    copilot)
-      cfg="$REPO/.github/hooks/handoff.json"
-      mkdir -p "$REPO/.github/hooks"
+    gemini | copilot)
+      # Neither tool has an uncommitted settings location. Writing their normal file would break
+      # the promise the flag makes, and silently writing it is worse than not wiring them -- the
+      # operator asked for nothing committed and would get two committed files.
+      if [ "$LOCAL_WIRING" = 1 ]; then
+        echo "  (skipping $tool: --local-wiring, and $tool has no uncommitted config location)" >&2
+        return 0
+      fi
+      case "$tool" in
+        gemini)
+          cfg="$REPO/.gemini/settings.json"
+          mkdir -p "$REPO/.gemini"
+          ;;
+        copilot)
+          cfg="$REPO/.github/hooks/handoff.json"
+          mkdir -p "$REPO/.github/hooks"
+          ;;
+      esac
       ;;
     *)
       echo "  (skipping unknown tool: $tool)" >&2
@@ -718,7 +748,9 @@ done
 # cross-repo: grant the current repo read/exec access to the shared handoff dir via
 # Claude's additionalDirectories (best-effort; only when claude is wired).
 if [ "$TOPOLOGY" = "cross-repo" ] && printf '%s' "$TOOLS" | grep -q claude; then
-  python3 "$SKILL_DIR/scripts/merge-hooks.py" "$REPO/.claude/settings.json" --board "$HDPATH" --add-dir || true
+  ADD_DIR_CFG="$REPO/.claude/settings.json"
+  [ "$LOCAL_WIRING" = 1 ] && ADD_DIR_CFG="$REPO/.claude/settings.local.json"
+  python3 "$SKILL_DIR/scripts/merge-hooks.py" "$ADD_DIR_CFG" --board "$HDPATH" --add-dir || true
 fi
 
 # --- AGENTS.md routing block (idempotent) ---------------------------------------------
@@ -729,9 +761,37 @@ fi
 # only injecting when absent — an insert-only guard let the block drift from the asset forever
 # (agents-block-drift-handoff). The splice replaces only the span between the markers and refuses
 # on duplicated/unbalanced ones instead of clobbering the file.
-python3 "$SKILL_DIR/scripts/splice-agents-block.py" \
-  --file "$REPO/AGENTS.md" \
-  --template "$ASSETS/agents-handoff.md" \
-  --handoff-dir "$HDPATH" || exit 1
+if [ "$LOCAL_WIRING" = 1 ]; then
+  echo "  (skipping the AGENTS.md routing block: --local-wiring)"
+  echo "  agents in this repo learn the protocol from $HDPATH/README.md instead."
+else
+  python3 "$SKILL_DIR/scripts/splice-agents-block.py" \
+    --file "$REPO/AGENTS.md" \
+    --template "$ASSETS/agents-handoff.md" \
+    --handoff-dir "$HDPATH" || exit 1
+fi
+
+# Record the choice where the verifier can read it, so a deliberately absent routing block is not
+# reported as a broken install. Written on EVERY run, true or false: a stale `true` left behind by
+# one run with the flag would keep excusing a genuinely missing block on every run without it.
+python3 - "$REPO/.agents/handoff.json" "$LOCAL_WIRING" << 'PYEOF'
+import json, os, sys
+
+path, local = sys.argv[1], sys.argv[2] == "1"
+cfg = {}
+if os.path.isfile(path):
+    try:
+        with open(path) as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict):
+            cfg = loaded
+    except (ValueError, OSError):
+        pass  # a hand-broken file must not fail the install
+cfg["localWiring"] = local
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as fh:
+    json.dump(dict(sorted(cfg.items())), fh, indent=2)
+    fh.write("\n")
+PYEOF
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"
