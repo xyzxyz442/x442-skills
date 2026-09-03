@@ -153,12 +153,25 @@ path and is a no-op when the install is already generic and current.
 bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" \
   --tools <comma-list> --primary <tool|none> \
   [--topology single-repo|cross-repo] [--handoff-dir <path>] \
-  [--migrate <legacy-dir>] [--allow-verify-cmd]
+  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring]
 ```
 
 `--allow-verify-cmd` records the opt-in that lets `release --status done --run-verify` execute a
 doc's `verify:` command (off by default — see the safety note). Re-running with a different
 `--primary` moves hard enforcement idempotently (strips the old deny/stop hooks).
+
+`--local-wiring` writes nothing the repo would commit. Claude's hooks go to
+`.claude/settings.local.json` and the `AGENTS.md` routing block is skipped; the choice is recorded
+in the repo's own `.agents/handoff.json` so the verifier reports the absent block as deliberate
+rather than as a broken install.
+
+Reach for it when a repo is a member of a board it does not own **and** its own rules forbid
+committing a path outside itself. Without it such a repo gets two tracked files pointing at
+`../`, which have to be reverted by hand after every install — a step that gets skipped once and
+committed forever. The cost is real and worth stating: with no routing block, an agent in that
+repo does not learn the protocol from `AGENTS.md`, so the board's own `README.md` becomes the
+only place it is written down. Gemini and Copilot have no uncommitted config location, so
+`--local-wiring` skips them with a notice instead of writing a file it promised not to touch.
 
 ### 7. Verify it fires
 
