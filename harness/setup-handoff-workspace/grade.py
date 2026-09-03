@@ -1918,6 +1918,183 @@ def _scope_notice_expectations(sh, ho, board, tag):
     return e
 
 
+def grade_schema_behind(_target):
+    """Archived documents below the board's schema must be COUNTED.
+
+    Regression for a `continue` written inside a `case` arm: it was meant to skip the
+    current-state check for archived docs and instead exited the whole loop iteration, so every
+    archived coordination and orchestrator doc also skipped the schema count at the bottom of the
+    loop. On a real board it reported "4 of 47 doc(s) predate schema 1" where the true number was
+    41 -- a drift detector hiding drift.
+
+    The two boards below are built so the FINDING ID discriminates, never the prose. Asserting the
+    count would mean parsing a message, and this harness asserts on ids precisely because prose is
+    reworded freely:
+
+      * `archived-coordination` -- the only doc below schema is an archived COORDINATION doc. The
+        buggy verifier never reaches its schema check, counts zero, and reports the all-clear
+        `doc.schema`. The fixed one reports `doc.schema.behind`.
+      * `archived-standalone` -- the only doc below schema is an archived STANDALONE doc. It never
+        enters the case arm, so BOTH versions count it and both report `doc.schema.behind`. This
+        is what made the real number 4 rather than 0, and it is the control: a "fix" that simply
+        exempts everything archived would pass the first board and fail this one.
+
+    Self-contained; ignores the passed fixture.
+    """
+    import shutil
+    import tempfile
+
+    e = []
+    base = Path(tempfile.mkdtemp(prefix="handoff-schema-behind-"))
+
+    def strip_schema(doc: Path) -> bool:
+        """Remove the `schema:` frontmatter line, making the doc read as pre-schema (0)."""
+        if not doc.is_file():
+            return False
+        kept = [
+            ln
+            for ln in doc.read_text().splitlines(True)
+            if not ln.startswith("schema:")
+        ]
+        doc.write_text("".join(kept))
+        return True
+
+    try:
+        for case, doc_args in (
+            ("archived-coordination", []),
+            ("archived-standalone", ["--standalone"]),
+        ):
+            tag = f"[{case}]"
+            repo = base / case
+            (repo / "src").mkdir(parents=True)
+            (repo / "AGENTS.md").write_text("# AGENTS\n")
+            (repo / "src/app.js").write_text("// app\n")
+            gc.git_init_commit(repo)
+
+            r = _run(
+                [
+                    "bash",
+                    str(SETUP),
+                    str(repo),
+                    "--tools",
+                    "claude",
+                    "--primary",
+                    "claude",
+                ],
+                repo,
+            )
+            e.append(
+                gc.expectation(
+                    f"{tag} install scaffolds a board",
+                    r.returncode == 0,
+                    f"exit {r.returncode}: {r.stderr.strip()[:120]}",
+                )
+            )
+
+            board = repo / HD
+            # A live doc that STAYS at the current schema, so the board is never uniformly stale --
+            # a board where everything is behind would warn no matter which branch ran.
+            _handoff(repo, "new", "live", "--title", "Live doc at the current schema")
+            _handoff(
+                repo,
+                "new",
+                "closed",
+                *doc_args,
+                "--title",
+                "Closed doc, later stripped",
+            )
+            rel = ["release", "closed", "--status", "done"]
+            if not doc_args:  # a coordination doc needs evidence to close
+                rel += ["--verified-by", "harness"]
+            _handoff(repo, *rel)
+
+            archived = board / "archive/closed-handoff.md"
+            e.append(
+                gc.expectation(
+                    f"{tag} the closed doc archived",
+                    archived.is_file(),
+                    f"exists: {archived.is_file()}",
+                )
+            )
+            e.append(
+                gc.expectation(
+                    f"{tag} its schema stamp was stripped",
+                    strip_schema(archived),
+                    f"stripped: {archived.is_file()}",
+                )
+            )
+            e.append(
+                gc.expectation(
+                    f"{tag} the live doc still carries schema",
+                    "schema:" in (board / "live-handoff.md").read_text(),
+                    "live doc frontmatter",
+                )
+            )
+
+            findings = gc.verify_findings(VERIFY, repo)
+            e.append(
+                gc.finding(
+                    findings,
+                    "doc.schema.behind",
+                    "warn",
+                    label=f"{tag} the archived doc below schema is counted",
+                )
+            )
+            # The buggy verifier does not merely miscount -- with nothing else behind, it counts
+            # zero and reports the ALL-CLEAR. Asserting its absence is what makes this a
+            # regression test rather than a restatement of the warn above.
+            e.append(
+                gc.expectation(
+                    f"{tag} the all-clear does NOT fire while a doc is behind",
+                    "doc.schema" not in findings,
+                    (
+                        "doc.schema absent"
+                        if "doc.schema" not in findings
+                        else f"doc.schema reported: {findings['doc.schema']}"
+                    ),
+                )
+            )
+
+        # And the check can still pass: a board where nothing was stripped reports the all-clear,
+        # so a warn is evidence of a real condition rather than a check that always fires.
+        clean = base / "all-current"
+        (clean / "src").mkdir(parents=True)
+        (clean / "AGENTS.md").write_text("# AGENTS\n")
+        (clean / "src/app.js").write_text("// app\n")
+        gc.git_init_commit(clean)
+        _run(
+            [
+                "bash",
+                str(SETUP),
+                str(clean),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            clean,
+        )
+        _handoff(clean, "new", "live", "--title", "Live doc at the current schema")
+        _handoff(
+            clean, "new", "closed", "--title", "Closed doc, left at the current schema"
+        )
+        _handoff(
+            clean, "release", "closed", "--status", "done", "--verified-by", "harness"
+        )
+        findings = gc.verify_findings(VERIFY, clean)
+        e.append(
+            gc.finding(
+                findings,
+                "doc.schema",
+                "pass",
+                label="[all-current] every doc at schema reports the all-clear",
+            )
+        )
+        return e
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def grade_grouped_board(_target):
     """A multi-group board: two groups co-located as sub-indexed sections + id collisions across
     groups, exercised under BOTH subfolder and prefix layouts. Self-contained (ignores the passed
@@ -2399,6 +2576,9 @@ def _grade(target, eval_id):
 
     if eval_id == "grouped-board":
         return grade_grouped_board(target)
+
+    if eval_id == "schema-behind":
+        return grade_schema_behind(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 
