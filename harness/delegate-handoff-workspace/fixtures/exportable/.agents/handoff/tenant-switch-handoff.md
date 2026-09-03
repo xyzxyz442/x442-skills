@@ -9,6 +9,7 @@ severity: high
 created: 2026-08-21
 updated: 2026-08-21
 note: Filed after a prod incident review.
+schema: 1
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -17,6 +18,10 @@ note: Filed after a prod incident review.
      needs a credential, do NOT paste it — leave a named placeholder, prompt the user, and
      suggest a safe channel (an environment variable, a secret-manager reference, or
      out-of-band). Record the variable/reference NAME here, never the value. -->
+
+## Current state
+
+<!-- REWRITABLE. Where this stands right now — overwrite it, do not append. -->
 
 ## Context
 

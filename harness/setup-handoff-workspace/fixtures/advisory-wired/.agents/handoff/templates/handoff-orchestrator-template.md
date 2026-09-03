@@ -41,6 +41,11 @@ note: PLACEHOLDER_NOTE
 <!-- handoff:children:end -->
 <!-- prettier-ignore-end -->
 
+## Current state
+
+<!-- REWRITABLE. Where the bundle stands — which phase is live, what the next session picks up.
+     Overwrite it; the Children table above is generated and carries the per-child status. -->
+
 ## Sequencing
 
 <!-- Order and dependencies BETWEEN children: what must land first, what can run in

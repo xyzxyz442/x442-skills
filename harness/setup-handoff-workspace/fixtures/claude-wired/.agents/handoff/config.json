@@ -1,8 +1,0 @@
-{
-  "allowVerifyCmd": false,
-  "groupLayout": "",
-  "groups": [],
-  "repoName": "claude-wired",
-  "topology": "single-repo",
-  "ttlHours": 4
-}

@@ -7,6 +7,7 @@ children: [auth-flow-handoff, payment-flow-handoff, notif-flow-handoff]
 created: 2026-08-21
 updated: 2026-08-21
 note: All three must land before 2.4 code-freeze.
+schema: 1
 ---
 
 <!-- NEVER COMMIT SECRETS. This doc is committed to the repo and its git history.
@@ -60,3 +61,7 @@ note: All three must land before 2.4 code-freeze.
 
 <!-- handoff:children:end -->
 <!-- prettier-ignore-end -->
+
+## Current state
+
+<!-- REWRITABLE. Where this stands right now — overwrite it, do not append. -->

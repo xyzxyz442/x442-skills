@@ -11,8 +11,10 @@
 #   1. Universal (always): .graph-hooks/ shared cores+dispatcher, git post-commit refresh,
 #      .gitignore entries, and .code-review-graphignore / .graphifyignore.
 #   2. Per chosen tool: its native hook config (from config/render.py), merged into the
-#      tool's settings file (config/merge.py) — never clobbering unrelated keys. Only the
-#      --primary tool gets the end-of-turn refresh, so N tools never duplicate the build.
+#      tool's settings file (config/merge.py), which adds ONLY the hook groups this skill
+#      owns and leaves every other key, event, and group in that file untouched — the user's
+#      and, on Gemini, setup-handoff's. Only the --primary tool gets the end-of-turn refresh,
+#      so N tools never duplicate the build.
 #
 # Idempotent and non-destructive: re-runnable; never deletes files; legacy scripts are only
 # reported, never removed. Every hook silently no-ops when a tool or graph is absent.
@@ -185,10 +187,11 @@ for t in $TOOLS_LIST; do
   case "$t" in
     claude)
       mkdir -p .claude
-      # Merge into BOTH the committed template and the active local copy. merge.py replaces
-      # only the "hooks" subtree (preserving any user keys), so a --primary change correctly
+      # Merge into BOTH the committed template and the active local copy. merge.py adds only
+      # the hook groups it recognizes as ours and refreshes them in place, so a --primary change
       # drops the stale Stop/endturn from whichever file previously owned it — no stale second
-      # refresh owner. The active file Claude Code actually reads is settings.local.json.
+      # refresh owner — while a user's own hooks in those same events stay put. The active file
+      # Claude Code actually reads is settings.local.json.
       render claude | merge .claude/settings.example.json
       render claude | merge .claude/settings.local.json
       echo "  + .claude/settings.example.json + settings.local.json (claude hooks)"

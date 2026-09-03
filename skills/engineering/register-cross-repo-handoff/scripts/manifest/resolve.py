@@ -28,15 +28,28 @@ import subprocess
 import sys
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # group names and repo aliases
-MANIFEST = ".handoff-repos.json"
-USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff-repos.json")
+# ONE filename at every layer. `.agents/handoff.json` is the same file the board and each member
+# repo use — the layers are told apart by WHERE they sit, not by what they are called. The old
+# `.handoff-repos.json` is still read, at LOWER precedence than the file that replaced it in the
+# same directory, so an existing workspace keeps resolving until its manifest is moved.
+MANIFEST = os.path.join(".agents", "handoff.json")
+LEGACY_MANIFEST = ".handoff-repos.json"
+USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff.json")
+LEGACY_USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff-repos.json")
 DEFAULT_LAYOUT = "subfolder"
 VALID_LAYOUTS = ("subfolder", "prefix")
 
 
 def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
-    """(layer-name, manifest-path, committed?) lowest precedence first."""
-    out: list[tuple[str, str, bool]] = [("user", USER_MANIFEST, False)]
+    """(layer-name, manifest-path, committed?) lowest precedence first.
+
+    Each directory contributes its legacy name first and its current one second, so a directory
+    holding both resolves to the current file while a directory holding only the old one keeps
+    working exactly as it did.
+    """
+    out: list[tuple[str, str, bool]] = [("user", LEGACY_USER_MANIFEST, False),
+                                        ("user", USER_MANIFEST, False)]
+    out.append(("scope", os.path.join(scope, LEGACY_MANIFEST), True))
     out.append(("scope", os.path.join(scope, MANIFEST), True))
     # every directory strictly between scope and `from`, scope -> leaf (deepest wins)
     rel = os.path.relpath(frm, scope)
@@ -46,7 +59,9 @@ def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
             if part in ("", os.pardir):
                 continue
             cur = os.path.join(cur, part)
-            out.append((os.path.relpath(cur, scope), os.path.join(cur, MANIFEST), True))
+            name = os.path.relpath(cur, scope)
+            out.append((name, os.path.join(cur, LEGACY_MANIFEST), True))
+            out.append((name, os.path.join(cur, MANIFEST), True))
     return out
 
 
@@ -96,22 +111,30 @@ def root_commit(repo: str) -> "str | None":
         return None
 
 
-def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | None, str | None]":
-    """Return (groups, default_board_raw, layout) from one manifest, or ({}, None, None) if absent/bad.
+def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | None, str | None, str | None]":
+    """Return (groups, default_board_raw, default_remote, layout), or empties if absent/bad.
 
     groups maps name -> either {"remove": True} or {"board_raw": str|None, "repos": [entry, ...]}.
     """
     if not os.path.exists(path):
-        return {}, None, None
+        return {}, None, None, None
     try:
         with open(path) as f:
             data = json.load(f)
     except Exception as e:  # noqa: BLE001
         errors.append(f"{path}: invalid JSON ({e})")
-        return {}, None, None
-    if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
-        errors.append(f'{path}: expected an object with a "groups" map')
-        return {}, None, None
+        return {}, None, None, None
+    if not isinstance(data, dict):
+        errors.append(f"{path}: expected a JSON object")
+        return {}, None, None, None
+    groups_val = data.get("groups")
+    if not isinstance(groups_val, dict):
+        # `groups` is shared with the board layer, where it is a bare LIST of section names — the
+        # same fact at lower fidelity. A list here means "this file configures a board, it does not
+        # declare a fleet", which is not an error: it simply contributes no groups.
+        if groups_val is not None and not isinstance(groups_val, list):
+            errors.append(f'{path}: "groups" must be a map of group name -> definition')
+        return {}, None, None, None
     if data.get("version", 1) != 1:
         warnings.append(f"{path}: unknown version {data.get('version')!r} — parsing as version 1")
 
@@ -120,6 +143,12 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
         errors.append(f"{path}: layout must be one of {list(VALID_LAYOUTS)} (got {layout!r})")
         layout = None
     default_board = data.get("board") if isinstance(data.get("board"), str) else None
+    # A board's remote is what makes it SHARED rather than merely versioned (ADR 0002). It is
+    # declared here rather than discovered because the scaffold has to create the board before
+    # anything could be discovered from it. Committed on purpose: a remote URL is the same for
+    # every member, unlike a checkout path, which is exactly the distinction schema 2 of repos.json
+    # draws. Never put credentials in it — use an SSH remote or a credential helper.
+    default_remote = data.get("boardRemote") if isinstance(data.get("boardRemote"), str) else None
 
     groups: dict = {}
     for gname, gval in data["groups"].items():
@@ -134,6 +163,7 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
             errors.append(f'{where}: expected an object with a "repos" array (or "remove": true)')
             continue
         board_raw = gval.get("board") if isinstance(gval.get("board"), str) else None
+        remote_raw = gval.get("boardRemote") if isinstance(gval.get("boardRemote"), str) else None
         repos, seen = [], set()
         for i, e in enumerate(gval["repos"]):
             rwhere = f"{where}.repos[{i}]"
@@ -158,8 +188,8 @@ def load_layer(path: str, errors: list, warnings: list) -> "tuple[dict, str | No
                 "alias": alias, "raw_path": raw, "audience": audience,
                 "notes": e.get("notes", "") if isinstance(e.get("notes"), str) else "",
             })
-        groups[gname] = {"board_raw": board_raw, "repos": repos}
-    return groups, default_board, layout
+        groups[gname] = {"board_raw": board_raw, "remote_raw": remote_raw, "repos": repos}
+    return groups, default_board, default_remote, layout
 
 
 def main() -> int:
@@ -187,7 +217,7 @@ def main() -> int:
         if not present:
             continue
         mdir = os.path.dirname(file)
-        groups, default_board_raw, lay = load_layer(file, errors, warnings)
+        groups, default_board_raw, default_remote_raw, lay = load_layer(file, errors, warnings)
         if lay is not None:
             layout, layout_from = lay, file  # nearest layer that sets layout wins
         for gname, gval in groups.items():
@@ -203,6 +233,7 @@ def main() -> int:
             effective[gname] = {
                 "layer": name, "manifest": file, "manifest_dir": mdir,
                 "board_raw": gval["board_raw"], "default_board_raw": default_board_raw,
+                "remote_raw": gval.get("remote_raw"), "default_remote_raw": default_remote_raw,
                 "repos": gval["repos"],
             }
             for r in gval["repos"]:
@@ -249,11 +280,20 @@ def main() -> int:
             "group": gname, "layer": g["layer"], "manifest": g["manifest"],
             "board": board, "layout": layout, "members": members,
         })
-        b = boards.setdefault(board, {"path": board, "groups": [],
+        b = boards.setdefault(board, {"path": board, "groups": [], "remote": "",
                                       "exists": os.path.isdir(board),
                                       "has_payload": os.path.isfile(os.path.join(board, "handoff"))
                                       and os.path.isfile(os.path.join(board, "scripts", "hooks.sh"))})
         b["groups"].append(gname)
+        # One board, one remote. Two groups sharing a board and declaring different remotes is a
+        # manifest error, not something to pick a winner for: the loser's members would be wired to
+        # a board that never receives their leases.
+        remote = g.get("remote_raw") or g.get("default_remote_raw") or ""
+        if remote and b["remote"] and remote != b["remote"]:
+            errors.append(f"board {board}: groups declare conflicting boardRemote values "
+                          f"({b['remote']!r} vs {remote!r}) — one board has one remote")
+        elif remote:
+            b["remote"] = remote
 
     json.dump({
         "scope": scope,

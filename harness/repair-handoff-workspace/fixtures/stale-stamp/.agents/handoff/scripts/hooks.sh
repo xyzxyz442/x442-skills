@@ -139,6 +139,11 @@ TOPOLOGY="$HC_TOPOLOGY"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
+# Relative board path used in every hint/deny message. HANDOFF_HDPATH (baked into older
+# hook commands) wins; otherwise the consumer's own .agents/handoff.json `board`, which is
+# what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
+hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
+
 # group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
 # this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
 # the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
@@ -188,7 +193,22 @@ meta() {
 }
 lock_session() { sed -n 's/^session=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_owner() { sed -n 's/^owner=//p' "$LOCKS/$1/owner" 2> /dev/null; }
-lock_expires() { sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null || echo 0; }
+# Expiry goes through config.sh's shared rule, exactly as the CLI's does. On a board with a remote
+# the deadline comes from the lease's COMMIT time rather than the writing machine's clock — and if
+# the gate applied a different rule than the CLI, it would deny edits to the rightful holder or
+# admit them to everyone else, with neither side reporting anything wrong.
+LEASES_SHARED=""
+leases_shared() {
+  if [ -z "$LEASES_SHARED" ]; then
+    if handoff_leases_shared "$DIR"; then LEASES_SHARED=1; else LEASES_SHARED=0; fi
+  fi
+  [ "$LEASES_SHARED" = 1 ]
+}
+lock_expires() {
+  local raw
+  raw="$(sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null)"
+  handoff_lease_expiry "$DIR" "$LOCKS/$1/owner" "${raw:-0}" "$TTL_HOURS"
+}
 lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]; }
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
@@ -260,7 +280,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
     local exp
-    exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+    exp="$(handoff_lease_expiry "$DIR" "$d/owner" "$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)" "$TTL_HOURS")"
     if [ "$(date +%s)" -ge "${exp:-0}" ]; then
       # remove the lease files then the now-empty dir (rmdir only removes empty dirs — no `rm -rf`)
       rm -f "$d"/owner 2> /dev/null
@@ -270,7 +290,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   return 0
 }
 touch_my_leases() { # auto-touch: extend every lease held by THIS session so active work never expires
-  local sess="$1"
+  local sess="$1" committed=0 exp d
   [ -n "$sess" ] || return 0
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
@@ -281,7 +301,25 @@ touch_my_leases() { # auto-touch: extend every lease held by THIS session so act
     echo "expires=$(($(date +%s) + TTL_HOURS * 3600))" >> "$t"
     cat "$t" > "$d/owner"
     rm -f "$t"
+    committed=1
   done
+  # On a shared board the deadline every other machine reads is the lease's COMMIT time, so the
+  # rewrite above extends nothing outside this checkout. Committing on every edit is not an option
+  # either — this is the post-edit hook, and a push per keystroke-sized change would make the board
+  # the slowest thing in the session. So the touch becomes a commit only in the last quarter of the
+  # TTL: one commit per lease per stretch of work, and an active session still never lapses
+  # mid-flight. Best effort throughout — a hook must never fail the session it runs in.
+  if [ "$committed" = 1 ] && leases_shared; then
+    for d in "$LOCKS"/*/; do
+      [ -d "$d" ] || continue
+      [ "$(sed -n 's/^session=//p' "$d/owner" 2> /dev/null)" = "$sess" ] || continue
+      exp="$(handoff_lease_expiry "$DIR" "$d/owner" 0 "$TTL_HOURS")"
+      [ "$(($(date +%s) + TTL_HOURS * 3600 / 4))" -lt "${exp:-0}" ] && continue
+      handoff_board_git "$DIR" add -- "$d/owner" \
+        && handoff_board_git "$DIR" commit --quiet -m "handoff: extend lease on $(basename "$d")" \
+        && handoff_board_git "$DIR" push --quiet "$(handoff_board_remote "$DIR")" HEAD
+    done
+  fi
   return 0
 }
 
@@ -366,9 +404,6 @@ case "$KIND" in
       out="${out}${line}"$'\n'
     done < <(each_doc)
     [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && exit 0
-    # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
-    # into the hook command; single-repo uses the default in-repo location.
-    hd="${HANDOFF_HDPATH:-.agents/handoff}"
     ctx="Handoffs for \`${REPO:-this repo}\` (from ${hd}/):"
     [ -n "$out" ] && ctx="${ctx}
 
@@ -406,7 +441,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     fi
     id="$(doc_id_of "$path")" || exit 0
 
-    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: .agents/handoff/handoff index"
+    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: ${hd}/handoff index"
 
     # Read the doc by its canonical path (the id alone can't be turned back into a path on a grouped
     # board — the stem may carry a group prefix, or the file may sit in a group subdir).
@@ -428,9 +463,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
       deny "'$id' is CLAIMED by $(lock_owner "$id"). Do not work on it and do not edit its doc — pick another handoff, or tell the user who holds it."
     fi
     if [ -d "$LOCKS/$id" ]; then
-      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: .agents/handoff/handoff claim $id \"note\" — the takeover gets logged."
+      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: ${hd}/handoff claim $id \"note\" — the takeover gets logged."
     fi
-    deny "You do not hold the lease on '$id'. Claim it before editing: .agents/handoff/handoff claim $id \"what you're doing\" — then re-try this edit."
+    deny "You do not hold the lease on '$id'. Claim it before editing: ${hd}/handoff claim $id \"what you're doing\" — then re-try this edit."
     ;;
 
   posttool-edit)
@@ -453,7 +488,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     [ -z "$held" ] && exit 0
     held="${held% }"
     _emit stop "⚠️  You still hold handoff lease(s): ${held}
-Release so others are not blocked: .agents/handoff/handoff release <id> --status open|blocked|done"
+Release so others are not blocked: ${hd}/handoff release <id> --status open|blocked|done"
     ;;
 esac
 exit 0

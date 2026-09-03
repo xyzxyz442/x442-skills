@@ -93,7 +93,7 @@ for t in d.get("tombstones", []):
 PY
 
 # --- emit a shell-parseable plan (bash never parses JSON) -----------------------------------------
-# BOARD<TAB>path<TAB>groups_csv<TAB>layout
+# BOARD<TAB>path<TAB>groups_csv<TAB>layout<TAB>remote
 # MEMBER<TAB>group<TAB>board<TAB>board_groups_csv<TAB>layout<TAB>alias<TAB>audience<TAB>repo<TAB>exists<TAB>has_agents
 PLAN="$(
   python3 - "$RESOLVED" << 'PY'
@@ -101,7 +101,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 boards = {b["path"]: b for b in d["boards"]}
 for b in d["boards"]:
-    print("\t".join(["BOARD", b["path"], ",".join(sorted(b["groups"])), d["layout"]]))
+    print("\t".join(["BOARD", b["path"], ",".join(sorted(b["groups"])), d["layout"], b.get("remote", "")]))
 for g in d["groups"]:
     bg = ",".join(sorted(boards[g["board"]]["groups"]))
     for m in g["members"]:
@@ -123,10 +123,17 @@ run() { # echo + run, or just echo under --dry-run
 
 # --- 1. scaffold each distinct board (standalone) ------------------------------------------------
 note "== boards =="
-while IFS=$'\t' read -r kind path groups layout; do
+while IFS=$'\t' read -r kind path groups layout remote; do
   [ "$kind" = "BOARD" ] || continue
-  note "board $path (groups: $groups, layout: $layout)"
-  run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
+  note "board $path (groups: $groups, layout: $layout${remote:+, remote: $remote})"
+  # --remote is passed through, not applied here: setup-handoff owns the board's git substrate, so
+  # the init/remote/.gitignore decisions live in ONE place rather than being re-derived per caller.
+  # A board with no declared remote is still git-initialised; it just says so.
+  if [ -n "$remote" ]; then
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout" --remote "$remote"
+  else
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
+  fi
 done <<< "$PLAN"
 
 # --- 1b. project the manifest into each board as repos.json --------------------------------------
@@ -136,7 +143,7 @@ done <<< "$PLAN"
 # export` resolves a cross-repo brief's target repo from that file instead of guessing a sibling
 # directory by name. registry.py owns the projection so this and the verifier cannot disagree.
 note "== board repo registries =="
-while IFS=$'\t' read -r kind path groups layout; do
+while IFS=$'\t' read -r kind path groups layout remote; do
   [ "$kind" = "BOARD" ] || continue
   if [ "$DRYRUN" = 1 ]; then
     note "  would: write $path/repos.json"
@@ -180,30 +187,62 @@ while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exis
 done <<< "$PLAN"
 
 # --- 4. state ledger (for --prune drift reporting) ----------------------------------------------
-LEDGER="$SCOPE/.agents/cross-repo-handoff-state.json"
+# The ledger is generated state, so it lives under `_generated` in the workspace's own layer of the
+# cascade rather than in a file of its own. Same rule as the board's registry: one filename, and
+# the generated block is fenced off from the hand-edited keys beside it.
+LEDGER="$SCOPE/.agents/handoff.json"
+LEGACY_LEDGER="$SCOPE/.agents/cross-repo-handoff-state.json"
 if [ "$DRYRUN" != 1 ]; then
   mkdir -p "$SCOPE/.agents"
-  python3 - "$RESOLVED" "$LEDGER" << 'PY'
-import json, sys
+  python3 - "$RESOLVED" "$LEDGER" "$LEGACY_LEDGER" << 'PY'
+import json, os, sys
 d = json.load(open(sys.argv[1]))
+dest, legacy = sys.argv[2], sys.argv[3]
 members = [{"group": g["group"], "alias": m["alias"], "path": m["path"], "board": g["board"]}
            for g in d["groups"] for m in g["members"] if m["exists"]]
-prev = {}
-try:
-    prev = json.load(open(sys.argv[2]))
-except Exception:
-    pass
-out = {"version": 1, "scope": d["scope"],
-       "members": sorted(members, key=lambda m: (m["group"], m["alias"])),
-       "boards": [b["path"] for b in d["boards"]]}
+
+
+def read(path):
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+# Everything outside `_generated` is the workspace's manifest and belongs to whoever wrote it.
+# Read it back and write it out untouched; only the generated block is ours to replace.
+doc = read(dest)
+prev = doc.get("_generated")
+prev = dict(prev) if isinstance(prev, dict) else {}
+if not prev.get("members"):
+    prev = read(legacy) or prev  # first run after consolidation: carry the standalone ledger over
+
+gen = doc.get("_generated")
+gen = dict(gen) if isinstance(gen, dict) else {}
+gen["scope"] = d["scope"]
+gen["members"] = sorted(members, key=lambda m: (m["group"], m["alias"]))
+gen["boards"] = [b["path"] for b in d["boards"]]
+doc["_generated"] = gen
+
 # report members that were wired before but have left scope (advisory — sync does not unwire)
 cur = {(m["group"], m["alias"]) for m in members}
 for m in prev.get("members", []):
     if (m["group"], m["alias"]) not in cur:
         print(f"  [prune] {m['group']}/{m['alias']} left scope — remove its handoff hooks manually "
               f"in {m['path']} (.claude/settings.json) if it should no longer coordinate.", file=sys.stderr)
-json.dump(out, open(sys.argv[2], "w"), indent=2)
-open(sys.argv[2], "a").write("\n")
+
+want = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+if read(dest) != doc or not os.path.isfile(dest):
+    with open(dest, "w") as fh:
+        fh.write(want)
+if os.path.isfile(legacy):
+    try:
+        os.replace(legacy, legacy + ".superseded")
+        print("  %s folded into handoff.json (.superseded is safe to delete)" % os.path.basename(legacy))
+    except OSError:
+        pass
 PY
 fi
 

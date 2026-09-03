@@ -24,12 +24,22 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
 
 1. **Universal payload (tool-agnostic, always installed)** under `.agents/handoff/`: the
    `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
-   `templates/` (the doc scaffolds), `.locks/` (gitignored), a committed `config` (topology + repo
-   name), and the `<!-- handoff -->` routing block appended to `AGENTS.md`. Because every tool's
+   `templates/` (the doc scaffolds), `.locks/` (gitignored on a board with no remote, committed on
+   one that has it — see **A shared board is a git repo**), a committed `handoff.json` (topology,
+   policy, and the tooling-owned `_generated` block), and the `<!-- handoff -->` routing block
+   appended to `AGENTS.md`. Because every tool's
    entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds
    only the `handoff` entry point and the docs themselves; a flat board from before this layout is
    migrated on the next install (`git mv`, hook commands rewritten), and keeps working until then.
+   The `handoff` entry point is a **dispatcher**, not the CLI: the CLI is ~180 KB and changes on
+   every fix, so a copy of it on every board made each fix an N-file regeneration. The dispatcher
+   resolves `$HANDOFF_BIN` → a **user-level install** (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`,
+   written by this installer — the one thing it writes outside the repo) → the board's vendored
+   `scripts/handoff-cli`, which is what keeps a cold clone working with nothing but bash. Pass
+   `--no-vendor-cli` to skip the vendored copy on a board that is never cloned cold. Which board
+   and which CLI answered is always reportable with `./handoff --which`, and repointing a repo at
+   another board needs no committed edit — export `HANDOFF_BOARD_PATH`.
 2. **One enforcement core (`hooks.sh`).** A single dispatcher runs every hook kind
    (`sessionstart` / `pretool-edit` / `posttool-edit` / `stop`). It parses each tool's payload
    with **python3** (this repo standardises on python3, not `jq`) and emits that tool's native
@@ -187,24 +197,99 @@ session-start hint shows the correct relative path). `hooks.sh`/`handoff` prefer
 the config, and the `AGENTS.md` routing block is path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## Two version numbers — payload and schema
+
+A board carries **`payload`** (the CLI, templates, hooks) and **`schema`** (the document format).
+Payload drift stays a verifier warning saying re-run the installer; **`schema` is the only thing
+that triggers a migration.** One number would mean a routine CLI bugfix prompting a whole-board
+rewrite for every member of every group (ADR 0003).
+
+The compatibility rule is asymmetric on purpose: an older CLI **reads** a newer document with one
+warning, and **refuses to write** it, naming both versions. Refusing to write is what makes reading
+safe — warn-and-proceed says nothing about writing, so an older CLI could read a newer doc, release
+it, and silently drop every field it did not understand. The two ship together; the read half alone
+is worse than neither.
+
+`./handoff migrate [--dry-run] [--yes]` moves documents forward. It moves **structure only** —
+never an inferred environment, sensitivity, or a current state seeded from an activity log — and it
+is gated on version control, no live lease in the section, a clean worktree, and a push that rolls
+back rather than half-applying. Interactive callers are asked, hooks print one line and do nothing,
+`--yes` is for CI.
+
+## `verify-setup-handoff.sh --json`
+
+The verifier speaks two ways. Without a flag it prints prose for a human; with `--json` it emits
+every finding as an object, each carrying a **stable id**:
+
+```json
+{
+  "tool": "verify-setup-handoff",
+  "schema": 1,
+  "summary": { "pass": 24, "warn": 2, "fail": 0 },
+  "findings": [
+    {
+      "id": "bundle.children.dangling",
+      "level": "warn",
+      "section": "7. Document schema",
+      "message": "…"
+    }
+  ]
+}
+```
+
+This is not a convenience. Roughly half of what the verifier checks is **advisory by design** —
+staleness, document size, weak closure evidence, a missing current state, a board with no remote, a
+bundle whose roster names documents that were never filed. None of it changes the exit code, so a
+grader or a repair skill reading only the exit status is blind to exactly the checks most likely to
+rot. Both consume the findings instead.
+
+The **id is the contract**: it names the check, `level` carries the outcome, and prose is reworded
+freely. Assert on `board.git.remote` coming back `warn`, never on the sentence. Where two outcomes
+of one check need different remediation they get their own ids (`payload.version.behind` vs
+`payload.version.ahead`). `schema` is bumped only when the document SHAPE changes — new ids appear
+over time by design, and a consumer that broke on each one would be abandoned within a release.
+
+Section 7 also carries the sensitivity/secret-scan trio from ADR 0005: `board.sensitivity.restricted`
+(always a `pass`, reporting the count — holding restricted work is the field doing its job, not a
+defect), `doc.sensitivity.invalid` (`warn` — a typo'd value reads as `normal` to every gate,
+silently), and `doc.secret.detected` (the section's one `fail` — a credential pattern already in
+git history, which needs redacting AND rotating, not just editing). A match on a doc whose activity
+log records a `--force-secret` override for that same rule reports as `doc.secret.overridden`
+(`warn`) instead: the decision is signed and auditable, so it stays visible without leaving a board
+that can never come back clean.
+
 ## Configuration
 
-The board's settings live in JSON and resolve through four scopes, **nearest wins**:
+**Everything about handoff is configured in one filename: `handoff.json`.** Which layer a file is
+depends on _where_ it sits, not on what it is called — the same shape `AGENTS.md` already uses.
+Nearest wins:
 
 ```text
-env  >  <repo>/.agents/handoff.config.json  >  <board>/config.json  >  built-in default
+env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
 ```
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two
 never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while
-file keys are camelCase (`ttlHours`).
+file keys are camelCase (`ttlHours`). Two overrides resolve the board and the CLI themselves and so
+sit above every config layer: `HANDOFF_BOARD_PATH` (which board) and `HANDOFF_BIN` (which CLI). A
+board named by either and not found is a hard error, never a silent fallback to a different board.
 
-**`<board>/config.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
-`allowVerifyCmd`, plus `repoName` on a single-repo board only. **`<repo>/.agents/handoff.config.json`**
-is per-consumer and written only for cross-repo installs — `repo`, `group`, `boardPath`. A shared
-board is read by every member repo, so no member's identity may live in the board file; the last
-installer would clobber the rest. The full key table ships in the board's own
-[`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the documentation.
+**`<board>/handoff.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
+`allowVerifyCmd`, `environments`, plus `repoName` on a single-repo board only, and the tooling-owned
+`_generated` block (the projected repo registry and the payload version stamp).
+**`<repo>/.agents/handoff.json`** is per-consumer and written only for cross-repo installs — `repo`,
+`group`, `board`. A shared board is read by every member repo, so no member's identity may live in
+the board file; the last installer would clobber the rest. The full key table ships in the board's
+own [`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the
+documentation.
+
+This used to be **five files with five names** — a board `config.json`, a generated `repos.json`, a
+`.version` stamp, a repo `handoff.config.json`, and a KEY=value `config` — and nobody could answer
+"where is handoff configured" without listing all of them. Every one of those is still **read**, at
+lower precedence than the file that replaced it in the same directory, so an install that has never
+been re-run keeps working. Re-running the installer folds each into `handoff.json` and renames the
+old file to `*.superseded`: renamed, never deleted, because nothing here removes a file somebody may
+have hand-edited.
 
 Three behaviours worth knowing before you re-run the installer:
 
@@ -233,14 +318,22 @@ working and migrates on its next install.
   it **denies handoff-doc edits** with an actionable reason and never blocks ordinary files — the
   opposite of the reference's silent no-op. Combined with the install-time preflight, a broken
   enforcement surfaces instead of vanishing.
+- **A shared board is a git repo (ADR 0002).** `--board-only` git-initialises the board it
+  scaffolds — non-optionally, because the board of record holds documents that exist nowhere else,
+  and one that was never a repository has no history, no blame, and no recovery. `--remote <url>`
+  gives it a remote; without one it says plainly that it is versioned but still reaches one
+  machine. A board with a remote commits its `.locks/` and `claim` becomes a compare-and-swap over
+  `git push` — real mutual exclusion across machines, no server. A board without one keeps
+  ignoring `.locks/` and touches the network on no path at all. A nested (in-repo) board is left
+  alone: its history belongs to the repo containing it.
 - **Self-maintaining leases.** `sessionstart` auto-reaps expired leases; `posttool-edit`
   auto-touches the current session's leases so active work never expires mid-flight. `touch`/`reap`
   remain manual escape hatches.
 - **`done` is evidence-gated.** `release --status done` requires `--verified-by "<how>"` and
   refuses to trust-close. An optional `verify:` command is **never auto-run** (a cross-repo doc is
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
-- **Two invariants, ported intact.** Ownership lives only in gitignored `.locks/`; durable state
-  only in frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
+- **Two invariants, ported intact.** Ownership lives only in `.locks/`; durable state only in
+  frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
   If the repo formats markdown (prettier, dprint, a markdown linter), exclude
   `.agents/handoff/INDEX.md` from it — the generated tables are unaligned, a formatter rewrites them,
   and the next `claim`/`release` regenerates them unaligned again, so the file churns on every
@@ -261,6 +354,20 @@ working and migrates on its next install.
   reminder (keys, passwords, PII → request via a safe channel, never paste), a `Suggested skills`
   section, and a link-don't-duplicate note. It is guidance, not a hard gate — redaction can't be
   mechanically verified.
+- **Sensitivity is a handling flag, not an access control (ADR 0005).**
+  `handoff new --sensitivity normal|restricted` marks a `coordination`/`orchestrator` doc that
+  must never leave the board; absent reads as `normal`, and `migrate` never backfills it. `restricted` refuses `export`
+  outright — a bundle refuses the whole export if the parent or any child carries it — prints a
+  handling banner on `claim`, marks the session-start row, and is refused by a delegated agent's
+  dispatcher. Board membership is the access boundary; the flag only changes what the tooling does
+  with the document.
+- **A secret scanner sits on the CLI write path, not in a pre-commit hook (ADR 0005)** — a
+  pre-commit hook has nothing to attach to on a board with no repository, which is the board most
+  likely to need it. `new`, `release`, `import --result`, and `export` all scan before writing
+  (`export` scans the RENDERED brief, closing the gap where the outbound path used to be
+  unchecked) and die naming the matched rule, never the value. `--force-secret "<reason>"`
+  overrides it on all four commands; the reason is required and recorded on the doc's Activity
+  log.
 - **Three handoff types.** Each doc carries a `type:` — `coordination` (default; the lease-gated work
   item) or `standalone` (a self-contained reference/knowledge doc: porting guide, eval report,
   compaction brief). A **standalone** doc is **gate-exempt** — the `pretool-edit` hook allows editing

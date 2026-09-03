@@ -1,8 +1,0 @@
-{
-  "allowVerifyCmd": false,
-  "groupLayout": "",
-  "groups": [],
-  "repoName": "returned-hostile",
-  "topology": "single-repo",
-  "ttlHours": 4
-}

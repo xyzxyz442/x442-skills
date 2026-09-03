@@ -74,6 +74,82 @@ eval "$(handoff_config_load "$T/board2")" 2> /dev/null
     P=$((P + 1))
   }
 
+# --- one filename at every layer -----------------------------------------------------------
+# `handoff.json` replaced five names. Every predecessor is still READ, at lower precedence than
+# the file that replaced it in the same directory, so an install that has never been re-run keeps
+# working — that is what the legacy cases above now prove. These prove the new name wins.
+mkdir -p "$T/onefile/.agents" "$T/oneboard"
+printf 'TOPOLOGY=single-repo\nHANDOFF_TTL_HOURS=1\n' > "$T/oneboard/config"
+printf '{"ttlHours": 2, "groups": ["old"]}\n' > "$T/oneboard/config.json"
+printf '{"ttlHours": 3, "groups": ["new"], "environments": ["dev","canary","prod"]}\n' > "$T/oneboard/handoff.json"
+eval "$(handoff_config_load "$T/oneboard")"
+chk "board handoff.json beats config.json beats the shell config" 3 "$HC_TTL_HOURS"
+chk "and its groups win too" "new" "$HC_GROUPS"
+chk "the environment ladder is board-global config" "dev,canary,prod" "$HC_ENVIRONMENTS"
+
+printf '{"repo":"legacy-id","group":"gL"}\n' > "$T/onefile/.agents/handoff.config.json"
+printf '{"repo":"current-id","board":"../workspace/handoff"}\n' > "$T/onefile/.agents/handoff.json"
+eval "$(handoff_config_load "$T/oneboard" "$T/onefile")"
+chk "repo handoff.json beats handoff.config.json" "current-id" "$HC_REPO_NAME"
+chk "a key only the older file sets is still inherited" "gL" "$HC_GROUP"
+chk "board is the canonical name for where the board is" "../workspace/handoff" "$HC_BOARD_PATH"
+
+# `boardPath` was the older spelling of the same key and still resolves to it — one meaning, and
+# a repo written before the rename must not silently lose its board.
+mkdir -p "$T/oldboardkey/.agents"
+printf '{"boardPath":"../workspace/old-handoff"}\n' > "$T/oldboardkey/.agents/handoff.json"
+eval "$(handoff_config_load "$T/oneboard" "$T/oldboardkey")"
+chk "boardPath is accepted as board" "../workspace/old-handoff" "$HC_BOARD_PATH"
+
+# `groups` is the SAME key at two fidelities: a bare list on a board, a map of definitions in a
+# workspace manifest. Both answer "which sections exist", so both yield the section names rather
+# than splitting into two keys that would have to be kept in sync.
+mkdir -p "$T/mapgroups"
+printf '{"groups": {"infra": {"repos": []}, "auth": {"repos": []}, "gone": {"remove": true}}}\n' > "$T/mapgroups/handoff.json"
+eval "$(handoff_config_load "$T/mapgroups")"
+chk "a groups MAP yields its names, sorted, minus tombstones" "auth,infra" "$HC_GROUPS"
+
+# --- the CLI ladder ------------------------------------------------------------------------
+# $HANDOFF_BIN > user-level install > the board's vendored copy, and a rung that cannot work is
+# skipped rather than selected. The empty-file case is why this block exists: `-f` alone accepts a
+# zero-byte file, bash runs it, and every command — `claim` included — exits 0 having done
+# nothing, so the caller believes it holds a lease it does not hold.
+mkdir -p "$T/ladder/board/scripts" "$T/ladder/xdg/handoff"
+printf 'echo vendored\n' > "$T/ladder/board/scripts/handoff-cli"
+printf 'echo user\n' > "$T/ladder/xdg/handoff/handoff"
+export XDG_DATA_HOME="$T/ladder/xdg"
+
+unset HANDOFF_BIN
+chk "user install beats the vendored copy" "user $T/ladder/xdg/handoff/handoff" \
+  "$(handoff_cli_resolve "$T/ladder/board")"
+
+printf 'echo env\n' > "$T/ladder/mybin"
+chk "\$HANDOFF_BIN beats both" "env $T/ladder/mybin" \
+  "$(HANDOFF_BIN="$T/ladder/mybin" handoff_cli_resolve "$T/ladder/board")"
+
+: > "$T/ladder/empty"
+chk "an EMPTY \$HANDOFF_BIN is skipped, not selected" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/empty" handoff_cli_resolve "$T/ladder/board")"
+
+printf 'echo unreadable\n' > "$T/ladder/noread"
+chmod 000 "$T/ladder/noread"
+chk "an UNREADABLE \$HANDOFF_BIN is skipped too" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/noread" handoff_cli_resolve "$T/ladder/board")"
+
+chk "a missing \$HANDOFF_BIN falls through" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/nope" handoff_cli_resolve "$T/ladder/board")"
+
+# An empty rung must fall THROUGH to a working one below it, not just be reported absent.
+: > "$T/ladder/xdg/handoff/handoff"
+chk "an empty user install falls through to the vendored copy" \
+  "vendored $T/ladder/board/scripts/handoff-cli" "$(handoff_cli_resolve "$T/ladder/board")"
+
+: > "$T/ladder/board/scripts/handoff-cli"
+handoff_cli_resolve "$T/ladder/board" > /dev/null 2>&1
+chk "every rung empty resolves NOTHING (so the gate-off path fires)" 1 \
+  "$([ $? -ne 0 ] && echo 1 || echo 0)"
+unset XDG_DATA_HOME
+
 printf '{ not json\n' > "$T/board/config.json"
 handoff_config_load "$T/board" > /dev/null 2>&1
 chk "malformed json exits non-zero" 1 "$([ $? -ne 0 ] && echo 1 || echo 0)"

@@ -2,9 +2,11 @@
 """Merge the handoff hooks into a tool's settings JSON, without clobbering other keys.
 
 Idempotent: every handoff hook command contains ``handoff/scripts/hooks.sh`` (or, on a board
-wired before the layout restructure, ``handoff/hooks.sh``). On each run we first drop every
-existing handoff-managed group — matching either spelling — then add the current set, so a re-run,
-a change of primary tool, or a migration from the flat layout converges instead of duplicating.
+wired before the layout restructure, ``handoff/hooks.sh``). On each run every handoff-managed
+group — matching either spelling — is refreshed in the slot it already holds, and any we no
+longer wire is removed, so a re-run, a change of primary tool, or a migration from the flat
+layout converges instead of duplicating. Holding the slot rather than re-appending is what keeps
+us from fighting setup-graph-hooks over the order of a shared .gemini/settings.json.
 
 Env (set by setup-handoff.sh):
   HANDOFF_HDPATH   path tools use to reach hooks.sh (e.g. ".agents/handoff")
@@ -15,6 +17,7 @@ Usage:
   merge-hooks.py <settings.json>            # wire hooks for HANDOFF_TOOL
   merge-hooks.py <settings.json> --add-dir  # add the handoff dir to additionalDirectories (claude)
   merge-hooks.py <settings.json> --check    # 0 current, 2 drifted, 3 not wired; writes nothing
+  merge-hooks.py --selftest                 # unit-check the managed-group predicate; writes nothing
 
 No eval, no network — reads/writes one JSON file. Claude's schema is wired precisely;
 Gemini/Copilot use their documented event names on a best-effort basis (the AGENTS.md
@@ -30,7 +33,7 @@ import sys
 from pathlib import Path
 
 # Recognizing OUR hook group must be board-name-agnostic (a shared cross-repo board can be named
-# handoff-auth, handoff-legacy, or a custom --handoff-dir) yet specific enough that strip_managed
+# handoff-auth, handoff-legacy, or a custom --handoff-dir) yet specific enough that replace_managed
 # never deletes an UNRELATED group. So a current command is ours iff it invokes `/scripts/hooks.sh`
 # AND carries handoff's own `--kind ` flag — both are present whether the path is quoted (claude:
 # `…/scripts/hooks.sh" --kind`) or bare (gemini/copilot: `…/scripts/hooks.sh --kind`). Requiring BOTH
@@ -81,7 +84,7 @@ def dump(path: Path, data: dict) -> None:
 def command(hdpath: str, tool: str, kind: str) -> str:
     # Identity is NOT baked in here any more. It used to ride as a HANDOFF_REPO=... prefix, which
     # made normal operating configuration invisible to anyone reading the board and stale the
-    # moment a repo was renamed. It now lives in the consuming repo's .agents/handoff.config.json
+    # moment a repo was renamed. It now lives in the consuming repo's .agents/handoff.json
     # and hooks.sh discovers it. What the command still carries is an ANCHOR -- where the repo is,
     # never what it is configured to do -- so resolution stays deterministic instead of depending
     # on the tool's working directory.
@@ -134,22 +137,44 @@ def migrate_prefix(commands: list) -> tuple:
     if found.get("HANDOFF_GROUP"):
         cfg["group"] = found["HANDOFF_GROUP"]
     if found.get("HANDOFF_HDPATH"):
-        cfg["boardPath"] = found["HANDOFF_HDPATH"]
+        cfg["board"] = found["HANDOFF_HDPATH"]
     return cfg, []
 
 
 def write_repo_config(repo_root: str, cfg: dict) -> None:
-    """Write the consuming repo's own identity. Merges, so a hand-added key survives."""
-    path = os.path.join(repo_root, ".agents", "handoff.config.json")
+    """Write the consuming repo's own identity into .agents/handoff.json.
+
+    One filename at every layer: this is the repo layer of the same cascade the board and the
+    workspace manifest sit in. The predecessor, .agents/handoff.config.json, is still READ (see
+    config.sh) and is carried forward here before being renamed aside, so an existing repo keeps
+    its identity across the rename instead of silently filing unscoped.
+    """
+    path = os.path.join(repo_root, ".agents", "handoff.json")
+    legacy = os.path.join(repo_root, ".agents", "handoff.config.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     existing = {}
-    if os.path.isfile(path):
-        with open(path) as fh:
-            existing = json.load(fh)
+    for src in (legacy, path):
+        if os.path.isfile(src):
+            try:
+                with open(src) as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    existing.update(loaded)
+            except (ValueError, OSError):
+                pass  # a hand-broken file must not stop the install; the writer below re-states it
     existing.update(cfg)
     with open(path, "w") as fh:
         json.dump(existing, fh, indent=2, sort_keys=True)
         fh.write("\n")
+    # Renamed, never deleted — its contents are already merged above, and a `.superseded` suffix
+    # is obvious and reversible where a delete is neither.
+    if os.path.isfile(legacy):
+        try:
+            os.replace(legacy, legacy + ".superseded")
+            print("  repo config moved to .agents/handoff.json "
+                  "(.agents/handoff.config.json.superseded is safe to delete)")
+        except OSError:
+            pass
 
 
 def env_repo_config() -> dict:
@@ -171,7 +196,7 @@ def env_repo_config() -> dict:
         cfg["group"] = grp
     hdpath_env = os.environ.get("HANDOFF_HDPATH", "")
     if hdpath_env:
-        cfg["boardPath"] = hdpath_env
+        cfg["board"] = hdpath_env
     return cfg
 
 
@@ -192,14 +217,27 @@ def collect_managed_commands(data: dict) -> list:
     return out
 
 
-def strip_managed(groups: list) -> list:
-    """Drop any hook group that contains a handoff-managed command."""
-    out = []
+def group_is_managed(g) -> bool:
+    hooks = g.get("hooks", []) if isinstance(g, dict) else []
+    return any(is_managed(h.get("command", "")) for h in hooks)
+
+
+def replace_managed(groups: list, ours: list) -> list:
+    """Swap our current groups into the slots our old ones occupy; leave every other group put.
+
+    Stripping and re-appending is what this used to do, and it is fine while we are the only
+    writer. We are not: setup-graph-hooks wires the same .gemini/settings.json, and its merge
+    appends too, so each install walked its own groups past the other's and dirtied the file
+    with a diff that changed nothing. Holding the slot makes an install a fixed point no matter
+    who else has written since. See hook-config-merge-clobber-handoff.
+    """
+    out, queue = [], list(ours)
     for g in groups or []:
-        hooks = g.get("hooks", []) if isinstance(g, dict) else []
-        if any(is_managed(h.get("command", "")) for h in hooks):
-            continue
-        out.append(g)
+        if not group_is_managed(g):
+            out.append(g)
+        elif queue:
+            out.append(queue.pop(0))
+    out.extend(queue)  # more groups than last time (a switch to primary) -> the rest go at the end
     return out
 
 
@@ -266,17 +304,19 @@ def wire(path: Path, hdpath: str, tool: str, primary: bool) -> None:
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         hooks = {}
-    events = events_for(tool, primary)
-    # first strip ALL handoff-managed groups from every event (so dropping to advisory,
-    # or switching primary, removes the old deny/stop entries)
+    wanted: dict = {}
+    for ev, kind, matcher in events_for(tool, primary):
+        wanted.setdefault(ev, []).append(group(hdpath, tool, kind, matcher))
+    # Every event the file already has: our groups are refreshed IN PLACE and everyone else's are
+    # left exactly where they are. An event we no longer wire (dropping to advisory, or handing
+    # over primary) keeps `wanted` empty for it, so our old deny/stop entries are simply removed.
     for ev in list(hooks.keys()):
-        hooks[ev] = strip_managed(hooks[ev])
+        hooks[ev] = replace_managed(hooks[ev], wanted.get(ev, []))
         if not hooks[ev]:
             del hooks[ev]
-    for ev, kind, matcher in events:
-        hooks.setdefault(ev, [])
-        hooks[ev] = strip_managed(hooks[ev])
-        hooks[ev].append(group(hdpath, tool, kind, matcher))
+    for ev, groups in wanted.items():
+        if ev not in hooks:
+            hooks[ev] = list(groups)
     data["hooks"] = hooks
     dump(path, data)
 
@@ -290,6 +330,96 @@ def add_dir(path: Path, hdpath: str) -> None:
     if hdpath not in dirs:
         dirs.append(hdpath)
     dump(path, data)
+
+
+def _selftest() -> int:
+    """python3 merge-hooks.py --selftest
+
+    `replace_managed` decides what an installer is allowed to delete from a settings file the user
+    and other skills also write. That predicate is a pure function over strings and it had no
+    unit coverage; the sibling installer that answers the same question by replacing the whole
+    "hooks" subtree destroys both — see hook-config-merge-clobber-handoff. These assertions pin
+    the two halves that matter: ours is always recognized (whatever the board is named), and
+    nobody else's ever is.
+    """
+    ours_claude = command("../.agents/handoff", "claude", "pretool-edit")
+    ours_gemini = command(".agents/handoff", "gemini", "sessionstart")
+    ours_named = command("../workspace/handoff-auth", "copilot", "stop")
+    for cmd in (ours_claude, ours_gemini, ours_named):
+        assert is_managed(cmd), f"must recognize our own hook: {cmd!r}"
+    assert is_managed("bash handoff/hooks.sh --tool claude"), "legacy flat board must be recognized"
+
+    # Nobody else's. A hook that merely lives under some scripts/hooks.sh, or merely says
+    # "handoff", is NOT ours — deleting it would make this installer a source of data loss.
+    for foreign in (
+        'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind pretool-shell',
+        "bash tools/scripts/hooks.sh --stage pre-commit",
+        "bash .agents/bin/consent-gate.sh --tool claude",
+        "echo handoff",
+        "",
+    ):
+        assert not is_managed(foreign), f"must NOT claim another tool's hook: {foreign!r}"
+
+    # replace_managed touches only the groups carrying our commands, and preserves order + identity
+    # of everything else — including a user's own group sitting in the same event.
+    # replace_managed with nothing of ours to put back is the delete path -- how dropping to
+    # advisory, or handing over primary, removes our old deny/stop groups.
+    mine = {"matcher": EDIT_MATCHER, "hooks": [{"type": "command", "command": ours_claude}]}
+    theirs = {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash .claude/mine.sh"}]}
+    graph = {"hooks": [{"type": "command", "command":
+                        'bash "$CLAUDE_PROJECT_DIR/.graph-hooks/hook.sh" --tool claude --kind endturn'}]}
+    assert replace_managed([theirs, mine, graph], []) == [theirs, graph], "drops ours, keeps theirs"
+    assert replace_managed([theirs, graph], []) == [theirs, graph], "nothing of ours, nothing removed"
+    assert replace_managed([mine], []) == [], "ours alone leaves an empty event"
+    assert replace_managed([theirs, mine, graph], [mine]) == [theirs, mine, graph], \
+        "ours keeps its slot, and so does everyone else's"
+    assert replace_managed([theirs], [mine]) == [theirs, mine], "a first install appends"
+    assert replace_managed([], []) == [] and replace_managed(None, []) == [], \
+        "empty input is not an error"
+    # Malformed entries are skipped, never crashed on: this runs against files humans hand-edit.
+    assert replace_managed(["not-a-dict", {"no": "hooks"}], []) == ["not-a-dict", {"no": "hooks"}]
+
+    assert sorted(collect_managed_commands({"hooks": {"PreToolUse": [mine, theirs],
+                                                      "SessionStart": [graph]}})) == [ours_claude]
+    assert collect_managed_commands({}) == [] and collect_managed_commands({"hooks": []}) == []
+
+    # A re-run must be a fixed point: wiring on top of an already-wired event replaces our group
+    # rather than appending a second copy. (wire() strips before it appends; assert the pieces.)
+    for tool in SCHEMAS:
+        soft = events_for(tool, False)
+        both = events_for(tool, True)
+        assert len(both) > len(soft), f"{tool}: the primary must wire more than a bystander"
+        assert soft == both[: len(soft)], f"{tool}: primary must ADD to the soft set, not reshape it"
+        for ev, kind, matcher in both:
+            g = group(".agents/handoff", tool, kind, matcher)
+            assert replace_managed([g], []) == [], f"{tool}/{kind}: we must recognize what we just wrote"
+            assert ("matcher" in g) == bool(matcher), f"{tool}/{kind}: matcher presence"
+
+    # A re-run must ALSO be a fixed point when another installer has written the same file since.
+    # setup-graph-hooks wires .gemini/settings.json too. If each of us strips its own groups and
+    # re-appends them, the two walk past each other forever and every install dirties the tree
+    # with a diff that changes nothing -- see hook-config-merge-clobber-handoff.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Path(tmp) / "settings.json"
+        wire(cfg, ".agents/handoff", "gemini", True)
+        data = json.loads(cfg.read_text())
+        # Appended AFTER ours -- the real ordering, since setup-graph-hooks installs second in
+        # the documented chain and lands after us. Re-appending would jump us past the newcomer.
+        data["hooks"]["SessionStart"].append({"hooks": [{"type": "command", "command":
+            'bash "$R/.graph-hooks/hook.sh" --tool gemini --kind sessionstart'}]})
+        cfg.write_text(json.dumps(data, indent=2) + "\n")
+        before = cfg.read_text()
+        wire(cfg, ".agents/handoff", "gemini", True)
+        assert cfg.read_text() == before, \
+            "a re-run must not reorder groups another installer placed around ours"
+
+    assert parse_legacy_prefix('HANDOFF_REPO=acme-api bash x/scripts/hooks.sh --kind stop') \
+        == {"HANDOFF_REPO": "acme-api"}
+    assert parse_legacy_prefix("bash x/scripts/hooks.sh --kind stop") == {}
+
+    print("merge-hooks selftest OK")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -310,7 +440,7 @@ def main(argv: list[str]) -> int:
         if idx + 1 >= len(argv):
             raise SystemExit("merge-hooks: --repo-root requires a value")
         repo_root = argv[idx + 1]
-    # Extraction MUST happen before wire() (below) strips the managed hook groups -- strip_managed
+    # Extraction MUST happen before wire() (below) rewrites the managed hook groups -- it
     # drops the old HANDOFF_*=-prefixed commands entirely, and would take the prefixes with them.
     #
     # The refusal is ALL-OR-NOTHING for THIS file: migrate_prefix only ever sees the commands
@@ -344,4 +474,6 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main(sys.argv[1:]))

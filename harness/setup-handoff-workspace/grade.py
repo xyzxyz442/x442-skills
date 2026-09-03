@@ -15,6 +15,8 @@ script-behavior}. Exits 0 iff nothing failed.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +36,14 @@ HD = ".agents/handoff"
 # does not exist, and must NOT fire for one that is only in another section of a grouped board.
 NO_SUCH = "no such handoff"
 CLAUDE_CFG = ".claude/settings.json"
+
+# Fixture boards carry no CLI copy of their own. <board>/handoff is a small dispatcher that execs
+# the CLI named by $HANDOFF_BIN (then a user-level install, then a vendored copy), so pointing it
+# at the skill's payload here is what puts the binary under test in front of every fixture. Without
+# it this workspace graded whatever `handoff` happened to be installed on the machine running it —
+# a green run proved the MACHINE was current, not the payload. The other three handoff workspaces
+# already pinned it; this one was missed. Set once, for every subprocess this grader spawns.
+os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
 
 # Legacy shell key -> camelCase JSON key. Mirrors the installer's own migration map; kept here
 # rather than imported because the grader must be able to disagree with the code under test.
@@ -59,18 +69,51 @@ def _read_shell_config(target):
     return out
 
 
+def _board_json(board):
+    """One board's JSON config, or {} when absent/unparseable.
+
+    Every layer was consolidated onto `handoff.json`; `config.json` is the generation before it.
+    Both are read, newest last, so a run against an older fixture still says something true.
+    Callers must assert on the VALUES: a bare {} is indistinguishable from a correctly-configured
+    board, which is exactly how the assertions below went on "passing" against an empty dict for a
+    whole release after the rename.
+    """
+    cfg = {}
+    for name in ("config.json", "handoff.json"):
+        try:
+            data = json.loads((Path(board) / name).read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            cfg.update(data)
+    return cfg
+
+
+def _repo_json(repo):
+    """A member repo's own handoff config (the `group` it resolves to), pre-consolidation name
+    accepted as a fallback."""
+    for name in ("handoff.config.json", "handoff.json"):
+        try:
+            data = json.loads((Path(repo) / ".agents" / name).read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
 def _read_json_config(target):
-    """The board's config.json, or {} when absent/unparseable -- the caller asserts on the values."""
-    path = Path(target) / HD / "config.json"
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    """The board config for a single-repo target at <target>/.agents/handoff."""
+    return _board_json(Path(target) / HD)
 
 
 def _run(args, cwd, env_extra=None):
     import os
     env = {**os.environ, **(env_extra or {})}
+    # A None VALUE means UNSET, not "empty string". The CLI-resolution cases have to run with
+    # $HANDOFF_BIN genuinely absent, and this module sets it for every other case — an empty
+    # string would still be a set variable and the ladder would read it as a rung.
+    env = {k: v for k, v in env.items() if v is not None}
     return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, env=env)
 
 
@@ -86,7 +129,24 @@ def _handoff(target, *args, session="sess-AAA", allow_verify=False):
     return _run(["bash", str(ho), *args], target, env)
 
 
-def _hook(target, kind, payload, session="sess-AAA"):
+def _resolved_cli(target) -> Path | None:
+    """The CLI file <board>/handoff actually execs.
+
+    The board root holds a dispatcher now, not the CLI, so a static assertion about CLI content
+    has to follow the same ladder the dispatcher does ($HANDOFF_BIN, user-level install, vendored
+    copy) rather than grepping the entry point. `--which` reports it; a pre-split board that does
+    not know the flag falls back to the root file, which on such a board IS the CLI.
+    """
+    r = _run(["bash", str(Path(target) / HD / "handoff"), "--which"], target)
+    for line in r.stdout.splitlines():
+        if line.startswith("CLI"):
+            cand = Path(line.split(None, 1)[1].strip())
+            return cand if cand.is_file() else None
+    root = Path(target) / HD / "handoff"
+    return root if root.is_file() else None
+
+
+def _hook(target, kind, payload, session="sess-AAA", env_extra=None):
     # hooks.sh lives under scripts/; fall back to the flat path for a pre-restructure board. Raise
     # rather than returning "" when neither exists: empty output means ALLOW, so a missing hooks.sh
     # would make every gate assertion pass vacuously.
@@ -95,10 +155,12 @@ def _hook(target, kind, payload, session="sess-AAA"):
         hk = Path(target) / HD / "hooks.sh"
     if not hk.is_file():
         raise FileNotFoundError(f"hooks.sh not found under {Path(target) / HD}")
+    env = {**os.environ, **(env_extra or {})}
+    env = {k: v for k, v in env.items() if v is not None}
     p = subprocess.run(
         ["bash", str(hk), "--kind", kind, "--tool", "claude"],
         cwd=str(target), input=json.dumps({"session_id": session, **payload}),
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     return p.stdout.strip()
 
@@ -136,6 +198,311 @@ def _fm_colon_offenders(path):
         if ":" in val:
             bad.append(f"{path.name}: {line}")
     return bad
+
+
+def grade_schema_forward(target):
+    """Read a NEWER document, refuse to WRITE it (ADR 0003).
+
+    These are one decision, so they are asserted together. Warn-and-proceed covers reading and
+    says nothing about writing, which means an older CLI could read a schema-99 doc, release it,
+    and silently drop every field it did not understand — shipping only the read half is worse
+    than shipping neither. The doc here is stamped by hand at a schema no CLI will ever reach,
+    which is what a member repo sees the day a teammate's board upgrades first.
+    """
+    e = []
+    doc = Path(target) / HD
+
+    _handoff(target, "new", "future", "--title", "Written by a newer CLI")
+    _handoff(target, "new", "ordinary", "--title", "An ordinary doc")
+    fut = doc / "future-handoff.md"
+    text = fut.read_text(encoding="utf-8").replace("schema: 1", "schema: 99", 1)
+    # A key this CLI has never heard of, to prove nothing quietly eats it on the way through.
+    fut.write_text(text.replace("status: open", "status: open\nquantum_flux: 7", 1), encoding="utf-8")
+
+    listing = _handoff(target, "list")
+    out = listing.stdout + listing.stderr
+    e.append(gc.expectation("a newer doc is still LISTED, not hidden",
+                            "future-handoff" in out, f"listed: {'future-handoff' in out}"))
+    e.append(gc.expectation("with one warning naming BOTH versions",
+                            "is schema 99" in out and "understands 1" in out,
+                            f"warning: {'is schema 99' in out}"))
+    e.append(gc.expectation("printed once, not once per doc — a wall of them teaches people to scroll",
+                            out.count("this CLI understands") == 1,
+                            f"occurrences: {out.count('this CLI understands')}"))
+
+    # Every mutating command. `export` is the one that used to slip through: it stamps the doc,
+    # so a missing gate there is a silent write to a document this CLI cannot represent.
+    for cmd, args in (("claim", ("future", "try")),
+                      ("release", ("future", "--status", "open")),
+                      ("export", ("future", "--to", "Someone"))):
+        r = _handoff(target, cmd, *args)
+        e.append(gc.expectation(
+            f"{cmd} on a newer doc is REFUSED",
+            r.returncode != 0 and "refusing to write it" in (r.stdout + r.stderr),
+            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-120:]}"))
+
+    e.append(gc.expectation("the unknown field was never touched",
+                            "quantum_flux: 7" in fut.read_text(encoding="utf-8"),
+                            "quantum_flux survived"))
+    # The blast radius has to stop at the newer doc. One doc from the future must not take the
+    # board down for everyone on it.
+    r = _handoff(target, "claim", "ordinary", "fine")
+    e.append(gc.expectation("an ordinary doc on the same board is completely unaffected",
+                            r.returncode == 0 and (doc / ".locks/ordinary-handoff").exists(),
+                            f"exit {r.returncode}"))
+
+    findings = gc.verify_findings(VERIFY, target)
+    e.append(gc.finding(findings, "doc.schema.ahead", "warn",
+                        label="verify reports the doc as ahead — a warn, since reading still works"))
+    return e
+
+
+def grade_schema_board_ahead(target):
+    """Refuse to CREATE on a board newer than this CLI — the gap require_writable cannot see.
+
+    require_writable compares a doc that ALREADY EXISTS, so it covers claim/release/export and
+    nothing else. `new` and plain `import` CREATE the doc and stamp it with this CLI's own
+    SCHEMA_VERSION, which makes it writable by construction however far behind the CLI is. On a
+    board a teammate already migrated, that files a downlevel document among current ones — and no
+    later reader can tell it apart from one that genuinely predates the migration, so the next
+    `migrate` "upgrades" a file that was written wrong today. The board's own stamp is the only
+    thing that knows, which is why this gate reads it and the per-doc gate cannot.
+    """
+    e = []
+    board = Path(target) / HD
+    _handoff(target, "new", "ordinary", "--title", "Filed before the board moved")
+
+    cfg = board / "handoff.json"
+    d = json.loads(cfg.read_text(encoding="utf-8"))
+    d["schema"] = 99
+    cfg.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    r = _handoff(target, "list")
+    e.append(gc.expectation("reads still work on a board from the future",
+                            r.returncode == 0, f"exit {r.returncode}"))
+
+    r = _handoff(target, "new", "downlevel", "--title", "Would be stamped wrong")
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("new is REFUSED, naming both versions",
+                            r.returncode != 0 and "is schema 99" in out and "understands 1" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("and nothing was created",
+                            not (board / "downlevel-handoff.md").exists(),
+                            "downlevel-handoff.md absent"))
+
+    brief = Path(target) / "inbound-brief.md"
+    brief.write_text("# Inbound\n\nA brief from outside the board.\n", encoding="utf-8")
+    r = _handoff(target, "import", str(brief), "--id", "inbound", "--title", "Inbound")
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("import is REFUSED for the same reason — it creates a doc too",
+                            r.returncode != 0 and "is schema 99" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("and nothing was imported",
+                            not (board / "inbound-handoff.md").exists(),
+                            "inbound-handoff.md absent"))
+
+    # The blast radius stops at creation: a doc this CLI can represent is still fully writable.
+    r = _handoff(target, "claim", "ordinary", "fine")
+    e.append(gc.expectation("an existing doc this CLI understands is still claimable",
+                            r.returncode == 0, f"exit {r.returncode}"))
+    return e
+
+
+def grade_payload_downgrade(target):
+    """Refuse to install OVER a newer board — the silent-downgrade bug.
+
+    install_file byte-compares and copies; it has no notion of newer. On a shared board that means
+    whoever runs the installer from the stalest checkout wins, and write_board_config then rewrites
+    the stamp to match what was just installed — so the rollback leaves no trace at all, and the one
+    reader that could have noticed (verify-setup-handoff.sh) blames the wrong side, telling the
+    person who ran it that THEIR copy is stale.
+    """
+    e = []
+    board = Path(target) / HD
+    # Isolate the user-level CLI: this case manipulates payload stamps, and the real one is shared
+    # by every board on the machine running the harness.
+    env = {"XDG_DATA_HOME": str(Path(target) / ".harness-xdg")}
+
+    cfg = board / "handoff.json"
+    d = json.loads(cfg.read_text(encoding="utf-8"))
+    d.setdefault("_generated", {})["payloadVersion"] = "setup-handoff 999"
+    cfg.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    before = (board / "handoff").read_bytes()
+
+    r = _run(["bash", str(SETUP), str(target), "--tools", "claude"], target, env)
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("installing over a newer board is REFUSED",
+                            r.returncode != 0 and "refusing to install" in out,
+                            f"exit {r.returncode}: {out.strip()[-140:]}"))
+    e.append(gc.expectation("naming both versions, so the operator knows which side is stale",
+                            "v999" in out, f"out: {out.strip()[-140:]}"))
+    e.append(gc.expectation("the board's CLI is byte-unchanged",
+                            (board / "handoff").read_bytes() == before, "dispatcher identical"))
+    stamp = json.loads(cfg.read_text(encoding="utf-8")).get("_generated", {}).get("payloadVersion")
+    e.append(gc.expectation("and its stamp was NOT rewritten to hide the rollback",
+                            stamp == "setup-handoff 999", f"stamp: {stamp}"))
+
+    r = _run(["bash", str(SETUP), str(target), "--tools", "claude", "--force-downgrade"], target, env)
+    e.append(gc.expectation("--force-downgrade is the deliberate override",
+                            r.returncode == 0, f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-140:]}"))
+    stamp = json.loads(cfg.read_text(encoding="utf-8")).get("_generated", {}).get("payloadVersion")
+    e.append(gc.expectation("and it does roll the stamp back",
+                            stamp != "setup-handoff 999", f"stamp: {stamp}"))
+    return e
+
+
+def _dead_cli_env(target):
+    """An environment in which NO rung of the CLI ladder resolves.
+
+    $HANDOFF_BIN unset (this module sets it for every other case), $XDG_DATA_HOME pointed at an
+    empty directory so the real user-level install on the machine running the harness cannot
+    answer, and the fixture boards vendor no copy. All three rungs have to be closed at once or
+    the case grades a machine that happens to have a CLI somewhere.
+    """
+    return {"HANDOFF_BIN": None, "XDG_DATA_HOME": str(Path(target) / ".harness-empty-xdg")}
+
+
+def grade_cli_unresolvable(target):
+    """Fail OPEN when no CLI resolves, and never select a rung that cannot work.
+
+    Two halves of one decision. The gate's every deny message ends in "claim it first:
+    <board>/handoff claim …" — a command that does not exist on a board with no CLI. Denying
+    anyway locks someone out of their own repo with an instruction they cannot follow, and the
+    rational response is to delete the hook, so this one fails OPEN and says so loudly.
+
+    That only holds if "no CLI resolves" is decided honestly. `-f` alone accepted a zero-byte
+    file — an interrupted copy — and bash runs one happily: every command exited 0 having done
+    nothing, so `claim` reported success while the lease stayed with its real holder, and the run
+    discipline tells agents to trust that exit code. A rung that cannot work is now skipped, which
+    is why the empty-$HANDOFF_BIN assertions below belong in the same case as the fail-open ones:
+    a wrongly-selected rung is how the fail-open path stops being reached at all.
+    """
+    e = []
+    board = Path(target) / HD
+    dead = _dead_cli_env(target)
+    Path(dead["XDG_DATA_HOME"]).mkdir(parents=True, exist_ok=True)
+
+    # A doc held by SOMEONE ELSE. Without a live lease the gate allows the edit anyway and every
+    # "allowed" assertion below would pass vacuously.
+    _handoff(target, "new", "gated", "--title", "Held by another session")
+    _handoff(target, "claim", "gated", "held by A", session="sess-AAA")
+    doc = str(board / "gated-handoff.md")
+    payload = {"tool_input": {"file_path": doc}}
+
+    # The contrast. Same doc, same non-holder, working CLI -> DENY. This is what makes the
+    # fail-open assertion mean something rather than merely observing an empty string.
+    deny = _hook(target, "pretool-edit", payload, session="sess-ZZZ")
+    e.append(gc.expectation("with a CLI, the gate DENIES a non-holder editing a held doc",
+                            '"deny"' in deny, f"out: {deny[:120] or '(empty = allow)'}"))
+
+    allow = _hook(target, "pretool-edit", payload, session="sess-ZZZ", env_extra=dead)
+    e.append(gc.expectation("with NO CLI, the same edit is ALLOWED — the gate fails open",
+                            allow == "", f"out: {allow[:160]}"))
+
+    banner = _hook(target, "sessionstart", {}, session="sess-ZZZ", env_extra=dead)
+    e.append(gc.expectation("and the session banner says the lease gate is OFF",
+                            "LEASE GATE IS OFF" in banner, f"out: {banner[:160]}"))
+    e.append(gc.expectation("naming the fix, not just the symptom",
+                            "setup-handoff" in banner and "HANDOFF_BIN" in banner,
+                            f"out: {banner[-200:]}"))
+
+    r = _run(["bash", str(board / "handoff"), "list"], target, dead)
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("the dispatcher exits 4 rather than dying as 'command not found'",
+                            r.returncode == 4, f"exit {r.returncode}"))
+    e.append(gc.expectation("naming all three rungs it looked at",
+                            all(s in out for s in ("HANDOFF_BIN", "user-level install",
+                                                   "vendored copy")),
+                            f"out: {out.strip()[:200]}"))
+
+    # The regression. An EMPTY $HANDOFF_BIN must not shadow the working rung below it.
+    empty = Path(target) / ".harness-empty-cli"
+    empty.write_bytes(b"")
+    r = _run(["bash", str(board / "handoff"), "claim", "gated", "steal"], target,
+             {"HANDOFF_BIN": str(empty), "HANDOFF_SESSION_ID": "sess-ZZZ"})
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("an EMPTY $HANDOFF_BIN is skipped, so the claim still reaches a CLI",
+                            r.returncode != 0, f"exit {r.returncode}: {out.strip()[:140]}"))
+    e.append(gc.expectation("and the non-holder's steal is REFUSED, not silently 'succeeded'",
+                            "CLAIMED by" in out, f"out: {out.strip()[:160]}"))
+    e.append(gc.expectation("the lease still belongs to its real holder",
+                            "sess-AAA" in _lease(target, "gated-handoff"),
+                            f"owner: {_lease(target, 'gated-handoff')[:60]}"))
+
+    # With every rung closed AND $HANDOFF_BIN pointing at that empty file, the diagnostic has to
+    # say WHY it was rejected: the path printed is a file the reader can see sitting right there.
+    r = _run(["bash", str(board / "handoff"), "list"], target,
+             {**dead, "HANDOFF_BIN": str(empty)})
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("a rejected rung is reported as EMPTY, not merely 'looked at'",
+                            "EMPTY" in out, f"out: {out.strip()[:220]}"))
+    return e
+
+
+def grade_board_override(target):
+    """$HANDOFF_BOARD_PATH re-points the dispatcher at another board, visibly.
+
+    The dispatcher's whole first job is "which board am I", answered from the directory it sits
+    in. The override exists because that answer is wrong for a worktree, a shared board mounted
+    elsewhere, or a harness driving one CLI across several boards. Two things have to hold, and
+    only the pair is worth anything: the override must actually redirect BOTH reads and writes —
+    a `list` that follows it while `new` files into the old board is worse than no override — and
+    it must be VISIBLE, because a silent redirect means work lands on a board nobody is watching.
+    """
+    e = []
+    board = Path(target) / HD
+
+    r = _handoff(target, "--which")
+    e.append(gc.expectation("by default the board is the dispatcher's own directory",
+                            str(board) in r.stdout and "this board's dispatcher" in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
+
+    _handoff(target, "new", "on-home-board", "--title", "Filed with no override")
+    e.append(gc.expectation("and a doc files into that board",
+                            (board / "on-home-board-handoff.md").is_file(),
+                            "on-home-board-handoff.md present"))
+
+    # A second, real board. Copied rather than installed: the installer resolves to the git root,
+    # so a nested install would land back on the first board and the case would grade nothing.
+    other = Path(target) / "second-board"
+    shutil.copytree(board, other)
+    for junk in list(other.glob("*-handoff.md")) + [other / "INDEX.md"]:
+        junk.unlink(missing_ok=True)
+    shutil.rmtree(other / ".locks", ignore_errors=True)
+    env = {"HANDOFF_BOARD_PATH": str(other), "HANDOFF_SESSION_ID": "sess-AAA"}
+
+    r = _run(["bash", str(board / "handoff"), "--which"], target, env)
+    e.append(gc.expectation("the override re-points the board",
+                            str(other) in r.stdout, f"out: {r.stdout.strip()[:200]}"))
+    e.append(gc.expectation("and says so, naming the board it overrode — never a silent redirect",
+                            "HANDOFF_BOARD_PATH" in r.stdout and "overriding" in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
+
+    r = _run(["bash", str(board / "handoff"), "list"], target, env)
+    e.append(gc.expectation("READS follow the override — the home board's doc is not listed",
+                            r.returncode == 0 and "on-home-board" not in r.stdout,
+                            f"exit {r.returncode}: {r.stdout.strip()[:200]}"))
+
+    r = _run(["bash", str(board / "handoff"), "new", "via-override",
+              "--title", "Filed through the override"], target, env)
+    e.append(gc.expectation("WRITES follow it too — a new doc lands on the overridden board",
+                            (other / "via-override-handoff.md").is_file(),
+                            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-140:]}"))
+    e.append(gc.expectation("and NOT on the dispatcher's own board",
+                            not (board / "via-override-handoff.md").exists(),
+                            "home board unchanged"))
+    e.append(gc.expectation("the overridden board's index is the one regenerated",
+                            (other / "INDEX.md").is_file()
+                            and "via-override" in (other / "INDEX.md").read_text(),
+                            "second-board/INDEX.md names it"))
+
+    # The home board must still be reachable the moment the override is dropped — an override that
+    # left state behind would make it a one-way door.
+    r = _handoff(target, "list")
+    e.append(gc.expectation("dropping the override returns to the home board",
+                            "on-home-board" in r.stdout and "via-override" not in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
+    return e
 
 
 def grade_script_behavior(target):
@@ -243,7 +610,7 @@ def grade_script_behavior(target):
     # config.json. Written through json so the file stays parseable — the readers now REFUSE a
     # malformed config rather than silently falling back, so a hand-appended line would not just
     # be ignored here, it would fail the whole board.
-    _cfg_path = Path(target) / ".agents/handoff/config.json"
+    _cfg_path = Path(target) / ".agents/handoff/handoff.json"
     _cfg = json.loads(_cfg_path.read_text())
     _cfg["allowVerifyCmd"] = True
     _cfg_path.write_text(json.dumps(_cfg, indent=2, sort_keys=True) + "\n")
@@ -608,8 +975,14 @@ def grade_layout_migration(target):
                             and not (hd / "handoff-doc-template.md").exists(),
                             f"templates/: {(hd / 'templates/handoff-doc-template.md').is_file()}; "
                             f"stale root copy: {(hd / 'handoff-doc-template.md').exists()}"))
-    e.append(gc.expectation("the handoff CLI stays at the board root", (hd / "handoff").is_file(),
+    # The board root keeps a file called `handoff` — every wired hook command and README points
+    # there — but it is now the dispatcher, and the CLI it execs is vendored under scripts/. Both
+    # halves are asserted: a dispatcher with nothing to exec is a board whose lease gate is off.
+    e.append(gc.expectation("the board root keeps a `handoff` entry point", (hd / "handoff").is_file(),
                             f"handoff at root: {(hd / 'handoff').is_file()}"))
+    e.append(gc.expectation("and a default install vendors the CLI it dispatches to",
+                            (hd / "scripts/handoff-cli").is_file(),
+                            f"scripts/handoff-cli: {(hd / 'scripts/handoff-cli').is_file()}"))
 
     cfg = json.loads(settings.read_text())
     cmds = [h.get("command", "") for groups in cfg.get("hooks", {}).values()
@@ -675,12 +1048,12 @@ def grade_cross_repo(_target):
             e.append(gc.expectation(f"installer succeeds cross-repo in {name}", res.returncode == 0,
                                     f"exit {res.returncode}: {res.stderr.strip()[:120]}"))
 
-        cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+        cfg = _board_json(board)
         e.append(gc.expectation("shared config omits repoName (no last-writer clobber)",
                                 "repoName" not in cfg and cfg.get("topology") == "cross-repo", f"config={cfg!r}"))
 
         for name, r in repos.items():
-            rc_path = r / ".agents/handoff.config.json"
+            rc_path = r / ".agents/handoff.json"
             rc = json.loads(rc_path.read_text()) if rc_path.is_file() else {}
             e.append(gc.expectation(f"{name} repo config records its own identity",
                                     rc.get("repo") == name, f"repo config={rc!r}"))
@@ -698,8 +1071,11 @@ def grade_cross_repo(_target):
 
         # Re-run A: B's identity and the shared config must NOT flip (the exact spec repro).
         install(repos["repo-a"])
-        rc_b = json.loads((repos["repo-b"] / ".agents/handoff.config.json").read_text())
-        cfg2 = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+        # Through the resolver, not a bare read_text(): the pre-consolidation filename made this
+        # line raise FileNotFoundError and take the WHOLE cross-repo eval down — no grading.json
+        # was produced at all, so the case read as "not run" rather than "failing".
+        rc_b = _repo_json(repos["repo-b"])
+        cfg2 = _board_json(board)
         e.append(gc.expectation("re-installing repo-a leaves repo-b's identity intact",
                                 rc_b.get("repo") == "repo-b" and "repoName" not in cfg2,
                                 f"b-intact repo config: {rc_b!r}; cfg-neutral: {'repoName' not in cfg2}"))
@@ -790,7 +1166,7 @@ def grade_grouped_board(_target):
                     "--groups", "auth,infra", "--layout", layout], base)
             e.append(gc.expectation(f"{tag} --board-only scaffolds a standalone board", r.returncode == 0,
                                     f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
-            cfg = json.loads((board / "config.json").read_text()) if (board / "config.json").is_file() else {}
+            cfg = _board_json(board)
             e.append(gc.expectation(f"{tag} board config records groups + layout",
                                     cfg.get("groups") == ["auth", "infra"] and cfg.get("groupLayout") == layout,
                                     f"config={cfg!r}"))
@@ -902,8 +1278,11 @@ def _grade(target, eval_id):
         exps = [gc.run_verify_script(VERIFY, target)]
         exps.append(gc.contains(target, CLAUDE_CFG, "pretool-edit",
                                 label="claude config has the hard-enforcement pretool deny gate"))
-        # idempotency: a clean re-run must leave nothing dirty
-        _install(target, "--primary", "claude")
+        # Idempotency: a clean re-run must leave nothing dirty. --no-vendor-cli because this
+        # fixture is the BARE half of the cold-clone pair — it ships the dispatcher and no CLI
+        # copy, so a default (vendoring) re-run would add scripts/handoff-cli and read as drift.
+        # The flag never removes an existing copy, so this is idempotent on a vendored board too.
+        _install(target, "--primary", "claude", "--no-vendor-cli")
         exps.append(gc.git_diff_empty(target))
         return exps
 
@@ -914,9 +1293,9 @@ def _grade(target, eval_id):
         return exps
 
     if eval_id == "legacy-config":
-        # A board still on the sourced shell `config`, with no config.json. The installer must
-        # migrate it, and every value must survive: the migration is worthless if it produces a
-        # well-formed file with the wrong numbers in it. ttlHours is the one that proves it,
+        # A board still on the sourced shell `config`, with no JSON config at all. The installer
+        # must migrate it, and every value must survive: the migration is worthless if it produces
+        # a well-formed file with the wrong numbers in it. ttlHours is the one that proves it,
         # because the installer's own default (4) differs from the fixture's (8) -- so a value
         # that survives cannot have come from the default path.
         before = _read_shell_config(target)
@@ -924,8 +1303,8 @@ def _grade(target, eval_id):
         exps = [gc.expectation("installer succeeds on a legacy-config board", r.returncode == 0,
                                f"exit {r.returncode}: {r.stderr.strip()[:120]}")]
         exps.append(gc.run_verify_script(VERIFY, target))
-        exps.append(gc.file_exists(target, f"{HD}/config.json"))
-        exps.append(gc.json_roundtrip(target, f"{HD}/config.json"))
+        exps.append(gc.file_exists(target, f"{HD}/handoff.json"))
+        exps.append(gc.json_roundtrip(target, f"{HD}/handoff.json"))
         after = _read_json_config(target)
         for key, want in (("ttlHours", before.get("ttlHours")), ("topology", before.get("topology"))):
             if want is None:
@@ -934,9 +1313,16 @@ def _grade(target, eval_id):
                 f"{key} survived the shell-to-JSON migration",
                 str(after.get(key)) == str(want),
                 f"legacy {key}={want!r} -> json {key}={after.get(key)!r}"))
-        # The readers deliberately fall back to the legacy file, so removing it would strand any
-        # board whose migration half-completed.
-        exps.append(gc.file_exists(target, f"{HD}/config"))
+        # The legacy file is SUPERSEDED, not deleted: renamed to `config.superseded` so it can
+        # never be read as authoritative again while still being there to recover from if the
+        # migration got a value wrong. Asserting both halves — the rename happened AND nothing was
+        # destroyed — is the whole claim; asserting only that `config` still exists (what this
+        # used to do) now passes exactly when the migration has NOT run.
+        exps.append(gc.file_exists(target, f"{HD}/config.superseded"))
+        exps.append(gc.expectation(
+            "the superseded legacy config is no longer readable as authoritative",
+            not (Path(target) / HD / "config").exists(),
+            f"{HD}/config present: {(Path(target) / HD / 'config').exists()}"))
         return exps
 
     if eval_id == "legacy-install":
@@ -946,8 +1332,11 @@ def _grade(target, eval_id):
         exps.append(gc.file_exists(target, f"{HD}/legacy-open-handoff.md"))
         exps.append(gc.file_exists(target, f"{HD}/archive/legacy-done-handoff.md"))
         exps.append(gc.no_fabrication(target, ".claude/handoff"))  # legacy dir moved away
-        exps.append(gc.contains(target, f"{HD}/handoff", "session=",
-                                label="migrated handoff script writes session= (defect #1 fixed)"))
+        cli = _resolved_cli(target)
+        exps.append(gc.expectation(
+            "the migrated board runs a CLI that writes session= (defect #1 fixed)",
+            bool(cli) and "session=" in cli.read_text(encoding="utf-8", errors="replace"),
+            f"resolved CLI: {cli}" if cli else "no CLI resolved for the migrated board"))
         exps.append(gc.run_verify_script(VERIFY, target))
         return exps
 
@@ -977,6 +1366,21 @@ def _grade(target, eval_id):
 
     if eval_id == "script-behavior":
         return grade_script_behavior(target)
+
+    if eval_id == "schema-forward":
+        return grade_schema_forward(target)
+
+    if eval_id == "schema-board-ahead":
+        return grade_schema_board_ahead(target)
+
+    if eval_id == "payload-downgrade":
+        return grade_payload_downgrade(target)
+
+    if eval_id == "cli-unresolvable":
+        return grade_cli_unresolvable(target)
+
+    if eval_id == "board-override":
+        return grade_board_override(target)
 
     if eval_id == "layout-migration":
         return grade_layout_migration(target)

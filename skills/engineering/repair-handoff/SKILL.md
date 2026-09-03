@@ -95,13 +95,25 @@ it _running_ — a CRLF shebang, a truncated copy, or a missing `python3` all le
 file that dies on invocation.
 
 ```bash
+"$BOARD/handoff" --which # which CLI answers, and which board it acts on
 "$BOARD/handoff" list    # exits 0? or shebang / syntax / parse error
 bash -n "$BOARD/handoff" # syntax check without executing
 bash -n "$BOARD/scripts/hooks.sh"
 ```
 
+Start with `--which`, because `$BOARD/handoff` is a **dispatcher**: the CLI it runs comes from
+`$HANDOFF_BIN`, a user-level install, or the board's vendored `scripts/handoff-cli`, and which one
+answered is the first thing that explains a board behaving like a different board or a fixed bug
+that appears to still be present.
+
 Classify and act:
 
+- **no CLI resolves** (exit 4, and the dispatcher lists the three places it looked) — the lease
+  gate is **off**, not broken: the session banner says so and edits are allowed, because denying
+  them would lock people out with an error the tool cannot fix. Re-run the installer to restore a
+  CLI, or point `$HANDOFF_BIN` at one.
+- **the wrong CLI answers** (`--which` names a stale user-level install) — re-run the installer to
+  refresh it, or set `$HANDOFF_BIN` for the session.
 - **broken** (non-zero exit, `bad interpreter`, or a syntax error) — the payload is corrupt.
   Re-run the installer to restore it before touching anything else, then re-run this step.
 - **CRLF** — `grep -c $'\r' "$BOARD/handoff"` returns non-zero on a Windows-mangled copy. The
@@ -147,17 +159,34 @@ because each depends on the relationship between the board's parts rather than o
   it breaks the frontmatter render, and the CLI folds colons to an em dash precisely to avoid it.
 - **Id and filename disagreement.** The lock key is the file stem, so a doc whose `id:` does not
   match its filename can be claimed under one name and gated under another.
+- **Read the verifier's findings, not its prose.** `verify-setup-handoff.sh --json` emits every
+  check as an object with a stable id, a level, and a message. Roughly half of what it checks is
+  advisory and changes no exit code — a stale payload stamp, a board with no remote, a bundle whose
+  roster names documents that were never filed — so a board that exits 0 can still have real drift
+  on it. Match on the **id** (`bundle.children.dangling`, `board.git.lease_visibility`,
+  `payload.version.behind`); the wording is not a contract.
+- **Dangling bundle children.** A roster naming docs that were never filed means the bundle can
+  never close, since `release --status done` refuses while anything is outstanding. The fix is to
+  FILE them — `handoff children add --stub <parent> <child>` files each as a real, claimable doc —
+  never to quietly prune the roster, which throws away somebody's plan.
 - **Open versus archive.** A doc with `status: done` still on the open board, or an archived doc
   still holding a lease.
 - **Section resolution (shared boards only).** Confirm the board pointer in the tool hook commands
-  resolves, that the board's effective `groups` and `groupLayout` match what `.handoff-repos.json`
-  declares, that this repo's own `.agents/handoff.config.json` names the right `group`, and that its
+  resolves, that the board's effective `groups` and `groupLayout` match what the workspace manifest
+  declares, that this repo's own `.agents/handoff.json` names the right `group`, and that its
   section directory or prefix exists. A mismatch is why handoffs "disappear" — they are filed into a
-  section nobody reads. **Read those through the resolver, not by grepping a file**: board facts live
-  in `$BOARD/config.json` on any board the current installer wrote and in the legacy KEY=value
-  `$BOARD/config` only on older ones, and the repo's section is in its own
-  `.agents/handoff.config.json` — not baked into the hook command. `$BOARD/scripts/config.sh`'s
-  `handoff_config_load <board> [<repo>]` already decides all of that.
+  section nobody reads. **Read those through the resolver, never by grepping a file.** Handoff is
+  configured in one filename, `handoff.json`, at every layer — `$BOARD/handoff.json` for board facts,
+  `$REPO/.agents/handoff.json` for this repo's section — but four predecessors are still read
+  underneath (`config.json`, the KEY=value `config`, `repos.json`, `handoff.config.json`), so which
+  file actually answered is exactly the thing you must not guess at.
+  `$BOARD/scripts/config.sh`'s `handoff_config_load <board> [<repo>]` already decides all of that.
+
+  A board still carrying a `config.json`, `.version` or `repos.json` beside its `handoff.json` has
+  not been re-installed since the files were consolidated. That is drift, not damage: the resolver
+  prefers the consolidated file, and re-running `setup-handoff` (or the cross-repo sync) folds each
+  predecessor in and renames it `*.superseded`. Files ending `.superseded` are inert — never repair
+  them, and never treat one as the board's config.
 
   ```bash
   . "$BOARD/scripts/config.sh" && eval "$(handoff_config_load "$BOARD" "$REPO")"

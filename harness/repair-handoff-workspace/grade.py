@@ -23,11 +23,12 @@ otherwise be graded against x442-skills. See grade_common.isolated_git_target.
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
-`eval_id` is one of the ids in evals/evals.json (healthy | stale-stamp | orphaned-lease |
-missing-index | not-wired). With no eval_id, only the verifier-wrap assertion runs. Exits 0 iff
+`eval_id` is one of the ids in evals/evals.json (healthy | stale-stamp | dangling-children |
+orphaned-lease | missing-index | not-wired). With no eval_id, only the verifier-wrap assertion runs. Exits 0 iff
 nothing failed.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -38,41 +39,36 @@ import grade_common as gc  # noqa: E402
 REPO = gc.repo_root(HERE)
 # repair's success is measured by setup-handoff's verifier — repair ships none of its own.
 VERIFY = REPO / "skills/engineering/setup-handoff/scripts/verify-setup-handoff.sh"
-SHIPPED_STAMP = REPO / "skills/engineering/setup-handoff/scripts/payload.version"
 
 BOARD = ".agents/handoff"
+
+# Fixture boards carry no CLI copy of their own. <board>/handoff is a small dispatcher that execs
+# the CLI named by $HANDOFF_BIN (then a user-level install, then a vendored copy), so pointing it
+# at the skill's payload here is what puts the binary under test in front of every fixture — and
+# makes a stale committed mirror impossible. Set once, for every subprocess this grader spawns,
+# including the verify script.
+os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
 INDEX = f"{BOARD}/INDEX.md"
-STAMP = f"{BOARD}/.version"
 ORPHAN_LOCK = f"{BOARD}/.locks/deleted-doc-handoff"
 SAMPLE_DOC = f"{BOARD}/sample-repair-handoff.md"
 
 
-def _shipped_version() -> str:
-    """The version setup-handoff currently ships, as the stamp's second field."""
-    try:
-        return SHIPPED_STAMP.read_text().split()[1]
-    except (OSError, IndexError):
-        return ""
 
-
-def stamp_current(root: Path) -> gc.Expectation:
+def stamp_current(findings: dict) -> gc.Expectation:
     """The installed payload stamp matches what the skill ships.
 
-    Read here rather than inferred from the verifier's summary line: a drift warning does not
-    fail the verifier (a behind-but-working board still works), so the summary alone cannot
-    distinguish a repaired board from a stale one.
+    Asked of the VERIFIER rather than read out of a file. A drift warning does not fail the
+    verifier — a behind-but-working board still works — so the summary line alone cannot tell a
+    repaired board from a stale one; but the verifier already answers this precisely, and it is the
+    thing that actually knows where the stamp lives.
+
+    That last part is not hypothetical: the stamp moved out of `.version` and into `handoff.json`
+    when the config files were consolidated, and this helper's own file-poking silently started
+    failing on a perfectly healthy board. A grader that re-derives what the tool already computes
+    is a second implementation to keep in sync, and it will drift — this one did.
     """
-    want = _shipped_version()
-    path = root / STAMP
-    try:
-        got = path.read_text().split()[1]
-    except (OSError, IndexError):
-        return gc.expectation("payload stamp matches the shipped version", False, f"{STAMP} unreadable or malformed")
-    return gc.expectation(
-        "payload stamp matches the shipped version",
-        bool(want) and got == want,
-        f"installed v{got}, skill ships v{want or '?'}",
-    )
+    return gc.finding(findings, "payload.version", "pass",
+                      label="payload stamp matches the shipped version")
 
 
 def path_absent(root: Path, rel: str, label: str) -> gc.Expectation:
@@ -102,15 +98,43 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         cleanup()
 
 
+BUNDLE_DOC = f"{BOARD}/wide-bundle-handoff.md"
+
+
 def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     exps = [gc.run_verify_script(VERIFY, target)]
+    # The verifier's machine-readable channel. The exit code can only ever say "something failed",
+    # and roughly half of what it checks is advisory by design — so the checks most likely to rot
+    # are exactly the ones exit-code grading cannot see. Assertions below name a check ID, never a
+    # message: ids are the stable contract, prose is reworded freely.
+    findings = gc.verify_findings(VERIFY, target)
     if eval_id == "healthy":
         # Repair must not touch a healthy board: verify green, stamp current, tree still clean.
-        exps.append(stamp_current(target))
+        exps.append(stamp_current(findings))
         exps.append(gc.git_diff_empty(target))
+        # And it must stay green in the advisory channel too — a repair that silently introduced a
+        # warning would still exit 0 today, which is the blind spot this closes.
+        exps.append(gc.no_findings_at(findings, "fail"))
+        exps.append(gc.finding(findings, "cli.list", "pass"))
+        exps.append(gc.finding(findings, "hook.pretool.deny_index", "pass",
+                               label="the edit gate still denies edits to the generated index"))
     elif eval_id == "stale-stamp":
         # Post-repair, the board carries the version the skill ships.
-        exps.append(stamp_current(target))
+        # Graded raw this fixture reports payload.version.behind; after repair that finding is gone
+        # and payload.version passes. Neither state changes the exit code, so this assertion is the
+        # only thing that can tell the two apart.
+        exps.append(stamp_current(findings))
+    elif eval_id == "dangling-children":
+        # Pure advisory drift: the verifier exits 0 both before and after repair, so the exit code
+        # cannot tell the two states apart. This assertion is the whole case.
+        exps.append(gc.finding(findings, "bundle.children.dangling", "pass",
+                               label="every child on the bundle's roster is a real doc"))
+        # And the fix must be to FILE the missing docs, not to quietly shorten the roster —
+        # declaring a bundle before authoring its children is legitimate planning.
+        exps.append(gc.contains(target, BUNDLE_DOC, "ghost-one-handoff",
+                                label="the roster still names every child it declared"))
+        for child in ("ghost-one-handoff", "ghost-two-handoff", "ghost-three-handoff"):
+            exps.append(gc.file_exists(target, f"{BOARD}/{child}.md"))
     elif eval_id == "orphaned-lease":
         # Post-repair, the orphan is gone AND no doc was destroyed getting there.
         exps.append(path_absent(target, ORPHAN_LOCK, "orphaned lock directory cleared"))

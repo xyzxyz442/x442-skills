@@ -1,8 +1,0 @@
-{
-  "allowVerifyCmd": false,
-  "groupLayout": "",
-  "groups": [],
-  "repoName": "bundle",
-  "topology": "single-repo",
-  "ttlHours": 4
-}

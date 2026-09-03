@@ -45,7 +45,7 @@ SYNC = SKILL / "scripts/sync-cross-repo-handoff.sh"
 
 MEMBERS = ("api", "web", "kubernetes", "monolith")
 
-# Legacy KEY=value board config -> the config.json key each name became. Only the keys a board ever
+# Legacy KEY=value board config -> the handoff.json key each name became. Only the keys a board ever
 # wrote are mapped, matching the payload's own resolver (payload/config.sh).
 _LEGACY_BOARD_KEYS = {
     "TOPOLOGY": "topology", "REPO_NAME": "repoName",
@@ -53,13 +53,24 @@ _LEGACY_BOARD_KEYS = {
 }
 
 
+def _read_json(path: Path) -> dict:
+    """Parse a JSON object, or {} when absent/unreadable. Callers assert on the VALUES — never on
+    the {} itself, which is exactly how the pre-consolidation filenames went unnoticed here."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _board_config(board: Path) -> dict:
     """One board's effective config, resolved the way the payload resolves it.
 
-    A board written by the current installer carries `config.json`; an older one carries the legacy
-    KEY=value `config`, and config.json wins where both exist. This grader used to assert against
-    the legacy filename alone, so a correctly scaffolded board read as "missing" — the same defect
-    the verifier had. Keep this agreeing with skills/engineering/setup-handoff/scripts/payload/config.sh.
+    A board written by the current installer carries `handoff.json`; older ones carry `config.json`
+    or the legacy KEY=value `config`, and the newest present wins. Keep this agreeing with
+    skills/engineering/setup-handoff/scripts/payload/config.sh — it has now been wrong twice, once
+    per rename, and each time the symptom was a correctly scaffolded board reading as "missing"
+    rather than a failure that named the filename.
     """
     cfg: dict = {}
     legacy = board / "config"
@@ -72,8 +83,11 @@ def _board_config(board: Path) -> dict:
             key = key.strip()
             if key in _LEGACY_BOARD_KEYS:
                 cfg[_LEGACY_BOARD_KEYS[key]] = val.strip().strip('"').strip("'")
-    js = board / "config.json"
-    if js.is_file():
+    # Newest last: each generation's file overrides the one before it, as the resolver does.
+    for name in ("config.json", "handoff.json"):
+        js = board / name
+        if not js.is_file():
+            continue
         try:
             cfg.update(json.loads(js.read_text(encoding="utf-8")))
         except ValueError:
@@ -82,7 +96,7 @@ def _board_config(board: Path) -> dict:
 
 
 def _groups_csv(cfg: dict) -> str:
-    """`groups` as a sorted csv — config.json stores a list, the legacy file a csv string."""
+    """`groups` as a sorted csv — handoff.json stores a list, the legacy file a csv string."""
     groups = cfg.get("groups") or []
     if isinstance(groups, str):
         groups = [g for g in groups.split(",") if g]
@@ -90,16 +104,18 @@ def _groups_csv(cfg: dict) -> str:
 
 
 def _member_group(repo: Path) -> str:
-    """The section a member repo resolves to. It lives in the repo's own .agents/handoff.config.json
+    """The section a member repo resolves to. It lives in the repo's own .agents/handoff.json
     (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
     literal was deliberately removed so a rename cannot strand a stale copy inside a tool config."""
-    js = repo / ".agents/handoff.config.json"
-    if not js.is_file():
-        return ""
-    try:
-        return str(json.loads(js.read_text(encoding="utf-8")).get("group") or "")
-    except ValueError:
-        return ""
+    for name in ("handoff.json", "handoff.config.json"):  # current first, then the pre-consolidation name
+        js = repo / ".agents" / name
+        if not js.is_file():
+            continue
+        try:
+            return str(json.loads(js.read_text(encoding="utf-8")).get("group") or "")
+        except ValueError:
+            return ""
+    return ""
 
 
 def _sandbox_home(base: Path) -> dict:
@@ -131,6 +147,10 @@ def grade_not_configured(fixture: Path) -> list:
         env = _sandbox_home(sandbox)  # guarantees no user-layer manifest makes it "configured"
         proc, summary_exp = _run_verify(work, env)
         not_configured = "not configured" in proc.stdout and proc.returncode == 0
+        # Asserted on the FINDING, not on the exit code. "Not configured" and "the verifier
+        # produced nothing at all" both exit 0 with an all-zero summary; only the finding tells
+        # them apart, which is the whole reason --json exists.
+        findings = gc.verify_findings(VERIFY, work, env=env)
         return [
             summary_exp,
             gc.expectation(
@@ -138,6 +158,8 @@ def grade_not_configured(fixture: Path) -> list:
                 not_configured,
                 f"exit {proc.returncode}; 'not configured' in output: {'not configured' in proc.stdout}",
             ),
+            gc.finding(findings, "manifest.not_configured", "pass",
+                       label="the verifier SAYS it is unconfigured, rather than merely exiting 0"),
         ]
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -170,6 +192,24 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         _, summary_exp = _run_verify(work, env)
         summary_exp["text"] = f"{tag} {summary_exp['text']}"
         exps.append(summary_exp)
+
+        # The advisory half. None of these change the exit code, so a grader reading only the
+        # status is blind to exactly the checks most likely to rot — a board that stopped
+        # projecting the manifest still exits 0 all the way to the first mis-targeted brief.
+        findings = gc.verify_findings(VERIFY, work, env=env)
+        for fid, label in (
+            ("manifest.cascade.resolves", "the cascade resolves"),
+            ("board.groups", "each board records its groups"),
+            ("board.layout", "each board records its layout"),
+            ("member.section", "each member resolves to its section"),
+            ("registry.projection", "each board's registry still projects the manifest"),
+        ):
+            e = gc.finding(findings, fid, "pass")
+            e["text"] = f"{tag} {label}"
+            exps.append(e)
+        e = gc.no_findings_at(findings, "fail")
+        e["text"] = f"{tag} no fail findings"
+        exps.append(e)
 
         # boards scaffolded with the right group facts
         shared_cfg = _board_config(work / ".agents/handoff")
@@ -205,11 +245,24 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             got_group = _member_group(work / name)
             exps.append(gc.expectation(
                 f"{tag} {name} resolves to section {group}", got_group == group,
-                f".agents/handoff.config.json group={got_group or 'unset'}",
+                f".agents/handoff.json group={got_group or 'unset'}",
             ))
 
         # ledger recorded
-        exps.append(gc.file_exists(work, ".agents/cross-repo-handoff-state.json"))
+        # The ledger moved INSIDE the workspace's own handoff.json, under `_generated`, when every
+        # layer was consolidated onto one filename. Asserting the file's existence is no longer the
+        # question — `_generated.members` is, since an empty or absent block means --prune has
+        # nothing to compare against and drift reporting silently does nothing.
+        ledger = _read_json(work / ".agents/handoff.json").get("_generated") or {}
+        # Keyed on PATH, not alias: an alias is the manifest's short name for a repo (`k8s` for
+        # `kubernetes/`) and comparing it to a directory name asserts a coincidence, not a fact.
+        got_paths = sorted({os.path.basename(str(m.get("path", "")).rstrip("/"))
+                            for m in ledger.get("members") or []})
+        exps.append(gc.expectation(
+            f"{tag} ledger records every member under _generated",
+            got_paths == sorted(MEMBERS),
+            f"members={got_paths or 'unset'}",
+        ))
 
         # idempotency: commit the FIRST sync's output as the baseline, then re-sync and assert every
         # member repo's git status is clean (the second sync changed nothing).

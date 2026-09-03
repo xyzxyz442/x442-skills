@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "board": "./.agents/handoff",
+  "boardRemote": "git@github.com:acme/acme-handoff-board.git",
+  "layout": "subfolder",
+  "groups": {
+    "auth-suite": {
+      "repos": [
+        {
+          "alias": "api",
+          "path": "./api",
+          "audience": "api",
+          "notes": "REST + auth handlers"
+        },
+        { "alias": "web", "path": "./web", "notes": "customer web app" },
+        { "alias": "mobile", "path": "./mobile", "remove": true }
+      ]
+    },
+    "infra": {
+      "repos": [
+        {
+          "alias": "k8s",
+          "path": "./kubernetes",
+          "notes": "clusters + manifests"
+        },
+        { "alias": "homelab", "path": "./homelab" }
+      ]
+    },
+    "legacy": {
+      "board": "./.agents/handoff-legacy",
+      "boardRemote": "git@github.com:acme/acme-handoff-legacy.git",
+      "repos": [{ "alias": "monolith", "path": "./monolith" }]
+    }
+  }
+}

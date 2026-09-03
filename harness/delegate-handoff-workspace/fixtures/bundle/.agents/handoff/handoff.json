@@ -1,0 +1,12 @@
+{
+  "_generated": {
+    "payloadVersion": "setup-handoff 21"
+  },
+  "allowVerifyCmd": false,
+  "groupLayout": "",
+  "groups": [],
+  "repoName": "bundle",
+  "schema": 1,
+  "topology": "single-repo",
+  "ttlHours": 4
+}

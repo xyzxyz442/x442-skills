@@ -169,25 +169,20 @@ append-only guard strands every repo that installed an earlier revision on stale
 verifier can only warn about it, and re-running the skill would never fix it.
 
 ```bash
-python3 - "$REPO/AGENTS.md" "$SKILL_DIR/assets/agents-knowledge-graph.md" << 'PY'
-import pathlib, sys
-
-agents, block = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]).read_text()
-text = agents.read_text() if agents.exists() else ""
-BEG, END = "<!-- graph-hooks:begin", "<!-- graph-hooks:end -->"
-i, j = text.find(BEG), text.find(END)
-if i >= 0 and j > i:                       # refresh: swap the managed span, keep the rest
-    new = text[:i] + block.strip() + "\n" + text[j + len(END) :].lstrip("\n")
-else:                                      # first install: append
-    new = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block
-if new != text:                            # unchanged block -> no write, so a re-run is a no-op
-    agents.write_text(new)
-PY
+python3 "$SKILL_DIR/scripts/splice-agents-block.py" \
+  --file "$REPO/AGENTS.md" --block "$SKILL_DIR/assets/agents-knowledge-graph.md"
 ```
 
 Only the span between the markers is managed; anything the repo added before or after it
-survives. A second run with no upstream change writes nothing, which is what the `all-wired`
-harness fixture asserts.
+survives — including a **sibling skill's managed block** directly below, which keeps the blank
+line separating the two. A second run with no upstream change writes nothing, which is what the
+`all-wired` harness fixture asserts.
+
+This is a script rather than an inline heredoc on purpose: prose the agent executes cannot be unit
+tested, and the inline version had silently diverged from the three sibling splices in this suite —
+it dropped the blank line between its block and setup-handoff's, so no repo wired for both was ever
+byte-stable across a re-run. `python3 "$SKILL_DIR/scripts/splice-agents-block.py" --selftest`
+asserts those whitespace invariants directly.
 
 ### 6. Verify it fires
 

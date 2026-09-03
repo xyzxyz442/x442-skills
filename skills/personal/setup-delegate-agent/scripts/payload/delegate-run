@@ -357,6 +357,17 @@ while IFS= read -r pat; do
   fi
 done <<< "$(printf '%s' "$RESOLVED" | jq -r '.never_delegate[]')"
 
+# A restricted handoff is never dispatched (ADR 0005 in x442-skills). `handoff export` already
+# refuses to render a brief for one, so the ordinary route cannot reach here — this catches the
+# route that skips it: a board doc handed to delegation directly, or a brief written by hand.
+# Matched on the frontmatter key, which is the one thing both artifacts carry.
+if grep -qE '^sensitivity:[[:space:]]*restricted[[:space:]]*$' "$BRIEF" 2> /dev/null; then
+  emit --arg id "$ID" \
+    '{status:"misrouted", id:$id,
+      reason:"this brief is marked sensitivity: restricted — restricted work is never handed to a delegated or external agent. Do it in a session with board access."}'
+  exit 77
+fi
+
 # Content scan before anything leaves. This is the enforceable half of the no-secret rule.
 scan_secrets "$BRIEF" "dispatch this brief"
 

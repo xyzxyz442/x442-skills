@@ -145,7 +145,9 @@ command can still print one by accident — and if it does, it is on disk perman
   omission to a deliberate act. The real boundary is the tool allowlist and the worktree.
 - **Adapters never read a credential.** Whatever the CLI already uses is that CLI's business.
 - Bundled files: `scripts/setup-delegate-agent.sh`, `scripts/verify-delegate-agent.sh`,
-  `scripts/manifest/resolve.py`, `scripts/payload/{delegate-agent,delegate-run,consent-gate.sh}`,
+  `scripts/merge-consent-hook.py` (the settings-file merge, `--selftest`-able),
+  `scripts/manifest/{resolve.py,splice.py}`,
+  `scripts/payload/{delegate-agent,delegate-run,consent-gate.sh}`,
   `scripts/payload/adapters/{claude,codex,copilot,gemini}.sh`,
   `assets/{agents-delegate.md,delegate-to-agent.md}`, `references/backend-shims.md`.
 

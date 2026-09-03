@@ -139,6 +139,34 @@ TOPOLOGY="$HC_TOPOLOGY"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
+# Relative board path used in every hint/deny message. HANDOFF_HDPATH (baked into older
+# hook commands) wins; otherwise the consumer's own .agents/handoff.json `board`, which is
+# what a cross-repo install records. Falls back to the in-repo default for single-repo boards.
+hd="${HANDOFF_HDPATH:-${HC_BOARD_PATH:-.agents/handoff}}"
+
+# --- is there a CLI at all? ------------------------------------------------------------
+# Two failures used to look identical to this gate, and treating them the same way was wrong in
+# opposite directions:
+#
+#   * The hook PAYLOAD cannot be parsed. We cannot tell who is editing, so we cannot tell whether
+#     they hold the lease. That stays fail-CLOSED: refusing one edit is recoverable, admitting an
+#     unverified one silently is not.
+#   * No `handoff` CLI resolves for this board. Nothing is ambiguous here — we simply cannot offer
+#     the fix. Every deny message this gate emits ends in "claim it first: <board>/handoff claim
+#     …", and that command does not exist. Denying anyway locks someone out of their own repo with
+#     an instruction they cannot follow, and the rational response is to delete the hook. So this
+#     one fails OPEN: edits proceed, and the session banner says loudly that the gate is off.
+#
+# Pure file tests, no subprocess — this runs on every single edit.
+CLI_OK=0
+if command -v handoff_cli_resolve > /dev/null 2>&1; then
+  handoff_cli_resolve "$DIR" > /dev/null 2>&1 && CLI_OK=1
+elif [ -f "$DIR/handoff" ]; then
+  # config.sh is missing or predates the resolver, so the ladder is unknowable from here. A file at
+  # the board root is the only signal left, and on such a board it IS the CLI.
+  CLI_OK=1
+fi
+
 # group sections — mirror the handoff CLI so the gate, session board, and lease lookups act inside
 # this repo's own section. LAYOUT is board-global (config); GROUP is this repo's section, wired into
 # the hook command as $HANDOFF_GROUP. Both empty on a flat board => every path is exactly as before.
@@ -178,6 +206,58 @@ each_doc() { # this section's active docs, one per line (space-safe)
 # only reaps/touches/nags its own section's leases, and the key matches what the CLI wrote.
 LOCKS="$(sec_dir)/.locks"
 
+# Progress for a bundle, as a count. hooks.sh deliberately does NOT reuse the CLI's child_progress:
+# it must run with nothing but bash, and it must never be the reason a session-start hook is slow.
+# Reading each child's status line is enough to say "2/6 done"; the CLI owns the detail.
+# Schema drift, as ONE line on the session banner. Never a block and never a prompt: a hook has
+# nobody listening, and taking a session down over a board upgrade is how a hook gets deleted.
+# Reported in both directions, because they need opposite actions — an older board wants
+# `handoff migrate`, a newer one wants the payload updated first.
+SCHEMA_VERSION=1
+schema_note() { # -> one line, or nothing
+  local board=0 ahead=0 f v
+  if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+    board="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get("schema")
+print(v if isinstance(v, int) else 0)' "$DIR/handoff.json" 2> /dev/null)"
+  fi
+  case "$board" in '' | *[!0-9]*) board=0 ;; esac
+  if [ "$board" -gt "$SCHEMA_VERSION" ]; then
+    printf 'Board is schema %s; this payload understands %s. Reads work; WRITES to newer docs are refused. Re-run setup-handoff to update the payload.' "$board" "$SCHEMA_VERSION"
+    return 0
+  fi
+  for f in $(each_doc); do
+    [ -f "$f" ] || continue
+    v="$(meta "$f" schema)"
+    case "$v" in '' | *[!0-9]*) v=0 ;; esac
+    [ "$v" -lt "$SCHEMA_VERSION" ] && ahead=$((ahead + 1))
+  done
+  [ "$ahead" -gt 0 ] \
+    && printf '%s document(s) predate schema %s. Run `%s/handoff migrate` when convenient — reads are unaffected.' "$ahead" "$SCHEMA_VERSION" "$hd"
+  return 0
+}
+
+bundle_progress() { # orchestrator-path -> " (2/6 done)" or ""
+  local f="$1" raw total=0 done=0 c cf
+  raw="$(meta "$f" children)"
+  raw="${raw#"["}"
+  raw="${raw%"]"}"
+  [ -n "$raw" ] || return 0
+  local IFS=,
+  for c in $raw; do
+    c="$(printf '%s' "$c" | tr -d '[:space:]')"
+    [ -n "$c" ] || continue
+    total=$((total + 1))
+    cf="$(sec_dir)/$c.md"
+    [ -f "$cf" ] || cf="$(sec_dir)/archive/$c.md"
+    [ -f "$cf" ] || continue
+    [ "$(meta "$cf" status)" = "done" ] && done=$((done + 1))
+  done
+  [ "$total" -gt 0 ] && printf ' (%s/%s done)' "$done" "$total"
+}
+
 PAYLOAD="$(cat)"
 
 # Strips one surrounding quote pair, matching the CLI's meta() — a quoted value (see the `verify:`
@@ -188,7 +268,22 @@ meta() {
 }
 lock_session() { sed -n 's/^session=//p' "$LOCKS/$1/owner" 2> /dev/null; }
 lock_owner() { sed -n 's/^owner=//p' "$LOCKS/$1/owner" 2> /dev/null; }
-lock_expires() { sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null || echo 0; }
+# Expiry goes through config.sh's shared rule, exactly as the CLI's does. On a board with a remote
+# the deadline comes from the lease's COMMIT time rather than the writing machine's clock — and if
+# the gate applied a different rule than the CLI, it would deny edits to the rightful holder or
+# admit them to everyone else, with neither side reporting anything wrong.
+LEASES_SHARED=""
+leases_shared() {
+  if [ -z "$LEASES_SHARED" ]; then
+    if handoff_leases_shared "$DIR"; then LEASES_SHARED=1; else LEASES_SHARED=0; fi
+  fi
+  [ "$LEASES_SHARED" = 1 ]
+}
+lock_expires() {
+  local raw
+  raw="$(sed -n 's/^expires=//p' "$LOCKS/$1/owner" 2> /dev/null)"
+  handoff_lease_expiry "$DIR" "$LOCKS/$1/owner" "${raw:-0}" "$TTL_HOURS"
+}
 lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]; }
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
@@ -260,7 +355,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
     local exp
-    exp="$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)"
+    exp="$(handoff_lease_expiry "$DIR" "$d/owner" "$(sed -n 's/^expires=//p' "$d/owner" 2> /dev/null || echo 0)" "$TTL_HOURS")"
     if [ "$(date +%s)" -ge "${exp:-0}" ]; then
       # remove the lease files then the now-empty dir (rmdir only removes empty dirs — no `rm -rf`)
       rm -f "$d"/owner 2> /dev/null
@@ -270,7 +365,7 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   return 0
 }
 touch_my_leases() { # auto-touch: extend every lease held by THIS session so active work never expires
-  local sess="$1"
+  local sess="$1" committed=0 exp d
   [ -n "$sess" ] || return 0
   for d in "$LOCKS"/*/; do
     [ -d "$d" ] || continue
@@ -281,7 +376,25 @@ touch_my_leases() { # auto-touch: extend every lease held by THIS session so act
     echo "expires=$(($(date +%s) + TTL_HOURS * 3600))" >> "$t"
     cat "$t" > "$d/owner"
     rm -f "$t"
+    committed=1
   done
+  # On a shared board the deadline every other machine reads is the lease's COMMIT time, so the
+  # rewrite above extends nothing outside this checkout. Committing on every edit is not an option
+  # either — this is the post-edit hook, and a push per keystroke-sized change would make the board
+  # the slowest thing in the session. So the touch becomes a commit only in the last quarter of the
+  # TTL: one commit per lease per stretch of work, and an active session still never lapses
+  # mid-flight. Best effort throughout — a hook must never fail the session it runs in.
+  if [ "$committed" = 1 ] && leases_shared; then
+    for d in "$LOCKS"/*/; do
+      [ -d "$d" ] || continue
+      [ "$(sed -n 's/^session=//p' "$d/owner" 2> /dev/null)" = "$sess" ] || continue
+      exp="$(handoff_lease_expiry "$DIR" "$d/owner" 0 "$TTL_HOURS")"
+      [ "$(($(date +%s) + TTL_HOURS * 3600 / 4))" -lt "${exp:-0}" ] && continue
+      handoff_board_git "$DIR" add -- "$d/owner" \
+        && handoff_board_git "$DIR" commit --quiet -m "handoff: extend lease on $(basename "$d")" \
+        && handoff_board_git "$DIR" push --quiet "$(handoff_board_remote "$DIR")" HEAD
+    done
+  fi
   return 0
 }
 
@@ -345,7 +458,14 @@ case "$KIND" in
       # Standalone/reference docs and orchestrators are not claimable work — list them apart,
       # no lease nag. An orchestrator holds no work of its own; its children are the work.
       case "$(meta "$f" type)" in
-        standalone | orchestrator)
+        orchestrator)
+          # A COUNT, never the roster. This line is injected into every agent's context on every
+          # session; an unbounded list of child ids here is a token cost levied on unrelated work
+          # forever. `handoff list` shows a bounded sample, and `list --verbose` the full roster.
+          refs="${refs}- ${id} — $(meta "$f" title)$(bundle_progress "$f")"$'\n'
+          continue
+          ;;
+        standalone)
           refs="${refs}- ${id} — $(meta "$f" title)"$'\n'
           continue
           ;;
@@ -354,6 +474,13 @@ case "$KIND" in
       # cross-repo: only surface what THIS repo must act on next.
       [ "$TOPOLOGY" = "cross-repo" ] && [ -n "$REPO" ] && [ -n "$aud" ] && [ "$aud" != "$REPO" ] && continue
       line="- ${id} — $(meta "$f" status) · $(meta "$f" severity) · $(meta "$f" title)"
+      # The session banner is where an agent decides what to pick up and, crucially, what to hand
+      # to a cheaper or external agent. A restricted unit that reads as ordinary work here has
+      # already lost — `export` would refuse it, but only after the agent has planned around it.
+      # The title is NOT redacted (ADR 0005): the index is what makes the work coordinable, and
+      # the id discloses as much as the title does.
+      [ "$(meta "$f" sensitivity)" = "restricted" ] \
+        && line="$line [🔴 RESTRICTED — never export or delegate; do it in this session]"
       if lock_live "$id"; then
         line="$line [🔒 HELD by $(lock_owner "$id") — do not work on it]"
       elif [ -d "$LOCKS/$id" ]; then
@@ -365,14 +492,23 @@ case "$KIND" in
       fi
       out="${out}${line}"$'\n'
     done < <(each_doc)
-    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && exit 0
-    # Relative board path for the hint. Cross-repo bakes HANDOFF_HDPATH (e.g. ../.claude/handoff)
-    # into the hook command; single-repo uses the default in-repo location.
-    hd="${HANDOFF_HDPATH:-.agents/handoff}"
-    ctx="Handoffs for \`${REPO:-this repo}\` (from ${hd}/):"
+    # CLI_OK is part of this guard: a board with nothing open still has to report a dead gate,
+    # and an empty board is exactly where a broken install goes unnoticed longest.
+    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && [ "$CLI_OK" = "1" ] && exit 0
+    # Name the board. `hd` is the RELATIVE path this repo was wired with, which reads as
+    # ".agents/handoff" whether the board is in this repo or three directories up in a shared
+    # workspace — the two cases where acting on the wrong one costs the most. When the resolved
+    # board is not this repo's own, print where it actually is.
+    board_note="${hd}/"
+    [ "$DIR" = "${PROJECT_DIR:-$PWD}/.agents/handoff" ] || board_note="${hd}/ → ${DIR}"
+    ctx="Handoffs for \`${REPO:-this repo}\` (from ${board_note}):"
+    # The parenthetical is a promise about enforcement, so it tracks whether enforcement is
+    # actually running. Telling an agent its edits are gated while the gate is off is worse than
+    # saying nothing: it is the sentence that stops them from coordinating by hand.
+    if [ "$CLI_OK" = "1" ]; then claim_note="claim before working — editing a doc without its lease is blocked"; else claim_note="claim before working — BUT the lease gate is off this session, see below"; fi
     [ -n "$out" ] && ctx="${ctx}
 
-Open (claim before working — editing a doc without its lease is blocked):
+Open (${claim_note}):
 ${out}"
     [ -n "$refs" ] && ctx="${ctx}
 
@@ -380,11 +516,23 @@ Standalone / reference (no claim needed — edit freely):
 ${refs}"
     ctx="${ctx}
 Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
+    # One line, informational, never a block. Placed with the board's own state rather than under
+    # "needs attention": schema drift is a scheduled upgrade, not damage.
+    SCHEMA_NOTE="$(schema_note)"
+    [ -n "$SCHEMA_NOTE" ] && ctx="${ctx}
+
+Schema: ${SCHEMA_NOTE}"
     [ -n "$health" ] && ctx="${ctx}
 
 Board needs attention:
 $(printf '%s\n' "$health" | sed 's/^/  - /')
   Repair: use the repair-handoff skill (re-running setup-handoff does not fix board state)."
+    [ "$CLI_OK" = "1" ] || ctx="${ctx}
+
+LEASE GATE IS OFF for this session. No handoff CLI resolves for the board at ${DIR}:
+  \$HANDOFF_BIN is unset or missing, there is no user-level install, and this board vendors no copy.
+  Edits to handoff docs are NOT being checked against their leases — coordinate by hand until this
+  is fixed. Fix: re-run the setup-handoff skill in this repo, or export \$HANDOFF_BIN."
     [ "$CONFIG_MISSING" = "1" ] && ctx="${ctx}
 
 This board's configuration could not be loaded (${CONFIG_MISSING_WHY:-scripts/config.sh is missing}) — identity and settings are running on built-in defaults.
@@ -393,6 +541,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     ;;
 
   pretool-edit)
+    # No CLI => no way to claim => nothing this gate says is actionable. Allow, silently; the
+    # session banner already told the user the gate is off (see CLI_OK above).
+    [ "$CLI_OK" = "1" ] || exit 0
     path="$(field path)"
     if [ -z "$path" ]; then
       # FAIL-SAFE: couldn't parse the path. Only refuse if the payload clearly targets
@@ -406,7 +557,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     fi
     id="$(doc_id_of "$path")" || exit 0
 
-    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: .agents/handoff/handoff index"
+    [ "$id" = "INDEX" ] && deny "INDEX.md is generated — never hand-edit it. Change the handoff doc's frontmatter, then run: ${hd}/handoff index"
 
     # Read the doc by its canonical path (the id alone can't be turned back into a path on a grouped
     # board — the stem may carry a group prefix, or the file may sit in a group subdir).
@@ -428,9 +579,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
       deny "'$id' is CLAIMED by $(lock_owner "$id"). Do not work on it and do not edit its doc — pick another handoff, or tell the user who holds it."
     fi
     if [ -d "$LOCKS/$id" ]; then
-      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: .agents/handoff/handoff claim $id \"note\" — the takeover gets logged."
+      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: ${hd}/handoff claim $id \"note\" — the takeover gets logged."
     fi
-    deny "You do not hold the lease on '$id'. Claim it before editing: .agents/handoff/handoff claim $id \"what you're doing\" — then re-try this edit."
+    deny "You do not hold the lease on '$id'. Claim it before editing: ${hd}/handoff claim $id \"what you're doing\" — then re-try this edit."
     ;;
 
   posttool-edit)
@@ -453,7 +604,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     [ -z "$held" ] && exit 0
     held="${held% }"
     _emit stop "⚠️  You still hold handoff lease(s): ${held}
-Release so others are not blocked: .agents/handoff/handoff release <id> --status open|blocked|done"
+Release so others are not blocked: ${hd}/handoff release <id> --status open|blocked|done"
     ;;
 esac
 exit 0

@@ -15,8 +15,11 @@
 #   - exactly one begin/end pair  -> replace the span
 #   - no markers                  -> append after one blank line at EOF
 #   - unbalanced / duplicated     -> refuse, exit 1 (a human must fix it)
-#   - empty effective set         -> remove the block (a block advertising zero repos is noise)
+#   - empty effective set         -> remove the block (a block advertising zero repos is noise),
+#                                    keeping every byte after the end marker
 # Writes only when the bytes actually change, so a re-run leaves `git status --porcelain` empty.
+#
+# Self-test:  python3 render.py --selftest
 import argparse
 import json
 import os
@@ -76,10 +79,80 @@ def splice(existing: str, block: str) -> str:
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
     tail = existing[existing.index(END) + len(END):]
+    rest = tail.lstrip("\n")
     if not block:
-        # Removing the block: collapse the blank line it left behind, keep a single trailing newline.
-        return head.rstrip("\n") + "\n" if head.strip() else head
-    return head + block + tail.lstrip("\n")
+        # The removal path used to be `head.rstrip("\n") + "\n" if head.strip() else head` — it
+        # returned the head and DISCARDED the tail outright: every byte after this block's end
+        # marker, deleted, by a script whose header promises "not one byte outside the markers".
+        # This is the reachable one. A repo that ran the documented chain (initial-project ->
+        # setup-graph-hooks -> setup-handoff) has the handoff routing block sitting directly below
+        # this one, so un-declaring the repo from the graph manifest deleted it.
+        if not head.strip():
+            return rest
+        return head.rstrip("\n") + "\n" + ("\n" + rest if rest else "")
+    # The separator is owned HERE, not by the tail. `block` ends with exactly one "\n", so
+    # returning `tail.lstrip("\n")` bare left NO blank line between this block and whatever
+    # followed it — invisible while this was the only managed block, a permanent one-line diff
+    # the moment a sibling skill spliced below it. Same defect, same fix, as
+    # setup-handoff/scripts/splice-agents-block.py and register-cross-repo-handoff's render.py.
+    block = block.rstrip("\n") + "\n"
+    return head + block + ("\n" + rest if rest else "")
+
+
+def _selftest() -> int:
+    """python3 render.py --selftest
+
+    This splice is the one the other three were copied FROM, and it kept both halves of the defect
+    longest — including the tail-discarding removal, which is data loss, not whitespace. The cases
+    mirror register-cross-repo-handoff's render.py, because the two are declared to mirror each
+    other and a divergence between them is exactly what went unnoticed for four copies.
+    """
+    blk = BEGIN + " -->\nbody\n" + END + "\n"
+
+    # Append at EOF, whichever of the three shapes the file ends in.
+    assert splice("# A\n", blk) == "# A\n\n" + blk
+    assert splice("# A\n\n", blk) == "# A\n\n" + blk
+    assert splice("# A", blk) == "# A\n\n" + blk
+
+    # Replace in place, block at EOF.
+    one = "# A\n\n" + BEGIN + " -->\nold\n" + END + "\n"
+    assert splice(one, blk) == "# A\n\n" + blk
+    assert splice(splice(one, blk), blk) == splice(one, blk), "must be idempotent"
+
+    # THE REGRESSION: a sibling skill's managed block directly below this one keeps the blank line
+    # that separates them, however ragged the separator was to begin with.
+    sib = "<!-- handoff:begin -->\nx\n"
+    two = "# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n" + sib
+    got = splice(two, blk)
+    assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
+    assert splice(got, blk) == got, "idempotent with a sibling block below"
+    assert splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+
+    # A block whose template left a trailing blank line must not widen the gap on every run.
+    assert splice(two, blk + "\n") == got
+
+    # Ordinary prose below the block gets the same one blank line.
+    assert splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk) \
+        == "# A\n\n" + blk + "\nprose\n"
+
+    # REMOVAL keeps every byte outside the markers. Returning `head` alone deleted the tail — and
+    # the tail is a sibling skill's routing block in any repo that ran more than one skill.
+    assert splice(two, "") == "# A\n\n" + sib, repr(splice(two, ""))
+    assert splice(one, "") == "# A\n"
+    assert splice(BEGIN + " -->\no\n" + END + "\n\n" + sib, "") == sib
+    assert splice("# A\n", "") == "# A\n", "no block, nothing to remove"
+
+    # Malformed marker sets are refused, never guessed at.
+    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+        try:
+            splice(bad, blk)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"must refuse malformed input: {bad!r}")
+
+    print("render (cross-repo-graph) selftest OK")
+    return 0
 
 
 def main() -> int:
@@ -130,4 +203,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())

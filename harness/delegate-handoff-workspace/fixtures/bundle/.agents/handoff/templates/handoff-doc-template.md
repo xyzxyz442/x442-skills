@@ -6,6 +6,9 @@ status: open
 audience: PLACEHOLDER_AUDIENCE
 repos: []
 severity: PLACEHOLDER_SEVERITY
+environment: PLACEHOLDER_ENVIRONMENT
+sensitivity: PLACEHOLDER_SENSITIVITY
+depends_on: []
 created: PLACEHOLDER_CREATED
 updated: PLACEHOLDER_UPDATED
 note: PLACEHOLDER_NOTE
@@ -17,6 +20,13 @@ note: PLACEHOLDER_NOTE
      needs a credential, do NOT paste it — leave a named placeholder, prompt the user, and
      suggest a safe channel (an environment variable, a secret-manager reference, or
      out-of-band). Record the variable/reference NAME here, never the value. -->
+
+## Current state
+
+<!-- REWRITABLE. Where the work stands right now, in a few lines — overwrite it, do not append.
+     This is the section a session reads first and the only one that is allowed to be rewritten
+     wholesale, which is why the activity log below stays one line per event. Boards without it
+     grow hand-rolled "Resolution (date)" / "Execution log" headings that nobody can find. -->
 
 ## Context
 
@@ -32,7 +42,9 @@ note: PLACEHOLDER_NOTE
 
 <!-- How the NEXT agent confirms this is done against the LIVE code — a test to run,
      a flow to exercise, a file:line to check. `release --status done` needs this as
-     `--verified-by`. Optionally add a `verify:` frontmatter command (never auto-run). -->
+     `--verified-by`. Optionally add a `verify:` frontmatter command (never auto-run).
+     Evidence that names a command, a file:line, or a commit is checkable by the next reader;
+     evidence that names none of those is a claim about somebody's memory. -->
 
 ## Decisions
 

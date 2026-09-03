@@ -152,6 +152,75 @@ def run_verify_script(script: Path, target: Path, *, env: dict | None = None) ->
     return expectation(f"{name} passes", passed, evidence)
 
 
+def verify_findings(script: Path, target: Path, *, env: dict | None = None) -> dict:
+    """Run a verifier in `--json` mode and return its findings keyed by id.
+
+    Exit codes can only ever say "something failed". Roughly half of what these verifiers check is
+    ADVISORY by design — staleness, size, weak evidence, a board with no remote — and none of it
+    changes the exit code, so a grader reading only the status is blind to exactly the checks most
+    likely to rot. This is the channel that makes those gradeable.
+
+    Returns {} when the script is missing or does not support `--json`, so a caller can degrade to
+    exit-code grading rather than crash on an older verifier.
+    """
+    script, target = Path(script), Path(target)
+    if not script.is_file():
+        return {}
+    proc = subprocess.run(
+        ["bash", str(script), str(target), "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    try:
+        doc = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return {}
+    out: dict = {}
+    for f in doc.get("findings", []):
+        out.setdefault(f["id"], []).append(f)
+    return out
+
+
+def finding(findings: dict, fid: str, level: str, *, label: str | None = None) -> Expectation:
+    """Assert that check `fid` reported `level`.
+
+    Asserts on the ID, never on the message: ids are the stable contract and prose is reworded
+    freely. `level` may be a single value or a "/"-separated set for a check with more than one
+    acceptable outcome.
+    """
+    want = set(level.split("/"))
+    hits = findings.get(fid, [])
+    got = sorted({h["level"] for h in hits})
+    text = label or f"{fid} is {level}"
+    if not hits:
+        if not findings:
+            known = "no findings at all (verifier gave no JSON?)"
+        else:
+            # A check with several remediations reports under sub-ids (payload.version.behind,
+            # .ahead, .unknown). Saying "did not run" when one of those fired is a lie that sends
+            # the reader looking for a check that is working perfectly — name what DID come back.
+            siblings = sorted(k for k in findings if k.startswith(fid + "."))
+            known = ("not reported; " + ", ".join(
+                f"{k} came back {findings[k][0]['level']}" for k in siblings)
+                if siblings else "check did not run")
+        return expectation(text, False, f"{fid}: {known}")
+    passed = bool(want & set(got))
+    msg = hits[0].get("message", "")
+    return expectation(text, passed, f"{fid}: {'/'.join(got)} — {msg[:160]}")
+
+
+def no_findings_at(findings: dict, level: str, *, ignore: "set[str] | None" = None) -> Expectation:
+    """Assert that nothing came back at `level` (e.g. no fails), listing anything that did."""
+    ignore = ignore or set()
+    hits = [f for lst in findings.values() for f in lst
+            if f["level"] == level and f["id"] not in ignore]
+    ids = sorted({f["id"] for f in hits})
+    return expectation(
+        f"no {level} findings" + (f" (ignoring {', '.join(sorted(ignore))})" if ignore else ""),
+        not hits,
+        "none" if not hits else f"{len(hits)}: {', '.join(ids)}",
+    )
+
+
 def _rollup(expectations: list[Expectation]) -> dict:
     """Tally a list of expectations into the `summary` block.
 
@@ -202,6 +271,21 @@ def summarize(expectations: list[Expectation]) -> dict:
 def repo_root(start: Path) -> Path:
     """Walk up from `start` to the repo root — the first ancestor holding a skills/ dir."""
     return next(p for p in Path(start).resolve().parents if (p / "skills").is_dir())
+
+
+def payload_cli(start: Path) -> Path:
+    """The one `handoff` CLI the harness runs.
+
+    Fixture boards no longer vendor a copy of it. A board ships a small dispatcher at
+    <board>/handoff which execs a CLI found via $HANDOFF_BIN, a user-level install, or a vendored
+    copy — so the harness points $HANDOFF_BIN at the skill's payload and every fixture runs the
+    binary under test by construction. A committed per-fixture copy could only ever be a mirror
+    that someone forgets to re-sync, and 13 of them were.
+
+    Deliberately NOT used by graders whose fixture is a cold clone (a legacy board carrying its own
+    CLI): there, which binary answers is the thing being graded.
+    """
+    return repo_root(start) / "skills/engineering/setup-handoff/scripts/payload/handoff"
 
 
 _HARNESS_GIT_ENV = {

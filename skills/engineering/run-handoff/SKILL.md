@@ -45,6 +45,22 @@ handoff claim <id> "what you're doing"
 - A **stale** lease (past its TTL) is reclaimable: claiming takes it over and logs the takeover.
 - The lease auto-renews while you keep editing and auto-reaps if you crash — you do not babysit it.
 
+## Restricted work stays in this session
+
+A handoff whose frontmatter carries `sensitivity: restricted` is not a permission boundary —
+everyone with board access can still read it — but it is a hard instruction to the tooling: never
+export it, never hand it to a delegated or external agent. If the session-start board or a `claim`
+banner shows `[🔴 RESTRICTED — never export or delegate; do it in this session]`, do the work
+yourself, right here. `handoff export` refuses it outright with no override, and a dispatcher wired
+through `run-delegate-agent` refuses to run a brief carrying it. Whether _other_ work is fit to
+delegate is the judgment [`delegate-handoff`](../delegate-handoff/SKILL.md) carries; a restricted
+handoff never reaches that judgment — it is a gate above it.
+
+Keep credential VALUES out of every doc regardless of sensitivity. The write path scans `new`,
+`release`, and `import --result` for anything shaped like a credential and refuses to write it,
+naming the rule that matched, never the value. Record a credential's NAME — an env var or
+secret-manager reference — never its value.
+
 ## 3. File a new handoff when work crosses a boundary
 
 When you find work you will not finish here, or that another repo/session must pick up:
@@ -139,6 +155,64 @@ As you write:
 - **Link, don't duplicate.** Reference existing artifacts (PRDs, plans, ADRs, issues, commits,
   diffs) by path or URL instead of pasting their content into the doc.
 
+## The fields that carry the graph, the stage, and the evidence
+
+Four things real boards record constantly and the template used to have nowhere to put. Getting
+them into fields rather than prose is what makes them queryable — and a relationship the tool
+cannot see is one nobody is warned about.
+
+**`depends_on` vs `blocked_on`.** `depends_on` holds **board ids only** and means _this cannot
+start before that lands_. `blocked_on` is free text, reserved for what the board cannot model
+(`external: …`, `decision: …`). If your blocker is a handoff id it belongs in `depends_on`; put it
+in `blocked_on` and the verifier will say so.
+
+```text
+handoff new prod-backfill --title "…" --env prod --after schema-change
+```
+
+Enforcement is **advisory** on purpose: `claim` warns when a prerequisite is still open and then
+gets out of the way. Work legitimately proceeds out of order — a production incident gets fixed
+before the pre-production backfill — and a rule that refused it would be routed around. If you
+are working past a prerequisite, say so in `## Current state`.
+
+**`environment`** is an open string defaulting to `dev`, with the common spellings normalized.
+There is deliberately **no fanout command**: the prod follow-up to a dev fix is a different piece
+of work with different evidence, and minting it automatically produces exactly the open-forever
+documents these boards are already full of. `new --env prod --after <id>` is one line and says
+more.
+
+**`role`** applies to standalone docs and says what one is _for_ — `steering`, `spec`,
+`reference`, `brief-archive` — where `type` says what its lifecycle is. A coordination doc points
+at its spec with `spec:`, which the reader resolves as a path, then a URL, then a board id.
+
+**Evidence is a field.** `release --status done --verified-by "…"` now persists what you wrote as
+`verified_by:`, not only as a sentence in the activity log. Write something the next reader can
+re-run: a command, a `file:line`, a commit. Evidence naming none of those is a claim about your
+memory, and the verifier reports it as such.
+
+## Keep `## Current state` current, and the activity log boring
+
+Every coordination and orchestrator doc carries a **`## Current state`** section. It is
+**rewritable** — overwrite it, do not append. It is where the work actually stands, and it is the
+first thing the next session reads.
+
+`## Activity` is the opposite: one line per event, appended, never revised. When you find yourself
+adding a `Resolution (date)` or `Execution log` heading, what you want is `## Current state` — the
+boards that motivated this schema are full of exactly those improvised headings, and nobody can
+find anything in them.
+
+## When the board refuses to let you write
+
+`claim`/`release`/`export` can refuse with _"this doc is schema N and this CLI understands M"_.
+That is not a bug and not something to work around: the doc carries fields your CLI does not know,
+and writing it here would silently drop them. Update the payload (re-run `setup-handoff`), then
+`./handoff migrate`. Reading — `list`, the index, the doc itself — keeps working throughout.
+
+The reverse direction is a one-line note on the session banner: documents that _predate_ the
+current schema. Nothing is broken, reads and writes both work, and `./handoff migrate` moves them
+when convenient. Migration rewrites every document on the board, so it asks first, refuses while
+anyone holds a lease in your section, and never runs itself.
+
 ## 4. Work under the lease
 
 Edit code and keep the doc current as you learn. The `posttool-edit` hook regenerates `INDEX.md`
@@ -164,6 +238,10 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   unblocked at the next session start.
 - Don't hold a lease you are not working. The stop hook nags if you end a session still holding
   one — release it so others are not blocked.
+- **A release refused for looking like a secret is not a bug to route around.** Redact the
+  `--verified-by`/`--blocked-on`/note text and re-run. Reach for `--force-secret "<reason>"` only
+  when it is a genuine false positive, and say concretely why the match is safe — the override is
+  recorded on the doc's Activity log, not silently applied.
 
 ## `verify:` commands are not auto-run
 
@@ -190,3 +268,11 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Pasting a secret/key/password/PII into a doc → it lands in git history; redact it and request the
   value via a safe channel (env var / secret-manager ref) instead.
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.
+- Putting a handoff id in `blocked_on` → it belongs in `depends_on`, where the tool can see it.
+- Appending a `Resolution (date)` heading → that is what `## Current state` is for; rewrite it.
+- Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
+  and rightly: nobody checked anything.
+- Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;
+  do the work in this session instead.
+- Reaching for `--force-secret` to push past a real credential match → redact and rotate it
+  instead; the flag is for false positives, and every use is permanently logged.

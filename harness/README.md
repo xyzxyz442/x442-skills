@@ -31,13 +31,24 @@ harness/
 ├── repair-handoff-workspace/
 ├── register-cross-repo-handoff-workspace/
 ├── setup-delegate-agent-workspace/
-└── release-announcement-workspace/
+├── release-announcement-workspace/
+└── agents-md-blocks-workspace/     # cross-skill: the shared AGENTS.md managed-block invariant
 ```
 
 Each `<skill>-workspace/` holds `evals/evals.json`, `fixtures/`, `grade.py`, and
 `iterations/` (results). Workspace directories use the skill's **unprefixed** folder name;
 the `x442-` prefix lives only in the skill's frontmatter `name` and in `evals.json`'s
 `skill_name`.
+
+`agents-md-blocks-workspace/` is the exception and names an invariant instead of a skill: five
+skills splice a managed block into the same `AGENTS.md` through five separate implementations,
+and every one of them shipped the same defect — no blank line survived between a managed block
+and whatever followed it, and one deleted every byte after its own end marker on removal. No
+per-skill workspace could have caught it, because each grades one skill against one repo and the
+defect is only reachable once two skills write the same file. Its `evals.json` carries no
+`skill_path` and no `verify_script`; it discovers every splice implementation under `skills/` by its head/tail surgery and grades each directly and then
+runs `setup-graph-hooks` and `setup-handoff` for real into one isolated repo. Put a case here
+whenever the thing under test is a contract _between_ skills.
 
 ## Two layers: `verify-*.sh` vs `grade.py`
 
@@ -78,6 +89,37 @@ Self-test the shared library at any time:
 ```bash
 for m in grade_common aggregate reorg; do python3 harness/lib/$m.py --selftest; done
 ```
+
+## Keeping fixture boards in sync with the payload
+
+A handoff fixture board is a committed snapshot of an installed board, so the files the installer
+copies verbatim — the dispatcher, `hooks.sh`, `config.sh`, `README.md`, the doc templates — are
+**mirrors of `setup-handoff`'s payload**. Edit the payload and they drift, and the idempotency
+evals fail with "re-run produces an empty diff", which names the symptom and not the file.
+
+```bash
+bash scripts/sync-fixture-boards.sh         # refresh every mirror
+bash scripts/sync-fixture-boards.sh --check # report drift, write nothing (exit 1 if any)
+```
+
+It only refreshes files a fixture already carries, never adds new ones, and skips the fixtures
+whose board is a deliberately old install (`stale-stamp`, `legacy-install`) — there, the stale
+mirror _is_ the scenario.
+
+The `handoff` CLI is deliberately **not** mirrored into fixtures. A board's `handoff` is a small
+dispatcher; the harness points `$HANDOFF_BIN` at the skill's payload
+(`grade_common.payload_cli`), so every fixture runs the binary under test by construction and a
+stale committed copy is impossible rather than merely discouraged.
+
+That pin makes one class of case impossible to write by accident: anything about how a board
+behaves when the CLI **cannot** be resolved. `setup-handoff-workspace`'s `cli-unresolvable` case
+closes all three rungs at once — `$HANDOFF_BIN` genuinely unset (a `None` value in `_run`'s
+`env_extra` unsets rather than blanks, since an empty string is still a set variable the ladder
+would read), `$XDG_DATA_HOME` pointed at an empty directory so the harness machine's own install
+cannot answer, and fixture boards vendoring no copy. Its sibling `board-override` drives one
+dispatcher against a second board through `$HANDOFF_BOARD_PATH`. Both grade behavior no
+post-state fixture can hold, because what they assert about is the resolution step that happens
+before the CLI ever starts.
 
 ## Guardrail
 

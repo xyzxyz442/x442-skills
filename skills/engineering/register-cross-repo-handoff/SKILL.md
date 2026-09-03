@@ -1,12 +1,12 @@
 ---
 name: x442-register-cross-repo-handoff
-description: Use when several repos should coordinate handoffs together — a fleet, a monorepo's packages, or "these projects share a handoff board / group / workspace". Declare groups of peer repos in a .handoff-repos.json cascade, then sync to scaffold a standalone shared board (owned by no repo) and wire every member to its own sub-indexed section. Chains after setup-handoff.
+description: Use when several repos should coordinate handoffs together — a fleet, a monorepo's packages, or "these projects share a handoff board / group / workspace". Declare groups of peer repos in an .agents/handoff.json cascade, then sync to scaffold a standalone shared board (owned by no repo) and wire every member to its own sub-indexed section. Chains after setup-handoff.
 ---
 
 # Register a cross-repo handoff fleet
 
 Coordinate handoffs across a **group (or several groups) of peer repos** without seeding the board
-from any one project. You declare the groups and their members in a `.handoff-repos.json` manifest
+from any one project. You declare the groups and their members in an `.agents/handoff.json` manifest
 at a workspace directory; the sync scaffolds a standalone shared board and wires every member repo
 to its own **sub-indexed section** of that board.
 
@@ -30,15 +30,20 @@ Do **not** use it for a single repo's own handoffs — that is plain `setup-hand
 - Each member repo already has an `AGENTS.md` (run `initial-project` there first) — the sync
   refuses to fabricate one.
 
-## The manifest: `.handoff-repos.json`
+## The manifest — `.agents/handoff.json`
 
 A cascade, lowest precedence first, nearest wins (exactly like `AGENTS.md` / `CLAUDE.md`):
 
-1. **user** — `~/.agents/handoff-repos.json` (personal, uncommitted)
-2. **workspace** — `<scope>/.handoff-repos.json` (the default; committed if the workspace is a repo)
-3. **subdir** — `<dir>/.handoff-repos.json` for dirs between scope and where you sync from
+1. **user** — `~/.agents/handoff.json` (personal, uncommitted — also where the machine-local
+   checkout locations live)
+2. **workspace** — `<scope>/.agents/handoff.json` (the default; committed if the workspace is a repo)
+3. **subdir** — `<dir>/.agents/handoff.json` for dirs between scope and where you sync from
 
-Start from [`assets/handoff-repos.example.json`](assets/handoff-repos.example.json):
+It is the **same filename** the board and each member repo use. A layer is identified by where it
+sits, not by what it is called. The predecessor `.handoff-repos.json` is still read at each layer,
+below the file that replaced it there, so an existing workspace keeps resolving until it moves.
+
+Start from [`assets/handoff.example.json`](assets/handoff.example.json):
 
 ```json
 {
@@ -100,17 +105,21 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 
 - Resolves the cascade with `scripts/manifest/resolve.py` (read-only; the same brain the verifier
   uses, so they cannot disagree).
-- Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …`
-  — a standalone board owned by no repo.
+- Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …
+[--remote <url>]` — a standalone board owned by no repo. The board is **git-initialised
+  non-optionally**: it is the board of record, and one that was never a repository has no history,
+  no blame, and no recovery for documents that exist nowhere else. Declare its remote as
+  `boardRemote` in the manifest and the sync passes it through; without one the board is versioned
+  but still reaches exactly one machine, and the sync says so.
 - Wires each member via `setup-handoff.sh <repo> --topology cross-repo --handoff-dir <board>
 --group <group> …`, which installs the hooks, Claude `additionalDirectories`, and the standard
-  handoff block. The section itself is written to the member's own `.agents/handoff.config.json`,
+  handoff block. The section itself is written to the member's own `.agents/handoff.json`,
   **not** baked into the hook command — so renaming a group cannot strand a stale literal inside a
   tool config where nobody reading the board would see it.
 - Splices the peer-listing block with `scripts/manifest/render.py`.
-- Projects the resolved manifest into each board as `<board>/repos.json`, via
+- Projects the resolved manifest into each board's `handoff.json`, under `_generated`, via
   `scripts/manifest/registry.py` — see **Brief repo identity** below.
-- Records `<scope>/.agents/cross-repo-handoff-state.json` so a later `--prune` can report members
+- Records the wired members under `_generated` in `<scope>/.agents/handoff.json` so a later `--prune` can report members
   that have left scope.
 
 ## Working the board
@@ -134,7 +143,7 @@ The board root `INDEX.md` is a **roll-up** across every section; each group also
 sub-index. The session board and edit gate a repo sees are filtered to its own group, so groups on
 a shared board never collide, and ids may repeat across groups without clashing.
 
-## Brief repo identity — `<board>/repos.json`
+## Brief repo identity — `_generated.repos`
 
 A delegation brief (`handoff export`) names `file:line` locations that plausibly exist in a
 different repo and mean something else there, so the brief carries the target repo's **root commit**
@@ -143,26 +152,48 @@ whatever the handoff's `audience` names — a different repo from the one export
 
 The board's CLI cannot resolve the cascade for itself: it ships inside the member repos, so it can
 reach neither `resolve.py` nor `--scope`. The sync therefore writes the answer down where the CLI
-can read it — `<board>/repos.json`, generated, never hand-edited:
+can read it — the `_generated` block of `<board>/handoff.json`, generated, never hand-edited:
 
 ```json
 {
-  "version": 1,
-  "repos": [
-    {
-      "group": "auth-suite",
-      "alias": "api",
-      "audience": "api",
-      "path": "../../api",
-      "rootCommit": "4f2a1c9e…"
-    }
-  ]
+  "topology": "cross-repo",
+  "ttlHours": 4,
+
+  "_generated": {
+    "schema": 2,
+    "repos": [
+      {
+        "group": "auth-suite",
+        "alias": "api",
+        "audience": "api",
+        "rootCommit": "4f2a1c9e…"
+      }
+    ]
+  }
 }
 ```
 
-`path` is relative to the **board** directory, so a committed board stays portable. `rootCommit` is
-an **attestation, not a value to copy**: export reads the live root commit at that path and trusts
-the location only when the two agree. Everything that can go wrong degrades to
+The registry is a **key inside the board's own `handoff.json`**, not a file of its own. `_generated`
+is the block the sync owns and rewrites wholesale; everything beside it is the board's policy and is
+read back and written out untouched. That fence is what lets one file hold both without a re-sync
+clobbering a hand-set `ttlHours`, or a hand-edit masquerading as a projection of the manifest.
+
+**Schema 2 records identity and nothing else.** A repo's root commit is what it is on every
+machine; a path is what it is on one. Schema 1 stored both, and that one `path` field is what
+pinned a board to a single disk — `"../../../../acme-lib"` resolves nowhere else, so a board could
+be committed, cloned, and still useless to the person who cloned it (ADR 0002).
+
+Location is now a per-machine concern, resolved by the CLI in this order:
+
+1. `~/.agents/handoff.json` — the `locations` map in the cascade's own user layer, which is the
+   one layer that is never committed (a location is true for exactly one disk).
+2. A schema-1 entry's `path`, if the file still has one. Still honoured, still unverified.
+3. A bounded scan of `$WORKSPACE_ROOT` and the board's parent directories, one level deep, whose
+   answer is cached back into the map.
+
+`rootCommit` remains an **attestation, not a value to copy**: export reads the live root commit at
+whatever location resolved and trusts it only when the two agree. Everything that can go wrong
+degrades to
 `repo_root_commit: unverified` with its own warning, and `import --result` then demands
 `--force-repo` plus a human check — a moved checkout, a manifest edited without a re-sync, an
 audience the registry does not declare, an audience claimed twice inside one group, an unreadable
@@ -179,6 +210,30 @@ member's briefs render `unverified` — honest, but degraded.
 A member with no attestable root commit at sync time (not on disk, not a git repo, no commits) gets
 **no entry**, and the sync warns. An unattestable entry would be a guess, which is the thing this
 file exists to eliminate.
+
+A repo the registry identifies but this machine cannot locate reports `no-location` rather than
+"not declared". The two look alike and are fixed differently: the first wants a clone (or an entry
+in the location map), the second wants a manifest change and a re-sync.
+
+## The board's remote
+
+A board with a remote is **shared**; a board without one is merely **versioned**. The difference is
+not cosmetic — it is what decides whether `claim` can exclude another machine at all, because the
+lease primitive is `git push` acting as a compare-and-swap (ADR 0002).
+
+```json
+{
+  "board": "./.agents/handoff",
+  "boardRemote": "git@github.com:acme/acme-handoff-board.git"
+}
+```
+
+Declarable per group as well as at the top level; two groups sharing one board must not declare
+different remotes, and the resolver refuses rather than picking a winner. Put no credentials in the
+URL — use an SSH remote or a credential helper.
+
+One board per **trust boundary**, not per group: groups are sections inside a board. A board's
+readers are everyone who can clone it, so the line worth drawing is the one an ACL already draws.
 
 ## Caveats
 
