@@ -39,7 +39,7 @@ def _load_runs(iteration_dir: Path) -> list[dict]:
     for eval_dir in sorted(iteration_dir.glob("eval-*")):
         if not eval_dir.is_dir():
             continue
-        eval_id = eval_dir.name[len("eval-"):]
+        eval_id = eval_dir.name[len("eval-") :]
         for config in CONFIGS:
             cfg_dir = eval_dir / config
             if not cfg_dir.is_dir():
@@ -52,12 +52,14 @@ def _load_runs(iteration_dir: Path) -> list[dict]:
                 run_number = int(m.group(1)) if m else 0
                 data = json.loads(grading.read_text(encoding="utf-8"))
                 pass_rate = data.get("summary", {}).get("pass_rate")
-                runs.append({
-                    "eval_id": eval_id,
-                    "configuration": config,
-                    "run_number": run_number,
-                    "result": {"pass_rate": pass_rate},
-                })
+                runs.append(
+                    {
+                        "eval_id": eval_id,
+                        "configuration": config,
+                        "run_number": run_number,
+                        "result": {"pass_rate": pass_rate},
+                    }
+                )
     return runs
 
 
@@ -90,8 +92,12 @@ def _fmt_delta(with_mean: float | None, without_mean: float | None) -> str | Non
     return f"{with_mean - without_mean:+.2f}"
 
 
-def aggregate(iteration_dir: Path, *, executor_model: str | None = None,
-              timestamp: str | None = None) -> dict:
+def aggregate(
+    iteration_dir: Path,
+    *,
+    executor_model: str | None = None,
+    timestamp: str | None = None,
+) -> dict:
     iteration_dir = Path(iteration_dir)
     runs = _load_runs(iteration_dir)
 
@@ -107,7 +113,8 @@ def aggregate(iteration_dir: Path, *, executor_model: str | None = None,
     evals_run = sorted({r["eval_id"] for r in runs})
     per_config_run_counts = [
         len([r for r in runs if r["configuration"] == c and r["eval_id"] == e])
-        for e in evals_run for c in CONFIGS
+        for e in evals_run
+        for c in CONFIGS
     ]
     runs_per_configuration = max(per_config_run_counts, default=0)
 
@@ -136,9 +143,11 @@ def aggregate(iteration_dir: Path, *, executor_model: str | None = None,
     }
 
     (iteration_dir / "benchmark.json").write_text(
-        json.dumps(benchmark, indent=2) + "\n", encoding="utf-8")
+        json.dumps(benchmark, indent=2) + "\n", encoding="utf-8"
+    )
     (iteration_dir / "benchmark.md").write_text(
-        _render_md(benchmark, runs), encoding="utf-8")
+        _render_md(benchmark, runs), encoding="utf-8"
+    )
     return benchmark
 
 
@@ -177,7 +186,8 @@ def _render_md(benchmark: dict, runs: list[dict]) -> str:
         ewo = _stats(_rates(runs, "without_skill", e))
         delta = _fmt_delta(ew["mean"] if ew else None, ewo["mean"] if ewo else None)
         lines.append(
-            f"| {e} | {_cell(ew, 'mean')} | {_cell(ewo, 'mean')} | {delta or '—'} |")
+            f"| {e} | {_cell(ew, 'mean')} | {_cell(ewo, 'mean')} | {delta or '—'} |"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -187,26 +197,49 @@ def _selftest() -> int:
 
     def write_grading(path: Path, pass_rate: float) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "expectations": [],
-            "summary": {"pass_rate": pass_rate, "passed": 0, "failed": 0, "total": 0},
-            "timing": {},
-        }), encoding="utf-8")
+        path.write_text(
+            json.dumps(
+                {
+                    "expectations": [],
+                    "summary": {
+                        "pass_rate": pass_rate,
+                        "passed": 0,
+                        "failed": 0,
+                        "total": 0,
+                    },
+                    "timing": {},
+                }
+            ),
+            encoding="utf-8",
+        )
 
     with tempfile.TemporaryDirectory() as tmp:
         ws = Path(tmp) / "demo-workspace"
         (ws / "evals").mkdir(parents=True)
-        (ws / "evals" / "evals.json").write_text(json.dumps({
-            "skill_name": "x442-demo", "skill_path": "skills/demo", "evals": [],
-        }), encoding="utf-8")
+        (ws / "evals" / "evals.json").write_text(
+            json.dumps(
+                {
+                    "skill_name": "x442-demo",
+                    "skill_path": "skills/demo",
+                    "evals": [],
+                }
+            ),
+            encoding="utf-8",
+        )
         it = ws / "iterations" / "iteration-1"
         # with_skill: 1.0, 1.0 ; without_skill: 0.5, 0.5  -> delta +0.50
         write_grading(it / "eval-fresh" / "with_skill" / "run-1" / "grading.json", 1.0)
         write_grading(it / "eval-fresh" / "with_skill" / "run-2" / "grading.json", 1.0)
-        write_grading(it / "eval-fresh" / "without_skill" / "run-1" / "grading.json", 0.5)
-        write_grading(it / "eval-fresh" / "without_skill" / "run-2" / "grading.json", 0.5)
+        write_grading(
+            it / "eval-fresh" / "without_skill" / "run-1" / "grading.json", 0.5
+        )
+        write_grading(
+            it / "eval-fresh" / "without_skill" / "run-2" / "grading.json", 0.5
+        )
 
-        b = aggregate(it, executor_model="selftest-model", timestamp="2026-07-14T00:00:00Z")
+        b = aggregate(
+            it, executor_model="selftest-model", timestamp="2026-07-14T00:00:00Z"
+        )
         assert b["run_summary"]["with_skill"]["pass_rate"]["mean"] == 1.0, b
         assert b["run_summary"]["without_skill"]["pass_rate"]["mean"] == 0.5, b
         assert b["run_summary"]["delta"]["pass_rate"] == "+0.50", b
@@ -217,7 +250,9 @@ def _selftest() -> int:
         # Re-aggregating an unchanged iteration must be byte-identical (no datetime.now()).
         before = (it / "benchmark.json").read_bytes()
         aggregate(it, executor_model="selftest-model", timestamp="2026-07-14T00:00:00Z")
-        assert (it / "benchmark.json").read_bytes() == before, "rerun must be deterministic"
+        assert (
+            it / "benchmark.json"
+        ).read_bytes() == before, "rerun must be deterministic"
 
         # A single-config iteration: delta is null, and both keys still exist.
         it2 = ws / "iterations" / "iteration-2"

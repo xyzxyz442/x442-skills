@@ -26,7 +26,9 @@ import sys
 ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 VALID_TOOLS = ("crg", "graphify")
 MANIFEST = ".graph-repos.json"
-USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".code-review-graph", "graph-repos.json")
+USER_MANIFEST = os.path.join(
+    os.path.expanduser("~"), ".code-review-graph", "graph-repos.json"
+)
 # CRG owns registry.json and watch.toml in that same directory. graph-repos.json is OURS and must
 # never be confused with them; the verifier asserts registry.json still has CRG's shape.
 
@@ -75,9 +77,16 @@ def head_commit_time(repo: str) -> int | None:
     try:
         out = subprocess.run(
             ["git", "-C", repo, "log", "-1", "--format=%ct"],
-            capture_output=True, text=True, timeout=10, check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
-        return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+        return (
+            int(out.stdout.strip())
+            if out.returncode == 0 and out.stdout.strip()
+            else None
+        )
     except Exception:  # noqa: BLE001
         return None
 
@@ -92,10 +101,12 @@ def load_layer(path: str, errors: list[str], warnings: list[str]) -> list[dict]:
         errors.append(f"{path}: invalid JSON ({e})")
         return []
     if not isinstance(data, dict) or not isinstance(data.get("repos"), list):
-        errors.append(f"{path}: expected an object with a \"repos\" array")
+        errors.append(f'{path}: expected an object with a "repos" array')
         return []
     if data.get("version", 1) != 1:
-        warnings.append(f"{path}: unknown version {data.get('version')!r} — parsing as version 1")
+        warnings.append(
+            f"{path}: unknown version {data.get('version')!r} — parsing as version 1"
+        )
 
     entries, seen = [], set()
     for i, e in enumerate(data["repos"]):
@@ -105,7 +116,9 @@ def load_layer(path: str, errors: list[str], warnings: list[str]) -> list[dict]:
             continue
         alias = e.get("alias")
         if not isinstance(alias, str) or not ALIAS_RE.match(alias):
-            errors.append(f"{where}: alias must match {ALIAS_RE.pattern} (got {alias!r})")
+            errors.append(
+                f"{where}: alias must match {ALIAS_RE.pattern} (got {alias!r})"
+            )
             continue
         if alias in seen:
             warnings.append(f"{path}: duplicate alias {alias!r} — the last one wins")
@@ -115,16 +128,26 @@ def load_layer(path: str, errors: list[str], warnings: list[str]) -> list[dict]:
             continue
         raw = e.get("path")
         if not isinstance(raw, str) or not raw:
-            errors.append(f"{where}: {alias!r} needs a \"path\" (or \"remove\": true)")
+            errors.append(f'{where}: {alias!r} needs a "path" (or "remove": true)')
             continue
         tools = e.get("tools", list(VALID_TOOLS))
-        if not isinstance(tools, list) or not tools or any(t not in VALID_TOOLS for t in tools):
-            errors.append(f"{where}: {alias!r} tools must be a non-empty subset of {list(VALID_TOOLS)}")
+        if (
+            not isinstance(tools, list)
+            or not tools
+            or any(t not in VALID_TOOLS for t in tools)
+        ):
+            errors.append(
+                f"{where}: {alias!r} tools must be a non-empty subset of {list(VALID_TOOLS)}"
+            )
             continue
-        entries.append({
-            "alias": alias, "raw_path": raw, "tools": tools,
-            "notes": e.get("notes", "") if isinstance(e.get("notes"), str) else "",
-        })
+        entries.append(
+            {
+                "alias": alias,
+                "raw_path": raw,
+                "tools": tools,
+                "notes": e.get("notes", "") if isinstance(e.get("notes"), str) else "",
+            }
+        )
     return entries
 
 
@@ -183,8 +206,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", required=True)
     ap.add_argument("--root", required=True)
-    ap.add_argument("--registry", default=os.path.join(
-        os.path.expanduser("~"), ".code-review-graph", "registry.json"))
+    ap.add_argument(
+        "--registry",
+        default=os.path.join(
+            os.path.expanduser("~"), ".code-review-graph", "registry.json"
+        ),
+    )
     args = ap.parse_args()
 
     scope = os.path.realpath(args.scope)
@@ -199,7 +226,9 @@ def main() -> int:
 
     for name, file, committed in layer_files(scope, root):
         present = os.path.exists(file)
-        layers.append({"layer": name, "file": file, "committed": committed, "present": present})
+        layers.append(
+            {"layer": name, "file": file, "committed": committed, "present": present}
+        )
         if not present:
             continue
         mdir = os.path.dirname(file)
@@ -209,22 +238,36 @@ def main() -> int:
                 if effective.pop(alias, None) is not None:
                     tombstones.append({"alias": alias, "layer": name, "manifest": file})
                 else:
-                    warnings.append(f"{file}: tombstone {alias!r} removes nothing (no lower layer declares it)")
+                    warnings.append(
+                        f"{file}: tombstone {alias!r} removes nothing (no lower layer declares it)"
+                    )
                 continue
             if alias in effective:
-                shadowed.append({
-                    "alias": alias, "by_layer": name,
-                    "was_layer": effective[alias]["layer"], "was_path": effective[alias]["path"],
-                })
+                shadowed.append(
+                    {
+                        "alias": alias,
+                        "by_layer": name,
+                        "was_layer": effective[alias]["layer"],
+                        "was_path": effective[alias]["path"],
+                    }
+                )
             path = resolve_path(e["raw_path"], mdir)
-            if committed and os.path.isabs(e["raw_path"]) and not e["raw_path"].startswith("~"):
+            if (
+                committed
+                and os.path.isabs(e["raw_path"])
+                and not e["raw_path"].startswith("~")
+            ):
                 warnings.append(
                     f"{file}: {alias!r} uses an absolute path — machine-specific in a committed "
                     f"manifest. Prefer a path relative to the manifest, or move it to the user layer."
                 )
             effective[alias] = {
-                "alias": alias, "path": path, "tools": e["tools"],
-                "notes": e["notes"], "layer": name, "manifest": file,
+                "alias": alias,
+                "path": path,
+                "tools": e["tools"],
+                "notes": e["notes"],
+                "layer": name,
+                "manifest": file,
             }
 
     # Hydrate each surviving entry with the on-disk facts the shell scripts need but must not
@@ -235,7 +278,9 @@ def main() -> int:
         p = e["path"]
         db = os.path.join(p, ".code-review-graph", "graph.db")
         gj = os.path.join(p, "graphify-out", "graph.json")
-        is_git = os.path.isdir(os.path.join(p, ".git")) or os.path.isfile(os.path.join(p, ".git"))
+        is_git = os.path.isdir(os.path.join(p, ".git")) or os.path.isfile(
+            os.path.join(p, ".git")
+        )
         e["exists"] = os.path.isdir(p)
         e["has_crg_db"] = os.path.isfile(db)
         e["has_gfy_json"] = os.path.isfile(gj)
@@ -243,7 +288,11 @@ def main() -> int:
         e["db_mtime"] = int(os.path.getmtime(db)) if e["has_crg_db"] else None
         e["gfy_mtime"] = int(os.path.getmtime(gj)) if e["has_gfy_json"] else None
         e["head_ct"] = head_commit_time(p) if e["exists"] and is_git else None
-        e["writable"] = os.access(os.path.join(p, ".code-review-graph"), os.W_OK) if e["has_crg_db"] else None
+        e["writable"] = (
+            os.access(os.path.join(p, ".code-review-graph"), os.W_OK)
+            if e["has_crg_db"]
+            else None
+        )
         if not e["exists"]:
             errors.append(
                 f"{e['manifest']}: {e['alias']!r} -> {p} does not exist "
@@ -265,21 +314,25 @@ def main() -> int:
             registry_ok = False
 
     live = [e for e in effective.values() if e["exists"]]
-    json.dump({
-        "scope": scope,
-        "scope_rel": os.path.relpath(scope, root) if scope != root else ".",
-        "root": root,
-        "layers": layers,
-        "effective": live,
-        "dead": [e for e in effective.values() if not e["exists"]],
-        "shadowed": shadowed,
-        "tombstones": tombstones,
-        "warnings": warnings,
-        "errors": errors,
-        "registry": registry,
-        "registry_ok": registry_ok,
-        "registry_path": args.registry,
-    }, sys.stdout, indent=2)
+    json.dump(
+        {
+            "scope": scope,
+            "scope_rel": os.path.relpath(scope, root) if scope != root else ".",
+            "root": root,
+            "layers": layers,
+            "effective": live,
+            "dead": [e for e in effective.values() if not e["exists"]],
+            "shadowed": shadowed,
+            "tombstones": tombstones,
+            "warnings": warnings,
+            "errors": errors,
+            "registry": registry,
+            "registry_ok": registry_ok,
+            "registry_path": args.registry,
+        },
+        sys.stdout,
+        indent=2,
+    )
     sys.stdout.write("\n")
     return 1 if errors else 0
 

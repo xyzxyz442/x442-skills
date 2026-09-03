@@ -28,13 +28,17 @@ BEGIN = "<!-- cross-repo-handoff:begin"
 END = "<!-- cross-repo-handoff:end -->"
 
 
-def render(data: dict, template: str, group: str, board_rel: str, self_alias: str) -> str:
+def render(
+    data: dict, template: str, group: str, board_rel: str, self_alias: str
+) -> str:
     g = next((x for x in data.get("groups", []) if x["group"] == group), None)
     if g is None:
         return ""
     members = sorted(g["members"], key=lambda m: m["alias"])
-    rows = ["| Repo | Acts-next name (`audience:`) | What lives there |",
-            "| ---- | --------------------------- | ---------------- |"]
+    rows = [
+        "| Repo | Acts-next name (`audience:`) | What lives there |",
+        "| ---- | --------------------------- | ---------------- |",
+    ]
     for m in members:
         notes = m.get("notes") or "—"
         mark = " ← this repo" if m["alias"] == self_alias else ""
@@ -45,7 +49,9 @@ def render(data: dict, template: str, group: str, board_rel: str, self_alias: st
     body = body.replace("{{LAYOUT}}", g.get("layout", "subfolder"))
     body = body.replace("{{BOARD}}", board_rel)
     body = body.replace("{{PEER_TABLE}}", "\n".join(rows))
-    body = body.replace("{{PEERS}}", ", ".join(f"`{p}`" for p in peers) if peers else "— (no peers yet)")
+    body = body.replace(
+        "{{PEERS}}", ", ".join(f"`{p}`" for p in peers) if peers else "— (no peers yet)"
+    )
     return re.sub(r"\n{3,}", "\n\n", body)
 
 
@@ -58,10 +64,14 @@ def splice(existing: str, block: str) -> str:
     if n_begin == 0:
         if not block:
             return existing
-        sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+        sep = (
+            ""
+            if existing.endswith("\n\n")
+            else ("\n" if existing.endswith("\n") else "\n\n")
+        )
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
-    tail = existing[existing.index(END) + len(END):]
+    tail = existing[existing.index(END) + len(END) :]
     rest = tail.lstrip("\n")
     if not block:
         # The removal path used to return `head` and DISCARD the tail outright — every byte after
@@ -110,7 +120,11 @@ def _selftest() -> int:
     assert splice(BEGIN + " -->\no\n" + END + "\n\n" + sib, "") == sib
     assert splice("# A\n", "") == "# A\n", "no block, nothing to remove"
 
-    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+    for bad in (
+        BEGIN + " -->\n",
+        END + "\n",
+        BEGIN + " -->\n" + BEGIN + " -->\n" + END + END,
+    ):
         try:
             splice(bad, blk)
         except ValueError:
@@ -145,7 +159,10 @@ def main() -> int:
         with open(args.file) as f:
             existing = f.read()
     elif not args.dry_run:
-        print(f"render: {args.file} does not exist — run initial-project first", file=sys.stderr)
+        print(
+            f"render: {args.file} does not exist — run initial-project first",
+            file=sys.stderr,
+        )
         return 1
 
     try:

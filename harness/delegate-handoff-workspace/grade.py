@@ -43,7 +43,9 @@ TO = "Acme Contracting"  # the delegate every fixture's briefs were exported --t
 
 def _handoff(target, *args):
     ho = Path(target) / HD / "handoff"
-    return subprocess.run(["bash", str(ho), *args], cwd=str(target), capture_output=True, text=True)
+    return subprocess.run(
+        ["bash", str(ho), *args], cwd=str(target), capture_output=True, text=True
+    )
 
 
 def _frontmatter(path: Path) -> dict:
@@ -65,7 +67,8 @@ def _frontmatter(path: Path) -> dict:
 def _root_commit(target: Path) -> str:
     proc = subprocess.run(
         ["git", "-C", str(target), "rev-list", "--max-parents=0", "HEAD"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     return lines[-1] if lines else ""
@@ -85,7 +88,9 @@ def _restamp_repo_root(brief_path: Path, root: str) -> None:
     wrong-repo hostile brief, whose entire point is a mismatched identity.
     """
     text = brief_path.read_text(encoding="utf-8")
-    text = re.sub(r"(?m)^repo_root_commit:.*$", f"repo_root_commit: {root}", text, count=1)
+    text = re.sub(
+        r"(?m)^repo_root_commit:.*$", f"repo_root_commit: {root}", text, count=1
+    )
     brief_path.write_text(text, encoding="utf-8")
 
 
@@ -96,7 +101,9 @@ def _lease_held(doc_dir: Path, id_: str) -> bool:
 def grade(target, eval_id):
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
@@ -113,29 +120,52 @@ def _grade(target: Path, eval_id):
         # .agents/handoff, so this single failed expectation is the whole story: 0/1 -> 0.00.
         return [gc.run_verify_script(VERIFY, target)]
 
-    exps = [gc.run_verify_script(VERIFY, target)]  # environment sanity, as run-handoff's grader does
+    exps = [
+        gc.run_verify_script(VERIFY, target)
+    ]  # environment sanity, as run-handoff's grader does
 
     if eval_id == "export-bundle":
         r = _handoff(target, "export", "release-hardening", "--to", TO)
-        exps.append(gc.expectation("export succeeds on an orchestrator", r.returncode == 0,
-                                    f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}"))
+        exps.append(
+            gc.expectation(
+                "export succeeds on an orchestrator",
+                r.returncode == 0,
+                f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}",
+            )
+        )
         cover_rel = f"{HD}/briefs/release-hardening-handoff.cover.md"
         exps.append(gc.file_exists(target, cover_rel))
         root = _root_commit(target)
         for cid in ("auth-flow-handoff", "payment-flow-handoff", "notif-flow-handoff"):
             brief = doc_dir / "briefs" / f"{cid}.brief.md"
             fm = _frontmatter(brief)
-            exps.append(gc.expectation(f"{cid}: brief was produced", brief.is_file(), str(brief)))
-            exps.append(gc.expectation(
-                f"{cid}: brief's repo_root_commit matches the target repo",
-                fm.get("repo_root_commit") == root and bool(root),
-                f"want {root!r}, got {fm.get('repo_root_commit')!r}"))
+            exps.append(
+                gc.expectation(
+                    f"{cid}: brief was produced", brief.is_file(), str(brief)
+                )
+            )
+            exps.append(
+                gc.expectation(
+                    f"{cid}: brief's repo_root_commit matches the target repo",
+                    fm.get("repo_root_commit") == root and bool(root),
+                    f"want {root!r}, got {fm.get('repo_root_commit')!r}",
+                )
+            )
             doc_fm = _frontmatter(doc_dir / f"{cid}.md")
-            exps.append(gc.expectation(f"{cid}: doc carries delegated_to",
-                                        doc_fm.get("delegated_to") == TO,
-                                        f"delegated_to={doc_fm.get('delegated_to')!r}"))
-            exps.append(gc.expectation(f"{cid}: doc holds a lease", _lease_held(doc_dir, cid),
-                                        f"lock dir present: {_lease_held(doc_dir, cid)}"))
+            exps.append(
+                gc.expectation(
+                    f"{cid}: doc carries delegated_to",
+                    doc_fm.get("delegated_to") == TO,
+                    f"delegated_to={doc_fm.get('delegated_to')!r}",
+                )
+            )
+            exps.append(
+                gc.expectation(
+                    f"{cid}: doc holds a lease",
+                    _lease_held(doc_dir, cid),
+                    f"lock dir present: {_lease_held(doc_dir, cid)}",
+                )
+            )
             exps.append(gc.contains(target, cover_rel, cid, label=f"cover lists {cid}"))
         return exps
 
@@ -147,55 +177,96 @@ def _grade(target: Path, eval_id):
         before = (doc_dir / "key-rotation-handoff.md").read_text(encoding="utf-8")
         r = _handoff(target, "export", "key-rotation", "--to", TO)
         out = r.stdout + r.stderr
-        exps.append(gc.expectation(
-            "export refuses a restricted unit", r.returncode != 0 and "restricted" in out,
-            f"exit {r.returncode}: {out.strip()[-160:]}"))
-        exps.append(gc.expectation(
-            "no brief was written",
-            not (doc_dir / "briefs" / "key-rotation-handoff.brief.md").exists(),
-            "briefs/key-rotation-handoff.brief.md absent"))
-        exps.append(gc.expectation(
-            "no lease was taken", not _lease_held(doc_dir, "key-rotation-handoff"),
-            f"lock dir present: {_lease_held(doc_dir, 'key-rotation-handoff')}"))
+        exps.append(
+            gc.expectation(
+                "export refuses a restricted unit",
+                r.returncode != 0 and "restricted" in out,
+                f"exit {r.returncode}: {out.strip()[-160:]}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "no brief was written",
+                not (doc_dir / "briefs" / "key-rotation-handoff.brief.md").exists(),
+                "briefs/key-rotation-handoff.brief.md absent",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "no lease was taken",
+                not _lease_held(doc_dir, "key-rotation-handoff"),
+                f"lock dir present: {_lease_held(doc_dir, 'key-rotation-handoff')}",
+            )
+        )
         # Byte-identical, the same sharp assertion the hostile-import cases use: a refusal that
         # printed the right words and still mutated the doc is a failed refusal.
-        exps.append(gc.expectation(
-            "the refusal leaves the doc byte-identical",
-            before == (doc_dir / "key-rotation-handoff.md").read_text(encoding="utf-8"),
-            "doc unchanged"))
+        exps.append(
+            gc.expectation(
+                "the refusal leaves the doc byte-identical",
+                before
+                == (doc_dir / "key-rotation-handoff.md").read_text(encoding="utf-8"),
+                "doc unchanged",
+            )
+        )
         # There is no --force for this one. --force-secret overrides the SCANNER; nothing
         # overrides the sensitivity gate, and an override that quietly worked would unmake a
         # stated decision about the work by accident.
-        rf = _handoff(target, "export", "key-rotation", "--to", TO, "--force-secret", "I am sure")
-        exps.append(gc.expectation(
-            "--force-secret does not unlock it", rf.returncode != 0,
-            f"exit {rf.returncode}: {(rf.stdout + rf.stderr).strip()[-120:]}"))
+        rf = _handoff(
+            target, "export", "key-rotation", "--to", TO, "--force-secret", "I am sure"
+        )
+        exps.append(
+            gc.expectation(
+                "--force-secret does not unlock it",
+                rf.returncode != 0,
+                f"exit {rf.returncode}: {(rf.stdout + rf.stderr).strip()[-120:]}",
+            )
+        )
 
         # WHOLE-bundle refusal. Shipping the ordinary sibling would hand an executor a cover
         # naming a unit they were never sent.
         rb = _handoff(target, "export", "auth-hardening", "--to", TO)
-        exps.append(gc.expectation(
-            "a bundle with a restricted child is refused whole",
-            rb.returncode != 0 and "restricted" in (rb.stdout + rb.stderr),
-            f"exit {rb.returncode}: {(rb.stdout + rb.stderr).strip()[-160:]}"))
-        for absent in ("briefs/auth-hardening-handoff.cover.md",
-                       "briefs/rate-limit-handoff.brief.md"):
-            exps.append(gc.expectation(
-                f"{absent} was not written", not (doc_dir / absent).exists(), f"{absent} absent"))
+        exps.append(
+            gc.expectation(
+                "a bundle with a restricted child is refused whole",
+                rb.returncode != 0 and "restricted" in (rb.stdout + rb.stderr),
+                f"exit {rb.returncode}: {(rb.stdout + rb.stderr).strip()[-160:]}",
+            )
+        )
+        for absent in (
+            "briefs/auth-hardening-handoff.cover.md",
+            "briefs/rate-limit-handoff.brief.md",
+        ):
+            exps.append(
+                gc.expectation(
+                    f"{absent} was not written",
+                    not (doc_dir / absent).exists(),
+                    f"{absent} absent",
+                )
+            )
 
         # The gate is SCOPED. A restricted unit on the board must not make the board
         # undelegatable — that would be the fastest route to the flag being removed entirely.
         ro = _handoff(target, "export", "rate-limit", "--to", TO)
-        exps.append(gc.expectation(
-            "the ordinary unit on the same board still exports",
-            ro.returncode == 0 and (doc_dir / "briefs" / "rate-limit-handoff.brief.md").is_file(),
-            f"exit {ro.returncode}: {(ro.stdout + ro.stderr).strip()[-160:]}"))
+        exps.append(
+            gc.expectation(
+                "the ordinary unit on the same board still exports",
+                ro.returncode == 0
+                and (doc_dir / "briefs" / "rate-limit-handoff.brief.md").is_file(),
+                f"exit {ro.returncode}: {(ro.stdout + ro.stderr).strip()[-160:]}",
+            )
+        )
 
         # And the index still names it. Redacting restricted titles makes the board useless for
         # exactly the work that most needs coordination, and the id discloses as much anyway.
         _handoff(target, "index")
-        exps.append(gc.contains(target, f"{HD}/INDEX.md", "Rotate the signing keys",
-                                 label="the index still lists the restricted unit by title"))
+        exps.append(
+            gc.contains(
+                target,
+                f"{HD}/INDEX.md",
+                "Rotate the signing keys",
+                label="the index still lists the restricted unit by title",
+            )
+        )
         return exps
 
     if eval_id == "import-clean":
@@ -203,22 +274,52 @@ def _grade(target: Path, eval_id):
         _restamp_repo_root(brief, _root_commit(target))
         doc = doc_dir / "rate-limit-fix-handoff.md"
         r = _handoff(target, "import", "--result", str(brief))
-        exps.append(gc.expectation("import --result succeeds", r.returncode == 0,
-                                    f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}"))
+        exps.append(
+            gc.expectation(
+                "import --result succeeds",
+                r.returncode == 0,
+                f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}",
+            )
+        )
         fm = _frontmatter(doc)
         # The load-bearing assertion: import never writes status. The executor's claim lands in
         # result_claimed; done stays a reviewer action taken after reproducing evidence.
-        exps.append(gc.expectation("status is STILL open after import (import never closes it)",
-                                    fm.get("status") == "open", f"status={fm.get('status')!r}"))
-        exps.append(gc.expectation("review is pending", fm.get("review") == "pending",
-                                    f"review={fm.get('review')!r}"))
-        exps.append(gc.expectation("result_claimed records the executor's claim",
-                                    fm.get("result_claimed") == "done",
-                                    f"result_claimed={fm.get('result_claimed')!r}"))
-        exps.append(gc.expectation("result_from records the reporter", fm.get("result_from") == TO,
-                                    f"result_from={fm.get('result_from')!r}"))
-        exps.append(gc.contains(target, f"{HD}/rate-limit-fix-handoff.md", "token-bucket refill math",
-                                 label="Result body was spliced into the doc"))
+        exps.append(
+            gc.expectation(
+                "status is STILL open after import (import never closes it)",
+                fm.get("status") == "open",
+                f"status={fm.get('status')!r}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "review is pending",
+                fm.get("review") == "pending",
+                f"review={fm.get('review')!r}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "result_claimed records the executor's claim",
+                fm.get("result_claimed") == "done",
+                f"result_claimed={fm.get('result_claimed')!r}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "result_from records the reporter",
+                fm.get("result_from") == TO,
+                f"result_from={fm.get('result_from')!r}",
+            )
+        )
+        exps.append(
+            gc.contains(
+                target,
+                f"{HD}/rate-limit-fix-handoff.md",
+                "token-bucket refill math",
+                label="Result body was spliced into the doc",
+            )
+        )
         return exps
 
     if eval_id == "import-hostile":
@@ -239,36 +340,72 @@ def _grade(target: Path, eval_id):
             before = doc.read_text(encoding="utf-8")
             r = _handoff(target, "import", "--result", str(brief))
             out = r.stdout + r.stderr
-            exps.append(gc.expectation(f"{id_} is refused ({msg!r})",
-                                        r.returncode != 0 and msg in out,
-                                        f"exit {r.returncode}: {out.strip()[-200:]}"))
+            exps.append(
+                gc.expectation(
+                    f"{id_} is refused ({msg!r})",
+                    r.returncode != 0 and msg in out,
+                    f"exit {r.returncode}: {out.strip()[-200:]}",
+                )
+            )
             after = doc.read_text(encoding="utf-8")
             # The sharp assertion: a refusal that printed the right message but still mutated the
             # doc is a FAILED refusal. Only a before/after byte comparison catches that.
-            exps.append(gc.expectation(f"{id_} refusal leaves the doc byte-identical",
-                                        before == after,
-                                        "unchanged" if before == after else "doc MUTATED by a refused import"))
+            exps.append(
+                gc.expectation(
+                    f"{id_} refusal leaves the doc byte-identical",
+                    before == after,
+                    (
+                        "unchanged"
+                        if before == after
+                        else "doc MUTATED by a refused import"
+                    ),
+                )
+            )
         return exps
 
     # default: export-single, against the `exportable` fixture
     id_ = "tenant-switch-handoff"
     root = _root_commit(target)
     r = _handoff(target, "export", "tenant-switch", "--to", TO)
-    exps.append(gc.expectation("export succeeds", r.returncode == 0,
-                                f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}"))
+    exps.append(
+        gc.expectation(
+            "export succeeds",
+            r.returncode == 0,
+            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}",
+        )
+    )
     brief = doc_dir / "briefs" / f"{id_}.brief.md"
     fm = _frontmatter(brief)
     exps.append(gc.file_exists(target, f"{HD}/briefs/{id_}.brief.md"))
-    exps.append(gc.expectation("brief's repo_root_commit matches the target repo",
-                                fm.get("repo_root_commit") == root and bool(root),
-                                f"want {root!r}, got {fm.get('repo_root_commit')!r}"))
+    exps.append(
+        gc.expectation(
+            "brief's repo_root_commit matches the target repo",
+            fm.get("repo_root_commit") == root and bool(root),
+            f"want {root!r}, got {fm.get('repo_root_commit')!r}",
+        )
+    )
     doc_fm = _frontmatter(doc_dir / f"{id_}.md")
-    exps.append(gc.expectation("doc carries delegated_to", doc_fm.get("delegated_to") == TO,
-                                f"delegated_to={doc_fm.get('delegated_to')!r}"))
-    exps.append(gc.expectation("doc holds a lease", _lease_held(doc_dir, id_),
-                                f"lock dir present: {_lease_held(doc_dir, id_)}"))
-    exps.append(gc.expectation("status untouched by export", doc_fm.get("status") == "open",
-                                f"status={doc_fm.get('status')!r}"))
+    exps.append(
+        gc.expectation(
+            "doc carries delegated_to",
+            doc_fm.get("delegated_to") == TO,
+            f"delegated_to={doc_fm.get('delegated_to')!r}",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "doc holds a lease",
+            _lease_held(doc_dir, id_),
+            f"lock dir present: {_lease_held(doc_dir, id_)}",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "status untouched by export",
+            doc_fm.get("status") == "open",
+            f"status={doc_fm.get('status')!r}",
+        )
+    )
     return exps
 
 

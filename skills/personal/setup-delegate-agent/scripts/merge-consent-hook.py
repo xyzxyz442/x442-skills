@@ -13,6 +13,7 @@ hook-config-merge-clobber-handoff.
 The file it writes is shared: on Claude, setup-handoff wires its own enforcement hooks into the
 same .claude/settings.json, in the same PreToolUse event.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,8 +47,11 @@ def is_managed(group) -> bool:
     """
     if not isinstance(group, dict):
         return False
-    return any(MARKER in (h.get("command") or "")
-               for h in group.get("hooks", []) or [] if isinstance(h, dict))
+    return any(
+        MARKER in (h.get("command") or "")
+        for h in group.get("hooks", []) or []
+        if isinstance(h, dict)
+    )
 
 
 def replace_managed(groups, ours: dict) -> list:
@@ -78,9 +82,14 @@ def wire(repo: pathlib.Path, tool: str) -> str:
         try:
             data = json.loads(path.read_text())
         except ValueError as e:
-            raise SystemExit(f"  ! {rel} is not valid JSON ({e}) — refusing to rewrite it")
+            raise SystemExit(
+                f"  ! {rel} is not valid JSON ({e}) — refusing to rewrite it"
+            )
     hooks = data.setdefault("hooks", {}) if tool != "copilot" else data
-    ours = {"matcher": MATCHER, "hooks": [{"type": "command", "command": command(tool)}]}
+    ours = {
+        "matcher": MATCHER,
+        "hooks": [{"type": "command", "command": command(tool)}],
+    }
     hooks[event] = replace_managed(hooks.get(event, []), ours)
     new = json.dumps(data, indent=2) + "\n"
     if not path.exists() or path.read_text() != new:
@@ -99,31 +108,58 @@ def _selftest() -> int:
     import tempfile
 
     for tool in EVENT:
-        assert is_managed({"hooks": [{"type": "command", "command": command(tool)}]}), \
-            f"must recognize the gate we write for {tool}"
+        assert is_managed(
+            {"hooks": [{"type": "command", "command": command(tool)}]}
+        ), f"must recognize the gate we write for {tool}"
 
     for foreign in (
-        {"hooks": [{"type": "command",
+        {
+            "hooks": [
+                {
+                    "type": "command",
                     "command": 'bash "$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh" '
-                               '--kind pretool-edit --tool claude'}]},
-        {"hooks": [{"type": "command", "command":
-                    'H="$R/.graph-hooks/hook.sh"; bash "$H" --tool claude --kind pretool-shell'}]},
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash .claude/my-guard.sh"}]},
+                    "--kind pretool-edit --tool claude",
+                }
+            ]
+        },
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'H="$R/.graph-hooks/hook.sh"; bash "$H" --tool claude --kind pretool-shell',
+                }
+            ]
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "bash .claude/my-guard.sh"}],
+        },
         {"hooks": [{"type": "command"}]},
         {"hooks": []},
         {},
         "not-a-dict",
     ):
-        assert not is_managed(foreign), f"must NOT claim another tool's hook: {foreign!r}"
+        assert not is_managed(
+            foreign
+        ), f"must NOT claim another tool's hook: {foreign!r}"
 
     theirs = {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash x.sh"}]}
-    mine = {"matcher": MATCHER, "hooks": [{"type": "command", "command": command("claude")}]}
+    mine = {
+        "matcher": MATCHER,
+        "hooks": [{"type": "command", "command": command("claude")}],
+    }
     assert replace_managed([theirs], mine) == [theirs, mine], "a first install appends"
-    assert replace_managed([mine, theirs], mine) == [mine, theirs], "ours keeps its slot"
+    assert replace_managed([mine, theirs], mine) == [
+        mine,
+        theirs,
+    ], "ours keeps its slot"
     assert replace_managed([theirs, mine], mine) == [theirs, mine], "and so does theirs"
     assert replace_managed([], mine) == [mine] and replace_managed(None, mine) == [mine]
-    assert replace_managed(["junk", {"no": "hooks"}], mine) == ["junk", {"no": "hooks"}, mine], \
-        "malformed entries are skipped, never crashed on — humans hand-edit these files"
+    assert replace_managed(["junk", {"no": "hooks"}], mine) == [
+        "junk",
+        {"no": "hooks"},
+        mine,
+    ], "malformed entries are skipped, never crashed on — humans hand-edit these files"
 
     with tempfile.TemporaryDirectory() as tmp:
         repo = pathlib.Path(tmp)
@@ -131,26 +167,41 @@ def _selftest() -> int:
             event, rel = EVENT[tool]
             path = repo / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"unrelated": True, "hooks": {event: [theirs]}}
-                                       if tool != "copilot" else
-                                       {"version": 1, event: [theirs]}, indent=2) + "\n")
+            path.write_text(
+                json.dumps(
+                    (
+                        {"unrelated": True, "hooks": {event: [theirs]}}
+                        if tool != "copilot"
+                        else {"version": 1, event: [theirs]}
+                    ),
+                    indent=2,
+                )
+                + "\n"
+            )
             assert wire(repo, tool).startswith("  +"), f"{tool}: a first wiring writes"
             before = path.read_text()
-            assert wire(repo, tool).startswith("  ="), f"{tool}: a re-run reports no change"
+            assert wire(repo, tool).startswith(
+                "  ="
+            ), f"{tool}: a re-run reports no change"
             assert path.read_text() == before, f"{tool}: a re-run is byte-identical"
 
             data = json.loads(before)
             groups = (data["hooks"] if tool != "copilot" else data)[event]
             assert theirs in groups, f"{tool}: another skill's group must survive"
-            assert sum(is_managed(g) for g in groups) == 1, f"{tool}: exactly one gate, never two"
+            assert (
+                sum(is_managed(g) for g in groups) == 1
+            ), f"{tool}: exactly one gate, never two"
 
             # Another installer appends after ours; our next run must not jump the queue.
-            groups.append({"hooks": [{"type": "command", "command": "bash .agents/other.sh"}]})
+            groups.append(
+                {"hooks": [{"type": "command", "command": "bash .agents/other.sh"}]}
+            )
             path.write_text(json.dumps(data, indent=2) + "\n")
             reordered = path.read_text()
             wire(repo, tool)
-            assert path.read_text() == reordered, \
-                f"{tool}: a re-run must not reorder groups another installer placed around ours"
+            assert (
+                path.read_text() == reordered
+            ), f"{tool}: a re-run must not reorder groups another installer placed around ours"
 
         bad = repo / ".gemini/settings.json"
         bad.write_text("{not json")

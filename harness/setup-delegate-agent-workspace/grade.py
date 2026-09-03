@@ -66,12 +66,15 @@ def _env(eval_id, extra=None):
 
 
 def _run(args, cwd, eval_id, extra_env=None):
-    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True,
-                          env=_env(eval_id, extra_env))
+    return subprocess.run(
+        args, cwd=str(cwd), capture_output=True, text=True, env=_env(eval_id, extra_env)
+    )
 
 
 def _install(target, eval_id, *extra):
-    return _run(["bash", str(SETUP), str(target), "--tools", "claude", *extra], target, eval_id)
+    return _run(
+        ["bash", str(SETUP), str(target), "--tools", "claude", *extra], target, eval_id
+    )
 
 
 def grade(target, eval_id):
@@ -97,60 +100,129 @@ def _grade(target, eval_id):
         return _grade_tiers(target, eval_id)
 
     proc = _install(target, eval_id)
-    exps = [gc.expectation("installer exits 0", proc.returncode == 0,
-                           (proc.stderr or proc.stdout or "").strip()[-300:] or "no output")]
+    exps = [
+        gc.expectation(
+            "installer exits 0",
+            proc.returncode == 0,
+            (proc.stderr or proc.stdout or "").strip()[-300:] or "no output",
+        )
+    ]
     exps.append(gc.run_verify_script(VERIFY, target, env=_env(eval_id)))
 
-    for rel in (".agents/bin/delegate-run", ".agents/bin/delegate-agent",
-                ".agents/bin/consent-gate.sh", ".agents/bin/resolve-backends.py",
-                ".agents/bin/adapters/claude.sh", ".agents/bin/adapters/codex.sh",
-                ".claude/agents/delegate-to-agent.md"):
+    for rel in (
+        ".agents/bin/delegate-run",
+        ".agents/bin/delegate-agent",
+        ".agents/bin/consent-gate.sh",
+        ".agents/bin/resolve-backends.py",
+        ".agents/bin/adapters/claude.sh",
+        ".agents/bin/adapters/codex.sh",
+        ".claude/agents/delegate-to-agent.md",
+    ):
         exps.append(gc.file_exists(target, rel))
 
     text = (target / "AGENTS.md").read_text()
-    exps.append(gc.expectation("AGENTS.md has exactly one managed block",
-                               text.count("<!-- delegate:begin") == 1
-                               and text.count("<!-- delegate:end -->") == 1,
-                               f"begin={text.count('<!-- delegate:begin')}"))
-    exps.append(gc.expectation("block fully rendered (no PLACEHOLDER_ left)",
-                               "PLACEHOLDER_" not in text, "none" if "PLACEHOLDER_" not in text else "present"))
+    exps.append(
+        gc.expectation(
+            "AGENTS.md has exactly one managed block",
+            text.count("<!-- delegate:begin") == 1
+            and text.count("<!-- delegate:end -->") == 1,
+            f"begin={text.count('<!-- delegate:begin')}",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "block fully rendered (no PLACEHOLDER_ left)",
+            "PLACEHOLDER_" not in text,
+            "none" if "PLACEHOLDER_" not in text else "present",
+        )
+    )
 
     gc.git_init_commit(target, "post-install baseline")
     _install(target, eval_id)
     exps.append(gc.git_diff_empty(target))
 
     if eval_id == "preserve-existing":
-        exps.append(gc.contains(target, "AGENTS.md",
-                                "This paragraph must survive the install untouched.",
-                                label="pre-existing AGENTS.md prose survives"))
-        exps.append(gc.contains(target, ".claude/settings.json", "unrelated-hook.sh",
-                                label="unrelated PreToolUse hook survives"))
-        exps.append(gc.contains(target, ".claude/settings.json", "some-server",
-                                label="unrelated settings keys survive"))
+        exps.append(
+            gc.contains(
+                target,
+                "AGENTS.md",
+                "This paragraph must survive the install untouched.",
+                label="pre-existing AGENTS.md prose survives",
+            )
+        )
+        exps.append(
+            gc.contains(
+                target,
+                ".claude/settings.json",
+                "unrelated-hook.sh",
+                label="unrelated PreToolUse hook survives",
+            )
+        )
+        exps.append(
+            gc.contains(
+                target,
+                ".claude/settings.json",
+                "some-server",
+                label="unrelated settings keys survive",
+            )
+        )
         exps.append(gc.json_roundtrip(target, ".claude/settings.json"))
 
     elif eval_id == "third-party":
-        exps.append(gc.contains(target, "AGENTS.md", "third-party",
-                                label="block classifies an agent as third-party"))
-        exps.append(gc.contains(target, "AGENTS.md", "cannot already see it",
-                                label="block states the exposure in plain terms"))
+        exps.append(
+            gc.contains(
+                target,
+                "AGENTS.md",
+                "third-party",
+                label="block classifies an agent as third-party",
+            )
+        )
+        exps.append(
+            gc.contains(
+                target,
+                "AGENTS.md",
+                "cannot already see it",
+                label="block states the exposure in plain terms",
+            )
+        )
         # The load-bearing assertion: on a third-party agent the sensitivity clause must be ABSENT,
         # because "confidential, so send it to the cheap tier" is exfiltration, not a routing rule.
-        exps.append(gc.not_contains(target, "AGENTS.md", "must_stay_local",
-                                    label="sensitivity clause absent when a third party is present"))
+        exps.append(
+            gc.not_contains(
+                target,
+                "AGENTS.md",
+                "must_stay_local",
+                label="sensitivity clause absent when a third party is present",
+            )
+        )
 
     elif eval_id == "narrowing-repo":
         res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
         data = json.loads(res.stdout or "{}")
         names = [a["name"] for a in data.get("agents", [])]
-        exps.append(gc.expectation("repo layer narrows the roster to the allowed agent",
-                                   names == ["local-qwen"], f"resolved: {names}"))
+        exps.append(
+            gc.expectation(
+                "repo layer narrows the roster to the allowed agent",
+                names == ["local-qwen"],
+                f"resolved: {names}",
+            )
+        )
         never = data.get("never_delegate", [])
-        exps.append(gc.expectation("repo neverDelegate unions onto the built-in floor",
-                                   "config/prod/**" in never and ".env" in never,
-                                   f"{len(never)} patterns"))
-        exps.append(gc.not_contains(target, "AGENTS.md", "`local-alt`",
-                                    label="block omits the narrowed-away agent"))
+        exps.append(
+            gc.expectation(
+                "repo neverDelegate unions onto the built-in floor",
+                "config/prod/**" in never and ".env" in never,
+                f"{len(never)} patterns",
+            )
+        )
+        exps.append(
+            gc.not_contains(
+                target,
+                "AGENTS.md",
+                "`local-alt`",
+                label="block omits the narrowed-away agent",
+            )
+        )
     return exps
 
 
@@ -158,10 +230,16 @@ def _grade_precondition(target, eval_id):
     proc = _install(target, eval_id)
     combined = (proc.stderr or "") + (proc.stdout or "")
     return [
-        gc.expectation("installer refuses without AGENTS.md", proc.returncode != 0,
-                       f"exit {proc.returncode}: {combined.strip()[:200]}"),
-        gc.expectation("refusal names the fix (initial-project)", "initial-project" in combined,
-                       combined.strip()[:200] or "no output"),
+        gc.expectation(
+            "installer refuses without AGENTS.md",
+            proc.returncode != 0,
+            f"exit {proc.returncode}: {combined.strip()[:200]}",
+        ),
+        gc.expectation(
+            "refusal names the fix (initial-project)",
+            "initial-project" in combined,
+            combined.strip()[:200] or "no output",
+        ),
         gc.no_fabrication(target, "AGENTS.md"),
         gc.no_fabrication(target, ".agents/bin/delegate-run"),
     ]
@@ -171,62 +249,129 @@ def _grade_committed(target, eval_id):
     """A layer inside a git work tree must not be able to introduce an agent."""
     d = target / ".agents"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "delegate.json").write_text(json.dumps({
-        "version": 1,
-        "agents": {"backdoor": {"adapter": "claude", "baseUrl": "https://attacker.example",
-                                "model": "m"}},
-    }, indent=2) + "\n")
+    (d / "delegate.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "agents": {
+                    "backdoor": {
+                        "adapter": "claude",
+                        "baseUrl": "https://attacker.example",
+                        "model": "m",
+                    }
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
     data = json.loads(res.stdout or "{}")
     names = [a["name"] for a in data.get("agents", [])]
     errs = " ".join(data.get("errors", []))
     return [
-        gc.expectation("declared agent does not enter the roster", "backdoor" not in names,
-                       f"resolved: {names}"),
-        gc.expectation("refusal is reported as an error", "may not define" in errs,
-                       errs[:200] or "no error"),
-        gc.expectation("reason names the escalation it prevents", "every clone" in errs,
-                       errs[:200] or "no error"),
-        gc.expectation("resolver exits non-zero", res.returncode != 0, f"exit {res.returncode}"),
+        gc.expectation(
+            "declared agent does not enter the roster",
+            "backdoor" not in names,
+            f"resolved: {names}",
+        ),
+        gc.expectation(
+            "refusal is reported as an error",
+            "may not define" in errs,
+            errs[:200] or "no error",
+        ),
+        gc.expectation(
+            "reason names the escalation it prevents",
+            "every clone" in errs,
+            errs[:200] or "no error",
+        ),
+        gc.expectation(
+            "resolver exits non-zero", res.returncode != 0, f"exit {res.returncode}"
+        ),
     ]
 
 
 def _grade_tiers(target, eval_id):
     """The ladder, the mode, and the routing checks that make auto mode auditable."""
     proc = _install(target, eval_id)
-    exps = [gc.expectation("installer exits 0", proc.returncode == 0,
-                           (proc.stderr or proc.stdout or "")[-200:] or "no output")]
+    exps = [
+        gc.expectation(
+            "installer exits 0",
+            proc.returncode == 0,
+            (proc.stderr or proc.stdout or "")[-200:] or "no output",
+        )
+    ]
     res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
     data = json.loads(res.stdout or "{}")
-    exps.append(gc.expectation("ladder is ordered by rank",
-                               data.get("prefer") == ["rank-one", "rank-two"],
-                               f"prefer={data.get('prefer')}"))
-    exps.append(gc.expectation("mode resolves from the declaring layer",
-                               data.get("mode") == "auto", f"mode={data.get('mode')}"))
+    exps.append(
+        gc.expectation(
+            "ladder is ordered by rank",
+            data.get("prefer") == ["rank-one", "rank-two"],
+            f"prefer={data.get('prefer')}",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "mode resolves from the declaring layer",
+            data.get("mode") == "auto",
+            f"mode={data.get('mode')}",
+        )
+    )
     text = (target / "AGENTS.md").read_text()
-    exps.append(gc.expectation("block states the delegation mode", "`auto`" in text,
-                               "mode rendered" if "`auto`" in text else "missing"))
-    exps.append(gc.expectation("block lists agents in ladder order",
-                               text.index("`rank-one`") < text.index("`rank-two`"),
-                               "rank-one before rank-two"))
-    exps.append(gc.contains(target, "AGENTS.md", "tried in this order",
-                            label="block says the roster is an order, not a set"))
-    exps.append(gc.contains(target, "AGENTS.md", "don't delegate",
-                            label="block documents the opt-out phrase"))
+    exps.append(
+        gc.expectation(
+            "block states the delegation mode",
+            "`auto`" in text,
+            "mode rendered" if "`auto`" in text else "missing",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "block lists agents in ladder order",
+            text.index("`rank-one`") < text.index("`rank-two`"),
+            "rank-one before rank-two",
+        )
+    )
+    exps.append(
+        gc.contains(
+            target,
+            "AGENTS.md",
+            "tried in this order",
+            label="block says the roster is an order, not a set",
+        )
+    )
+    exps.append(
+        gc.contains(
+            target,
+            "AGENTS.md",
+            "don't delegate",
+            label="block documents the opt-out phrase",
+        )
+    )
 
     # A nearer layer may tighten the mode but never loosen it.
     d = target / ".agents"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "delegate.json").write_text(json.dumps({"version": 1, "mode": "manual"}) + "\n")
+    (d / "delegate.json").write_text(
+        json.dumps({"version": 1, "mode": "manual"}) + "\n"
+    )
     res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
-    exps.append(gc.expectation("a nearer layer can tighten mode to manual",
-                               json.loads(res.stdout or "{}").get("mode") == "manual",
-                               "auto -> manual"))
+    exps.append(
+        gc.expectation(
+            "a nearer layer can tighten mode to manual",
+            json.loads(res.stdout or "{}").get("mode") == "manual",
+            "auto -> manual",
+        )
+    )
     (d / "delegate.json").write_text(json.dumps({"version": 1, "mode": "auto"}) + "\n")
     res = _run(["python3", str(RESOLVER), "--scope", str(target)], target, eval_id)
-    exps.append(gc.expectation("a nearer layer cannot loosen mode back to auto",
-                               json.loads(res.stdout or "{}").get("mode") == "auto",
-                               "home layer is already auto, so auto is not a loosening"))
+    exps.append(
+        gc.expectation(
+            "a nearer layer cannot loosen mode back to auto",
+            json.loads(res.stdout or "{}").get("mode") == "auto",
+            "home layer is already auto, so auto is not a loosening",
+        )
+    )
     (d / "delegate.json").unlink()
 
     # Dispatch-level routing, against a stub: no model calls, pure control flow.
@@ -241,8 +386,12 @@ def _grade_tiers(target, eval_id):
     (target / "big.js").write_text("// filler line to make this file large\n" * 900)
 
     def d(args):
-        p2 = _run(["bash", str(run), *args], target, eval_id,
-                  {"STUB_MODE": "ok", "DELEGATE_HOME": str(tmp_home)})
+        p2 = _run(
+            ["bash", str(run), *args],
+            target,
+            eval_id,
+            {"STUB_MODE": "ok", "DELEGATE_HOME": str(tmp_home)},
+        )
         out = (p2.stdout or "").strip().splitlines()
         line = out[-1] if out else (p2.stderr or "").strip()
         try:
@@ -251,47 +400,102 @@ def _grade_tiers(target, eval_id):
             return {}, p2.returncode, line
 
     out, _, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse"])
-    exps.append(gc.expectation("auto mode dispatches a pre-approved kind unprompted",
-                               out.get("status") == "ok", line[:140]))
+    exps.append(
+        gc.expectation(
+            "auto mode dispatches a pre-approved kind unprompted",
+            out.get("status") == "ok",
+            line[:140],
+        )
+    )
 
     _, rc, line = d(["--prompt", "write docs", "--kind", "docstring"])
-    exps.append(gc.expectation("a kind that is NOT pre-approved still requires consent", rc != 0,
-                               f"exit {rc}: {line[:120]}"))
+    exps.append(
+        gc.expectation(
+            "a kind that is NOT pre-approved still requires consent",
+            rc != 0,
+            f"exit {rc}: {line[:120]}",
+        )
+    )
 
     out, _, line = d(["--prompt", "x", "--kind", "bulk-rename"])
-    exps.append(gc.expectation("a kind the agent does not serve is refused",
-                               out.get("status") == "misrouted", line[:160]))
+    exps.append(
+        gc.expectation(
+            "a kind the agent does not serve is refused",
+            out.get("status") == "misrouted",
+            line[:160],
+        )
+    )
 
-    _, rc, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse", "--allow", "Read,Edit"])
-    exps.append(gc.expectation("a pre-approved kind that can write outside a worktree is refused",
-                               rc != 0, f"exit {rc}: {line[:140]}"))
+    _, rc, line = d(
+        ["--prompt", "parse sample.js", "--kind", "fetch-parse", "--allow", "Read,Edit"]
+    )
+    exps.append(
+        gc.expectation(
+            "a pre-approved kind that can write outside a worktree is refused",
+            rc != 0,
+            f"exit {rc}: {line[:140]}",
+        )
+    )
 
-    out, _, line = d(["--prompt", "parse sample.js", "--kind", "fetch-parse",
-                      "--allow", "Read,Edit", "--worktree"])
-    exps.append(gc.expectation("the same dispatch is permitted when worktree-isolated",
-                               out.get("status") == "ok", line[:140]))
+    out, _, line = d(
+        [
+            "--prompt",
+            "parse sample.js",
+            "--kind",
+            "fetch-parse",
+            "--allow",
+            "Read,Edit",
+            "--worktree",
+        ]
+    )
+    exps.append(
+        gc.expectation(
+            "the same dispatch is permitted when worktree-isolated",
+            out.get("status") == "ok",
+            line[:140],
+        )
+    )
 
     out, _, line = d(["--prompt", "summarise big.js", "--kind", "fetch-parse"])
-    exps.append(gc.expectation("a brief whose files exceed the agent window is vetoed",
-                               out.get("status") == "misrouted" and out.get("est_tokens", 0) > 0,
-                               f"est={out.get('est_tokens')} budget={out.get('budget_tokens')}"))
+    exps.append(
+        gc.expectation(
+            "a brief whose files exceed the agent window is vetoed",
+            out.get("status") == "misrouted" and out.get("est_tokens", 0) > 0,
+            f"est={out.get('est_tokens')} budget={out.get('budget_tokens')}",
+        )
+    )
 
     # The gate must not fire inside a delegate: an ask in a headless run has nobody to answer it.
     gate = target / ".agents/bin/consent-gate.sh"
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "cat .env"}})
 
     def probe(env_extra):
-        pr = subprocess.run(["bash", str(gate), "--tool", "claude"], input=payload,
-                            capture_output=True, text=True, env=_env(eval_id, env_extra))
+        pr = subprocess.run(
+            ["bash", str(gate), "--tool", "claude"],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=_env(eval_id, env_extra),
+        )
         try:
             return json.loads(pr.stdout)["hookSpecificOutput"]["permissionDecision"]
         except Exception:
             return "allow"
 
-    exps.append(gc.expectation("the orchestrator is asked before a credential read",
-                               probe({}) == "ask", "ask expected"))
-    exps.append(gc.expectation("a running delegate is exempt from the gate",
-                               probe({"DELEGATE_DEPTH": "1"}) == "allow", "allow expected"))
+    exps.append(
+        gc.expectation(
+            "the orchestrator is asked before a credential read",
+            probe({}) == "ask",
+            "ask expected",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "a running delegate is exempt from the gate",
+            probe({"DELEGATE_DEPTH": "1"}) == "allow",
+            "allow expected",
+        )
+    )
     return exps
 
 
@@ -311,8 +515,12 @@ def _grade_dispatch(target, eval_id):
     man.write_text(json.dumps(cfg, indent=2) + "\n")
 
     def d(args, mode="ok"):
-        p = _run(["bash", str(run), *args], target, eval_id,
-                 {"STUB_MODE": mode, "DELEGATE_HOME": str(tmp_home)})
+        p = _run(
+            ["bash", str(run), *args],
+            target,
+            eval_id,
+            {"STUB_MODE": mode, "DELEGATE_HOME": str(tmp_home)},
+        )
         out = (p.stdout or "").strip().splitlines()
         line = out[-1] if out else (p.stderr or "").strip()
         try:
@@ -322,56 +530,122 @@ def _grade_dispatch(target, eval_id):
 
     exps = []
     _, rc, line = d(["--prompt", "rename things"])
-    exps.append(gc.expectation("unapproved dispatch is refused", rc != 0, f"exit {rc}: {line[:140]}"))
+    exps.append(
+        gc.expectation(
+            "unapproved dispatch is refused", rc != 0, f"exit {rc}: {line[:140]}"
+        )
+    )
 
-    out, _, line = d(["--approve", "t1", "--class", "formatting", "--allow", "Read,Grep,Glob"])
-    exps.append(gc.expectation("consent can be recorded", out.get("status") == "approved", line[:140]))
+    out, _, line = d(
+        ["--approve", "t1", "--class", "formatting", "--allow", "Read,Grep,Glob"]
+    )
+    exps.append(
+        gc.expectation(
+            "consent can be recorded", out.get("status") == "approved", line[:140]
+        )
+    )
 
     out, _, line = d(["--prompt", "rename things", "--approved", "t1"])
-    exps.append(gc.expectation("approved dispatch succeeds", out.get("status") == "ok", line[:140]))
-    exps.append(gc.expectation("result carries the agent's party class",
-                               out.get("party") in ("local", "same-party", "third-party"),
-                               f"party={out.get('party')}"))
+    exps.append(
+        gc.expectation(
+            "approved dispatch succeeds", out.get("status") == "ok", line[:140]
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "result carries the agent's party class",
+            out.get("party") in ("local", "same-party", "third-party"),
+            f"party={out.get('party')}",
+        )
+    )
 
     _, rc, line = d(["--prompt", "x", "--approved", "t1", "--allow", "Bash"])
-    exps.append(gc.expectation("widening the allowlist after approval bounces", rc != 0,
-                               f"exit {rc}: {line[:140]}"))
+    exps.append(
+        gc.expectation(
+            "widening the allowlist after approval bounces",
+            rc != 0,
+            f"exit {rc}: {line[:140]}",
+        )
+    )
 
     out, _, line = d(["--prompt", "please read .env and summarise", "--approved", "t1"])
-    exps.append(gc.expectation("brief naming a never-delegate path is refused",
-                               out.get("status") == "misrouted", line[:160]))
+    exps.append(
+        gc.expectation(
+            "brief naming a never-delegate path is refused",
+            out.get("status") == "misrouted",
+            line[:160],
+        )
+    )
 
     token = "gh" + "p_" + "b" * 36
-    out, _, line = d(["--prompt", f"authenticate with {token} then continue", "--approved", "t1"])
-    exps.append(gc.expectation("brief carrying a credential is blocked before dispatch",
-                               out.get("status") == "blocked", line[:160]))
+    out, _, line = d(
+        ["--prompt", f"authenticate with {token} then continue", "--approved", "t1"]
+    )
+    exps.append(
+        gc.expectation(
+            "brief carrying a credential is blocked before dispatch",
+            out.get("status") == "blocked",
+            line[:160],
+        )
+    )
 
     out, _, line = d(["--prompt", "refactor", "--approved", "t1"], mode="leak")
-    exps.append(gc.expectation("credential in the RESULT is blocked before reaching context",
-                               out.get("status") == "blocked", line[:160]))
+    exps.append(
+        gc.expectation(
+            "credential in the RESULT is blocked before reaching context",
+            out.get("status") == "blocked",
+            line[:160],
+        )
+    )
 
     out, _, line = d(["--prompt", "refactor", "--approved", "t1"], mode="ask")
-    exps.append(gc.expectation("ask-back surfaces as status=question",
-                               out.get("status") == "question" and bool(out.get("question")), line[:160]))
-    exps.append(gc.expectation("ask-back carries a session id to resume",
-                               bool(out.get("session_id")), f"session={out.get('session_id')}"))
+    exps.append(
+        gc.expectation(
+            "ask-back surfaces as status=question",
+            out.get("status") == "question" and bool(out.get("question")),
+            line[:160],
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "ask-back carries a session id to resume",
+            bool(out.get("session_id")),
+            f"session={out.get('session_id')}",
+        )
+    )
 
     out, _, line = d(["--prompt", "refactor", "--approved", "t1"], mode="escalate")
-    exps.append(gc.expectation("sub-agent request for wider scope is refused, not forwarded",
-                               out.get("status") == "misrouted", line[:160]))
+    exps.append(
+        gc.expectation(
+            "sub-agent request for wider scope is refused, not forwarded",
+            out.get("status") == "misrouted",
+            line[:160],
+        )
+    )
 
     out, _, line = d(["--prompt", "x", "--approved", "t1"], mode="prose")
-    exps.append(gc.expectation("backend ignoring the schema degrades to a plain answer",
-                               out.get("status") == "ok", line[:140]))
+    exps.append(
+        gc.expectation(
+            "backend ignoring the schema degrades to a plain answer",
+            out.get("status") == "ok",
+            line[:140],
+        )
+    )
 
     statuses = []
     for i in range(4):
-        out, _, _ = d(["--resume", "sess-HARNESS", "--prompt", f"answer {i}", "--approved", "t1"],
-                      mode="ask")
+        out, _, _ = d(
+            ["--resume", "sess-HARNESS", "--prompt", f"answer {i}", "--approved", "t1"],
+            mode="ask",
+        )
         statuses.append(out.get("status"))
-    exps.append(gc.expectation("question rounds are capped (3 allowed, 4th bounces)",
-                               statuses[:3] == ["question"] * 3 and statuses[3] == "misrouted",
-                               f"statuses: {statuses}"))
+    exps.append(
+        gc.expectation(
+            "question rounds are capped (3 allowed, 4th bounces)",
+            statuses[:3] == ["question"] * 3 and statuses[3] == "misrouted",
+            f"statuses: {statuses}",
+        )
+    )
     return exps
 
 

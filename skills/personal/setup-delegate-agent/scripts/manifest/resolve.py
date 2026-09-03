@@ -60,7 +60,12 @@ MANIFEST = os.path.join(".agents", "delegate.json")
 ADAPTERS = {
     # schema:  how a forced output shape is expressed (needed for the ask-back protocol)
     # tools:   how faithfully a per-tool allowlist can be applied
-    "claude": {"schema": "inline", "tools": "fine", "resume": True, "vendor": "anthropic"},
+    "claude": {
+        "schema": "inline",
+        "tools": "fine",
+        "resume": True,
+        "vendor": "anthropic",
+    },
     "codex": {"schema": "file", "tools": "coarse", "resume": True, "vendor": "openai"},
     "copilot": {"schema": "none", "tools": "kind", "resume": True, "vendor": "github"},
     "gemini": {"schema": "none", "tools": "policy", "resume": True, "vendor": "google"},
@@ -90,15 +95,24 @@ def ancestors(scope: str, home: str) -> list[str]:
 
 def in_git_worktree(d: str) -> bool:
     try:
-        r = subprocess.run(["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
-                           capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            ["git", "-C", d, "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         return r.returncode == 0 and r.stdout.strip() == "true"
     except Exception:  # noqa: BLE001
         return False
 
 
-def classify_party(base_url: str | None, adapter: str, vendor: str | None,
-                   primary_vendor: str | None, local_provider: str | None) -> str:
+def classify_party(
+    base_url: str | None,
+    adapter: str,
+    vendor: str | None,
+    primary_vendor: str | None,
+    local_provider: str | None,
+) -> str:
     """local | same-party | third-party.
 
     `local` means the work never leaves the machine. `same-party` means it goes to a vendor who
@@ -133,8 +147,15 @@ def classify_party(base_url: str | None, adapter: str, vendor: str | None,
 
 def read_settings(path: str, warnings: list[str]) -> dict:
     """Read a CLI's own settings file for base URL / model / context. Never returns the token."""
-    out = {"path": path, "base_url": None, "model": None, "context": None,
-           "has_token": False, "mode": None, "world_readable": None}
+    out = {
+        "path": path,
+        "base_url": None,
+        "model": None,
+        "context": None,
+        "has_token": False,
+        "mode": None,
+        "world_readable": None,
+    }
     if not os.path.isfile(path):
         warnings.append(f"{path} does not exist")
         return out
@@ -154,8 +175,11 @@ def read_settings(path: str, warnings: list[str]) -> dict:
     env = data.get("env") if isinstance(data.get("env"), dict) else {}
     out["base_url"] = env.get("ANTHROPIC_BASE_URL") or env.get("OPENAI_BASE_URL")
     out["model"] = data.get("model") or env.get("ANTHROPIC_MODEL")
-    out["has_token"] = bool(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")
-                            or env.get("OPENAI_API_KEY"))
+    out["has_token"] = bool(
+        env.get("ANTHROPIC_AUTH_TOKEN")
+        or env.get("ANTHROPIC_API_KEY")
+        or env.get("OPENAI_API_KEY")
+    )
     raw = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS")
     if raw is not None:
         try:
@@ -174,7 +198,9 @@ def _slist(v, where, field, errors, pattern=None):
     if pattern:
         bad = [x for x in v if not pattern.match(x)]
         if bad:
-            errors.append(f"{where}: {field} entries must match {pattern.pattern} (got {bad!r})")
+            errors.append(
+                f"{where}: {field} entries must match {pattern.pattern} (got {bad!r})"
+            )
             return [x for x in v if pattern.match(x)]
     return v
 
@@ -192,7 +218,7 @@ def load_agents(path, data, may_define, errors, warnings):
         errors.append(
             f'{path}: this layer is inside a git work tree and may not define "agents". A '
             f"committed manifest that could add an agent would add an egress target to every "
-            f'clone. Define it in an uncommittable layer (~/.agents/delegate.json or a workspace '
+            f"clone. Define it in an uncommittable layer (~/.agents/delegate.json or a workspace "
             f'directory) and narrow here with "allow" instead.'
         )
         return {}
@@ -211,7 +237,9 @@ def load_agents(path, data, may_define, errors, warnings):
             continue
         adapter = a.get("adapter")
         if adapter not in ADAPTERS:
-            errors.append(f"{where}: adapter must be one of {sorted(ADAPTERS)} (got {adapter!r})")
+            errors.append(
+                f"{where}: adapter must be one of {sorted(ADAPTERS)} (got {adapter!r})"
+            )
             continue
 
         cfg_dir = a.get("configDir")
@@ -222,45 +250,66 @@ def load_agents(path, data, may_define, errors, warnings):
 
         model = a.get("model") or (settings or {}).get("model")
         if not isinstance(model, str) or not model:
-            errors.append(f'{where}: needs a "model" (or a configDir whose settings supply one)')
+            errors.append(
+                f'{where}: needs a "model" (or a configDir whose settings supply one)'
+            )
             continue
 
         base_url = a.get("baseUrl") or (settings or {}).get("base_url")
         local_provider = a.get("localProvider")
         if local_provider and adapter != "codex":
-            errors.append(f"{where}: localProvider is only meaningful for the codex adapter")
+            errors.append(
+                f"{where}: localProvider is only meaningful for the codex adapter"
+            )
             continue
 
         ctx = a.get("context") or (settings or {}).get("context")
-        if ctx is not None and (not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0):
+        if ctx is not None and (
+            not isinstance(ctx, int) or isinstance(ctx, bool) or ctx <= 0
+        ):
             errors.append(f"{where}: context must be a positive integer")
             continue
 
         rank = a.get("rank", 50)
         if not isinstance(rank, int) or isinstance(rank, bool) or rank < 0:
-            errors.append(f"{where}: rank must be a non-negative integer (lower is tried first)")
+            errors.append(
+                f"{where}: rank must be a non-negative integer (lower is tried first)"
+            )
             continue
         kinds = _slist(a.get("kinds"), where, "kinds", errors, KIND_RE)
 
         out[name] = {
-            "name": name, "adapter": adapter, "model": model,
+            "name": name,
+            "adapter": adapter,
+            "model": model,
             # Rank orders the ladder; kinds say what this agent is for. "*" means any kind, which
             # is what makes a capable same-party agent usable as the catch-all fallback.
-            "rank": rank, "kinds": kinds if kinds is not None else ["*"],
+            "rank": rank,
+            "kinds": kinds if kinds is not None else ["*"],
             "command": a.get("command") or adapter,
-            "base_url": base_url, "config_dir": cfg_dir if isinstance(cfg_dir, str) else None,
-            "local_provider": local_provider, "vendor": a.get("vendor"),
-            "context": ctx, "notes": a.get("notes", "") if isinstance(a.get("notes"), str) else "",
+            "base_url": base_url,
+            "config_dir": cfg_dir if isinstance(cfg_dir, str) else None,
+            "local_provider": local_provider,
+            "vendor": a.get("vendor"),
+            "context": ctx,
+            "notes": a.get("notes", "") if isinstance(a.get("notes"), str) else "",
             "settings_world_readable": (settings or {}).get("world_readable"),
             "settings_path": (settings or {}).get("path"),
             "settings_mode": (settings or {}).get("mode"),
             "has_token": (settings or {}).get("has_token", False),
-            "layer": path, "capabilities": dict(ADAPTERS[adapter]),
+            "layer": path,
+            "capabilities": dict(ADAPTERS[adapter]),
             # Base limits; policy layers may only tighten these.
             "allow_tools": a.get("allowTools", DEFAULT_ALLOW_TOOLS),
             "allow_models": _slist(a.get("allowModels"), where, "allowModels", errors),
-            "auto_approve": _slist(a.get("autoApprove"), where, "autoApprove", errors, CLASS_RE) or [],
-            "always_ask": _slist(a.get("alwaysAsk"), where, "alwaysAsk", errors, CLASS_RE) or [],
+            "auto_approve": _slist(
+                a.get("autoApprove"), where, "autoApprove", errors, CLASS_RE
+            )
+            or [],
+            "always_ask": _slist(
+                a.get("alwaysAsk"), where, "alwaysAsk", errors, CLASS_RE
+            )
+            or [],
             "max_question_rounds": a.get("maxQuestionRounds", DEFAULT_ROUNDS),
             "max_turns": a.get("maxTurns", 25),
             "timeout": a.get("timeout", 1800),
@@ -280,12 +329,16 @@ def tighten(agent, pol, where, errors):
             errors.append(f"{where}: allowTools must be a string")
         else:
             agent["allow_tools"] = ",".join(
-                sorted(_toolset(agent["allow_tools"]) & _toolset(pol["allowTools"])))
+                sorted(_toolset(agent["allow_tools"]) & _toolset(pol["allowTools"]))
+            )
     if "allowModels" in pol:
         v = _slist(pol["allowModels"], where, "allowModels", errors)
         if v is not None:
-            agent["allow_models"] = sorted(set(v) if agent["allow_models"] is None
-                                           else set(agent["allow_models"]) & set(v))
+            agent["allow_models"] = sorted(
+                set(v)
+                if agent["allow_models"] is None
+                else set(agent["allow_models"]) & set(v)
+            )
     if "autoApprove" in pol:
         v = _slist(pol["autoApprove"], where, "autoApprove", errors, CLASS_RE)
         if v is not None:
@@ -294,8 +347,11 @@ def tighten(agent, pol, where, errors):
         v = _slist(pol["alwaysAsk"], where, "alwaysAsk", errors, CLASS_RE)
         if v is not None:
             agent["always_ask"] = sorted(set(agent["always_ask"]) | set(v))
-    for key, field in (("maxQuestionRounds", "max_question_rounds"),
-                       ("maxTurns", "max_turns"), ("timeout", "timeout")):
+    for key, field in (
+        ("maxQuestionRounds", "max_question_rounds"),
+        ("maxTurns", "max_turns"),
+        ("timeout", "timeout"),
+    ):
         if key in pol:
             v = pol[key]
             if not isinstance(v, int) or isinstance(v, bool) or v < 0:
@@ -310,7 +366,9 @@ def tighten(agent, pol, where, errors):
             errors.append(f"{where}: requireParty must be one of {sorted(PARTY_RANK)}")
         else:
             cur = agent["require_party"]
-            agent["require_party"] = v if cur is None or PARTY_RANK[v] < PARTY_RANK[cur] else cur
+            agent["require_party"] = (
+                v if cur is None or PARTY_RANK[v] < PARTY_RANK[cur] else cur
+            )
 
 
 def _selftest() -> int:
@@ -338,7 +396,9 @@ def _selftest() -> int:
 
         # --- order: outermost first, the scope itself last (nearest wins) --------------------
         assert got[-1] == deep, got[-3:]
-        assert got.index(os.path.dirname(deep)) < got.index(deep), "parents precede children"
+        assert got.index(os.path.dirname(deep)) < got.index(
+            deep
+        ), "parents precede children"
         assert got[0] == os.sep or got[0] == home, got[:2]
 
         # --- every ancestor of the scope is present, none skipped ----------------------------
@@ -355,7 +415,9 @@ def _selftest() -> int:
         # resolvers' "user" layer — so a cascade that omitted it would silently drop personal
         # agent declarations.
         assert home in got, got
-        assert got.count(home) == 1, "no layer may appear twice, or it would be applied twice"
+        assert (
+            got.count(home) == 1
+        ), "no layer may appear twice, or it would be applied twice"
 
         # A $HOME that IS an ancestor is not duplicated, and keeps its natural position.
         inside = ancestors(deep, os.path.join(td, "ws"))
@@ -374,7 +436,9 @@ def _selftest() -> int:
 def main() -> int:  # noqa: C901
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", required=True)
-    ap.add_argument("--home", default=os.environ.get("DELEGATE_HOME") or os.path.expanduser("~"))
+    ap.add_argument(
+        "--home", default=os.environ.get("DELEGATE_HOME") or os.path.expanduser("~")
+    )
     args = ap.parse_args()
 
     scope = os.path.realpath(args.scope)
@@ -401,7 +465,9 @@ def main() -> int:  # noqa: C901
             errors.append(f"{f}: expected a JSON object")
             continue
         if data.get("version", 1) != 1:
-            warnings.append(f"{f}: unknown version {data.get('version')!r} — parsing as version 1")
+            warnings.append(
+                f"{f}: unknown version {data.get('version')!r} — parsing as version 1"
+            )
 
         agents.update(load_agents(f, data, not committable, errors, warnings))
 
@@ -425,7 +491,11 @@ def main() -> int:  # noqa: C901
                 # A nearer layer may only make delegation MORE restrictive, same as every other
                 # knob: off beats manual beats auto.
                 order = {"auto": 0, "manual": 1, "off": 2}
-                mode = data["mode"] if mode is None or order[data["mode"]] > order[mode] else mode
+                mode = (
+                    data["mode"]
+                    if mode is None or order[data["mode"]] > order[mode]
+                    else mode
+                )
                 mode_layer = f
         if isinstance(data.get("policy"), dict):
             policies.append((f, data["policy"]))
@@ -433,66 +503,102 @@ def main() -> int:  # noqa: C901
     # Party depends on the primary assistant, so it is computed after every layer has been read.
     primary_vendor = ADAPTERS.get(primary, {}).get("vendor") if primary else None
     if primary and primary not in ADAPTERS:
-        warnings.append(f"primary {primary!r} is not a known adapter — party falls back to third-party")
+        warnings.append(
+            f"primary {primary!r} is not a known adapter — party falls back to third-party"
+        )
     for a in agents.values():
-        a["party"] = classify_party(a["base_url"], a["adapter"], a["vendor"],
-                                    primary_vendor, a["local_provider"])
+        a["party"] = classify_party(
+            a["base_url"],
+            a["adapter"],
+            a["vendor"],
+            primary_vendor,
+            a["local_provider"],
+        )
 
     # Narrowing after every layer, so `allow` is the intersection of all of them.
     if allow is not None:
         for name in sorted(allow):
             if name not in agents:
-                warnings.append(f"allow lists {name!r}, which no layer defines — it grants nothing")
+                warnings.append(
+                    f"allow lists {name!r}, which no layer defines — it grants nothing"
+                )
         dropped = sorted(set(agents) - allow)
         for name in dropped:
             agents.pop(name)
         if dropped:
             narrowed.append({"effect": "dropped", "agents": dropped})
         if not agents:
-            errors.append("the allow lists intersect to nothing — no agent is permitted here")
+            errors.append(
+                "the allow lists intersect to nothing — no agent is permitted here"
+            )
 
     for f, pol in policies:
         for key, block in pol.items():
-            targets = agents.values() if key == "*" else [agents[key]] if key in agents else []
+            targets = (
+                agents.values()
+                if key == "*"
+                else [agents[key]] if key in agents else []
+            )
             for a in targets:
                 tighten(a, block, f"{f}[policy.{key}]", errors)
 
     for a in list(agents.values()):
         rp = a["require_party"]
         if rp and PARTY_RANK[a["party"]] > PARTY_RANK[rp]:
-            narrowed.append({"effect": "party", "agent": a["name"],
-                             "required": rp, "actual": a["party"]})
+            narrowed.append(
+                {
+                    "effect": "party",
+                    "agent": a["name"],
+                    "required": rp,
+                    "actual": a["party"],
+                }
+            )
             agents.pop(a["name"])
             continue
         if a["allow_models"] is not None and a["model"] not in a["allow_models"]:
-            narrowed.append({"effect": "model", "agent": a["name"],
-                             "model": a["model"], "allowed": a["allow_models"]})
+            narrowed.append(
+                {
+                    "effect": "model",
+                    "agent": a["name"],
+                    "model": a["model"],
+                    "allowed": a["allow_models"],
+                }
+            )
             agents.pop(a["name"])
             continue
         # A capability that cannot be enforced must be visible, not assumed.
         if a["capabilities"]["schema"] == "none":
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter cannot force an output schema, so "
-                f"ask-back is best-effort — a blocked sub-agent may return prose instead of a question")
+                f"ask-back is best-effort — a blocked sub-agent may return prose instead of a question"
+            )
         if a["capabilities"]["tools"] == "kind" and _toolset(a["allow_tools"]):
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter scopes by permission kind (shell, write, "
                 f"url), not by tool name — {a['allow_tools']!r} is mapped onto those kinds, not "
-                f"enforced tool-by-tool")
+                f"enforced tool-by-tool"
+            )
         if a["capabilities"]["tools"] == "coarse" and _toolset(a["allow_tools"]):
             warnings.append(
                 f"{a['name']}: the {a['adapter']} adapter has sandbox levels, not a per-tool "
-                f"allowlist — {a['allow_tools']!r} is approximated, not enforced tool-by-tool")
-        unknown = [k for k in a["auto_approve"]
-                   if "*" not in a["kinds"] and k not in a["kinds"]]
+                f"allowlist — {a['allow_tools']!r} is approximated, not enforced tool-by-tool"
+            )
+        unknown = [
+            k
+            for k in a["auto_approve"]
+            if "*" not in a["kinds"] and k not in a["kinds"]
+        ]
         if unknown:
             errors.append(
                 f"{a['name']}: autoApprove names {unknown!r}, which are not in this agent's kinds "
                 f"{a['kinds']!r}. Pre-approving a kind an agent does not serve would dispatch "
-                f"unprompted work to an agent that was never assessed for it.")
+                f"unprompted work to an agent that was never assessed for it."
+            )
         if a["settings_world_readable"]:
-            warnings.append(f"{a['settings_path']} is mode {a['settings_mode']} and holds a token "
-                            f"— group/world readable. Consider: chmod 600 {a['settings_path']}")
+            warnings.append(
+                f"{a['settings_path']} is mode {a['settings_mode']} and holds a token "
+                f"— group/world readable. Consider: chmod 600 {a['settings_path']}"
+            )
 
     # Default selection. A repo that narrows away the machine-wide default is the NORMAL case,
     # not a misconfiguration, so fall back rather than erroring — and say which layer caused it.
@@ -500,31 +606,48 @@ def main() -> int:  # noqa: C901
     if default is not None and default not in agents:
         if len(agents) == 1:
             only = next(iter(agents))
-            default_reason = (f"{default!r} (set by {default_layer}) is not permitted here; "
-                              f"fell back to the only permitted agent {only!r}")
+            default_reason = (
+                f"{default!r} (set by {default_layer}) is not permitted here; "
+                f"fell back to the only permitted agent {only!r}"
+            )
             default = only
             default_layer = "fallback"
         else:
             errors.append(
                 f"default {default!r} (set by {default_layer}) is not permitted here, and "
-                f"{len(agents)} agents remain — declare a default in this scope")
+                f"{len(agents)} agents remain — declare a default in this scope"
+            )
             default = None
     if default is None and len(agents) == 1:
         default, default_layer = next(iter(agents)), "implicit"
 
     seen = set()
-    json.dump({
-        "scope": scope,
-        "layers": layers,
-        "primary": primary, "primary_layer": primary_layer, "primary_vendor": primary_vendor,
-        "agents": sorted(agents.values(), key=lambda a: a["name"]),
-        "default": default, "default_layer": default_layer, "default_reason": default_reason,
-        # The ladder: try lower ranks first. Ties break by name so the order is stable across runs.
-        "prefer": [a["name"] for a in sorted(agents.values(), key=lambda x: (x["rank"], x["name"]))],
-        "mode": mode or "manual", "mode_layer": mode_layer,
-        "never_delegate": [n for n in never if not (n in seen or seen.add(n))],
-        "narrowed": narrowed, "warnings": warnings, "errors": errors,
-    }, sys.stdout, indent=2)
+    json.dump(
+        {
+            "scope": scope,
+            "layers": layers,
+            "primary": primary,
+            "primary_layer": primary_layer,
+            "primary_vendor": primary_vendor,
+            "agents": sorted(agents.values(), key=lambda a: a["name"]),
+            "default": default,
+            "default_layer": default_layer,
+            "default_reason": default_reason,
+            # The ladder: try lower ranks first. Ties break by name so the order is stable across runs.
+            "prefer": [
+                a["name"]
+                for a in sorted(agents.values(), key=lambda x: (x["rank"], x["name"]))
+            ],
+            "mode": mode or "manual",
+            "mode_layer": mode_layer,
+            "never_delegate": [n for n in never if not (n in seen or seen.add(n))],
+            "narrowed": narrowed,
+            "warnings": warnings,
+            "errors": errors,
+        },
+        sys.stdout,
+        indent=2,
+    )
     sys.stdout.write("\n")
     return 1 if errors else 0
 

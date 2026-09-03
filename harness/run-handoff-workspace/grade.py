@@ -38,8 +38,13 @@ os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
 def _handoff(target, *args, session="sess-RH"):
     ho = Path(target) / HD / "handoff"
     env = {**os.environ, "HANDOFF_SESSION_ID": session}
-    return subprocess.run(["bash", str(ho), *args], cwd=str(target),
-                          capture_output=True, text=True, env=env)
+    return subprocess.run(
+        ["bash", str(ho), *args],
+        cwd=str(target),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
 
 
 def _frontmatter(path: Path) -> dict:
@@ -59,7 +64,9 @@ def _frontmatter(path: Path) -> dict:
 def grade(target, eval_id):
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
@@ -76,13 +83,35 @@ def _grade(target, eval_id):
         _handoff(target, "claim", "work")
         _handoff(target, "release", "work", "--status", "blocked", "--blocked-on", "up")
         fm = _frontmatter(doc / "work-handoff.md")
-        exps.append(gc.expectation("doc status is blocked", fm.get("status") == "blocked", f"status={fm.get('status')}"))
-        exps.append(gc.expectation("doc records blocked_on", fm.get("blocked_on") == "up-handoff", f"blocked_on={fm.get('blocked_on')}"))
-        exps.append(gc.expectation("lease released", not (doc / ".locks/work-handoff").exists(),
-                                   "lock present: %s" % (doc / ".locks/work-handoff").exists()))
-        exps.append(gc.expectation("doc stays on the open board (not archived)",
-                                   (doc / "work-handoff.md").is_file() and not (doc / "archive/work-handoff.md").exists(),
-                                   "open: %s" % (doc / "work-handoff.md").is_file()))
+        exps.append(
+            gc.expectation(
+                "doc status is blocked",
+                fm.get("status") == "blocked",
+                f"status={fm.get('status')}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "doc records blocked_on",
+                fm.get("blocked_on") == "up-handoff",
+                f"blocked_on={fm.get('blocked_on')}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "lease released",
+                not (doc / ".locks/work-handoff").exists(),
+                "lock present: %s" % (doc / ".locks/work-handoff").exists(),
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "doc stays on the open board (not archived)",
+                (doc / "work-handoff.md").is_file()
+                and not (doc / "archive/work-handoff.md").exists(),
+                "open: %s" % (doc / "work-handoff.md").is_file(),
+            )
+        )
         return exps
 
     if eval_id == "discipline-secrets":
@@ -94,51 +123,102 @@ def _grade(target, eval_id):
         # by the sweep the same feature adds to the verifier, and this grader would fail its own
         # repo's check.
         aws = "AKIA" + "IOSFODNN7EXAMPLE"
-        r = _handoff(target, "new", "leak", "--title", "Leaky", "--note", f"key {aws} here")
+        r = _handoff(
+            target, "new", "leak", "--title", "Leaky", "--note", f"key {aws} here"
+        )
         out = r.stdout + r.stderr
-        exps.append(gc.expectation(
-            "new refuses a credential pasted into a flag",
-            r.returncode != 0 and "aws-access-key-id" in out,
-            f"exit {r.returncode}: {out.strip()[-140:]}"))
-        exps.append(gc.expectation(
-            "the refusal never echoes the value back", aws not in out,
-            "value absent from the refusal"))
+        exps.append(
+            gc.expectation(
+                "new refuses a credential pasted into a flag",
+                r.returncode != 0 and "aws-access-key-id" in out,
+                f"exit {r.returncode}: {out.strip()[-140:]}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "the refusal never echoes the value back",
+                aws not in out,
+                "value absent from the refusal",
+            )
+        )
         # "Nothing was written" has to be literally true, not nearly: the doc is rendered to a
         # temp file precisely so a refusal leaves no half-created doc and no index entry.
-        exps.append(gc.expectation(
-            "and nothing was written", not (doc / "leak-handoff.md").exists(),
-            f"leak-handoff.md present: {(doc / 'leak-handoff.md').exists()}"))
+        exps.append(
+            gc.expectation(
+                "and nothing was written",
+                not (doc / "leak-handoff.md").exists(),
+                f"leak-handoff.md present: {(doc / 'leak-handoff.md').exists()}",
+            )
+        )
 
         # release carries pasted terminal output more often than any other command, and terminal
         # output is where credentials appear.
         _handoff(target, "new", "rel", "--title", "Releasable")
         _handoff(target, "claim", "rel")
-        rr = _handoff(target, "release", "rel", "--status", "done",
-                      "--verified-by", f"ran the suite with {aws}")
-        exps.append(gc.expectation(
-            "release refuses a credential in the evidence",
-            rr.returncode != 0 and "aws-access-key-id" in (rr.stdout + rr.stderr),
-            f"exit {rr.returncode}: {(rr.stdout + rr.stderr).strip()[-140:]}"))
-        exps.append(gc.expectation(
-            "and the doc is untouched — still open, not archived",
-            _frontmatter(doc / "rel-handoff.md").get("status") == "open"
-            and not (doc / "archive/rel-handoff.md").exists(),
-            f"status={_frontmatter(doc / 'rel-handoff.md').get('status')}"))
+        rr = _handoff(
+            target,
+            "release",
+            "rel",
+            "--status",
+            "done",
+            "--verified-by",
+            f"ran the suite with {aws}",
+        )
+        exps.append(
+            gc.expectation(
+                "release refuses a credential in the evidence",
+                rr.returncode != 0 and "aws-access-key-id" in (rr.stdout + rr.stderr),
+                f"exit {rr.returncode}: {(rr.stdout + rr.stderr).strip()[-140:]}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "and the doc is untouched — still open, not archived",
+                _frontmatter(doc / "rel-handoff.md").get("status") == "open"
+                and not (doc / "archive/rel-handoff.md").exists(),
+                f"status={_frontmatter(doc / 'rel-handoff.md').get('status')}",
+            )
+        )
 
         # The override exists because the scanner will misfire on legitimate prose. It is a
         # RECORDED decision, not a silent hole — an override that left no trace would be the
         # same as no scanner.
-        rf = _handoff(target, "new", "leak", "--title", "Leaky", "--note", f"key {aws} here",
-                      "--force-secret", "the vendor's own published example key")
-        exps.append(gc.expectation(
-            "--force-secret gets past it", rf.returncode == 0 and (doc / "leak-handoff.md").is_file(),
-            f"exit {rf.returncode}"))
-        body = (doc / "leak-handoff.md").read_text(encoding="utf-8") if (doc / "leak-handoff.md").is_file() else ""
-        exps.append(gc.expectation(
-            "and the override is recorded on the doc, naming the rule AND the reason",
-            "secret-scan OVERRIDDEN" in body and "aws-access-key-id" in body
-            and "vendor's own published example key" in body,
-            "activity log records the override" if "secret-scan OVERRIDDEN" in body else "no override entry"))
+        rf = _handoff(
+            target,
+            "new",
+            "leak",
+            "--title",
+            "Leaky",
+            "--note",
+            f"key {aws} here",
+            "--force-secret",
+            "the vendor's own published example key",
+        )
+        exps.append(
+            gc.expectation(
+                "--force-secret gets past it",
+                rf.returncode == 0 and (doc / "leak-handoff.md").is_file(),
+                f"exit {rf.returncode}",
+            )
+        )
+        body = (
+            (doc / "leak-handoff.md").read_text(encoding="utf-8")
+            if (doc / "leak-handoff.md").is_file()
+            else ""
+        )
+        exps.append(
+            gc.expectation(
+                "and the override is recorded on the doc, naming the rule AND the reason",
+                "secret-scan OVERRIDDEN" in body
+                and "aws-access-key-id" in body
+                and "vendor's own published example key" in body,
+                (
+                    "activity log records the override"
+                    if "secret-scan OVERRIDDEN" in body
+                    else "no override entry"
+                ),
+            )
+        )
         return exps
 
     if eval_id == "discipline-restricted":
@@ -146,59 +226,127 @@ def _grade(target, eval_id):
         # TOLD, at the two moments it decides what to do next. Export refusal is graded in
         # delegate-handoff's export-restricted case; this asserts the signals that reach a
         # session before it ever gets that far.
-        _handoff(target, "new", "rotate", "--title", "Rotate the signing keys",
-                 "--sensitivity", "restricted")
+        _handoff(
+            target,
+            "new",
+            "rotate",
+            "--title",
+            "Rotate the signing keys",
+            "--sensitivity",
+            "restricted",
+        )
         rc = _handoff(target, "claim", "rotate")
         out = rc.stdout + rc.stderr
-        exps.append(gc.expectation(
-            "claim succeeds — restricted is a handling flag, not a lock",
-            rc.returncode == 0 and (doc / ".locks/rotate-handoff").exists(),
-            f"exit {rc.returncode}; lease held: {(doc / '.locks/rotate-handoff').exists()}"))
-        exps.append(gc.expectation(
-            "claim prints the handling banner", "RESTRICTED" in out,
-            f"banner in output: {'RESTRICTED' in out}"))
-        exps.append(gc.expectation(
-            "the banner says plainly that it is NOT an access control",
-            "not an access control" in out,
-            "the one sentence that stops the flag being read as a permission"))
+        exps.append(
+            gc.expectation(
+                "claim succeeds — restricted is a handling flag, not a lock",
+                rc.returncode == 0 and (doc / ".locks/rotate-handoff").exists(),
+                f"exit {rc.returncode}; lease held: {(doc / '.locks/rotate-handoff').exists()}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "claim prints the handling banner",
+                "RESTRICTED" in out,
+                f"banner in output: {'RESTRICTED' in out}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "the banner says plainly that it is NOT an access control",
+                "not an access control" in out,
+                "the one sentence that stops the flag being read as a permission",
+            )
+        )
         # The session-start banner is where an agent decides what to pick up and what to hand to
         # a cheaper agent. A restricted unit reading as ordinary work there has already lost.
         hooks = doc / "scripts/hooks.sh"
         env = dict(os.environ, HANDOFF_SESSION_ID="sess-RH")
-        hr = subprocess.run(["bash", str(hooks), "--kind", "sessionstart", "--tool", "claude"],
-                            input='{"session_id":"sess-RH"}', cwd=str(target),
-                            capture_output=True, text=True, env=env)
-        exps.append(gc.expectation(
-            "the session-start board marks the restricted row",
-            "RESTRICTED" in hr.stdout,
-            f"marker in banner: {'RESTRICTED' in hr.stdout}"))
-        exps.append(gc.expectation(
-            "while still naming it — the index is not redacted",
-            "Rotate the signing keys" in hr.stdout,
-            "title present in the session banner"))
+        hr = subprocess.run(
+            ["bash", str(hooks), "--kind", "sessionstart", "--tool", "claude"],
+            input='{"session_id":"sess-RH"}',
+            cwd=str(target),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        exps.append(
+            gc.expectation(
+                "the session-start board marks the restricted row",
+                "RESTRICTED" in hr.stdout,
+                f"marker in banner: {'RESTRICTED' in hr.stdout}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "while still naming it — the index is not redacted",
+                "Rotate the signing keys" in hr.stdout,
+                "title present in the session banner",
+            )
+        )
         return exps
 
     # discipline-done (default)
     _handoff(target, "new", "task", "--title", "Ship the task", "--severity", "high")
     created = _frontmatter(doc / "task-handoff.md")
-    exps.append(gc.expectation("filed doc has schema-valid frontmatter (id/title/status)",
-                               created.get("id") == "task-handoff" and created.get("title") == "Ship the task"
-                               and created.get("status") == "open",
-                               f"frontmatter: {created}"))
+    exps.append(
+        gc.expectation(
+            "filed doc has schema-valid frontmatter (id/title/status)",
+            created.get("id") == "task-handoff"
+            and created.get("title") == "Ship the task"
+            and created.get("status") == "open",
+            f"frontmatter: {created}",
+        )
+    )
     _handoff(target, "claim", "task")
-    r = _handoff(target, "release", "task", "--status", "done", "--verified-by", "e2e green: task.e2e.ts")
-    exps.append(gc.expectation("release --status done succeeds with evidence", r.returncode == 0,
-                               f"exit {r.returncode}: {r.stderr.strip()[:100]}"))
+    r = _handoff(
+        target,
+        "release",
+        "task",
+        "--status",
+        "done",
+        "--verified-by",
+        "e2e green: task.e2e.ts",
+    )
+    exps.append(
+        gc.expectation(
+            "release --status done succeeds with evidence",
+            r.returncode == 0,
+            f"exit {r.returncode}: {r.stderr.strip()[:100]}",
+        )
+    )
     archived = doc / "archive/task-handoff.md"
-    exps.append(gc.expectation("doc archived on done", archived.is_file(), f"archived: {archived.is_file()}"))
+    exps.append(
+        gc.expectation(
+            "doc archived on done",
+            archived.is_file(),
+            f"archived: {archived.is_file()}",
+        )
+    )
     if archived.is_file():
         fm = _frontmatter(archived)
-        exps.append(gc.expectation("archived doc stamped verified_at", bool(fm.get("verified_at")),
-                                   f"verified_at={fm.get('verified_at')}"))
-    exps.append(gc.expectation("lease released after done", not (doc / ".locks/task-handoff").exists(),
-                               "lock present: %s" % (doc / ".locks/task-handoff").exists()))
-    exps.append(gc.contains(target, f"{HD}/INDEX.md", "archive/task-handoff.md",
-                            label="INDEX.md regenerated and lists the archived doc"))
+        exps.append(
+            gc.expectation(
+                "archived doc stamped verified_at",
+                bool(fm.get("verified_at")),
+                f"verified_at={fm.get('verified_at')}",
+            )
+        )
+    exps.append(
+        gc.expectation(
+            "lease released after done",
+            not (doc / ".locks/task-handoff").exists(),
+            "lock present: %s" % (doc / ".locks/task-handoff").exists(),
+        )
+    )
+    exps.append(
+        gc.contains(
+            target,
+            f"{HD}/INDEX.md",
+            "archive/task-handoff.md",
+            label="INDEX.md regenerated and lists the archived doc",
+        )
+    )
     return exps
 
 

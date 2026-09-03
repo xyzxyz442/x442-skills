@@ -65,12 +65,15 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
         for m in g["members"]:
             where = "%s/%s" % (g["group"], m["alias"])
             if not m.get("root_commit"):
-                reason = ("not on disk" if not m.get("exists")
-                          else "not a git repo" if not m.get("is_git")
-                          else "has no commits")
+                reason = (
+                    "not on disk"
+                    if not m.get("exists")
+                    else "not a git repo" if not m.get("is_git") else "has no commits"
+                )
                 warnings.append(
                     "no identity recorded for %s (%s) — cross-repo briefs targeting it will "
-                    "render as unverified" % (where, reason))
+                    "render as unverified" % (where, reason)
+                )
                 continue
             # Keyed by (group, audience), matching how the CLI resolves: a handoff only ever acts
             # within its caller's section, so two groups sharing one board may each have their own
@@ -84,19 +87,22 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
             # board_repo_entry, which reads ~/.agents/handoff-locations.json and, failing that,
             # discovers the checkout and caches it). Schema 1 files still READ — their path is
             # accepted as a hint that has to prove itself against this root commit.
-            entries.append({
-                "group": g["group"],
-                "alias": m["alias"],
-                "audience": m["audience"],
-                "rootCommit": m["root_commit"],
-            })
+            entries.append(
+                {
+                    "group": g["group"],
+                    "alias": m["alias"],
+                    "audience": m["audience"],
+                    "rootCommit": m["root_commit"],
+                }
+            )
 
     for (group, aud), wheres in sorted(by_audience.items()):
         if len(wheres) > 1:
             warnings.append(
                 "audience %r is claimed twice inside group %r (%s) — `handoff export` refuses to "
                 "pick between them and degrades to unverified; give them distinct audiences"
-                % (aud, group, ", ".join(sorted(wheres))))
+                % (aud, group, ", ".join(sorted(wheres)))
+            )
 
     # No timestamp and no scope path anywhere in the payload: a re-projection that changes nothing
     # must be byte-identical, or every board with a registry shows up dirty on each run. Written
@@ -116,7 +122,9 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--resolved", required=True, help="resolve.py output, or - for stdin")
+    ap.add_argument(
+        "--resolved", required=True, help="resolve.py output, or - for stdin"
+    )
     ap.add_argument("--board", required=True)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
@@ -141,15 +149,19 @@ def main() -> int:
     n = len(json.loads(want)[GENERATED_KEY]["repos"])
     if args.check:
         if have is None:
-            print("%s: missing — cross-repo briefs cannot resolve their target repo and will "
-                  "render as unverified; re-run the sync" % dest)
+            print(
+                "%s: missing — cross-repo briefs cannot resolve their target repo and will "
+                "render as unverified; re-run the sync" % dest
+            )
             return 1
         # A board still carrying the standalone registry has not been re-synced since the files were
         # consolidated. Reported as drift, which it is: the CLI prefers the consolidated key, so the
         # old file is no longer the answer to anything.
         if os.path.isfile(os.path.join(os.path.realpath(args.board), LEGACY_FILENAME)):
-            print("%s: a standalone repos.json is still present beside it — re-run the sync to "
-                  "consolidate, then delete repos.json" % dest)
+            print(
+                "%s: a standalone repos.json is still present beside it — re-run the sync to "
+                "consolidate, then delete repos.json" % dest
+            )
             return 1
         if have != want:
             print("%s: drift from the manifest — re-run the sync" % dest)
@@ -171,7 +183,10 @@ def main() -> int:
         # a `.superseded` suffix is obvious and reversible where a delete is neither.
         try:
             os.replace(legacy, legacy + ".superseded")
-            print("%s: folded into handoff.json (repos.json.superseded is safe to delete)" % legacy)
+            print(
+                "%s: folded into handoff.json (repos.json.superseded is safe to delete)"
+                % legacy
+            )
         except OSError:
             pass
     print("%s (%d repo(s))" % (dest, n))

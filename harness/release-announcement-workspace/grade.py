@@ -63,39 +63,96 @@ def grade(target, eval_id):
     # Structure — from the skill's `## Structure` section.
     lines = [ln for ln in text.splitlines() if ln.strip()]
     title = lines[0] if lines else ""
-    exps.append(check(f"structure: title line names the version ({VERSION})",
-                      title.startswith("# ") and VERSION in title, f"title: {title[:80]!r}"))
+    exps.append(
+        check(
+            f"structure: title line names the version ({VERSION})",
+            title.startswith("# ") and VERSION in title,
+            f"title: {title[:80]!r}",
+        )
+    )
     body = text.splitlines()[1:] if lines else []
     lede = [ln for ln in _until_heading(body) if ln.strip()]
-    exps.append(check("structure: a lede paragraph follows the title",
-                      bool(lede), f"{len(lede)} prose line(s) before the first section"))
-    exps.append(check("structure: a highlights section exists",
-                      "highlight" in low, f"'highlight' present: {'highlight' in low}"))
-    exps.append(check("structure: Get-it block carries the copy-pasteable upgrade command",
-                      UPGRADE in text, f"{UPGRADE!r} present: {UPGRADE in text}"))
+    exps.append(
+        check(
+            "structure: a lede paragraph follows the title",
+            bool(lede),
+            f"{len(lede)} prose line(s) before the first section",
+        )
+    )
+    exps.append(
+        check(
+            "structure: a highlights section exists",
+            "highlight" in low,
+            f"'highlight' present: {'highlight' in low}",
+        )
+    )
+    exps.append(
+        check(
+            "structure: Get-it block carries the copy-pasteable upgrade command",
+            UPGRADE in text,
+            f"{UPGRADE!r} present: {UPGRADE in text}",
+        )
+    )
     link = COMPARE in text or "CHANGELOG.md" in text
-    exps.append(check("structure: links the compare range or the full changelog",
-                      link, f"compare range or CHANGELOG.md link present: {link}"))
+    exps.append(
+        check(
+            "structure: links the compare range or the full changelog",
+            link,
+            f"compare range or CHANGELOG.md link present: {link}",
+        )
+    )
 
     # Rules — from the skill's `## Rules` section; labels name the rule broken.
     found = [m for m in MARKETING if m in low]
-    exps.append(check("rule: no marketing language",
-                      not found, f"marketing phrases found: {found or 'none'}"))
-    exps.append(check("rule: the non-public upstream is not named",
-                      UPSTREAM not in low, f"{UPSTREAM!r} present: {UPSTREAM in low}"))
-    exps.append(check("rule: no destructive command in the upgrade block",
-                      "rm -rf" not in text, f"'rm -rf' present: {'rm -rf' in text}"))
-    exps.append(check("rule: the status promotion (experimental -> stable) is stated",
-                      "stable" in low, f"'stable' present: {'stable' in low}"))
-    exps.append(check("rule: advisory rate limiting is not overstated as server-enforced",
-                      OVERCLAIM not in low, f"{OVERCLAIM!r} present: {OVERCLAIM in low}"))
+    exps.append(
+        check(
+            "rule: no marketing language",
+            not found,
+            f"marketing phrases found: {found or 'none'}",
+        )
+    )
+    exps.append(
+        check(
+            "rule: the non-public upstream is not named",
+            UPSTREAM not in low,
+            f"{UPSTREAM!r} present: {UPSTREAM in low}",
+        )
+    )
+    exps.append(
+        check(
+            "rule: no destructive command in the upgrade block",
+            "rm -rf" not in text,
+            f"'rm -rf' present: {'rm -rf' in text}",
+        )
+    )
+    exps.append(
+        check(
+            "rule: the status promotion (experimental -> stable) is stated",
+            "stable" in low,
+            f"'stable' present: {'stable' in low}",
+        )
+    )
+    exps.append(
+        check(
+            "rule: advisory rate limiting is not overstated as server-enforced",
+            OVERCLAIM not in low,
+            f"{OVERCLAIM!r} present: {OVERCLAIM in low}",
+        )
+    )
     corpus = _input_corpus(target)
     runs = sorted(set(re.findall(r"\d+", text)))
     invented = [r for r in runs if r not in corpus]
-    exps.append(check("rule: no invented numbers (every digit run traces to the inputs)",
-                      not invented,
-                      f"invented: {invented}" if invented
-                      else f"all {len(runs)} digit run(s) trace to the inputs"))
+    exps.append(
+        check(
+            "rule: no invented numbers (every digit run traces to the inputs)",
+            not invented,
+            (
+                f"invented: {invented}"
+                if invented
+                else f"all {len(runs)} digit run(s) trace to the inputs"
+            ),
+        )
+    )
     return exps
 
 

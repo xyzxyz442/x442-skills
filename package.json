@@ -4,9 +4,11 @@
   "private": true,
   "description": "A collection of model-agnostic agent skills.",
   "scripts": {
-    "format": "prettier --check .",
-    "format:fix": "prettier --write --list-different .",
+    "format": "prettier --check . && scripts/py-tool.sh black --check .",
+    "format:fix": "prettier --write --list-different . && scripts/py-tool.sh black --write .",
     "install:dev": "pnpm install && scripts/husky.sh install",
+    "lint": "scripts/py-tool.sh ruff check .",
+    "lint:fix": "scripts/py-tool.sh ruff check --fix .",
     "lint-staged": "lint-staged",
     "release": "release-it",
     "release:dry-run": "release-it --dry-run",

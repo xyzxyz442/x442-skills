@@ -49,10 +49,14 @@ def file_exists(root: Path, rel: str) -> Expectation:
     if not p.is_file():
         return expectation(f"{rel} exists and is non-empty", False, f"{rel} missing")
     size = p.stat().st_size
-    return expectation(f"{rel} exists and is non-empty", size > 0, f"{rel} size: {size} bytes")
+    return expectation(
+        f"{rel} exists and is non-empty", size > 0, f"{rel} size: {size} bytes"
+    )
 
 
-def contains(root: Path, rel: str, needle: str, *, label: str | None = None) -> Expectation:
+def contains(
+    root: Path, rel: str, needle: str, *, label: str | None = None
+) -> Expectation:
     """Pass if file `root/rel` contains the literal substring `needle`."""
     text = label or f"{rel} contains {needle!r}"
     p = Path(root) / rel
@@ -62,7 +66,9 @@ def contains(root: Path, rel: str, needle: str, *, label: str | None = None) -> 
     return expectation(text, present, f"{needle!r} present: {present}")
 
 
-def not_contains(root: Path, rel: str, needle: str, *, label: str | None = None) -> Expectation:
+def not_contains(
+    root: Path, rel: str, needle: str, *, label: str | None = None
+) -> Expectation:
     """Pass if file `root/rel` does NOT contain the literal substring `needle`.
 
     The negation of contains(). Used to assert a tool did NOT receive the end-of-turn
@@ -108,18 +114,27 @@ def git_diff_empty(target: Path) -> Expectation:
     """
     proc = subprocess.run(
         ["git", "-C", str(target), "status", "--porcelain"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
-        return expectation("re-run produces an empty diff", False, "target is not a git repo")
+        return expectation(
+            "re-run produces an empty diff", False, "target is not a git repo"
+        )
     dirty = proc.stdout.strip()
-    return expectation("re-run produces an empty diff", not dirty, dirty or "working tree clean")
+    return expectation(
+        "re-run produces an empty diff", not dirty, dirty or "working tree clean"
+    )
 
 
-_SUMMARY_RE = re.compile(r"Summary:\s*(\d+)\s+passed,\s*(\d+)\s+warnings,\s*(\d+)\s+failed")
+_SUMMARY_RE = re.compile(
+    r"Summary:\s*(\d+)\s+passed,\s*(\d+)\s+warnings,\s*(\d+)\s+failed"
+)
 
 
-def run_verify_script(script: Path, target: Path, *, env: dict | None = None) -> Expectation:
+def run_verify_script(
+    script: Path, target: Path, *, env: dict | None = None
+) -> Expectation:
     """Run a skill's bundled verify-*.sh against `target` and grade it.
 
     Parses the script's `Summary: N passed, W warnings, F failed` line and its exit code.
@@ -168,7 +183,9 @@ def verify_findings(script: Path, target: Path, *, env: dict | None = None) -> d
         return {}
     proc = subprocess.run(
         ["bash", str(script), str(target), "--json"],
-        capture_output=True, text=True, env=env,
+        capture_output=True,
+        text=True,
+        env=env,
     )
     try:
         doc = json.loads(proc.stdout)
@@ -180,7 +197,9 @@ def verify_findings(script: Path, target: Path, *, env: dict | None = None) -> d
     return out
 
 
-def finding(findings: dict, fid: str, level: str, *, label: str | None = None) -> Expectation:
+def finding(
+    findings: dict, fid: str, level: str, *, label: str | None = None
+) -> Expectation:
     """Assert that check `fid` reported `level`.
 
     Asserts on the ID, never on the message: ids are the stable contract and prose is reworded
@@ -199,23 +218,35 @@ def finding(findings: dict, fid: str, level: str, *, label: str | None = None) -
             # .ahead, .unknown). Saying "did not run" when one of those fired is a lie that sends
             # the reader looking for a check that is working perfectly — name what DID come back.
             siblings = sorted(k for k in findings if k.startswith(fid + "."))
-            known = ("not reported; " + ", ".join(
-                f"{k} came back {findings[k][0]['level']}" for k in siblings)
-                if siblings else "check did not run")
+            known = (
+                "not reported; "
+                + ", ".join(
+                    f"{k} came back {findings[k][0]['level']}" for k in siblings
+                )
+                if siblings
+                else "check did not run"
+            )
         return expectation(text, False, f"{fid}: {known}")
     passed = bool(want & set(got))
     msg = hits[0].get("message", "")
     return expectation(text, passed, f"{fid}: {'/'.join(got)} — {msg[:160]}")
 
 
-def no_findings_at(findings: dict, level: str, *, ignore: "set[str] | None" = None) -> Expectation:
+def no_findings_at(
+    findings: dict, level: str, *, ignore: "set[str] | None" = None
+) -> Expectation:
     """Assert that nothing came back at `level` (e.g. no fails), listing anything that did."""
     ignore = ignore or set()
-    hits = [f for lst in findings.values() for f in lst
-            if f["level"] == level and f["id"] not in ignore]
+    hits = [
+        f
+        for lst in findings.values()
+        for f in lst
+        if f["level"] == level and f["id"] not in ignore
+    ]
     ids = sorted({f["id"] for f in hits})
     return expectation(
-        f"no {level} findings" + (f" (ignoring {', '.join(sorted(ignore))})" if ignore else ""),
+        f"no {level} findings"
+        + (f" (ignoring {', '.join(sorted(ignore))})" if ignore else ""),
         not hits,
         "none" if not hits else f"{len(hits)}: {', '.join(ids)}",
     )
@@ -243,7 +274,9 @@ def _rollup(expectations: list[Expectation]) -> dict:
     }
 
 
-def write_grading(out_path: Path, expectations: list[Expectation], timing: dict | None = None) -> dict:
+def write_grading(
+    out_path: Path, expectations: list[Expectation], timing: dict | None = None
+) -> dict:
     """Roll a list of expectations into a grading.json and write it."""
     grading = {
         "expectations": expectations,
@@ -289,8 +322,10 @@ def payload_cli(start: Path) -> Path:
 
 
 _HARNESS_GIT_ENV = {
-    "GIT_AUTHOR_NAME": "x442-harness", "GIT_AUTHOR_EMAIL": "harness@x442.local",
-    "GIT_COMMITTER_NAME": "x442-harness", "GIT_COMMITTER_EMAIL": "harness@x442.local",
+    "GIT_AUTHOR_NAME": "x442-harness",
+    "GIT_AUTHOR_EMAIL": "harness@x442.local",
+    "GIT_COMMITTER_NAME": "x442-harness",
+    "GIT_COMMITTER_EMAIL": "harness@x442.local",
 }
 
 
@@ -298,9 +333,14 @@ def _git_toplevel(path: Path) -> Path | None:
     """The git working-tree root that contains `path`, or None if `path` is in no repo."""
     proc = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
-    return Path(proc.stdout.strip()).resolve() if proc.returncode == 0 and proc.stdout.strip() else None
+    return (
+        Path(proc.stdout.strip()).resolve()
+        if proc.returncode == 0 and proc.stdout.strip()
+        else None
+    )
 
 
 def git_init_commit(path: Path, message: str = "harness baseline") -> None:
@@ -317,7 +357,8 @@ def git_init_commit(path: Path, message: str = "harness baseline") -> None:
     subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
     subprocess.run(
         ["git", "-C", str(path), "commit", "-q", "--allow-empty", "-m", message],
-        env=env, check=True,
+        env=env,
+        check=True,
     )
 
 
@@ -358,7 +399,9 @@ def eval_kind(workspace_here: Path, eval_id: str | None) -> str | None:
     if not eval_id:
         return None
     try:
-        evals = json.loads((Path(workspace_here) / "evals" / "evals.json").read_text(encoding="utf-8"))
+        evals = json.loads(
+            (Path(workspace_here) / "evals" / "evals.json").read_text(encoding="utf-8")
+        )
     except (OSError, json.JSONDecodeError):
         return None
     for e in evals.get("evals", []):
@@ -396,7 +439,7 @@ def run_grader(grade_fn, argv: list[str]) -> int:
     if "--out" in argv:
         i = argv.index("--out")
         out = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
+        argv = argv[:i] + argv[i + 2 :]
     target = Path(argv[0]).resolve()
     eval_id = argv[1] if len(argv) > 1 else None
 
@@ -419,12 +462,35 @@ def _selftest() -> int:
     s = skipped("optional tool absent", "graphify not installed")
     assert s["skipped"] is True and s["passed"] is False, s
     assert s == json.loads(json.dumps(s)), "skip must JSON round-trip"
-    roll = _rollup([expectation("a", True, "ok"), skipped("b", "n/a"), expectation("c", False, "no")])
-    assert roll == {"pass_rate": 0.5, "passed": 1, "failed": 1, "skipped": 1, "total": 3}, roll
+    roll = _rollup(
+        [
+            expectation("a", True, "ok"),
+            skipped("b", "n/a"),
+            expectation("c", False, "no"),
+        ]
+    )
+    assert roll == {
+        "pass_rate": 0.5,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 1,
+        "total": 3,
+    }, roll
     allskip = _rollup([skipped("x", "n/a")])
-    assert allskip == {"pass_rate": 0.0, "passed": 0, "failed": 0, "skipped": 1, "total": 1}, allskip
+    assert allskip == {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 1,
+        "total": 1,
+    }, allskip
     # run_grader-style exit gate: a run of passes + skips (no fails) exits 0.
-    assert summarize([expectation("a", True, "ok"), skipped("b", "n/a")])["summary"]["failed"] == 0
+    assert (
+        summarize([expectation("a", True, "ok"), skipped("b", "n/a")])["summary"][
+            "failed"
+        ]
+        == 0
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -439,7 +505,9 @@ def _selftest() -> int:
         assert not contains(root, "AGENTS.md", "absent")["passed"]
         assert not_contains(root, "AGENTS.md", "absent")["passed"]
         assert not not_contains(root, "AGENTS.md", "@guidelines")["passed"]
-        assert not not_contains(root, "missing.md", "x")["passed"], "missing file must fail"
+        assert not not_contains(root, "missing.md", "x")[
+            "passed"
+        ], "missing file must fail"
         assert no_fabrication(root, "invented.md")["passed"]
         assert not no_fabrication(root, "AGENTS.md")["passed"]
         assert json_roundtrip(root, "cfg.json")["passed"]
@@ -455,28 +523,45 @@ def _selftest() -> int:
         good = root / "verify-good.sh"
         good.write_text(
             "#!/usr/bin/env bash\necho 'Summary: 8 passed, 1 warnings, 0 failed'\nexit 0\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         exp = run_verify_script(good, root)
         assert exp["passed"], exp
-        assert exp["evidence"] == "Summary: 8 passed, 1 warnings, 0 failed (exit 0)", exp
+        assert (
+            exp["evidence"] == "Summary: 8 passed, 1 warnings, 0 failed (exit 0)"
+        ), exp
 
         fail = root / "verify-fail.sh"
         fail.write_text(
             "#!/usr/bin/env bash\necho 'Summary: 2 passed, 0 warnings, 3 failed'\nexit 1\n",
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         assert not run_verify_script(fail, root)["passed"]
-        assert not run_verify_script(root / "absent.sh", root)["passed"], "missing script must fail"
+        assert not run_verify_script(root / "absent.sh", root)[
+            "passed"
+        ], "missing script must fail"
 
         # A non-repo target must fail rather than passing on an empty `git status`.
         assert not git_diff_empty(root)["passed"]
 
-        grading = write_grading(root / "grading.json", [
-            expectation("a", True, "ok"), expectation("b", False, "nope"),
-        ])
+        grading = write_grading(
+            root / "grading.json",
+            [
+                expectation("a", True, "ok"),
+                expectation("b", False, "nope"),
+            ],
+        )
         assert grading["summary"] == {
-            "pass_rate": 0.5, "passed": 1, "failed": 1, "skipped": 0, "total": 2}
+            "pass_rate": 0.5,
+            "passed": 1,
+            "failed": 1,
+            "skipped": 0,
+            "total": 2,
+        }
         assert (root / "grading.json").is_file()
-        assert summarize([])["summary"]["pass_rate"] == 0.0, "empty must not divide by zero"
+        assert (
+            summarize([])["summary"]["pass_rate"] == 0.0
+        ), "empty must not divide by zero"
 
         # Isolation: a fixture NESTED in an outer repo must be copied out so git_diff_empty and
         # verify-*.sh see the fixture, not the outer tree. Build outer-repo/nested and dirty the
@@ -486,13 +571,21 @@ def _selftest() -> int:
         nested.mkdir(parents=True)
         (nested / "keep.txt").write_text("fixture\n", encoding="utf-8")
         git_init_commit(outer)
-        (outer / "dirty.txt").write_text("outer tree is dirty\n", encoding="utf-8")  # outer only
-        assert not git_diff_empty(nested)["passed"], "nested target must see the dirty OUTER tree"
+        (outer / "dirty.txt").write_text(
+            "outer tree is dirty\n", encoding="utf-8"
+        )  # outer only
+        assert not git_diff_empty(nested)[
+            "passed"
+        ], "nested target must see the dirty OUTER tree"
         graded, cleanup = isolated_git_target(nested)
         try:
             assert graded != nested, "a nested target must be relocated"
-            assert _git_toplevel(graded) == graded, "isolated copy must be its own git root"
-            assert (graded / "keep.txt").is_file(), "isolation must preserve fixture contents"
+            assert (
+                _git_toplevel(graded) == graded
+            ), "isolated copy must be its own git root"
+            assert (
+                graded / "keep.txt"
+            ).is_file(), "isolation must preserve fixture contents"
             assert git_diff_empty(graded)["passed"], "isolated copy must be clean"
         finally:
             cleanup()
@@ -505,7 +598,9 @@ def _selftest() -> int:
         git_init_commit(standalone)
         graded2, cleanup2 = isolated_git_target(standalone)
         try:
-            assert graded2 == standalone.resolve(), "own-root target must not be relocated"
+            assert (
+                graded2 == standalone.resolve()
+            ), "own-root target must not be relocated"
         finally:
             cleanup2()
 
@@ -513,17 +608,26 @@ def _selftest() -> int:
         # file/eval/key all return None rather than raising.
         ws = root / "ws"
         (ws / "evals").mkdir(parents=True)
-        (ws / "evals" / "evals.json").write_text(json.dumps({"evals": [
-            {"id": "fresh", "kind": "pre-state"},
-            {"id": "wired", "kind": "post-state"},
-            {"id": "nolabel"},
-        ]}), encoding="utf-8")
+        (ws / "evals" / "evals.json").write_text(
+            json.dumps(
+                {
+                    "evals": [
+                        {"id": "fresh", "kind": "pre-state"},
+                        {"id": "wired", "kind": "post-state"},
+                        {"id": "nolabel"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         assert eval_kind(ws, "fresh") == "pre-state"
         assert eval_kind(ws, "wired") == "post-state"
         assert eval_kind(ws, "nolabel") is None, "an unlabeled eval has no kind"
         assert eval_kind(ws, "absent") is None, "an unknown eval id has no kind"
         assert eval_kind(ws, None) is None
-        assert eval_kind(root / "no-such-ws", "fresh") is None, "missing evals.json must not raise"
+        assert (
+            eval_kind(root / "no-such-ws", "fresh") is None
+        ), "missing evals.json must not raise"
         pre_state_hint(ws, "fresh")  # smoke: prints to stderr, must not raise
         pre_state_hint(ws, "wired")  # smoke: no-op
 

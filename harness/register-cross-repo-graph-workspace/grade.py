@@ -61,17 +61,25 @@ def _sandbox_home(base: Path) -> tuple[Path, dict]:
     return home, {**os.environ, "HOME": str(home)}
 
 
-def _run_verify(target: Path, env: dict) -> tuple[subprocess.CompletedProcess, gc.Expectation]:
+def _run_verify(
+    target: Path, env: dict
+) -> tuple[subprocess.CompletedProcess, gc.Expectation]:
     """Run verify-cross-repo-graph.sh once; return (proc, summary-expectation).
 
     One run, two uses: the Summary line grades pass/fail, and the raw stdout feeds the behavioral
     assertions (so the verifier is never invoked twice)."""
-    proc = subprocess.run(["bash", str(VERIFY), str(target)], capture_output=True, text=True, env=env)
+    proc = subprocess.run(
+        ["bash", str(VERIFY), str(target)], capture_output=True, text=True, env=env
+    )
     m = gc._SUMMARY_RE.search(proc.stdout)
     summary = m.group(0) if m else "(no Summary line)"
     failed = int(m.group(3)) if m else None
     passed = proc.returncode == 0 and failed == 0
-    exp = gc.expectation("verify-cross-repo-graph.sh passes", passed, f"{summary} (exit {proc.returncode})")
+    exp = gc.expectation(
+        "verify-cross-repo-graph.sh passes",
+        passed,
+        f"{summary} (exit {proc.returncode})",
+    )
     return proc, exp
 
 
@@ -89,7 +97,9 @@ def grade_not_configured(fixture: Path) -> list[gc.Expectation]:
     graded, cleanup = gc.isolated_git_target(fixture)
     sandbox = Path(tempfile.mkdtemp(prefix="x442-xr-nc-"))
     try:
-        _, env = _sandbox_home(sandbox)  # throwaway HOME guarantees no user-layer manifest leaks in
+        _, env = _sandbox_home(
+            sandbox
+        )  # throwaway HOME guarantees no user-layer manifest leaks in
         proc, summary_exp = _run_verify(graded, env)
         not_configured = "not configured" in proc.stdout and proc.returncode == 0
         return [
@@ -112,12 +122,14 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
     # "block drift" message. Fail fast and legibly instead — this is a real environment failure, not
     # an optional-tool skip (graphify, below, is the optional one).
     if shutil.which("code-review-graph") is None:
-        return [gc.expectation(
-            "code-review-graph installed (required to grade cross-repo)",
-            False,
-            "code-review-graph not on PATH — install it (pipx install code-review-graph) or grade "
-            "on a machine that has it; without it sync cannot register the sibling",
-        )]
+        return [
+            gc.expectation(
+                "code-review-graph installed (required to grade cross-repo)",
+                False,
+                "code-review-graph not on PATH — install it (pipx install code-review-graph) or grade "
+                "on a machine that has it; without it sync cannot register the sibling",
+            )
+        ]
     sandbox = Path(tempfile.mkdtemp(prefix="x442-xr-ss-"))
     try:
         work = sandbox / "work"
@@ -135,7 +147,10 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
         # Pre-seed the sandboxed registry so sync sees the sibling as already-registered and never
         # invokes the real CRG binary. The path must equal the resolver's realpath of "../sibling".
         (home / ".code-review-graph" / "registry.json").write_text(
-            json.dumps({"repos": [{"alias": ALIAS, "path": str(sibling.resolve())}]}, indent=2) + "\n",
+            json.dumps(
+                {"repos": [{"alias": ALIAS, "path": str(sibling.resolve())}]}, indent=2
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -145,28 +160,43 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
         gfy_ok = shutil.which("graphify") is not None
         if gfy_ok:
             for repo in (sibling, consumer):
-                subprocess.run(["graphify", "update", "."], cwd=str(repo),
-                               capture_output=True, text=True, env=env)
+                subprocess.run(
+                    ["graphify", "update", "."],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
 
         sync = subprocess.run(
             ["bash", str(SYNC), str(consumer), "--tools", "crg,graphify"],
-            capture_output=True, text=True, env=env,
+            capture_output=True,
+            text=True,
+            env=env,
         )
-        exps = [gc.expectation(
-            "sync-cross-repo-graph.sh completes (exit 0)",
-            sync.returncode == 0,
-            (sync.stderr or sync.stdout).strip().splitlines()[-1] if (sync.stderr or sync.stdout).strip() else "no output",
-        )]
+        exps = [
+            gc.expectation(
+                "sync-cross-repo-graph.sh completes (exit 0)",
+                sync.returncode == 0,
+                (
+                    (sync.stderr or sync.stdout).strip().splitlines()[-1]
+                    if (sync.stderr or sync.stdout).strip()
+                    else "no output"
+                ),
+            )
+        ]
 
         proc, summary_exp = _run_verify(consumer, env)
         exps.append(summary_exp)
 
         block = _block((consumer / "AGENTS.md").read_text(encoding="utf-8"))
-        exps.append(gc.expectation(
-            "AGENTS.md cross-repo block names exactly the in-scope alias",
-            ALIAS in block and "In-scope aliases" in block,
-            f"block names {ALIAS}: {ALIAS in block}; has routing rule: {'In-scope aliases' in block}",
-        ))
+        exps.append(
+            gc.expectation(
+                "AGENTS.md cross-repo block names exactly the in-scope alias",
+                ALIAS in block and "In-scope aliases" in block,
+                f"block names {ALIAS}: {ALIAS in block}; has routing rule: {'In-scope aliases' in block}",
+            )
+        )
         exps.append(gc.file_exists(consumer, CROSS_REPO_STATE))
         if gfy_ok:
             # graphify's per-project merged graph: sync must concatenate this repo's graph with the
@@ -176,19 +206,30 @@ def grade_single_sibling(fixture: Path) -> list[gc.Expectation]:
             # graphify is optional to the skill. Record the un-run facet as a skip rather than
             # dropping it silently, so a graphify-less machine reports reduced coverage instead of a
             # misleading full-green (summary.skipped: 1).
-            print("[grade] graphify not installed — merged-graph coverage skipped", file=sys.stderr)
-            exps.append(gc.skipped(
-                "graphify merged graph produced",
-                "graphify not installed — merged-graph coverage not exercised on this machine",
-            ))
+            print(
+                "[grade] graphify not installed — merged-graph coverage skipped",
+                file=sys.stderr,
+            )
+            exps.append(
+                gc.skipped(
+                    "graphify merged graph produced",
+                    "graphify not installed — merged-graph coverage not exercised on this machine",
+                )
+            )
         # Behavioral proof: the verifier's end-to-end steering check answered a grep into the
         # sibling from its graph, tagged with the alias, instead of leaving it to grep.
         steered = "answered from its graph" in proc.stdout and ALIAS in proc.stdout
-        exps.append(gc.expectation(
-            "grep into the sibling is answered from its graph, not left to grep",
-            steered,
-            "steering line present" if steered else "no cross-repo steering hit in verifier output",
-        ))
+        exps.append(
+            gc.expectation(
+                "grep into the sibling is answered from its graph, not left to grep",
+                steered,
+                (
+                    "steering line present"
+                    if steered
+                    else "no cross-repo steering hit in verifier output"
+                ),
+            )
+        )
         return exps
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)

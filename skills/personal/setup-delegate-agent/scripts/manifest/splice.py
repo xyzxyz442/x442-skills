@@ -30,10 +30,14 @@ def splice(existing: str, block: str) -> str:
     if n_begin == 0:
         if not existing.strip():
             return block
-        sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+        sep = (
+            ""
+            if existing.endswith("\n\n")
+            else ("\n" if existing.endswith("\n") else "\n\n")
+        )
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
-    tail = existing[existing.index(END) + len(END):]
+    tail = existing[existing.index(END) + len(END) :]
     rest = tail.lstrip("\n")
     # The separator is owned HERE, not by the tail. The installer used to return
     # `text[j:].lstrip("\n")` bare, so no blank line survived between this block and whatever
@@ -70,17 +74,25 @@ def _selftest() -> int:
     got = splice(two, blk)
     assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
     assert splice(got, blk) == got, "idempotent with a sibling block below"
-    assert splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    )
 
     # A rendered block ending in a trailing blank line must not widen the gap on every run.
     assert splice(two, blk + "\n") == got
 
     # Ordinary prose below the block gets the same one blank line.
-    assert splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk) \
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk)
         == "# A\n\n" + blk + "\nprose\n"
+    )
 
     # Malformed marker sets are refused, never guessed at.
-    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+    for bad in (
+        BEGIN + " -->\n",
+        END + "\n",
+        BEGIN + " -->\n" + BEGIN + " -->\n" + END + END,
+    ):
         try:
             splice(bad, blk)
         except ValueError:
@@ -95,5 +107,8 @@ def _selftest() -> int:
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(_selftest())
-    print(__doc__ or "splice.py is imported by setup-delegate-agent.sh; try --selftest", file=sys.stderr)
+    print(
+        __doc__ or "splice.py is imported by setup-delegate-agent.sh; try --selftest",
+        file=sys.stderr,
+    )
     sys.exit(2)

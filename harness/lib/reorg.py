@@ -41,7 +41,9 @@ from pathlib import Path
 
 CONFIGS = ("with_skill", "without_skill")
 ROOT_FILES = ("grading.json", "timing.json")
-_NAME_RE = re.compile(r"^eval-(?P<eval_id>.+?)__(?P<config>with_skill|without_skill)__run-(?P<run>\d+)$")
+_NAME_RE = re.compile(
+    r"^eval-(?P<eval_id>.+?)__(?P<config>with_skill|without_skill)__run-(?P<run>\d+)$"
+)
 
 
 def _resolve_meta(run_dir: Path) -> dict | None:
@@ -52,8 +54,11 @@ def _resolve_meta(run_dir: Path) -> dict | None:
             return meta
     m = _NAME_RE.match(run_dir.name)
     if m:
-        return {"eval_id": m["eval_id"], "configuration": m["config"],
-                "run_number": int(m["run"])}
+        return {
+            "eval_id": m["eval_id"],
+            "configuration": m["config"],
+            "run_number": int(m["run"]),
+        }
     return None
 
 
@@ -68,8 +73,12 @@ def reorg(raw_dir: Path, iteration_dir: Path) -> list[Path]:
         if meta["configuration"] not in CONFIGS:
             print(f"  skip {run_dir.name}: bad configuration {meta['configuration']!r}")
             continue
-        dest = (iteration_dir / f"eval-{meta['eval_id']}" /
-                meta["configuration"] / f"run-{meta['run_number']}")
+        dest = (
+            iteration_dir
+            / f"eval-{meta['eval_id']}"
+            / meta["configuration"]
+            / f"run-{meta['run_number']}"
+        )
         (dest / "outputs").mkdir(parents=True, exist_ok=True)
         for item in run_dir.iterdir():
             if item.name == "meta.json":
@@ -92,8 +101,15 @@ def _selftest() -> int:
         # one run via meta.json, one via the name-pattern fallback, one unparseable
         r1 = raw / "anything"
         (r1 / "src").mkdir(parents=True)
-        (r1 / "meta.json").write_text(json.dumps(
-            {"eval_id": "fresh-wired", "configuration": "with_skill", "run_number": 1}))
+        (r1 / "meta.json").write_text(
+            json.dumps(
+                {
+                    "eval_id": "fresh-wired",
+                    "configuration": "with_skill",
+                    "run_number": 1,
+                }
+            )
+        )
         (r1 / "grading.json").write_text("{}")
         (r1 / "AGENTS.md").write_text("# AGENTS")
         (r1 / "src" / "index.ts").write_text("export const x = 1;")
@@ -107,10 +123,16 @@ def _selftest() -> int:
         assert len(written) == 2, written
         run1 = it / "eval-fresh-wired" / "with_skill" / "run-1"
         assert (run1 / "grading.json").is_file(), "grading.json belongs at the run root"
-        assert (run1 / "outputs" / "AGENTS.md").is_file(), "other files belong under outputs/"
-        assert (run1 / "outputs" / "src" / "index.ts").is_file(), "dirs are copied recursively"
+        assert (
+            run1 / "outputs" / "AGENTS.md"
+        ).is_file(), "other files belong under outputs/"
+        assert (
+            run1 / "outputs" / "src" / "index.ts"
+        ).is_file(), "dirs are copied recursively"
         assert not (run1 / "meta.json").exists(), "meta.json is consumed, not copied"
-        assert (it / "eval-fresh-wired" / "without_skill" / "run-1" / "timing.json").is_file()
+        assert (
+            it / "eval-fresh-wired" / "without_skill" / "run-1" / "timing.json"
+        ).is_file()
         print("reorg selftest OK — normalized", len(written), "runs")
     return 0
 

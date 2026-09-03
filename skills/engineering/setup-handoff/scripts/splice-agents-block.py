@@ -42,10 +42,14 @@ def splice(existing: str, block: str) -> str:
             f"malformed managed block in AGENTS.md ({n_begin} begin / {n_end} end markers) — fix by hand"
         )
     if n_begin == 0:
-        sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+        sep = (
+            ""
+            if existing.endswith("\n\n")
+            else ("\n" if existing.endswith("\n") else "\n\n")
+        )
         return existing + sep + block
     head = existing[: existing.index(BEGIN)]
-    tail = existing[existing.index(END) + len(END):]
+    tail = existing[existing.index(END) + len(END) :]
     rest = tail.lstrip("\n")
     # The separator is owned HERE, not by the tail. `block` ends with exactly one "\n", so
     # returning `tail.lstrip("\n")` bare left NO blank line between this block and whatever
@@ -87,14 +91,22 @@ def _selftest() -> int:
     assert got == "# A\n\n" + blk + "\n" + sib, repr(got)
     assert splice(got, blk) == got, "idempotent with a sibling block below"
     # And it holds however ragged the separator was to begin with.
-    assert splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n\n\n" + sib, blk) == got
+    )
 
     # Ordinary prose below the block gets the same one blank line.
-    assert splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk) \
+    assert (
+        splice("# A\n\n" + BEGIN + " -->\no\n" + END + "\nprose\n", blk)
         == "# A\n\n" + blk + "\nprose\n"
+    )
 
     # Malformed marker sets are refused, never guessed at.
-    for bad in (BEGIN + " -->\n", END + "\n", BEGIN + " -->\n" + BEGIN + " -->\n" + END + END):
+    for bad in (
+        BEGIN + " -->\n",
+        END + "\n",
+        BEGIN + " -->\n" + BEGIN + " -->\n" + END + END,
+    ):
         try:
             splice(bad, blk)
         except ValueError:
@@ -110,9 +122,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", required=True, help="target repo's AGENTS.md")
     ap.add_argument("--template", required=True, help="assets/agents-handoff.md")
-    ap.add_argument("--handoff-dir", required=True, help="path the repo uses to reach the board")
+    ap.add_argument(
+        "--handoff-dir", required=True, help="path the repo uses to reach the board"
+    )
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--check", action="store_true", help="report drift by exit code, write nothing")
+    ap.add_argument(
+        "--check", action="store_true", help="report drift by exit code, write nothing"
+    )
     a = ap.parse_args()
 
     try:
@@ -158,8 +174,11 @@ def main() -> int:
         print(f"setup-handoff: cannot write {a.file}: {e}", file=sys.stderr)
         return 1
 
-    print("  injected AGENTS.md routing block" if BEGIN not in existing
-          else "  refreshed AGENTS.md routing block")
+    print(
+        "  injected AGENTS.md routing block"
+        if BEGIN not in existing
+        else "  refreshed AGENTS.md routing block"
+    )
     return 0
 
 

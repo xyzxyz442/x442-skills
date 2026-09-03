@@ -43,7 +43,9 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
     if graded != Path(target).resolve():
-        print(f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr)
+        print(
+            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
+        )
     try:
         return _grade(graded, eval_id)
     finally:
