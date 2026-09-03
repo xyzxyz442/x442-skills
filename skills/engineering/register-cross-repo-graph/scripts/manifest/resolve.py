@@ -31,13 +31,23 @@ USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".code-review-graph", "gra
 # never be confused with them; the verifier asserts registry.json still has CRG's shape.
 
 
+def _escapes(rel: str) -> bool:
+    """True when a relative path leaves the directory it was computed against."""
+    return rel == os.pardir or rel.startswith(os.pardir + os.sep)
+
+
 def layer_files(scope: str, root: str) -> list[tuple[str, str, bool]]:
     """(layer-name, manifest-path, committed?) lowest precedence first."""
     out: list[tuple[str, str, bool]] = [("user", USER_MANIFEST, False)]
     out.append(("project", os.path.join(root, MANIFEST), True))
     # every directory strictly between root and scope, root -> leaf (deepest wins)
+    #
+    # A scope OUTSIDE the root contributes no directory layers at all. Skipping `..` components
+    # and carrying on would rebuild the tail UNDER root — `scope=/other/sibling, root=/repo` used
+    # to yield /repo/other and /repo/other/sibling — so the cascade would read manifests out of a
+    # tree the caller never named, silently and with no layer marked absent.
     rel = os.path.relpath(scope, root)
-    if rel not in (".", ""):
+    if rel not in (".", "") and not _escapes(rel):
         cur = root
         for part in rel.split(os.sep):
             if part in ("", os.pardir):
@@ -116,6 +126,57 @@ def load_layer(path: str, errors: list[str], warnings: list[str]) -> list[dict]:
             "notes": e.get("notes", "") if isinstance(e.get("notes"), str) else "",
         })
     return entries
+
+
+def _selftest() -> int:
+    """python3 resolve.py --selftest
+
+    The cascade is the whole product here: which manifest layer wins decides which sibling repos
+    a session can reach. Every check that existed graded the RESULT of a sync — so an ordering or
+    containment bug looked like "the wrong repos got registered", days later and in someone
+    else's checkout, with nothing naming the layer that did it.
+
+    These are the same cases the other two cascade resolvers assert
+    (register-cross-repo-handoff, setup-delegate-agent). One shared contract, one shared bug when
+    it breaks — so a fix to any of the three should be mirrored to all three.
+    """
+    import tempfile
+
+    # --- order: user is lowest, the deepest directory is highest -----------------------------
+    got = layer_files("/repo/a/b", "/repo")
+    assert [n for n, _, _ in got] == ["user", "project", "a", "a/b"], got
+    assert got[0][1] == USER_MANIFEST, "the user layer is the machine-local one"
+
+    # --- committed flags: only the user layer is uncommittable -------------------------------
+    assert got[0][2] is False, "the user layer must never be committed"
+    assert all(c is True for _, _, c in got[1:]), got
+    # Every in-tree layer names the manifest inside its own directory.
+    assert got[1][1] == os.path.join("/repo", MANIFEST)
+    assert got[3][1] == os.path.join("/repo/a/b", MANIFEST)
+
+    # --- scope == root contributes no directory layers ---------------------------------------
+    assert [n for n, _, _ in layer_files("/repo", "/repo")] == ["user", "project"]
+
+    # --- THE REGRESSION: a scope outside the root fabricates nothing --------------------------
+    # `..` components used to be dropped and the tail rebuilt UNDER root, so this returned
+    # /repo/other and /repo/other/sibling — manifests from a tree nobody named.
+    esc = layer_files("/other/sibling", "/repo")
+    assert [n for n, _, _ in esc] == ["user", "project"], esc
+    assert not any("other" in p for _, p, _ in esc), esc
+
+    # --- resolve_path: relative resolves against the DECLARING manifest, not CWD --------------
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        os.makedirs(os.path.join(td, "ws", "consumer"))
+        os.makedirs(os.path.join(td, "ws", "acme-api"))
+        decl = os.path.join(td, "ws", "consumer")
+        assert resolve_path("../acme-api", decl) == os.path.join(td, "ws", "acme-api")
+        # An absolute path is taken as-is; `~` expands.
+        assert resolve_path(os.path.join(td, "ws"), decl) == os.path.join(td, "ws")
+        assert resolve_path("~", decl) == os.path.realpath(os.path.expanduser("~"))
+
+    print("register-cross-repo-graph resolve selftest OK")
+    return 0
 
 
 def main() -> int:
@@ -224,4 +285,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        raise SystemExit(_selftest())
     raise SystemExit(main())
