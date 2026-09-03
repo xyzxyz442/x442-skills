@@ -4,6 +4,13 @@
 # background graph update. Discovers which tools are wired from their config files and
 # fires the shared dispatcher with each tool's stdin shape, exactly as the tool would.
 #
+# Firing the dispatcher for real used to have a second, unnamed side effect: grep-steer.sh grants
+# one grep per repo per hour the answer-and-allow treatment, and the probe's grep command took it.
+# The operator ran a check and their next real grep got denied instead. $GRAPH_STEER_CACHE now
+# points the probe at a throwaway slot directory, so it stays on the real code path and spends a
+# throwaway allowance. Do NOT "fix" that by adding --graph-tried to the probe command: that
+# short-circuits the ladder at tier 2, so the probe would exercise nothing and still pass.
+#
 # Usage: ./verify-graph-hooks.sh [/path/to/repo] [--json]      (path defaults to current dir)
 #
 # --json emits every finding as a machine-readable object instead of prose. Most of what this
@@ -275,14 +282,34 @@ payload() { # $1=tool $2=kind
     *) printf '{}' ;;
   esac
 }
+# Throwaway allowance directory, removed on exit. Reset between tools as well as isolated from
+# $HOME: within one run the loop below fires pretool-shell once per wired tool, so without a reset
+# the first tool takes the slot and every tool after it is observed on the later-grep branch. That
+# made "what the dispatcher does" depend on loop order.
+# Torn down with rm -f plus rmdir rather than rm -rf, per this repo's own rule: rmdir refuses a
+# directory holding anything the sweep did not expect, which is the whole point of preferring it.
+STEER_CACHE="$(mktemp -d 2> /dev/null || echo "")"
+[ -n "$STEER_CACHE" ] && trap 'rm -f "$STEER_CACHE"/first-* 2> /dev/null; rmdir "$STEER_CACHE" 2> /dev/null' EXIT
+
 for t in $WIRED; do
+  if [ -n "$STEER_CACHE" ]; then
+    rm -f "$STEER_CACHE"/first-* 2> /dev/null || true
+  fi
   for k in pretool-shell pretool-read sessionstart; do
-    out=$(payload "$t" "$k" | bash "$HOOK" --tool "$t" --kind "$k" 2> /dev/null)
+    out=$(payload "$t" "$k" | GRAPH_STEER_CACHE="$STEER_CACHE" bash "$HOOK" --tool "$t" --kind "$k" 2> /dev/null)
     rc=$?
     if [ "$rc" -ne 0 ]; then
       bad hook.fires.exit "$t/$k exited $rc"
     elif [ -z "$out" ]; then
-      ok hook.fires "$t/$k ran cleanly (no output — correct with no graph / no match)"
+      # Silence is correct in two different situations, and copilot's is now the common one: its
+      # PreToolUse contract has no context field, so a context-only decision is allowed silently
+      # by design (emit.py, and its selftest asserts it). Naming only the no-graph case would send
+      # someone hunting a missing graph that is present and working.
+      if [ "$t" = copilot ] && [ "$k" = pretool-shell ]; then
+        ok hook.fires "$t/$k ran cleanly (no output — correct: copilot's PreToolUse takes no context, so advice is allowed silently)"
+      else
+        ok hook.fires "$t/$k ran cleanly (no output — correct with no graph / no match)"
+      fi
     elif is_json_str "$out"; then
       if printf '%s' "$out" | grep -q '"permissionDecision":"\(deny\|block\)"\|"decision":"deny"'; then
         ok hook.fires "$t/$k emitted a valid BLOCK decision (graph hit)"

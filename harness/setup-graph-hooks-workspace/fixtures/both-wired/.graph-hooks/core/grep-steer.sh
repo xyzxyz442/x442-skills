@@ -82,10 +82,27 @@ esac
 query_crg() { # $1=db $2=pattern  (FTS5, falls back to LIKE; read-only)
   python3 - "$1" "$2" << 'PY' 2> /dev/null
 import sqlite3, sys, os
+
+
+# Status-probe open: plain ro first (the only variant correct on a WAL graph — immutable=1 ignores
+# the -wal and would miss every uncheckpointed node), immutable=1 only as a fallback for a database
+# needing journal rollback, where a read-only open raises CANTOPEN. A failed probe here reads as
+# "no graph hit" and waves the grep through, so the fallback is what keeps the gate honest.
+def probe_connect(path, timeout=2):
+    for extra in ("", "&immutable=1"):
+        try:
+            c = sqlite3.connect("file:%s?mode=ro%s" % (path, extra), uri=True, timeout=timeout)
+            c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            return c
+        except sqlite3.Error:
+            continue
+    raise sqlite3.OperationalError("graph db unreadable")
+
+
 db, pat = sys.argv[1], sys.argv[2]
 if not os.path.exists(db): sys.exit(0)
 try:
-    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+    c = probe_connect(db, 3)
     rows = []
     try:
         rows = c.execute(
@@ -232,11 +249,30 @@ if [ -z "$XREPO_ALIAS" ]; then
   [ "$HAVE_GFY" = 1 ] && HINT="${HINT:+$HINT or }graphify query '$PATTERN' --graph graphify-out/graph.json"
 fi
 
-# One allowance per repo per hour
+# One allowance per repo per hour.
+#
+# $GRAPH_STEER_CACHE relocates the slot directory. It defaults to the real path, so nothing a wired
+# repo does changes -- it exists so a VERIFIER can fire this hook without spending the operator's
+# allowance on itself. verify-graph-hooks.sh drives the real dispatcher with a real grep command,
+# which took the slot and left the user's next genuine grep denied instead of answered: a check
+# that changed the behaviour of the thing it claims to only observe.
 KEY="$(printf '%s' "$PWD" | { md5sum 2> /dev/null || md5 2> /dev/null; } | cut -c1-8)"
-DIR="${HOME}/.cache/graph-steer-hook"
+DIR="${GRAPH_STEER_CACHE:-${HOME}/.cache/graph-steer-hook}"
 mkdir -p "$DIR" 2> /dev/null || true
-SLOT="${DIR}/first-${KEY:-x}-$(date +%Y%m%d%H)"
+HOUR="$(date +%Y%m%d%H)"
+SLOT="${DIR}/first-${KEY:-x}-${HOUR}"
+
+# Sweep slots from earlier hours. Nothing ever removed them, so the directory grew without bound --
+# 819 files over 51 repos on one machine, the oldest two months old. That is harmless in itself and
+# is precisely what made the pollution above invisible. Swept here, where they are created, so the
+# cost is one glob on a path we already touched.
+for stale in "$DIR"/first-*; do
+  case "$stale" in
+    *"-${HOUR}") continue ;;
+    "$DIR"/'first-*') continue ;; # no matches; the glob came back literal
+  esac
+  rm -f "$stale" 2> /dev/null || true
+done
 
 emit_neutral() { # $1=context|deny  $2=text   (python does the JSON escaping)
   python3 - "$1" "$2" << 'PY'
