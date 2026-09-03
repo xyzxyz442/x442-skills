@@ -522,9 +522,16 @@ while IFS= read -r doc; do
   # is not it.
   case "$dtype" in
     coordination | orchestrator)
-      [ "$darch" = 1 ] && continue
-      grep -q '^## Current state' "$doc" \
-        || warn doc.current_state.missing "$dname: no '## Current state' section — a reader has to reconstruct where this stands from the activity log"
+      # `darch = 0` and NOT `continue`: this skips ONE check, not the rest of the loop body. A
+      # `continue` here reads as "archived docs are exempt from the current-state check" and in
+      # fact exempted them from every check below it — including the schema count, the one check
+      # in this loop that is deliberately unguarded because it must see archived docs too. It
+      # under-reported doc.schema.behind as "4 of 47" on a board where 41 documents predated the
+      # schema, which is a drift detector that hides drift.
+      if [ "$darch" = 0 ]; then
+        grep -q '^## Current state' "$doc" \
+          || warn doc.current_state.missing "$dname: no '## Current state' section — a reader has to reconstruct where this stands from the activity log"
+      fi
       ;;
   esac
 
