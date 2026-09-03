@@ -27,20 +27,31 @@ handoff_cli_home() { # -> the directory setup-handoff installs the user-level CL
   printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff"
 }
 
+# A candidate must be a readable, NON-EMPTY regular file to count as a rung.
+#
+# Existence alone is not enough, and the gap is not cosmetic: an interrupted copy leaves a
+# zero-byte file, `bash` runs it happily, and every command exits 0 having done nothing. `handoff
+# claim` then reports success while the lease stays with whoever really holds it — and the run
+# discipline tells agents to trust that exit code. A silently-successful claim is the worst
+# failure this tool has, so a rung that cannot possibly work is SKIPPED rather than selected:
+# the ladder falls through to a copy that does work, and if none does, the dispatcher's
+# gate-is-off path fires, which is loud.
+handoff_cli_usable() { # path -> 0 when it can actually be exec'd as a CLI
+  [ -n "${1:-}" ] && [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ]
+}
+
 handoff_cli_resolve() { # board-dir -> prints "<source> <path>"; returns 1 when nothing resolves
   local board="${1:-}" c
-  # An unreadable or non-executable candidate is SKIPPED, not fatal: a half-finished install
-  # further down the ladder should not shadow a working one below it.
-  if [ -n "${HANDOFF_BIN:-}" ] && [ -f "$HANDOFF_BIN" ]; then
+  if handoff_cli_usable "${HANDOFF_BIN:-}"; then
     printf 'env %s' "$HANDOFF_BIN"
     return 0
   fi
   c="$(handoff_cli_home)/handoff"
-  if [ -f "$c" ]; then
+  if handoff_cli_usable "$c"; then
     printf 'user %s' "$c"
     return 0
   fi
-  if [ -n "$board" ] && [ -f "$board/scripts/handoff-cli" ]; then
+  if [ -n "$board" ] && handoff_cli_usable "$board/scripts/handoff-cli"; then
     printf 'vendored %s' "$board/scripts/handoff-cli"
     return 0
   fi

@@ -31,18 +31,21 @@ if ! command -v handoff_cli_resolve > /dev/null 2>&1; then
   # config.sh is missing or too old to carry the resolver. Fall back to a minimal inline ladder
   # rather than refusing: the vendored CLI may be sitting right there, and a board mid-upgrade is
   # exactly when someone needs to run `handoff` to find out what is wrong. config.sh remains the
-  # authoritative copy — this one deliberately implements the same three rungs and nothing else.
+  # authoritative copy — this one deliberately implements the same three rungs and nothing else,
+  # including the usability test: a zero-byte or unreadable candidate is skipped rather than
+  # selected, because exec'ing one makes every command exit 0 having done nothing (see config.sh).
+  handoff_cli_usable() { [ -n "${1:-}" ] && [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ]; }
   handoff_cli_resolve() {
     local board="${1:-}"
-    [ -n "${HANDOFF_BIN:-}" ] && [ -f "$HANDOFF_BIN" ] && {
+    handoff_cli_usable "${HANDOFF_BIN:-}" && {
       printf 'env %s' "$HANDOFF_BIN"
       return 0
     }
-    [ -f "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff" ] && {
+    handoff_cli_usable "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff" && {
       printf 'user %s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff"
       return 0
     }
-    [ -n "$board" ] && [ -f "$board/scripts/handoff-cli" ] && {
+    [ -n "$board" ] && handoff_cli_usable "$board/scripts/handoff-cli" && {
       printf 'vendored %s' "$board/scripts/handoff-cli"
       return 0
     }
@@ -53,12 +56,35 @@ fi
 _resolved="$(handoff_cli_resolve "$BOARD")" || {
   # Nothing to exec. Say what was looked for and how to fix it — this message is the entire user
   # experience of a board whose CLI never got installed, and "command not found" is not one.
-  cat >&2 <<EOF
+  #
+  # Say WHY each rung was rejected, not just where it was looked for. A rung skipped for being
+  # empty or unreadable is sitting right there at the path printed, so "looked at" alone reads as
+  # a lie and sends the reader hunting for a file they can see.
+  _why() { # path -> the reason it is not a usable CLI
+    [ -z "${1:-}" ] && {
+      printf '(unset)'
+      return
+    }
+    [ -e "$1" ] || {
+      printf '%s (not found)' "$1"
+      return
+    }
+    [ -r "$1" ] || {
+      printf '%s (not readable)' "$1"
+      return
+    }
+    [ -s "$1" ] || {
+      printf '%s (EMPTY — an interrupted install?)' "$1"
+      return
+    }
+    printf '%s (unusable)' "$1"
+  }
+  cat >&2 << EOF
 handoff: no CLI found for this board ($BOARD).
          Looked at, in order:
-           \$HANDOFF_BIN                  ${HANDOFF_BIN:-(unset)}
-           user-level install            ${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff
-           vendored copy                 $BOARD/scripts/handoff-cli
+           \$HANDOFF_BIN                  $(_why "${HANDOFF_BIN:-}")
+           user-level install            $(_why "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff")
+           vendored copy                 $(_why "$BOARD/scripts/handoff-cli")
          Fix: re-run the setup-handoff skill against this repo, or point \$HANDOFF_BIN at a CLI.
          Until then the lease gate is OFF — edits are allowed, so coordinate by hand.
 EOF

@@ -16,6 +16,7 @@ script-behavior}. Exits 0 iff nothing failed.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -109,6 +110,10 @@ def _read_json_config(target):
 def _run(args, cwd, env_extra=None):
     import os
     env = {**os.environ, **(env_extra or {})}
+    # A None VALUE means UNSET, not "empty string". The CLI-resolution cases have to run with
+    # $HANDOFF_BIN genuinely absent, and this module sets it for every other case — an empty
+    # string would still be a set variable and the ladder would read it as a rung.
+    env = {k: v for k, v in env.items() if v is not None}
     return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, env=env)
 
 
@@ -141,7 +146,7 @@ def _resolved_cli(target) -> Path | None:
     return root if root.is_file() else None
 
 
-def _hook(target, kind, payload, session="sess-AAA"):
+def _hook(target, kind, payload, session="sess-AAA", env_extra=None):
     # hooks.sh lives under scripts/; fall back to the flat path for a pre-restructure board. Raise
     # rather than returning "" when neither exists: empty output means ALLOW, so a missing hooks.sh
     # would make every gate assertion pass vacuously.
@@ -150,10 +155,12 @@ def _hook(target, kind, payload, session="sess-AAA"):
         hk = Path(target) / HD / "hooks.sh"
     if not hk.is_file():
         raise FileNotFoundError(f"hooks.sh not found under {Path(target) / HD}")
+    env = {**os.environ, **(env_extra or {})}
+    env = {k: v for k, v in env.items() if v is not None}
     p = subprocess.run(
         ["bash", str(hk), "--kind", kind, "--tool", "claude"],
         cwd=str(target), input=json.dumps({"session_id": session, **payload}),
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     return p.stdout.strip()
 
@@ -341,6 +348,160 @@ def grade_payload_downgrade(target):
     stamp = json.loads(cfg.read_text(encoding="utf-8")).get("_generated", {}).get("payloadVersion")
     e.append(gc.expectation("and it does roll the stamp back",
                             stamp != "setup-handoff 999", f"stamp: {stamp}"))
+    return e
+
+
+def _dead_cli_env(target):
+    """An environment in which NO rung of the CLI ladder resolves.
+
+    $HANDOFF_BIN unset (this module sets it for every other case), $XDG_DATA_HOME pointed at an
+    empty directory so the real user-level install on the machine running the harness cannot
+    answer, and the fixture boards vendor no copy. All three rungs have to be closed at once or
+    the case grades a machine that happens to have a CLI somewhere.
+    """
+    return {"HANDOFF_BIN": None, "XDG_DATA_HOME": str(Path(target) / ".harness-empty-xdg")}
+
+
+def grade_cli_unresolvable(target):
+    """Fail OPEN when no CLI resolves, and never select a rung that cannot work.
+
+    Two halves of one decision. The gate's every deny message ends in "claim it first:
+    <board>/handoff claim …" — a command that does not exist on a board with no CLI. Denying
+    anyway locks someone out of their own repo with an instruction they cannot follow, and the
+    rational response is to delete the hook, so this one fails OPEN and says so loudly.
+
+    That only holds if "no CLI resolves" is decided honestly. `-f` alone accepted a zero-byte
+    file — an interrupted copy — and bash runs one happily: every command exited 0 having done
+    nothing, so `claim` reported success while the lease stayed with its real holder, and the run
+    discipline tells agents to trust that exit code. A rung that cannot work is now skipped, which
+    is why the empty-$HANDOFF_BIN assertions below belong in the same case as the fail-open ones:
+    a wrongly-selected rung is how the fail-open path stops being reached at all.
+    """
+    e = []
+    board = Path(target) / HD
+    dead = _dead_cli_env(target)
+    Path(dead["XDG_DATA_HOME"]).mkdir(parents=True, exist_ok=True)
+
+    # A doc held by SOMEONE ELSE. Without a live lease the gate allows the edit anyway and every
+    # "allowed" assertion below would pass vacuously.
+    _handoff(target, "new", "gated", "--title", "Held by another session")
+    _handoff(target, "claim", "gated", "held by A", session="sess-AAA")
+    doc = str(board / "gated-handoff.md")
+    payload = {"tool_input": {"file_path": doc}}
+
+    # The contrast. Same doc, same non-holder, working CLI -> DENY. This is what makes the
+    # fail-open assertion mean something rather than merely observing an empty string.
+    deny = _hook(target, "pretool-edit", payload, session="sess-ZZZ")
+    e.append(gc.expectation("with a CLI, the gate DENIES a non-holder editing a held doc",
+                            '"deny"' in deny, f"out: {deny[:120] or '(empty = allow)'}"))
+
+    allow = _hook(target, "pretool-edit", payload, session="sess-ZZZ", env_extra=dead)
+    e.append(gc.expectation("with NO CLI, the same edit is ALLOWED — the gate fails open",
+                            allow == "", f"out: {allow[:160]}"))
+
+    banner = _hook(target, "sessionstart", {}, session="sess-ZZZ", env_extra=dead)
+    e.append(gc.expectation("and the session banner says the lease gate is OFF",
+                            "LEASE GATE IS OFF" in banner, f"out: {banner[:160]}"))
+    e.append(gc.expectation("naming the fix, not just the symptom",
+                            "setup-handoff" in banner and "HANDOFF_BIN" in banner,
+                            f"out: {banner[-200:]}"))
+
+    r = _run(["bash", str(board / "handoff"), "list"], target, dead)
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("the dispatcher exits 4 rather than dying as 'command not found'",
+                            r.returncode == 4, f"exit {r.returncode}"))
+    e.append(gc.expectation("naming all three rungs it looked at",
+                            all(s in out for s in ("HANDOFF_BIN", "user-level install",
+                                                   "vendored copy")),
+                            f"out: {out.strip()[:200]}"))
+
+    # The regression. An EMPTY $HANDOFF_BIN must not shadow the working rung below it.
+    empty = Path(target) / ".harness-empty-cli"
+    empty.write_bytes(b"")
+    r = _run(["bash", str(board / "handoff"), "claim", "gated", "steal"], target,
+             {"HANDOFF_BIN": str(empty), "HANDOFF_SESSION_ID": "sess-ZZZ"})
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("an EMPTY $HANDOFF_BIN is skipped, so the claim still reaches a CLI",
+                            r.returncode != 0, f"exit {r.returncode}: {out.strip()[:140]}"))
+    e.append(gc.expectation("and the non-holder's steal is REFUSED, not silently 'succeeded'",
+                            "CLAIMED by" in out, f"out: {out.strip()[:160]}"))
+    e.append(gc.expectation("the lease still belongs to its real holder",
+                            "sess-AAA" in _lease(target, "gated-handoff"),
+                            f"owner: {_lease(target, 'gated-handoff')[:60]}"))
+
+    # With every rung closed AND $HANDOFF_BIN pointing at that empty file, the diagnostic has to
+    # say WHY it was rejected: the path printed is a file the reader can see sitting right there.
+    r = _run(["bash", str(board / "handoff"), "list"], target,
+             {**dead, "HANDOFF_BIN": str(empty)})
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("a rejected rung is reported as EMPTY, not merely 'looked at'",
+                            "EMPTY" in out, f"out: {out.strip()[:220]}"))
+    return e
+
+
+def grade_board_override(target):
+    """$HANDOFF_BOARD_PATH re-points the dispatcher at another board, visibly.
+
+    The dispatcher's whole first job is "which board am I", answered from the directory it sits
+    in. The override exists because that answer is wrong for a worktree, a shared board mounted
+    elsewhere, or a harness driving one CLI across several boards. Two things have to hold, and
+    only the pair is worth anything: the override must actually redirect BOTH reads and writes —
+    a `list` that follows it while `new` files into the old board is worse than no override — and
+    it must be VISIBLE, because a silent redirect means work lands on a board nobody is watching.
+    """
+    e = []
+    board = Path(target) / HD
+
+    r = _handoff(target, "--which")
+    e.append(gc.expectation("by default the board is the dispatcher's own directory",
+                            str(board) in r.stdout and "this board's dispatcher" in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
+
+    _handoff(target, "new", "on-home-board", "--title", "Filed with no override")
+    e.append(gc.expectation("and a doc files into that board",
+                            (board / "on-home-board-handoff.md").is_file(),
+                            "on-home-board-handoff.md present"))
+
+    # A second, real board. Copied rather than installed: the installer resolves to the git root,
+    # so a nested install would land back on the first board and the case would grade nothing.
+    other = Path(target) / "second-board"
+    shutil.copytree(board, other)
+    for junk in list(other.glob("*-handoff.md")) + [other / "INDEX.md"]:
+        junk.unlink(missing_ok=True)
+    shutil.rmtree(other / ".locks", ignore_errors=True)
+    env = {"HANDOFF_BOARD_PATH": str(other), "HANDOFF_SESSION_ID": "sess-AAA"}
+
+    r = _run(["bash", str(board / "handoff"), "--which"], target, env)
+    e.append(gc.expectation("the override re-points the board",
+                            str(other) in r.stdout, f"out: {r.stdout.strip()[:200]}"))
+    e.append(gc.expectation("and says so, naming the board it overrode — never a silent redirect",
+                            "HANDOFF_BOARD_PATH" in r.stdout and "overriding" in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
+
+    r = _run(["bash", str(board / "handoff"), "list"], target, env)
+    e.append(gc.expectation("READS follow the override — the home board's doc is not listed",
+                            r.returncode == 0 and "on-home-board" not in r.stdout,
+                            f"exit {r.returncode}: {r.stdout.strip()[:200]}"))
+
+    r = _run(["bash", str(board / "handoff"), "new", "via-override",
+              "--title", "Filed through the override"], target, env)
+    e.append(gc.expectation("WRITES follow it too — a new doc lands on the overridden board",
+                            (other / "via-override-handoff.md").is_file(),
+                            f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-140:]}"))
+    e.append(gc.expectation("and NOT on the dispatcher's own board",
+                            not (board / "via-override-handoff.md").exists(),
+                            "home board unchanged"))
+    e.append(gc.expectation("the overridden board's index is the one regenerated",
+                            (other / "INDEX.md").is_file()
+                            and "via-override" in (other / "INDEX.md").read_text(),
+                            "second-board/INDEX.md names it"))
+
+    # The home board must still be reachable the moment the override is dropped — an override that
+    # left state behind would make it a one-way door.
+    r = _handoff(target, "list")
+    e.append(gc.expectation("dropping the override returns to the home board",
+                            "on-home-board" in r.stdout and "via-override" not in r.stdout,
+                            f"out: {r.stdout.strip()[:200]}"))
     return e
 
 
@@ -1214,6 +1375,12 @@ def _grade(target, eval_id):
 
     if eval_id == "payload-downgrade":
         return grade_payload_downgrade(target)
+
+    if eval_id == "cli-unresolvable":
+        return grade_cli_unresolvable(target)
+
+    if eval_id == "board-override":
+        return grade_board_override(target)
 
     if eval_id == "layout-migration":
         return grade_layout_migration(target)

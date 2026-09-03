@@ -109,6 +109,47 @@ printf '{"groups": {"infra": {"repos": []}, "auth": {"repos": []}, "gone": {"rem
 eval "$(handoff_config_load "$T/mapgroups")"
 chk "a groups MAP yields its names, sorted, minus tombstones" "auth,infra" "$HC_GROUPS"
 
+# --- the CLI ladder ------------------------------------------------------------------------
+# $HANDOFF_BIN > user-level install > the board's vendored copy, and a rung that cannot work is
+# skipped rather than selected. The empty-file case is why this block exists: `-f` alone accepts a
+# zero-byte file, bash runs it, and every command — `claim` included — exits 0 having done
+# nothing, so the caller believes it holds a lease it does not hold.
+mkdir -p "$T/ladder/board/scripts" "$T/ladder/xdg/handoff"
+printf 'echo vendored\n' > "$T/ladder/board/scripts/handoff-cli"
+printf 'echo user\n' > "$T/ladder/xdg/handoff/handoff"
+export XDG_DATA_HOME="$T/ladder/xdg"
+
+unset HANDOFF_BIN
+chk "user install beats the vendored copy" "user $T/ladder/xdg/handoff/handoff" \
+  "$(handoff_cli_resolve "$T/ladder/board")"
+
+printf 'echo env\n' > "$T/ladder/mybin"
+chk "\$HANDOFF_BIN beats both" "env $T/ladder/mybin" \
+  "$(HANDOFF_BIN="$T/ladder/mybin" handoff_cli_resolve "$T/ladder/board")"
+
+: > "$T/ladder/empty"
+chk "an EMPTY \$HANDOFF_BIN is skipped, not selected" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/empty" handoff_cli_resolve "$T/ladder/board")"
+
+printf 'echo unreadable\n' > "$T/ladder/noread"
+chmod 000 "$T/ladder/noread"
+chk "an UNREADABLE \$HANDOFF_BIN is skipped too" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/noread" handoff_cli_resolve "$T/ladder/board")"
+
+chk "a missing \$HANDOFF_BIN falls through" "user $T/ladder/xdg/handoff/handoff" \
+  "$(HANDOFF_BIN="$T/ladder/nope" handoff_cli_resolve "$T/ladder/board")"
+
+# An empty rung must fall THROUGH to a working one below it, not just be reported absent.
+: > "$T/ladder/xdg/handoff/handoff"
+chk "an empty user install falls through to the vendored copy" \
+  "vendored $T/ladder/board/scripts/handoff-cli" "$(handoff_cli_resolve "$T/ladder/board")"
+
+: > "$T/ladder/board/scripts/handoff-cli"
+handoff_cli_resolve "$T/ladder/board" > /dev/null 2>&1
+chk "every rung empty resolves NOTHING (so the gate-off path fires)" 1 \
+  "$([ $? -ne 0 ] && echo 1 || echo 0)"
+unset XDG_DATA_HOME
+
 printf '{ not json\n' > "$T/board/config.json"
 handoff_config_load "$T/board" > /dev/null 2>&1
 chk "malformed json exits non-zero" 1 "$([ $? -ne 0 ] && echo 1 || echo 0)"

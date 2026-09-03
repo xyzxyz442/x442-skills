@@ -111,6 +111,16 @@ dispatcher; the harness points `$HANDOFF_BIN` at the skill's payload
 (`grade_common.payload_cli`), so every fixture runs the binary under test by construction and a
 stale committed copy is impossible rather than merely discouraged.
 
+That pin makes one class of case impossible to write by accident: anything about how a board
+behaves when the CLI **cannot** be resolved. `setup-handoff-workspace`'s `cli-unresolvable` case
+closes all three rungs at once — `$HANDOFF_BIN` genuinely unset (a `None` value in `_run`'s
+`env_extra` unsets rather than blanks, since an empty string is still a set variable the ladder
+would read), `$XDG_DATA_HOME` pointed at an empty directory so the harness machine's own install
+cannot answer, and fixture boards vendoring no copy. Its sibling `board-override` drives one
+dispatcher against a second board through `$HANDOFF_BOARD_PATH`. Both grade behavior no
+post-state fixture can hold, because what they assert about is the resolution step that happens
+before the CLI ever starts.
+
 ## Guardrail
 
 Do not launch automated multi-run LLM loops without first computing the expected call count
