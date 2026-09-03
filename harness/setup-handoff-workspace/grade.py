@@ -30,6 +30,12 @@ SKILL = REPO / "skills/engineering/setup-handoff"
 SETUP = SKILL / "scripts/setup-handoff.sh"
 VERIFY = SKILL / "scripts/verify-setup-handoff.sh"
 DETECT = SKILL / "scripts/detect-handoff.sh"
+# setup-graph-hooks' installer, used by the custom-board-name case as the NEGATIVE half: it writes
+# `--kind` hook commands into the very config files check_tool reads, so it is the realistic thing
+# a widened pattern would wrongly claim as handoff wiring. Driving the real installer rather than a
+# hand-written copy of its command shape is deliberate -- an inline copy would go stale silently and
+# the guard would pass while no longer guarding anything.
+GRAPH_SETUP = REPO / "skills/engineering/setup-graph-hooks/scripts/setup-graph-hooks.sh"
 
 HD = ".agents/handoff"
 # The CLI's unresolvable-id error. Asserted both ways: it must still fire for an id that really
@@ -1658,6 +1664,212 @@ def grade_layout_migration(target):
     return e
 
 
+def grade_custom_board_name(_target):
+    """A board whose directory is NOT named `handoff` must resolve AND report its wired tool.
+
+    `--handoff-dir` accepts any path, but two checks in verify-setup-handoff.sh recovered the board
+    by grepping for a literal `handoff/` inside a hook command string. Point a repo at a board named
+    anything else and a completely healthy install came back as `handoff not installed` plus `no
+    tool hooks wired` — two hard FAILs, zero real defects. Every installer writes the default name,
+    which is exactly why nothing caught it: the existing custom-location case passes
+    `--handoff-dir .claude/handoff`, whose basename is still `handoff`.
+
+    Two negative halves stop the fix from being "just widen the pattern", and they do different
+    jobs. setup-graph-hooks writes its own `--kind` hook commands into these same config files, so
+    coexistence is asserted both ways: wired alongside handoff it must not inflate the count, and
+    wired ALONE it must still leave `tool.wired.any` failing. That pair does not by itself pin the
+    pattern down — graph-hooks' dispatcher is `.graph-hooks/hook.sh`, singular, so no widening of
+    `hooks\.sh` can confuse it. The check that actually discriminates is the third: a FOREIGN
+    `scripts/hooks.sh` command carrying no `--kind` flag, which a bare `hooks\.sh` pattern claims
+    as handoff wiring and the shape-anchored one does not. That is the hazard merge-hooks.py's
+    is_managed() is written against, and the reason both halves of it are required here.
+
+    Self-contained (ignores the passed fixture); cleans up its own temp tree.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    e = []
+    parent = Path(tempfile.mkdtemp(prefix="handoff-boardname-"))
+
+    def sh(args, cwd):
+        return subprocess.run(
+            args, cwd=str(cwd), capture_output=True, text=True, env=dict(os.environ)
+        )
+
+    def new_repo(name):
+        r = parent / name
+        r.mkdir()
+        sh(["git", "init", "-q"], r)
+        sh(["git", "config", "user.email", "t@t.t"], r)
+        sh(["git", "config", "user.name", "t"], r)
+        (r / "AGENTS.md").write_text("# AGENTS.md\n")
+        return r
+
+    def wire_graph(repo):
+        return sh(
+            [
+                "bash",
+                str(GRAPH_SETUP),
+                str(repo),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            repo,
+        )
+
+    try:
+        # --- positive: a board named `board`, with graph hooks wired alongside it ---------------
+        repo = new_repo("named-board")
+        graph = wire_graph(repo)
+        r = sh(
+            [
+                "bash",
+                str(SETUP),
+                str(repo),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+                "--handoff-dir",
+                ".agents/board",
+            ],
+            repo,
+        )
+        e.append(
+            gc.expectation(
+                "installer succeeds with a --handoff-dir whose basename is not `handoff`",
+                r.returncode == 0,
+                f"exit {r.returncode}: {r.stderr.strip()[:160]}",
+            )
+        )
+        e.append(gc.file_exists(repo, ".agents/board/scripts/hooks.sh"))
+        e.append(
+            gc.no_fabrication(repo, HD)
+        )  # did not silently fall back to the default name
+
+        proc = subprocess.run(
+            ["bash", str(VERIFY), str(repo), "--json"], capture_output=True, text=True
+        )
+        try:
+            resolved = json.loads(proc.stdout).get("board", "")
+        except ValueError:
+            resolved = ""
+        e.append(
+            gc.expectation(
+                "the verifier RESOLVES a board that is not named `handoff`",
+                resolved.endswith("/.agents/board"),
+                f"board={resolved or '(no JSON)'}",
+            )
+        )
+        findings = gc.verify_findings(VERIFY, repo)
+        e.append(
+            gc.finding(
+                findings,
+                "tool.wired",
+                "pass",
+                label="and reports the tool wired to it (the half that still grepped `handoff/`)",
+            )
+        )
+        e.append(gc.finding(findings, "tool.primary.hard", "pass"))
+        e.append(gc.no_findings_at(findings, "fail"))
+
+        # The graph hooks land in .claude/settings.local.json, which check_tool also reads. Exactly
+        # one config may be claimed as handoff wiring, and it must be the one setup-handoff wrote.
+        label = "a graph-hooks config alongside it is NOT claimed as handoff wiring"
+        if graph.returncode != 0:
+            e.append(
+                gc.skipped(label, f"setup-graph-hooks: {graph.stderr.strip()[:160]}")
+            )
+        else:
+            claimed = [f["message"] for f in findings.get("tool.wired", [])]
+            e.append(
+                gc.expectation(
+                    label,
+                    len(claimed) == 1 and "settings.local.json" not in claimed[0],
+                    f"tool.wired x{len(claimed)}: {claimed}",
+                )
+            )
+
+        # --- negative: graph hooks and NOTHING else ---------------------------------------------
+        # A default-named board, so resolution succeeds and the run actually reaches section 3, with
+        # every handoff hook command overwritten. Widening the pattern to a bare `hooks.sh` passes
+        # the positive above and fails right here.
+        label = "a repo wired ONLY with setup-graph-hooks still reports no handoff tools wired"
+        only = new_repo("graph-only")
+        sh(
+            ["bash", str(SETUP), str(only), "--tools", "claude", "--primary", "claude"],
+            only,
+        )
+        g2 = wire_graph(only)
+        graph_cfg = only / ".claude/settings.local.json"
+        if g2.returncode != 0 or not graph_cfg.is_file():
+            e.append(gc.skipped(label, f"setup-graph-hooks: {g2.stderr.strip()[:160]}"))
+        else:
+            shutil.copyfile(graph_cfg, only / ".claude/settings.json")
+            e.append(
+                gc.finding(
+                    gc.verify_findings(VERIFY, only),
+                    "tool.wired.any",
+                    "fail",
+                    label=label,
+                )
+            )
+
+        # --- negative: a FOREIGN scripts/hooks.sh, which is what a bare `hooks\.sh` would claim ---
+        # Written inline rather than driven from another installer on purpose: what is pinned here
+        # is a command that is NOT ours, so unlike a copy of some tool's real output it cannot go
+        # stale. No `--kind` is the whole point — that flag is handoff's own protocol.
+        alien = new_repo("alien-hooks")
+        sh(
+            [
+                "bash",
+                str(SETUP),
+                str(alien),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            alien,
+        )
+        (alien / ".claude/settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Edit",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "bash .config/somectl/scripts/hooks.sh --event pre-edit",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        e.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, alien),
+                "tool.wired.any",
+                "fail",
+                label="another tool's scripts/hooks.sh (no --kind) is NOT claimed as handoff wiring",
+            )
+        )
+        return e
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
+
+
 def grade_cross_repo(_target):
     """Two sibling repos sharing ONE parent board — the shared-board identity regression guard.
 
@@ -2570,6 +2782,9 @@ def _grade(target, eval_id):
 
     if eval_id == "layout-migration":
         return grade_layout_migration(target)
+
+    if eval_id == "custom-board-name":
+        return grade_custom_board_name(target)
 
     if eval_id == "cross-repo":
         return grade_cross_repo(target)
