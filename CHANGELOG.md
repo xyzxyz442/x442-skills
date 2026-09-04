@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.3](https://github.com/xyzxyz442/x442-skills/compare/v0.11.2...v0.11.3) (2026-09-04)
+
+### 🐞 Bug Fixes
+
+- **config:** lint-staged never checked shell, the language this repo is written in ([1f67c1a](https://github.com/xyzxyz442/x442-skills/commit/1f67c1aa8ca15f2edd0e117e5363e8022ee658f5))
+
 ## [0.11.2](https://github.com/xyzxyz442/x442-skills/compare/v0.11.1...v0.11.2) (2026-09-04)
 
 ### 🐞 Bug Fixes
