@@ -122,19 +122,20 @@ if not row or not row[0] or not row[1]:
 bare, _, detail = row[0].partition(":")   # "openai:qwen3-embedding@http://localhost:11434"
 if bare == "local":
     print("local " + (detail or "-")); raise SystemExit
-# Well-known local embedding servers, named by the port they conventionally serve on. Anything
-# else falls back to the hostname — a hint for the agent, never something it must parse.
-PORT_LABELS = {11434: "ollama", 1234: "lmstudio"}
-
+# The MODEL, never the vendor. A port number is not an identity: naming :1234 "lmstudio" is a
+# guess printed as a fact, and it is wrong for everything else that binds the same port — while
+# the model is recorded, is what actually determines retrieval quality, and is what an agent
+# would want to know. Fall back to the endpoint host only when no model was recorded.
 model, _, endpoint = detail.partition("@")
-if endpoint:
+if model:
+    label = model
+elif endpoint:
     try:
-        parsed = urlparse(endpoint)
-        label = PORT_LABELS.get(parsed.port) or parsed.hostname or endpoint
+        label = urlparse(endpoint).hostname or endpoint
     except ValueError:  # malformed port in the recorded endpoint
         label = endpoint
 else:
-    label = model or bare
+    label = bare
 print("custom " + label)
 PY
 }
@@ -142,25 +143,34 @@ PY
 resolve() {
   load_env
 
-  case "${CRG_EMBEDDING_PROVIDER:-}" in
-    local | openai | google | minimax)
-      printf '%s' "$CRG_EMBEDDING_PROVIDER"
-      return 0
-      ;;
-  esac
+  # An EXPLICIT provider wins, whatever it names. We deliberately keep no list of valid names:
+  # CRG owns that list (embeddings.py::_VALID_PROVIDERS) and grows it, and the copy that used to
+  # live here had already fallen a release behind — a repo configured with a provider missing from
+  # our copy resolved to nothing, this script exited 0, and the vectors rotted to keyword mode
+  # without a word. Passing an unknown name through costs one failed embed; keeping a stale copy
+  # costs silence. The name is REPORTED, not validated, in embed-health.sh, which runs at session
+  # start where output is actually visible — unlike here, where the refresh hook sends stderr to
+  # /dev/null.
+  if [ -n "${CRG_EMBEDDING_PROVIDER:-}" ]; then
+    printf '%s' "$CRG_EMBEDDING_PROVIDER"
+    return 0
+  fi
 
+  # The OpenAI-compatible trio is the one thing we infer, and only because it mirrors CRG's own
+  # no-provider default (embeddings.py::resolve) and because these three variables are config WE
+  # wrote — setup-embeddings.sh is the only thing that puts them in embed.env.
   if [ -n "${CRG_OPENAI_BASE_URL:-}" ] && [ -n "${CRG_OPENAI_API_KEY:-}" ] && [ -n "${CRG_OPENAI_MODEL:-}" ]; then
     printf 'openai'
     return 0
   fi
-  [ -n "${GOOGLE_API_KEY:-}" ] && {
-    printf 'google'
-    return 0
-  }
-  [ -n "${MINIMAX_API_KEY:-}" ] && {
-    printf 'minimax'
-    return 0
-  }
+
+  # NOTHING is inferred from a bare cloud API key. This used to read GOOGLE_API_KEY / MINIMAX_API_KEY
+  # and select that provider, which was a consent defect, not a convenience: CRG requires EXPLICIT
+  # opt-in for its cloud providers and emits a one-time egress warning before using one, and the
+  # refresh hook runs this under `nohup ... > /dev/null 2>&1`, so that warning could never reach
+  # anyone. A developer with GOOGLE_API_KEY exported for an unrelated service got their source
+  # shipped to a cloud embedding API on every commit, billed to them, silently. Selecting a cloud
+  # provider now requires saying so in CRG_EMBEDDING_PROVIDER.
 
   # Auto-keep-fresh: a repo embedded earlier keeps its vectors current with no config. Only
   # `local` qualifies — the cloud providers raise ValueError when their env vars are absent,
