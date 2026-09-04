@@ -36,7 +36,7 @@ territory by construction.
 **state which tier a search used** when it backs an answer. Preference order is
 **custom → local → keyword** (`./setup-embeddings.sh` sets it up in that order):
 
-1. **custom** — vectors from an external / OpenAI-compatible provider (e.g. Ollama). Richest.
+1. **custom** — vectors from an external / OpenAI-compatible provider. Richest.
    These are read ONLY when pinned, or the tool silently drops to keyword:
    `semantic_search_nodes_tool(query=X, provider="openai", model="<model>")`.
 2. **local** — vectors from CRG's built-in model. Read by default, no pin: `semantic_search_nodes_tool(query=X)`.

@@ -294,6 +294,19 @@ one, mirroring the installer and `verify-graph-hooks.sh` ("keyword mode … opti
   before they choose.
 - **Keyword mode** — always a valid answer; the user can choose to stay in keyword mode.
 
+CRG also ships providers this skill deliberately does **not** drive — `google`, `minimax`,
+`voyage`. They are reached by setting `CRG_EMBEDDING_PROVIDER` and that vendor's key yourself, not
+from this menu. The skill still recognises them: `embed-provider.sh` resolves whatever name is set
+and `embed-health.sh` checks that the MCP read path carries the credential they need. Driving them
+would mean owning a credential-prompt flow per vendor and re-drifting every time upstream adds
+one — recognise and check, never drive.
+
+**Nothing is inferred from a bare cloud API key.** A `GOOGLE_API_KEY` sitting in the environment
+for some unrelated service selects nothing: CRG requires explicit opt-in for its cloud providers
+and warns about source egress before using one, and the refresh hook discards that warning, so
+inference here would spend someone's key and ship their code with no way to notice. The only thing
+inferred is a complete `CRG_OPENAI_*` trio, which is config this skill wrote.
+
 Apply the answer non-interactively, then let the hooks keep it fresh:
 
 ```bash
