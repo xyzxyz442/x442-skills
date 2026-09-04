@@ -38,7 +38,7 @@ directories (`rmdir`, never `rm -rf`).
 - `verify-setup-handoff.sh` reported a `[FAIL]`, or a `[warn]` you want resolved.
 - After changing which AI tools the repo uses — a tool dropped from a later install can leave a
   stale enforcement hook, so the gate fires from a tool nobody runs.
-- A shared cross-repo board whose section stopped resolving after `.handoff-repos.json` changed.
+- A shared cross-repo board whose section stopped resolving after `.agents/handoff.json` changed.
 - A checkout on a new machine, or after a Windows clone (the exec bit or CRLF may have broken the
   CLI or its hooks).
 
@@ -195,7 +195,7 @@ because each depends on the relationship between the board's parts rather than o
 
 - **Brief repo identity (shared boards only).** `$BOARD/repos.json` is what `handoff export`
   resolves a handoff's `audience` to a real repo through. It is generated from
-  `.handoff-repos.json`, so a missing or drifted one is not visible at export time — every
+  `.agents/handoff.json`, so a missing or drifted one is not visible at export time — every
   cross-repo brief just quietly renders `repo_root_commit: unverified`. Detect it with
   `verify-cross-repo-handoff.sh`; the repair is a re-sync (step 5 below), never a hand-edit.
 - **AGENTS.md block drift.** The routing block between `<!-- handoff:begin` and

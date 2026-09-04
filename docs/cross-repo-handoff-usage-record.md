@@ -10,6 +10,13 @@ generated hook commands, the board layout, and the verifier output are copied ve
 illustrative. Where a feature is described but not exercised here (the `prefix` layout, a group
 given its own separate board), it is marked as such and shown from the skill's contract.
 
+> **Naming note (2026-09-04).** This record is transcribed from an install that predates the
+> config-filename consolidation, so it shows the manifest as `.handoff-repos.json`. The canonical
+> name is now `.agents/handoff.json` — the same filename at every layer. The old name is still read
+> below the file that replaced it, so the install described here keeps resolving; a new one should
+> use `.agents/handoff.json`. The transcript is left as-is rather than rewritten, because it is a
+> record of what actually ran.
+
 | Fact                    | Value                                                                                              |
 | ----------------------- | -------------------------------------------------------------------------------------------------- |
 | Board                   | `workspace/src/.agents/handoff` — a standalone directory, owned by no member repo                  |

@@ -29,7 +29,7 @@ Your session board and the edit gate **are** scoped for you, because the hooks c
 board are isolated. Do not edit a doc you do not hold the lease for. Handoff docs are committed to
 git history — never paste secrets, keys, or PII.
 
-Scope comes from the `.handoff-repos.json` cascade (user → workspace → subdirectory, nearest wins).
+Scope comes from the `.agents/handoff.json` cascade (user → workspace → subdirectory, nearest wins).
 After editing it, re-run `sync-cross-repo-handoff.sh` so this block, the board wiring, and the
 sub-indexes agree.
 
