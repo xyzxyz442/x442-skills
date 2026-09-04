@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/xyzxyz442/x442-skills/compare/v0.11.3...v0.11.4) (2026-09-04)
+
+### 🐞 Bug Fixes
+
+- **config:** lint-staged skipped JavaScript too ([21a864c](https://github.com/xyzxyz442/x442-skills/commit/21a864c88a69509698196999272c0d600e0a3e41))
+- **config:** stop commitlint warning about footers on ordinary prose ([09abfa8](https://github.com/xyzxyz442/x442-skills/commit/09abfa851529cf073d96320f5d48f16f600dbbfb))
+
 ## [0.11.3](https://github.com/xyzxyz442/x442-skills/compare/v0.11.2...v0.11.3) (2026-09-04)
 
 ### 🐞 Bug Fixes
