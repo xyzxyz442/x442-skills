@@ -281,6 +281,15 @@ in-flight work:
 And it is **never silent**. An interactive caller is asked; a hook prints one line and does
 nothing; `--yes` is the explicit consent for CI and local boards.
 
+It is also **offered rather than waited for**. A board that is behind takes every write safely, so
+nothing refuses it — which is exactly why it could sit at an old schema forever with `migrate`
+never typed. A write command (`claim`, `release`, `new`, `import`, `export`, `children`) run from a
+terminal therefore asks once whether to migrate first, runs it if you say yes, and **does the write
+either way**: declining, a migration that hits one of its own gates, no answer at all — none of
+them is a reason the command you typed fails. It stays quiet where an offer would be wrong: under a
+hook or a script (no tty), under `$HANDOFF_NONINTERACTIVE`, and while any lease is held in this
+section, since gate 2 would refuse the migration in that state and every `release` is holding one.
+
 **Downstream forks extend with flat `x_*` keys**, which upstream validation ignores. Flat, not
 nested — every frontmatter reader here is a line-matcher.
 

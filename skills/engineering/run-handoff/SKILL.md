@@ -208,9 +208,13 @@ That is not a bug and not something to work around: the doc carries fields your 
 and writing it here would silently drop them. Update the payload (re-run `setup-handoff`), then
 `./handoff migrate`. Reading — `list`, the index, the doc itself — keeps working throughout.
 
-The reverse direction is a one-line note on the session banner: documents that _predate_ the
-current schema. Nothing is broken, reads and writes both work, and `./handoff migrate` moves them
-when convenient. Migration rewrites every document on the board, so it asks first, refuses while
+The reverse direction — a board that _predates_ the current schema — is never a refusal, because
+writing to it is safe. It is a one-line note on the session banner, and, when you write from a
+terminal, an **offer**: `claim`, `new`, `import` and the rest ask once whether to migrate first,
+run it if you say yes, and do what you typed either way. Answer `n` freely; nothing about the
+command changes. Nothing offers when there is nobody to ask — a hook, a script, `$HANDOFF_NONINTERACTIVE` —
+and nothing offers while a lease is held in your section, since migration would refuse in that
+state anyway. Migration rewrites every document on the board, so it asks first, refuses while
 anyone holds a lease in your section, and never runs itself.
 
 ## 4. Work under the lease

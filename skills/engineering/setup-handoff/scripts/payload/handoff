@@ -720,7 +720,10 @@ warn_schema_forward() { # path
 require_writable() { # path id
   local v
   v="$(doc_schema "$1")"
-  [ "$v" -le "$SCHEMA_VERSION" ] && return 0
+  [ "$v" -le "$SCHEMA_VERSION" ] && {
+    offer_migration
+    return 0
+  }
   die "$2 is schema $v and this CLI understands $SCHEMA_VERSION — refusing to write it.
        Editing it here would silently drop every field this CLI does not know about.
        Update the board first: re-run setup-handoff, then './handoff migrate'."
@@ -749,11 +752,66 @@ print(v if isinstance(v, int) else "")' "$DIR/handoff.json" 2> /dev/null)"
 require_board_writable() { # what-this-command-would-do
   local v
   v="$(board_schema)"
-  [ "$v" -le "$SCHEMA_VERSION" ] && return 0
+  [ "$v" -le "$SCHEMA_VERSION" ] && {
+    offer_migration
+    return 0
+  }
   die "this board is schema $v and this CLI understands $SCHEMA_VERSION — refusing to $1.
        The document would be stamped schema $SCHEMA_VERSION on a schema $v board, and no later
        reader could tell it apart from one that predates the migration.
        Update this repo first: re-run setup-handoff, then './handoff migrate'."
+}
+
+# ADR 0003, "Migration is offered, never silent" — the OTHER direction of the two gates above. They
+# both handle the CLI being BEHIND the thing it is writing, where the answer is to refuse. When the
+# BOARD is behind the CLI the write is perfectly safe, which is why nothing refused it — and also
+# why nothing ever mentioned it: `migrate` sat there waiting to be typed unprompted, and a board
+# nobody migrated took every write without a word. So a write from a human offers.
+#
+# Three rules shape it, and each one is load-bearing:
+#   - it NEVER blocks. Declining, a failed migration, no answer at all — the write the user actually
+#     typed proceeds. A board upgrade must never be the reason a claim or a release fails.
+#   - it never prompts a hook or CI (`migrate_can_prompt`, the same test `migrate` itself uses).
+#     hooks.sh reports the same drift as one line on the session banner; that is the hook's half.
+#   - it stays quiet while a lease is held in this section, because `migrate` would refuse in that
+#     state (gate 2) — and every `release` is by definition holding one. Prompting for something
+#     guaranteed to fail is how an offer trains people to answer no.
+#
+# It rides the write gates rather than the eight call sites: those gates are, by construction,
+# on every write path and on nothing else, so a command added later inherits the offer for free.
+_MIGRATE_OFFERED=0
+offer_migration() {
+  [ "$_MIGRATE_OFFERED" = 0 ] || return 0
+  _MIGRATE_OFFERED=1
+  # Cheapest test first, and not only for tidiness: `migrate_can_prompt` is two shell builtins,
+  # while `board_schema` spawns python3 and `held_leases_in_section` walks every doc. Every
+  # scripted write — CI, a grader, a hook that shells out — fails this one and pays nothing for a
+  # prompt it was never going to see.
+  migrate_can_prompt || return 0
+  local v
+  v="$(board_schema)"
+  [ "$v" -lt "$SCHEMA_VERSION" ] || return 0
+  [ -z "$(held_leases_in_section)" ] || return 0
+
+  echo "ℹ️  This board is schema $v; this CLI writes schema $SCHEMA_VERSION. './handoff migrate' brings it current." >&2
+  printf 'Migrate the board first? [y/N] ' >&2
+  local reply=""
+  read -r reply < /dev/tty || reply=""
+  case "$reply" in
+    y | Y | yes | YES) ;;
+    *)
+      echo "Not migrating — continuing. Run './handoff migrate' when convenient." >&2
+      return 0
+      ;;
+  esac
+
+  # In a subshell on purpose: `migrate` dies on any of its four gates, and none of them — no git
+  # history, a lease taken since, a dirty tree, a rejected push — is a reason to abort the command
+  # the user came here to run. The migration's own message says which gate stopped it.
+  if ! (cmd_migrate --yes); then
+    echo "⚠️  The migration did not run (see above) — continuing without it." >&2
+  fi
+  return 0
 }
 
 VALID_ROLES="steering spec reference brief-archive"
@@ -3150,6 +3208,21 @@ surface_unblocked() { # closed_id -> print any open docs (in this section) block
 # forty-entry activity log is the current state. Judgment stays lazy-on-touch, and `verify` lists
 # what is still missing.
 
+# Who is holding a live lease in THIS section, as "id (owner), id (owner)" — empty when nobody is.
+# Migration rewrites every document on the board, so a held lease is the one condition that makes it
+# unrunnable right now; both the gate below and the write-path offer read it from here so they can
+# never disagree about who counts.
+held_leases_in_section() {
+  local f held="" kind owner exp key
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    key="$(basename "$f" .md)"
+    IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
+    [ "$kind" = "held" ] && held="${held:+$held, }$key ($owner)"
+  done < <(each_doc)
+  printf '%s' "$held"
+}
+
 # Is this an interactive human, or a hook? A hook must never prompt (nothing is listening) and must
 # never block (it would take the session down over a board upgrade). $HANDOFF_NONINTERACTIVE is the
 # explicit override for CI.
@@ -3269,14 +3342,8 @@ cmd_migrate() {
 
   # GATE 2 — no live lease in THIS section. Migrating a doc somebody is holding rewrites the file
   # under them. A lease in another section is somebody else's business and does not block this.
-  local held=""
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    local kind owner exp key
-    key="$(basename "$f" .md)"
-    IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
-    [ "$kind" = "held" ] && held="${held:+$held, }$key ($owner)"
-  done < <(each_doc)
+  local held
+  held="$(held_leases_in_section)"
   [ -n "$held" ] && die "live lease(s) in this section — migrating would rewrite documents somebody is holding: $held
        Wait for them to release, or take over an expired lease first."
 

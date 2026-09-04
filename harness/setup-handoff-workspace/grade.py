@@ -2619,6 +2619,283 @@ def grade_grouped_board(_target):
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _run_pty(argv, cwd, env_extra, feed, timeout=120):
+    """Run a command with a REAL controlling terminal, feeding it `feed` on stdin.
+
+    The migration offer only exists for an interactive human, and `migrate_can_prompt` decides
+    that with `[ -t 0 ] && [ -t 1 ]` while the answer is read from `/dev/tty`. A pipe therefore
+    proves nothing about it in either direction -- a plain subprocess is indistinguishable from a
+    hook, so the whole branch under test would be skipped and every assertion would pass
+    vacuously. `pty.fork()` is what gives the child a pty that is also its CONTROLLING terminal,
+    which is what makes `/dev/tty` resolve; `openpty` + dup alone would not.
+
+    Returns (exit code, combined output). The pty echoes the fed input back, so assertions read
+    substrings rather than whole lines.
+    """
+    import os
+    import pty
+    import select
+
+    env = {**os.environ, **env_extra}
+    env = {k: v for k, v in env.items() if v is not None}
+    pid, fd = pty.fork()
+    if pid == 0:  # child: this IS the pty session leader
+        try:
+            os.chdir(str(cwd))
+            os.execvpe(argv[0], argv, env)
+        finally:
+            os._exit(127)
+    if feed:
+        os.write(fd, feed.encode())
+    out = b""
+    while True:
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if not ready:
+            break
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:  # the slave closed -- normal EOF on a pty
+            break
+        if not chunk:
+            break
+        out += chunk
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return os.waitstatus_to_exitcode(status), out.decode(errors="replace")
+
+
+def grade_migration_offer(_target):
+    """ADR 0003's "Migration is offered, never silent" -- the half that never reached a write.
+
+    Two of the clause's three parts shipped: the hook reports one line and never blocks, and
+    `--yes` exists for CI. The third -- "an interactive invocation offers on a write command" --
+    did not. Both write gates only ever handled the CLI being BEHIND the thing it writes, where
+    the answer is to refuse; the opposite direction, a BOARD behind the CLI, which is the
+    direction migration exists for, had no write-path handler at all. A board left at schema 0
+    took every claim, release and export without once mentioning that `migrate` was sitting
+    there. That is what this case pins, in the three modes the ADR names plus the two that make
+    the offer safe.
+
+    Self-contained; ignores the passed fixture. Each mode runs against a genuinely schema-0
+    board -- board stamp AND document stamp -- because the board stamp alone is what
+    `board_schema()` reads and the document stamp alone is what gives `migrate` work to do.
+
+    The modes:
+      * `decline`   -- a tty write offers, and taking `n` still does the write. The offer must
+                       never be a gate; a board upgrade is not a reason a claim fails.
+      * `accept`    -- taking `y` migrates the board and THEN does the write. One command, both.
+      * `noninteractive` -- $HANDOFF_NONINTERACTIVE on a real tty: no prompt, no block. CI sets
+                       this precisely so the write is not the thing that hangs.
+      * `no tty`    -- a plain pipe (what a hook or a script is): same silence, by the other half
+                       of `migrate_can_prompt`.
+      * `lease held` -- `migrate` refuses while anyone in the section holds a lease (gate 2), and
+                       every `release` holds one by definition. An offer that is guaranteed to
+                       fail is how an offer teaches people to answer no, so this one stays quiet.
+      * `hook`      -- the already-shipped half, asserted unchanged: one line, exit 0.
+    """
+    import json as _json
+    import shutil
+    import tempfile
+
+    e = []
+    base = Path(tempfile.mkdtemp(prefix="handoff-migration-offer-"))
+    cli_env = {"HANDOFF_SESSION_ID": "sess-OFFER"}
+    OFFER = "Migrate the board first?"
+
+    def board_stamp(repo):
+        return _board_json(Path(repo) / HD).get("schema")
+
+    def to_schema_0(repo):
+        """Put the board back to the pre-schema state, stamp and documents alike."""
+        board = Path(repo) / HD
+        cfg = board / "handoff.json"
+        d = _json.loads(cfg.read_text())
+        d["schema"] = 0
+        cfg.write_text(_json.dumps(d, indent=2, sort_keys=True) + "\n")
+        for doc in board.glob("*-handoff.md"):
+            doc.write_text(
+                "".join(
+                    ln
+                    for ln in doc.read_text().splitlines(True)
+                    if not ln.startswith("schema:")
+                )
+            )
+
+    def scaffold(name):
+        repo = base / name
+        (repo / "src").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("# AGENTS\n")
+        (repo / "src/app.js").write_text("// app\n")
+        gc.git_init_commit(repo)
+        r = _run(
+            ["bash", str(SETUP), str(repo), "--tools", "claude", "--primary", "claude"],
+            repo,
+        )
+        e.append(
+            gc.expectation(
+                f"[{name}] install scaffolds a board",
+                r.returncode == 0,
+                f"exit {r.returncode}: {r.stderr.strip()[:120]}",
+            )
+        )
+        _handoff(repo, "new", "demo", "--title", "Demo doc")
+        to_schema_0(repo)
+        e.append(
+            gc.expectation(
+                f"[{name}] the board reads as schema 0 before the write",
+                board_stamp(repo) == 0,
+                f"stamp: {board_stamp(repo)}",
+            )
+        )
+        return repo
+
+    def claim_cmd(repo):
+        return ["bash", str(Path(repo) / HD / "handoff"), "claim", "demo", "note"]
+
+    def is_claimed(repo):
+        return "session=sess-OFFER" in _lease(repo, "demo-handoff")
+
+    try:
+        # --- decline: offered, and the write happens anyway --------------------------------
+        repo = scaffold("decline")
+        code, out = _run_pty(claim_cmd(repo), repo, cli_env, "n\n")
+        e.append(
+            gc.expectation(
+                "[decline] a tty write offers the migration",
+                OFFER in out and "schema 0" in out,
+                f"out: {out[:200]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[decline] declining does not block the write",
+                code == 0 and is_claimed(repo),
+                f"exit {code}, claimed: {is_claimed(repo)}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[decline] and nothing was migrated behind the answer",
+                board_stamp(repo) == 0,
+                f"stamp: {board_stamp(repo)}",
+            )
+        )
+
+        # --- lease held: quiet, because `migrate` could not run anyway ----------------------
+        # `release` is the case that matters -- it is ALWAYS holding the lease it is releasing.
+        code, out = _run_pty(
+            [
+                "bash",
+                str(Path(repo) / HD / "handoff"),
+                "release",
+                "demo",
+                "--status",
+                "open",
+            ],
+            repo,
+            cli_env,
+            "y\n",
+        )
+        e.append(
+            gc.expectation(
+                "[lease held] no offer while a lease in this section blocks migrate",
+                OFFER not in out,
+                f"out: {out[:200]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[lease held] and the release itself still succeeds",
+                code == 0 and not is_claimed(repo),
+                f"exit {code}, still claimed: {is_claimed(repo)}",
+            )
+        )
+
+        # --- accept: migrate first, then do the write --------------------------------------
+        repo = scaffold("accept")
+        code, out = _run_pty(claim_cmd(repo), repo, cli_env, "y\n")
+        e.append(
+            gc.expectation(
+                "[accept] the offer runs the migration",
+                board_stamp(repo) == 1,
+                f"stamp: {board_stamp(repo)}, out: {out[:200]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[accept] the document was migrated too, not only the board stamp",
+                "schema: 1" in (Path(repo) / HD / "demo-handoff.md").read_text(),
+                "doc frontmatter",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[accept] and the write the user actually typed still happened",
+                code == 0 and is_claimed(repo),
+                f"exit {code}, claimed: {is_claimed(repo)}",
+            )
+        )
+
+        # --- non-interactive: no prompt, no block ------------------------------------------
+        repo = scaffold("noninteractive")
+        code, out = _run_pty(
+            claim_cmd(repo), repo, {**cli_env, "HANDOFF_NONINTERACTIVE": "1"}, ""
+        )
+        e.append(
+            gc.expectation(
+                "[noninteractive] a tty write with $HANDOFF_NONINTERACTIVE never prompts",
+                OFFER not in out,
+                f"out: {out[:200]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[noninteractive] and it neither blocks nor migrates",
+                code == 0 and is_claimed(repo) and board_stamp(repo) == 0,
+                f"exit {code}, claimed: {is_claimed(repo)}, stamp: {board_stamp(repo)}",
+            )
+        )
+
+        # --- no tty at all: a hook or a script ---------------------------------------------
+        repo = scaffold("no-tty")
+        r = _handoff(repo, "claim", "demo", "note", session="sess-OFFER")
+        out = r.stdout + r.stderr
+        e.append(
+            gc.expectation(
+                "[no tty] a piped write never prompts",
+                OFFER not in out,
+                f"out: {out[:200]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[no tty] and it neither blocks nor migrates",
+                r.returncode == 0 and is_claimed(repo) and board_stamp(repo) == 0,
+                f"exit {r.returncode}, claimed: {is_claimed(repo)}, stamp: {board_stamp(repo)}",
+            )
+        )
+
+        # --- the hook half, unchanged ------------------------------------------------------
+        note = _hook(repo, "sessionstart", {}, session="sess-OFFER")
+        e.append(
+            gc.expectation(
+                "[hook] the session banner still reports the drift in one line",
+                "predate schema 1" in note and "migrate" in note,
+                f"note: {note[-200:]!r}",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[hook] and it never prompts",
+                OFFER not in note,
+                f"note: {note[-200:]!r}",
+            )
+        )
+        return e
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def grade(target, eval_id):
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
@@ -2856,6 +3133,9 @@ def _grade(target, eval_id):
 
     if eval_id == "schema-behind":
         return grade_schema_behind(target)
+
+    if eval_id == "migration-offer":
+        return grade_migration_offer(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 
