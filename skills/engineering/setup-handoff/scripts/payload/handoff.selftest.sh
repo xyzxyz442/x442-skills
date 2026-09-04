@@ -1575,5 +1575,18 @@ chk_contains "and release still takes one too" \
 chk_contains "a typo'd flag on import is refused too" \
   "$(hb "$UF" import "$(mktemp -d)/nope.md" --standalon)" "unknown flag: --standalon"
 
+# `list` reads and never writes, so a swallowed flag costs a wrong VIEW rather than a damaged doc.
+# It is still the same rule. The inventory that drove the guard missed it because cmd_list used a
+# bare `case` on $1 instead of the `while` loop the other four share — and repairing four sites
+# while leaving the fifth is how the inconsistency arose in the first place.
+chk_contains "a typo'd flag on list is refused" \
+  "$(hb "$UF" list --bogusflag)" "unknown flag: --bogusflag"
+chk_contains "a plain list still lists" "$(hb "$UF" list)" "STATUS"
+chk_contains "--verbose still works" "$(hb "$UF" list --verbose)" "STATUS"
+# Only $1 was ever examined, so a bad flag in second position was invisible whenever the first
+# one was valid.
+chk_contains "a typo'd flag AFTER a valid one is refused too" \
+  "$(hb "$UF" list --verbose --bogusflag)" "unknown flag: --bogusflag"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

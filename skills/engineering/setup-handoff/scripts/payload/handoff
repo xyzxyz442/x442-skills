@@ -2546,8 +2546,17 @@ export_bundle() { # id doc to outdir do_claim force-secret-reason
 }
 
 cmd_list() {
-  local VERBOSE=0
-  case "${1:-}" in --verbose | -v) VERBOSE=1 ;; esac
+  # EVERY argument is checked, not just $1. The old form read `$1` alone, so an unknown flag was
+  # ignored outright — and one in second position stayed invisible even when the first was valid.
+  # `list` only reads, so the cost was a wrong VIEW rather than a damaged doc, but it is the same
+  # rule as the four write commands and it is applied here for the same reason.
+  local VERBOSE=0 _a
+  for _a in "$@"; do
+    case "$_a" in
+      --verbose | -v) VERBOSE=1 ;;
+      *) reject_unknown_flag "$_a" ;;
+    esac
+  done
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
   # cannot see the work" indistinguishable — and this is the reachable case, not a corner one,
