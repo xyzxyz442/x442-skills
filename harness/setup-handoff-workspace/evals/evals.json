@@ -135,6 +135,13 @@
       "fixture": "fixtures/claude-wired",
       "prompt": "Drive one board's CLI against a different board.",
       "expected_output": "The dispatcher answers \"which board am I\" from the directory it sits in, which is wrong for a worktree, a shared board mounted elsewhere, or a harness driving one CLI across several boards. $HANDOFF_BOARD_PATH must re-point BOTH halves — a `list` that follows it while `new` files into the old board is worse than no override — and the redirect must be VISIBLE in `--which`, naming the board it overrode, because work landing silently on a board nobody watches is the failure this override could otherwise cause. Dropping the override must return to the home board, so it is not a one-way door."
+    },
+    {
+      "id": "migration-offer",
+      "kind": "post-state",
+      "prompt": "This board is still at the old document schema. Make the CLI say so when I write to it.",
+      "expected_output": "ADR 0003's \"Migration is offered, never silent\" on a WRITE command. Self-contained: the case scaffolds its own schema-0 boards. An interactive write (real pty) offers the migration; declining still does the write and migrates nothing; accepting migrates the board and document, then does the write. $HANDOFF_NONINTERACTIVE and a piped invocation never prompt and never block, and no offer appears while a lease in the section would make `migrate` refuse — every `release` holds one, and an offer guaranteed to fail is how an offer teaches people to answer no. The hook half is unchanged — one line on the session banner, never a prompt.",
+      "fixture": "fixtures/fresh"
     }
   ]
 }

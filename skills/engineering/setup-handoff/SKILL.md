@@ -229,7 +229,9 @@ is worse than neither.
 never an inferred environment, sensitivity, or a current state seeded from an activity log — and it
 is gated on version control, no live lease in the section, a clean worktree, and a push that rolls
 back rather than half-applying. Interactive callers are asked, hooks print one line and do nothing,
-`--yes` is for CI.
+`--yes` is for CI. A write command on a board that is behind **offers** the migration rather than
+waiting to be typed unprompted — from a terminal only, never while a lease in the section would
+make `migrate` refuse, and never as a gate: the write proceeds whatever the answer.
 
 ## `verify-setup-handoff.sh --json`
 
