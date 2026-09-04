@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.2](https://github.com/xyzxyz442/x442-skills/compare/v0.11.1...v0.11.2) (2026-09-04)
+
+### 🐞 Bug Fixes
+
+- **bug:** close the unknown-flag class at its fifth site, cmd_list ([c48d045](https://github.com/xyzxyz442/x442-skills/commit/c48d04532219ccb52441661d549a465ee52cdc13))
+
 ## [0.11.1](https://github.com/xyzxyz442/x442-skills/compare/v0.11.0...v0.11.1) (2026-09-04)
 
 ### 🐞 Bug Fixes
