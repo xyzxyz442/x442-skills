@@ -86,22 +86,75 @@ model = os.environ.get("CRG_OPENAI_MODEL") or ""
 key = os.environ.get("CRG_OPENAI_API_KEY") or ""
 explicit = os.environ.get("CRG_EMBEDDING_PROVIDER") or ""
 
-if explicit in ("local", "openai", "google", "minimax"):
+# Every explicit name is honoured, including one this script has never heard of — the write path
+# keeps no allow-list either (see embed-provider.sh::resolve). Validity is CRG's to judge; what
+# belongs HERE is reporting, because this runs at session start where the user can see it.
+KNOWN = ("local", "openai", "google", "minimax", "voyage")
+if explicit:
     provider = explicit
 elif base and model and key:
     provider = "openai"
 else:
     provider = ""
 
+# The credential each provider needs present in the READ path's environment. Advisory only: a name
+# missing from this map costs a missed warning, never a false failure, which is why a hand-kept map
+# is acceptable here and was not acceptable in resolve().
+REQUIRED_ENV = {
+    "openai": ("CRG_OPENAI_API_KEY", "CRG_OPENAI_BASE_URL", "CRG_OPENAI_MODEL"),
+    "google": ("GOOGLE_API_KEY",),
+    "minimax": ("MINIMAX_API_KEY",),
+    "voyage": ("VOYAGE_API_KEY",),
+    "local": (),
+}
+
 # The identity CRG stamps on a row, so it can be compared with what is already in the table.
+# Only the two providers we DRIVE have an identity we can reconstruct: openai's carries the model
+# and endpoint we wrote, local's carries the model. For a cloud provider reached by env we know the
+# NAME and nothing else, so `want` is the bare name and the comparison below degrades to a prefix
+# match. Leaving it empty (as this did until payload 3) made `have != want` true for every such
+# repo, reporting drift on a perfectly healthy google/minimax/voyage config — the same
+# "misdescribe a correct setup" failure this file exists to catch.
 if provider == "openai":
     want = "openai:%s@%s" % (model, base)
 elif provider == "local":
     want = "local:%s" % (os.environ.get("CRG_EMBEDDING_MODEL") or "")
 else:
-    want = ""
+    want = provider
 
 have, n = recorded()
+
+# ---- 0a. unknown: an explicit provider name CRG will reject -----------------------------------
+# resolve() passes any name through rather than keeping a stale copy of CRG's list, which trades a
+# silent skip for one loud failure. The failure is only loud somewhere it can be seen, and the
+# refresh hook is not that place — it runs under `nohup ... > /dev/null 2>&1`. So the report lands
+# here. KNOWN can fall behind upstream; being wrong costs a spurious warning on a valid provider,
+# not a broken embed, so it stays advisory.
+if explicit and explicit not in KNOWN:
+    problems.append((
+        "unknown",
+        "CRG_EMBEDDING_PROVIDER is %r, which code-review-graph does not accept (it knows %s) — "
+        "every embed will fail, and the hook sends the error to /dev/null"
+        % (explicit, ", ".join(KNOWN)),
+    ))
+
+# ---- 0b. consent: a cloud key present with no explicit provider -------------------------------
+# Until payload 3, resolve() read GOOGLE_API_KEY / MINIMAX_API_KEY and SELECTED that provider, so an
+# ambient key exported for something else silently shipped this repo's source to a cloud embedding
+# API on every commit, billed to its owner, with CRG's egress warning routed to /dev/null. That
+# inference is gone. This notice fires only for repos that were in exactly that state, so it stays
+# quiet for everyone else, and says what it means rather than leaving it to a version number.
+if not explicit:
+    stray = sorted(k for k in ("GOOGLE_API_KEY", "MINIMAX_API_KEY", "VOYAGE_API_KEY")
+                   if os.environ.get(k))
+    if stray:
+        problems.append((
+            "consent",
+            "%s present but CRG_EMBEDDING_PROVIDER is unset — before payload 3 this repo would "
+            "have embedded against that cloud provider automatically, sending source off this "
+            "machine without asking. It no longer does. Set CRG_EMBEDDING_PROVIDER explicitly if "
+            "you actually want it" % " and ".join(stray),
+        ))
 
 # ---- 1. drift: the write path and the index disagree -----------------------------------------
 if have and provider:
@@ -110,6 +163,9 @@ if have and provider:
     # the bare provider unless the config actually names a model.
     if provider == "local" and not os.environ.get("CRG_EMBEDDING_MODEL"):
         mismatch = not have.startswith("local:")
+    elif provider not in ("openai", "local"):
+        # Bare-name comparison: `have` is "google:text-embedding-004" and all we know is "google".
+        mismatch = have.split(":", 1)[0] != provider
     else:
         mismatch = have != want
     if mismatch:
@@ -188,24 +244,33 @@ for path, top in MCP_FILES:
             % (path, cwd),
         ))
 
-    if provider == "openai":
-        if not all(env.get(k) for k in ("CRG_OPENAI_BASE_URL", "CRG_OPENAI_API_KEY", "CRG_OPENAI_MODEL")):
-            problems.append((
-                "readpath",
-                "%s has no CRG_OPENAI_* env — the server falls back to keyword mode and never reads "
-                "these vectors" % path,
-            ))
-        elif (env["CRG_OPENAI_BASE_URL"].rstrip("/"), env["CRG_OPENAI_MODEL"]) != (base, model):
-            problems.append((
-                "readpath",
-                "%s reads %s/%s but the vectors were written by %s/%s — no query will match them"
-                % (path, env["CRG_OPENAI_BASE_URL"].rstrip("/"), env["CRG_OPENAI_MODEL"], base, model),
-            ))
-    elif provider == "local" and any(k.startswith("CRG_OPENAI_") for k in env):
+    # "The write path and the read path must agree" is true for EVERY provider, not just the two
+    # we drive. This used to run only for openai/local, so a repo embedding through a cloud
+    # provider got no read-path check at all — the MCP server would sit in keyword mode over a
+    # graph full of vectors and nothing would say so. The credential names come from REQUIRED_ENV;
+    # the endpoint/model comparison below is openai-specific because it is the only provider whose
+    # identity carries an endpoint.
+    missing = [k for k in REQUIRED_ENV.get(provider, ()) if not env.get(k)]
+    if provider and missing:
         problems.append((
             "readpath",
-            "%s still pins CRG_OPENAI_* but this repo embeds with the local provider — stale wiring"
-            % path,
+            "%s is missing %s — the graph server falls back to keyword mode and never reads these "
+            "vectors" % (path, ", ".join(missing)),
+        ))
+    elif provider == "openai" and (
+        (env["CRG_OPENAI_BASE_URL"].rstrip("/"), env["CRG_OPENAI_MODEL"]) != (base, model)
+    ):
+        problems.append((
+            "readpath",
+            "%s reads %s/%s but the vectors were written by %s/%s — no query will match them"
+            % (path, env["CRG_OPENAI_BASE_URL"].rstrip("/"), env["CRG_OPENAI_MODEL"], base, model),
+        ))
+
+    if provider and provider != "openai" and any(k.startswith("CRG_OPENAI_") for k in env):
+        problems.append((
+            "readpath",
+            "%s still pins CRG_OPENAI_* but this repo embeds with the %s provider — stale wiring"
+            % (path, provider),
         ))
 
 for code, msg in problems:

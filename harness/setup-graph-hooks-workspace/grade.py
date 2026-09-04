@@ -342,7 +342,10 @@ def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
     DECIDE — proving the two fixed defects (silent cloud-key inference, a stale hand-copied
     provider allow-list, a vendor name guessed from a port) cannot come back."""
     core = target / GRAPH_HOOKS_DIR / "core"
-    if not (core / "embed-provider.sh").is_file() or not (core / "embed-health.sh").is_file():
+    if (
+        not (core / "embed-provider.sh").is_file()
+        or not (core / "embed-health.sh").is_file()
+    ):
         return [
             gc.expectation(
                 "embed-provider.sh and embed-health.sh present for behavior test",
@@ -363,15 +366,21 @@ def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
     # this is trivially true; graded directly, it is the only thing standing between this fixture
     # and the same fate.
     for name in ("embed-provider.sh", "embed-health.sh"):
-        shipped = REPO / "skills/engineering/setup-graph-hooks/scripts/graph-hooks/core" / name
+        shipped = (
+            REPO
+            / "skills/engineering/setup-graph-hooks/scripts/graph-hooks/core"
+            / name
+        )
         same = shipped.is_file() and shipped.read_bytes() == (core / name).read_bytes()
         exps.append(
             gc.expectation(
                 f"{name} under test matches the skill's shipped copy",
                 same,
-                "identical to skill source"
-                if same
-                else f"{name} differs from {shipped} — fixture is stale, results below are about old code",
+                (
+                    "identical to skill source"
+                    if same
+                    else f"{name} differs from {shipped} — fixture is stale, results below are about old code"
+                ),
             )
         )
 
@@ -429,7 +438,9 @@ def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
     _drop_embeddings_db(repo)
     _write_embed_env(repo, "CRG_EMBEDDING_PROVIDER=totally-not-a-provider\n")
     out = _run_embed_script(
-        repo, "embed-health.sh", extra_env={"CRG_EMBEDDING_PROVIDER": "totally-not-a-provider"}
+        repo,
+        "embed-health.sh",
+        extra_env={"CRG_EMBEDDING_PROVIDER": "totally-not-a-provider"},
     )
     lines = [line for line in out.stdout.splitlines() if line.strip()]
     exps.append(
@@ -477,9 +488,7 @@ def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
     # The shipped fixture already carries this exact row; reseed explicitly anyway so the
     # assertion does not depend on what the fixture happens to ship.
     repo = _embed_scratch(target)
-    _seed_embeddings_db(
-        repo, ["openai:text-embedding-qwen3@http://localhost:1234"]
-    )
+    _seed_embeddings_db(repo, ["openai:text-embedding-qwen3@http://localhost:1234"])
     out = _run_embed_script(repo, "embed-provider.sh", "--tier")
     tier = out.stdout.strip()
     exps.append(
