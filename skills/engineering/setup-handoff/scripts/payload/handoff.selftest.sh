@@ -1542,5 +1542,38 @@ chk "an identified but unlocatable repo says so, rather than claiming it is unde
   "no-location||$S2_ROOT" "$S2_MISS"
 export HOME="$HOME_SAVE"
 
+printf '\nunknown flags are refused, not swallowed\n'
+# Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
+# (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing
+# said so. `release` and `claim` folded it into the trailing note, so the literal flag landed in
+# the Activity log. A mistyped flag is not data — it is an error that used to exit 0.
+UF="$(mkboard)"
+chk_contains "a typo'd flag on new is refused" \
+  "$(hb "$UF" new probe --title "t" --sevrity high --audience acme-api)" "unknown flag: --sevrity"
+chk "and no doc was created behind it" "no" \
+  "$([ -f "$UF/.agents/handoff/probe-handoff.md" ] && echo yes || echo no)"
+hb "$UF" new probe --title "t" --severity high --audience acme-api > /dev/null
+chk "the correctly spelled flag still lands" "high" \
+  "$(sed -n 's/^severity: //p' "$UF/.agents/handoff/probe-handoff.md" | head -1)"
+
+# `new` HAS a --note flag; `release` and `claim` take the note as a trailing positional. The same
+# habit typed at two commands behaved differently at each, and only one of them said so.
+chk_contains "a flag where release documents a positional note is refused" \
+  "$(hb "$UF" release probe --status open --note "x")" "unknown flag: --note"
+chk "and the Activity log did not absorb it" "" \
+  "$(grep -c -- '--note' "$UF/.agents/handoff/probe-handoff.md" | grep -v '^0$')"
+
+# The guard keys on the leading `--`, NOT on "unrecognized": `claim <id> [note]` and
+# `release <id> ... [note]` document a trailing bare-word note that has to keep working.
+hb "$UF" claim probe "a plain note" > /dev/null
+chk "a bare positional note still works on claim" "a plain note" \
+  "$(sed -n 's/^note=//p' "$UF/.agents/handoff/.locks/probe-handoff/owner" | head -1)"
+hb "$UF" release probe --status open "stopping here" > /dev/null
+chk_contains "and release still takes one too" \
+  "$(sed -n '/^## Activity/,$p' "$UF/.agents/handoff/probe-handoff.md" | tail -1)" "stopping here"
+
+chk_contains "a typo'd flag on import is refused too" \
+  "$(hb "$UF" import "$(mktemp -d)/nope.md" --standalon)" "unknown flag: --standalon"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
