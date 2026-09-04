@@ -4,6 +4,24 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ASSETS="$(cd "$HERE/../../assets" && pwd)"
+
+# ONE payload version per run, frozen here and never re-read.
+#
+# Every fixture copies the CLI in at fixture-creation time, and this suite builds 19 of them across
+# three builders over ~8 minutes. Reading $HERE live meant a run spanning an edit to the payload
+# built some boards from the old CLI and some from the new, then asserted the new behaviour against
+# both. That produced false failures twice — 2 each time, both in the delegate review gate — and
+# each cost ~25 minutes hunting a bug that was never in the code. It is not a hypothetical: the
+# payload is exactly what you are editing when you have reason to run this.
+#
+# SRC and TPL are what everything below reads. $HERE and $ASSETS are deliberately not used again —
+# a builder added later inherits the freeze only if it reads these, so these are the greppable names.
+SRC="$(mktemp -d)"
+TPL="$SRC/templates"
+mkdir -p "$TPL"
+cp "$HERE/handoff" "$HERE/config.sh" "$SRC/"
+cp "$ASSETS"/handoff-*-template.md "$TPL/"
+chmod +x "$SRC/handoff"
 P=0
 F=0
 
@@ -37,7 +55,7 @@ chk_contains() { # label haystack needle
 # too, silently no-op-ing every end-to-end check.
 HANDOFF_NO_MAIN=1
 # shellcheck disable=SC1091
-. "$HERE/handoff"
+. "$SRC/handoff"
 
 printf '\nrepo_origin_norm\n'
 chk "ssh form" "github.com/acme/acme-api" "$(repo_origin_norm 'git@github.com:acme/acme-api.git')"
@@ -95,9 +113,9 @@ mkboard() { # -> path to the repo root
   git -C "$r" add -A
   git -C "$r" commit -qm "initial commit"
   mkdir -p "$r/.agents/handoff/scripts" "$r/.agents/handoff/templates" "$r/.agents/handoff/archive"
-  cp "$HERE/handoff" "$r/.agents/handoff/handoff"
-  cp "$HERE/config.sh" "$r/.agents/handoff/scripts/config.sh"
-  cp "$ASSETS"/handoff-*-template.md "$r/.agents/handoff/templates/"
+  cp "$SRC/handoff" "$r/.agents/handoff/handoff"
+  cp "$SRC/config.sh" "$r/.agents/handoff/scripts/config.sh"
+  cp "$TPL"/handoff-*-template.md "$r/.agents/handoff/templates/"
   chmod +x "$r/.agents/handoff/handoff"
   printf '%s' "$r"
 }
@@ -476,9 +494,9 @@ mkboard_nogit() { # -> path to a repo-less board (REPO_DIR is empty for it)
   local r
   r="$(mktemp -d)"
   mkdir -p "$r/.agents/handoff/scripts" "$r/.agents/handoff/templates" "$r/.agents/handoff/archive"
-  cp "$HERE/handoff" "$r/.agents/handoff/handoff"
-  cp "$HERE/config.sh" "$r/.agents/handoff/scripts/config.sh"
-  cp "$ASSETS"/handoff-*-template.md "$r/.agents/handoff/templates/"
+  cp "$SRC/handoff" "$r/.agents/handoff/handoff"
+  cp "$SRC/config.sh" "$r/.agents/handoff/scripts/config.sh"
+  cp "$TPL"/handoff-*-template.md "$r/.agents/handoff/templates/"
   chmod +x "$r/.agents/handoff/handoff"
   printf '%s' "$r"
 }
@@ -937,9 +955,9 @@ mkshared() { # -> board dir (its own repo, pushed to a bare remote beside it)
   git init -q --bare "$bare"
   b="$base/board"
   mkdir -p "$b/scripts" "$b/templates" "$b/archive" "$b/briefs"
-  cp "$HERE/handoff" "$b/handoff"
-  cp "$HERE/config.sh" "$b/scripts/config.sh"
-  cp "$ASSETS"/handoff-*-template.md "$b/templates/"
+  cp "$SRC/handoff" "$b/handoff"
+  cp "$SRC/config.sh" "$b/scripts/config.sh"
+  cp "$TPL"/handoff-*-template.md "$b/templates/"
   chmod +x "$b/handoff"
   printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4\n}\n' > "$b/handoff.json"
   # The stale rule a board carries from before it had a remote. The CLI must repair it, because
