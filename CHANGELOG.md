@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1](https://github.com/xyzxyz442/x442-skills/compare/v0.11.0...v0.11.1) (2026-09-04)
+
+### 🐞 Bug Fixes
+
+- **bug:** refuse an unknown flag instead of swallowing it ([102fc2c](https://github.com/xyzxyz442/x442-skills/commit/102fc2c9c6e36642863190c6aff598ccb6150f9b))
+- **test:** freeze the payload once per selftest run ([b185105](https://github.com/xyzxyz442/x442-skills/commit/b1851057acb20deaf401b54d0b54ba54827df484))
+
+### 📚 Documentation
+
+- **docs:** correct manifest naming and harness-count drift after v0.11.0 ([1fe69f6](https://github.com/xyzxyz442/x442-skills/commit/1fe69f67821263abba250c413d3150884afb2fc8))
+
 ## [0.11.0](https://github.com/xyzxyz442/x442-skills/compare/v0.10.0...v0.11.0) (2026-09-04)
 
 ### 🚀 Features
