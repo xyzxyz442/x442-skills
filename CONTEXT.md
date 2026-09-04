@@ -119,7 +119,7 @@ migration.
 ## Graph
 
 **Search tier**:
-What the graph's semantic search *can* do in a repo, set by which vectors it holds —
+What the graph's semantic search _can_ do in a repo, set by which vectors it holds —
 **custom** (an external OpenAI-compatible provider), **local** (the built-in model), or
 **keyword** (no vectors, name matching only). A property of the repo, not of a query.
 Distinguished from **search mode**, which is what one query actually did. Unrelated to
@@ -136,7 +136,7 @@ _Avoid_: search type, fallback
 Which embedding backend writes and reads a repo's vectors. Three buckets, by transport, not
 by vendor: **local** (in-process model), **openai-compatible** (anything speaking
 `/v1/embeddings`), and **native** (a backend with its own SDK path). `ollama` and `lmstudio`
-are aliases *within* openai-compatible — presets that autofill an endpoint and a model — never
+are aliases _within_ openai-compatible — presets that autofill an endpoint and a model — never
 peers of it.
 _Avoid_: vendor, service, backend, LLM
 
