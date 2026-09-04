@@ -979,7 +979,12 @@ chk_contains "and names the prerequisite" "$DEP_OUT" "base-work-handoff (open)"
 # thing being asked for, which is why this one is stored quoted like `verify:`.
 chk_contains "and proceeds anyway" "$DEP_OUT" "Claimed prod-followup-handoff"
 hb "$SC" release prod-followup --status open > /dev/null
+# The day either side of the write, because the write is what stamps verified_at. Recomputing
+# the date down at the assertion instead made any run that crossed midnight in between fail a
+# check with nothing wrong behind it: the stamp was right, the expectation had moved on.
+VERIFY_DAY_BEFORE="$(date '+%Y-%m-%d')"
 hb "$SC" release base-work --status done --verified-by "read handoff:1 and ran the selftest" > /dev/null
+VERIFY_DAY_AFTER="$(date '+%Y-%m-%d')"
 QUIET_OUT="$(hb "$SC" claim prod-followup "starting again")"
 chk "a landed prerequisite warns about nothing" "" \
   "$(printf '%s' "$QUIET_OUT" | grep -c 'have not landed' | grep -v '^0$')"
@@ -992,8 +997,14 @@ printf '\ndocument schema — closure evidence is a field, not a sentence in a l
 chk "evidence is persisted as a field with its colons intact" "read handoff:1 and ran the selftest" \
   "$(cd "$SC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff \
     && meta "$SC/.agents/handoff/archive/base-work-handoff.md" verified_by)"
-chk "verified_at is still stamped beside it" "$(date '+%Y-%m-%d')" \
-  "$(sed -n 's/^verified_at: //p' "$SC/.agents/handoff/archive/base-work-handoff.md" | head -1)"
+# Whichever side of the write the stamp matches IS the expectation, so a genuinely wrong value
+# still reports itself as want/got rather than collapsing to a bare yes/no.
+VERIFIED_AT="$(sed -n 's/^verified_at: //p' "$SC/.agents/handoff/archive/base-work-handoff.md" | head -1)"
+VERIFY_DAY_EXPECT="$VERIFY_DAY_BEFORE"
+if [ "$VERIFIED_AT" = "$VERIFY_DAY_AFTER" ]; then
+  VERIFY_DAY_EXPECT="$VERIFY_DAY_AFTER"
+fi
+chk "verified_at is still stamped beside it" "$VERIFY_DAY_EXPECT" "$VERIFIED_AT"
 
 printf '\ndocument schema — role says what a standalone doc is FOR\n'
 hb "$SC" new auth-spec --standalone --role spec --title "Auth spec" > /dev/null
