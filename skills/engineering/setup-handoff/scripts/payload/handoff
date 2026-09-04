@@ -213,6 +213,24 @@ require_value() {
   esac
 }
 
+# The counterpart to require_value: an argument the command does not recognize.
+#
+# Four commands used to absorb one. `new` and `import` discarded it, so a typo'd `--severity`
+# created a doc with defaults and printed the ordinary success line — the misrouting was only
+# discoverable by reading the frontmatter back. `release` and `claim` folded it into the trailing
+# note, so the literal flag landed in the Activity log. In both shapes a mistyped flag was not an
+# error but data loss that exited 0.
+#
+# It keys on the leading `--`, NOT on "unrecognized", because `claim <id> [note]` and
+# `release <id> ... [note]` document a trailing bare-word note that must keep working. The optional
+# hint exists for exactly those two: `new` HAS a --note flag, so the same habit typed at release
+# behaves differently, and the message is the only place that can say so.
+reject_unknown_flag() { # arg [hint]
+  case "$1" in
+    --*) die "unknown flag: $1${2:+ ($2)}" ;;
+  esac
+}
+
 # An EXISTING file or directory's absolute path, via `cd && pwd` (portable — no `realpath` on
 # stock macOS). A relative path is only ever meaningful next to the cwd it was typed in; stamping
 # one into a doc's frontmatter records a pointer that resolves differently — or not at all — once
@@ -1382,7 +1400,10 @@ cmd_new() {
         force_secret="$2"
         shift 2
         ;;
-      *) shift ;;
+      *)
+        reject_unknown_flag "$1"
+        shift
+        ;;
     esac
   done
   case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
@@ -1863,7 +1884,10 @@ cmd_import() {
         type="standalone"
         shift
         ;;
-      *) shift ;;
+      *)
+        reject_unknown_flag "$1"
+        shift
+        ;;
     esac
   done
   [ -f "$src" ] || die "no such file: $src"
@@ -2727,6 +2751,9 @@ cmd_claim() {
   # accept the short or full id, in any casing; the lease is keyed on the resolved stem
   local raw_id="$id"
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  # Every remaining argument is note text, so each one is checked before it becomes note text.
+  local _a
+  for _a in "$@"; do reject_unknown_flag "$_a" "the note is a trailing positional, not a flag"; done
   local note="${*:-}"
   # Resolve the doc BEFORE deriving the lock key. The key is a pure function of the id, so an
   # unresolvable id would otherwise mint a lease for a doc that does not exist.
@@ -2900,6 +2927,7 @@ cmd_release() {
         shift
         ;;
       *)
+        reject_unknown_flag "$1" "the note is a trailing positional, not a flag"
         note="$note $1"
         shift
         ;;
