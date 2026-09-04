@@ -192,17 +192,25 @@ cfg.update(read_json(os.path.join(board, "handoff.json")))
 
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
-    # board", which is the board's `repoName`. `boardPath` was a second name for `board`; both are
-    # accepted, and both mean the same thing — where this repo's board is.
+    # board", which is the board's `repoName` (ADR 0006 — each layer names its subject from its
+    # own file's point of view, so the two are NOT converged). `boardPath` was a second name for
+    # `board`; both are accepted, and both mean the same thing — where this repo's board is.
     for src in (os.path.join(repo, ".agents", "handoff.config.json"),
                 os.path.join(repo, ".agents", "handoff.json")):
-        for key, val in read_json(src).items():
-            if key == "repo":
-                cfg["repoName"] = val
-            elif key == "boardPath":
-                cfg["board"] = val
-            else:
-                cfg[key] = val
+        data = read_json(src)
+        for key, val in data.items():
+            if key in ("repo", "board"):
+                continue  # this layer's documented keys, applied last — see below
+            cfg["board" if key == "boardPath" else key] = val
+        # The documented keys go on LAST so a superseded spelling can never beat the live one.
+        # merge-hooks.py carries a legacy `boardPath` forward alongside the `board` that replaced
+        # it, so BOTH sit on disk in every repo that predates the rename; applied in file order
+        # (json.dump sorts keys, so `boardPath` follows `board`) the dead key won, and repointing
+        # a repo by editing `board` silently did nothing.
+        if "repo" in data:
+            cfg["repoName"] = data["repo"]
+        if "board" in data:
+            cfg["board"] = data["board"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their

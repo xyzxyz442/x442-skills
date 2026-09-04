@@ -29,7 +29,7 @@ wired hook command still point at `<board>/handoff`.
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `$HANDOFF_BOARD_PATH`         | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
 | the CLI's own directory       | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
-| `<repo>/.agents/handoff.json` | its `boardPath`, what a cross-repo install records                                                                 |
+| `<repo>/.agents/handoff.json` | its `board`, what a cross-repo install records (`boardPath` is a legacy alias, still read)                         |
 | `.agents/handoff/`            | walking up from the working directory                                                                              |
 
 `$HANDOFF_BOARD_PATH` is how you point a repo at a different board **without editing any committed
@@ -354,6 +354,19 @@ so it must never carry any one repo's identity.
 | `group` | This repo's section, on a grouped board.                                            |
 | `board` | Path from this repo to the shared board. `boardPath` is a legacy alias, still read. |
 
+**A key names its subject from the point of view of the file it sits in.** That is why the board
+says `repoName` ("the repo this board belongs to") where a member repo says `repo` ("who I am on
+this board") — and why `groups` is the sections a board hosts while `group` is the one section a
+repo is in. The two identity keys are not two spellings of one entry: they are **never written to
+the same board.** `repoName` goes in the board config for a single-repo board only, and a
+single-repo board has no repo config at all; a cross-repo board must name no repo of its own and
+gets one repo config per member instead. Either spelling resolves to the same value, so a board
+that predates the split keeps working (ADR 0006).
+
+This is not licence for aliases generally. `board` and `boardPath` really are two names for one
+key in one file, and that is drift: `board` is canonical, `boardPath` is read-only and on its way
+out. The test is whether the two names sit in the same file describing the same subject.
+
 **Environment overrides** keep the `HANDOFF_` prefix, so the two are never confused: a `HANDOFF_`
 name always means "override this run", a camelCase key always means "configured".
 
@@ -367,7 +380,7 @@ here as a defect rather than an omission.
 | -------------------------- | -------------------------------------------------------------------------------- |
 | `HANDOFF_BOARD_PATH`       | Which board this CLI acts on. Beats every config layer.                          |
 | `HANDOFF_BIN`              | Which `handoff` binary the dispatcher runs.                                      |
-| `HANDOFF_REPO`             | This repo's identity on the board (config key `repo`).                           |
+| `HANDOFF_REPO`             | This repo's identity on the board (repo config `repo`, board config `repoName`). |
 | `HANDOFF_GROUP`            | This repo's section on a grouped board (config key `group`).                     |
 | `HANDOFF_GROUPS`           | The board's sections (board config key `groups`).                                |
 | `HANDOFF_GROUP_LAYOUT`     | `subfolder` or `prefix` (board config key `groupLayout`).                        |
