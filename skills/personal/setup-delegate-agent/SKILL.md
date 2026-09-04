@@ -143,6 +143,11 @@ command can still print one by accident — and if it does, it is on disk perman
   default ruleset does not flag bare AWS access-key pairs.
 - **The consent gate is cooperative, not a sandbox.** It raises skipping the assessment from an
   omission to a deliberate act. The real boundary is the tool allowlist and the worktree.
+- **Without `python3` the gate degrades; it does not surrender.** It falls back to a raw-text scan
+  of the payload — coarser, because nothing separates a command from a description without a JSON
+  parser — and every decision it reaches says it is degraded. It used to `exit 0` on a missing
+  interpreter, dropping the never-delegate paths, the credential checks and the consent
+  requirement in one line, for a check that is a pure-bash path regex and never needed one.
 - **Adapters never read a credential.** Whatever the CLI already uses is that CLI's business.
 - Bundled files: `scripts/setup-delegate-agent.sh`, `scripts/verify-delegate-agent.sh`,
   `scripts/merge-consent-hook.py` (the settings-file merge, `--selftest`-able),

@@ -227,6 +227,90 @@ print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev
     && ok gate.approved_allowed "approved dispatch is allowed" || bad gate.approved_allowed "approved dispatch was blocked"
   [ "$(probe '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}')" = "allow" ] \
     && ok gate.passthrough "unrelated commands pass through" || bad gate.passthrough "gate blocked an unrelated command"
+  # The gate used to `exit 0` the moment python3 was missing, taking the never-delegate paths,
+  # the credential checks and the consent requirement with it. These probes hold that line: they
+  # run the gate with a PATH that has no python3 on it at all and assert it still decides. The
+  # verifier keeps its own python3 for parsing the answer -- only the gate's PATH is stripped.
+  SAN="$(mktemp -d)"
+  for b in bash sed grep cat tr awk; do
+    src="$(command -v "$b" 2> /dev/null)" && ln -sf "$src" "${SAN}/$b"
+  done
+  if [ -n "$(PATH="$SAN" command -v python3 2> /dev/null)" ]; then
+    warn gate.degraded_probe "could not build a python3-free PATH; degraded-gate probes skipped"
+  else
+    dprobe() {
+      printf '%s' "$1" | env -i PATH="$SAN" bash "${BIN}/consent-gate.sh" --tool claude 2> /dev/null \
+        | python3 -c 'import json,sys
+raw=sys.stdin.read().strip()
+if not raw: print("allow"); raise SystemExit
+try: d=json.loads(raw)
+except Exception: print("badjson"); raise SystemExit
+print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev/null || echo badjson
+    }
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --prompt hi"}}')" = "deny" ] \
+      && ok gate.degraded_unapproved_denied "unapproved dispatch is denied without python3" \
+      || bad gate.degraded_unapproved_denied "without python3 the gate let an unapproved dispatch through"
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --task .env --approved t1"}}')" = "deny" ] \
+      && ok gate.degraded_credential_denied "dispatch naming a credential path is denied without python3" \
+      || bad gate.degraded_credential_denied "without python3 a dispatch naming a credential path was allowed"
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}')" = "ask" ] \
+      && ok gate.degraded_credential_read_asks "main-session credential read asks without python3" \
+      || bad gate.degraded_credential_read_asks "without python3 a credential read did not ask"
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}')" = "allow" ] \
+      && ok gate.degraded_passthrough "unrelated commands still pass through without python3" \
+      || bad gate.degraded_passthrough "without python3 the gate blocked an unrelated command -- it is wedging the session"
+    # A BARE dispatch, with no leading path. The first cut of the degraded lane matched the raw
+    # payload against boundary regexes that expect a slash or a space, so `"command":"delegate-run`
+    # put a quote where the boundary had to be and every bare dispatch was allowed. The probes
+    # missed it because they all named `.agents/bin/delegate-run`, whose slash matched by accident.
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"delegate-run --task-id T1 --class low"}}')" = "deny" ] \
+      && ok gate.degraded_bare_dispatch_denied "a bare unapproved dispatch is denied without python3" \
+      || bad gate.degraded_bare_dispatch_denied "without python3 a bare (unprefixed) dispatch was allowed"
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"delegate-agent --backend x"}}')" = "deny" ] \
+      && ok gate.degraded_bare_wrapper_denied "a bare direct wrapper call is denied without python3" \
+      || bad gate.degraded_bare_wrapper_denied "without python3 a bare direct wrapper call was allowed"
+    # The mirror-image failure: denying an ordinary tool call because an unrelated field mentioned
+    # delegation. A degraded gate that fires on prose is one people switch off.
+    [ "$(dprobe '{"tool_name":"Read","tool_input":{"file_path":"/home/u/notes.txt"},"context":"we discussed delegate-agent earlier"}')" = "allow" ] \
+      && ok gate.degraded_no_false_deny "prose mentioning delegation does not deny an ordinary read" \
+      || bad gate.degraded_no_false_deny "without python3 an ordinary read was denied because prose mentioned delegate-agent"
+    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"delegate-run --task-id T1"},"context":"we used --approve elsewhere"}')" = "deny" ] \
+      && ok gate.degraded_approve_not_smeared "--approve in an unrelated field does not grant consent" \
+      || bad gate.degraded_approve_not_smeared "without python3 an unrelated --approve short-circuited the consent check"
+    # The invariant behind all of the above: the two lanes read the same three fields, so for any
+    # payload they must reach the same decision. Enumerated cases catch the bug you thought of;
+    # this catches the next one.
+    PARITY_BAD=0
+    while IFS= read -r fixture; do
+      [ -n "$fixture" ] || continue
+      [ "$(dprobe "$fixture")" = "$(probe "$fixture")" ] || PARITY_BAD=$((PARITY_BAD + 1))
+    done << PARITY
+{"tool_name":"Bash","tool_input":{"command":"delegate-run --task-id T1 --class low"}}
+{"tool_name":"Bash","tool_input":{"command":"delegate-agent --backend x"}}
+{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --prompt hi --approved t1"}}
+{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --dry-run"}}
+{"tool_name":"Bash","tool_input":{"command":"cat .env"}}
+{"tool_name":"Bash","tool_input":{"command":"cat \".env\""}}
+{"tool_name":"Bash","tool_input":{"command":"cat server.pem"}}
+{"tool_name":"Bash","tool_input":{"command":"ls -la"}}
+{"tool_name":"Bash","tool_input":{"command":"npm run build"}}
+{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}
+{"tool_name":"Read","tool_input":{"file_path":"/home/u/notes.txt"},"context":"we discussed delegate-agent earlier"}
+{"tool_name":"Bash","tool_input":{"command":"delegate-run --task-id T1"},"context":"we used --approve elsewhere"}
+PARITY
+    [ "$PARITY_BAD" -eq 0 ] \
+      && ok gate.degraded_parity "degraded and parsed lanes agree on every fixture" \
+      || bad gate.degraded_parity "$PARITY_BAD fixture(s) decided differently with and without python3"
+    DREASON="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --prompt hi"}}' \
+      | env -i PATH="$SAN" bash "${BIN}/consent-gate.sh" --tool claude 2> /dev/null)"
+    case "$DREASON" in
+      *DEGRADED*) ok gate.degraded_announced "a degraded decision says so in its reason" ;;
+      *) bad gate.degraded_announced "the gate degraded silently -- the reason does not say python3 is missing" ;;
+    esac
+  fi
+  # symlinks only, so remove them by name rather than recursively
+  rm -f "${SAN}"/* 2> /dev/null || true
+  rmdir "$SAN" 2> /dev/null || true
 else
   bad gate.armed "consent-gate.sh not executable — the backstop is not armed"
 fi
