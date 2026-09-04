@@ -132,9 +132,17 @@ Read-only probes, each reported as a finding:
   - **partial** (`0 < embeddings < nodes`) — an `embed` was interrupted. Flag and offer re-embed.
   - **unrefreshable** — vectors exist, but `.graph-hooks/core/embed-provider.sh` prints nothing,
     so the hooks skip `embed` and the vectors are drifting. Usually `.code-review-graph/embed.env`
-    was deleted while the graph carries `openai:`/`google:`/`minimax:` vectors, which cannot be
-    reconstructed without their env vars. Flag; the fix is to restore `embed.env` (re-run
+    was deleted while the graph carries `openai:`/`google:`/`minimax:`/`voyage:` vectors, which
+    cannot be reconstructed without their env vars. Flag; the fix is to restore `embed.env` (re-run
     `setup-embeddings.sh`) or re-embed with the `local` provider.
+
+    From payload 3 `resolve()` honours **any** explicit `CRG_EMBEDDING_PROVIDER`, so a repo that
+    names a provider is never unrefreshable for want of a name — it used to keep a copy of CRG's
+    provider list that had fallen behind, and a valid provider missing from that copy landed here
+    silently. What it no longer does is infer a provider from a bare `GOOGLE_API_KEY` /
+    `MINIMAX_API_KEY`, so a repo that relied on that inference reads as unrefreshable now and is
+    correctly reported: `embed-health.sh` emits a `consent` line explaining it. The fix is to set
+    `CRG_EMBEDDING_PROVIDER` explicitly, not to restore the inference.
 - **Ollama-backed embeddings, daemon down.** When `embed.env` points `CRG_OPENAI_BASE_URL` at a
   localhost endpoint that does not answer `/api/tags`, embeddings will never refresh. Flag it —
   the graph itself is fine, so nothing else surfaces this.

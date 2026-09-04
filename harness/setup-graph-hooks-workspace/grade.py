@@ -15,17 +15,25 @@ Two caveats inherited knowingly:
   resets the slots it depends on and cleans up the ones it creates, so a rerun in the same
   hour is deterministic.
 
+`embed-provider-guard` fires `.graph-hooks/core/embed-provider.sh` and `embed-health.sh`
+directly (no dispatcher involved) against a fresh scratch copy per scenario, with synthetic
+env vars and a hand-seeded `.code-review-graph/graph.db`. Every scenario's ambient environment
+is scrubbed of real `CRG_*`/cloud-key vars first, so the check is deterministic regardless of
+what the grading machine happens to have exported — offline, no network, no real credentials.
+
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
 `eval_id` is one of the ids in evals/evals.json (no-agents-md | fresh-wired | all-wired |
-copilot-primary-wired | both-wired | graph-search-behavior). With no eval_id, only the
-verifier-wrap assertion runs. Exits 0 iff nothing failed.
+copilot-primary-wired | both-wired | graph-search-behavior | embed-provider-guard). With no
+eval_id, only the verifier-wrap assertion runs. Exits 0 iff nothing failed.
 """
 
 import hashlib
 import json
+import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -252,6 +260,261 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
     return exps
 
 
+# ---- embed-provider-guard --------------------------------------------------------------------
+# Regression coverage for the embed-provider fixes: resolve() no longer infers a cloud provider
+# from an ambient API key, embed-health.sh reports unknown provider names and the vulnerable
+# "cloud key + no explicit provider" consent case instead of staying silent, and the tier label
+# reports the recorded model rather than a vendor name guessed from a port number.
+#
+# Every scenario below fires the fixture's OWN copies of embed-provider.sh / embed-health.sh
+# (installed under .graph-hooks/core, not the skill's source copy) directly — no dispatcher, no
+# hook.sh involved — against a throwaway copy of the fixture, so mutating embed.env / graph.db
+# for one scenario can never leak into another.
+EMBED_CFG = ".code-review-graph/embed.env"
+EMBED_DB = ".code-review-graph/graph.db"
+
+# Real-shaped-looking env vars a scenario might legitimately need (an OpenAI-compatible trio, a
+# cloud API key) are obviously-synthetic placeholders, never anything that could pass for a real
+# credential. Every ambient var of the same name is also scrubbed from the subprocess env below,
+# so a real key exported on the grading machine can never leak into — or skew — a result.
+_AMBIENT_SCRUB = (
+    "CRG_EMBEDDING_PROVIDER",
+    "CRG_EMBEDDING_MODEL",
+    "CRG_OPENAI_BASE_URL",
+    "CRG_OPENAI_API_KEY",
+    "CRG_OPENAI_MODEL",
+    "GOOGLE_API_KEY",
+    "MINIMAX_API_KEY",
+    "VOYAGE_API_KEY",
+)
+
+
+def _embed_scratch(target: Path) -> Path:
+    """A fresh throwaway copy of `target` for one embed-provider-guard scenario."""
+    tmp = Path(tempfile.mkdtemp(prefix="sgh-embed-"))
+    dest = tmp / "repo"
+    shutil.copytree(target, dest)
+    return dest
+
+
+def _write_embed_env(repo: Path, content: str) -> None:
+    cfg = repo / EMBED_CFG
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(content, encoding="utf-8")
+
+
+def _seed_embeddings_db(repo: Path, rows: list[str]) -> None:
+    """(Re)write `.code-review-graph/graph.db`'s embeddings table to hold exactly `rows`."""
+    db = repo / EMBED_DB
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.unlink(missing_ok=True)
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE embeddings (provider TEXT)")
+    conn.executemany("INSERT INTO embeddings VALUES (?)", [(r,) for r in rows])
+    conn.commit()
+    conn.close()
+
+
+def _drop_embeddings_db(repo: Path) -> None:
+    (repo / EMBED_DB).unlink(missing_ok=True)
+
+
+def _run_embed_script(
+    repo: Path, script: str, *args: str, extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
+    """Run `.graph-hooks/core/<script>` with a scrubbed ambient env plus `extra_env`."""
+    env = dict(os.environ)
+    for key in _AMBIENT_SCRUB:
+        env.pop(key, None)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(repo / GRAPH_HOOKS_DIR / "core" / script), *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
+    """Fire embed-provider.sh / embed-health.sh with synthetic env/config and assert what they
+    DECIDE — proving the two fixed defects (silent cloud-key inference, a stale hand-copied
+    provider allow-list, a vendor name guessed from a port) cannot come back."""
+    core = target / GRAPH_HOOKS_DIR / "core"
+    if not (core / "embed-provider.sh").is_file() or not (core / "embed-health.sh").is_file():
+        return [
+            gc.expectation(
+                "embed-provider.sh and embed-health.sh present for behavior test",
+                False,
+                f"{GRAPH_HOOKS_DIR}/core/{{embed-provider.sh,embed-health.sh}} missing",
+            )
+        ]
+
+    exps: list[gc.Expectation] = []
+
+    # 0. The scripts under test must be the ones the skill currently ships.
+    #
+    # Every other fixture in this repo that carries these two files drifted: at the time this case
+    # was written, 9 of the 10 still held the pre-fix embed-provider.sh, cloud-key inference and
+    # all. A behavioral case graded directly against a frozen fixture would keep reporting PASS
+    # against code the skill no longer ships — the eval equivalent of the silent rot this whole
+    # case exists to catch. In the normal flow the produced workspace is installed from source and
+    # this is trivially true; graded directly, it is the only thing standing between this fixture
+    # and the same fate.
+    for name in ("embed-provider.sh", "embed-health.sh"):
+        shipped = REPO / "skills/engineering/setup-graph-hooks/scripts/graph-hooks/core" / name
+        same = shipped.is_file() and shipped.read_bytes() == (core / name).read_bytes()
+        exps.append(
+            gc.expectation(
+                f"{name} under test matches the skill's shipped copy",
+                same,
+                "identical to skill source"
+                if same
+                else f"{name} differs from {shipped} — fixture is stale, results below are about old code",
+            )
+        )
+
+    # 1-2. An ambient cloud key alone must never select a provider (the silent-egress defect).
+    for key in ("GOOGLE_API_KEY", "MINIMAX_API_KEY"):
+        repo = _embed_scratch(target)
+        out = _run_embed_script(
+            repo, "embed-provider.sh", extra_env={key: "fake-not-a-real-key"}
+        )
+        exps.append(
+            gc.expectation(
+                f"ambient {key} alone does not select a provider",
+                out.returncode == 0 and out.stdout.strip() == "",
+                f"stdout: {out.stdout.strip()!r}",
+            )
+        )
+        shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 3-4. An explicit CRG_EMBEDDING_PROVIDER is honoured verbatim.
+    for provider in ("voyage", "google"):
+        repo = _embed_scratch(target)
+        _write_embed_env(repo, f"CRG_EMBEDDING_PROVIDER={provider}\n")
+        out = _run_embed_script(repo, "embed-provider.sh")
+        exps.append(
+            gc.expectation(
+                f"explicit CRG_EMBEDDING_PROVIDER={provider} is honoured",
+                out.returncode == 0 and out.stdout.strip() == provider,
+                f"stdout: {out.stdout.strip()!r}",
+            )
+        )
+        shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 5. A complete CRG_OPENAI_* trio is still inferred with no explicit provider set.
+    repo = _embed_scratch(target)
+    _write_embed_env(
+        repo,
+        "CRG_OPENAI_BASE_URL=http://localhost:1234/v1\n"
+        "CRG_OPENAI_API_KEY=fake-not-a-real-key\n"
+        "CRG_OPENAI_MODEL=fake-embed-model\n",
+    )
+    out = _run_embed_script(repo, "embed-provider.sh")
+    exps.append(
+        gc.expectation(
+            "a complete CRG_OPENAI_* trio is still inferred as openai",
+            out.returncode == 0 and out.stdout.strip() == "openai",
+            f"stdout: {out.stdout.strip()!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 6. An unrecognised provider name is REPORTED by embed-health.sh, not silently dropped.
+    # Dropped graph.db keeps this scenario isolated from the drift check below -- an unknown
+    # provider is still an unknown provider whether or not a graph happens to exist yet.
+    repo = _embed_scratch(target)
+    _drop_embeddings_db(repo)
+    _write_embed_env(repo, "CRG_EMBEDDING_PROVIDER=totally-not-a-provider\n")
+    out = _run_embed_script(
+        repo, "embed-health.sh", extra_env={"CRG_EMBEDDING_PROVIDER": "totally-not-a-provider"}
+    )
+    lines = [line for line in out.stdout.splitlines() if line.strip()]
+    exps.append(
+        gc.expectation(
+            "an unknown CRG_EMBEDDING_PROVIDER name is reported by embed-health.sh",
+            out.returncode == 0 and any(line.startswith("unknown") for line in lines),
+            f"stdout lines: {lines!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 7. graph.db present + ambient cloud key + no explicit provider -> the consent notice fires.
+    # embed-health.sh:33 exits early with neither a graph.db nor an embed.env present (a repo that
+    # never opted in has nothing to be wrong about) -- that early exit is correct and untouched;
+    # the consent notice is reachable only once a graph exists, which this scenario provides.
+    repo = _embed_scratch(target)
+    _seed_embeddings_db(repo, [])
+    out = _run_embed_script(
+        repo, "embed-health.sh", extra_env={"GOOGLE_API_KEY": "fake-not-a-real-key"}
+    )
+    lines = [line for line in out.stdout.splitlines() if line.strip()]
+    exps.append(
+        gc.expectation(
+            "graph.db + ambient cloud key + no explicit provider raises a consent notice",
+            out.returncode == 0 and any(line.startswith("consent") for line in lines),
+            f"stdout lines: {lines!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 8. A clean, never-configured repo with no graph stays completely silent.
+    repo = _embed_scratch(target)
+    _drop_embeddings_db(repo)
+    out = _run_embed_script(repo, "embed-health.sh")
+    exps.append(
+        gc.expectation(
+            "a clean repo with nothing configured and no graph emits no output",
+            out.returncode == 0 and out.stdout.strip() == "",
+            f"stdout: {out.stdout.strip()!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 9. The tier label reports the recorded MODEL, never a vendor guessed from a port number.
+    # The shipped fixture already carries this exact row; reseed explicitly anyway so the
+    # assertion does not depend on what the fixture happens to ship.
+    repo = _embed_scratch(target)
+    _seed_embeddings_db(
+        repo, ["openai:text-embedding-qwen3@http://localhost:1234"]
+    )
+    out = _run_embed_script(repo, "embed-provider.sh", "--tier")
+    tier = out.stdout.strip()
+    exps.append(
+        gc.expectation(
+            "--tier reports the model, never a vendor name guessed from the port",
+            out.returncode == 0
+            and tier == "custom text-embedding-qwen3"
+            and "lmstudio" not in tier,
+            f"stdout: {tier!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    # 10. A correctly-configured cloud provider must not be misreported as drifting: `want` used
+    # to be empty for any provider whose identity cannot be reconstructed from the write-side
+    # config alone (any cloud provider but openai), making `have != want` true even when the
+    # graph and the config agree -- a false positive on a healthy repo.
+    repo = _embed_scratch(target)
+    _seed_embeddings_db(repo, ["google:text-embedding-004"])
+    _write_embed_env(repo, "CRG_EMBEDDING_PROVIDER=google\n")
+    out = _run_embed_script(
+        repo, "embed-health.sh", extra_env={"GOOGLE_API_KEY": "fake-not-a-real-key"}
+    )
+    exps.append(
+        gc.expectation(
+            "a correctly-configured cloud provider produces no drift false positive",
+            out.returncode == 0 and out.stdout.strip() == "",
+            f"stdout: {out.stdout.strip()!r}",
+        )
+    )
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+    return exps
+
+
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     """Grade in an isolated copy when `target` is nested in a larger repo.
 
@@ -294,6 +557,11 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         return [gc.run_verify_script(VERIFY, target)] + grade_graph_search_behavior(
             target
         )
+    if eval_id == "embed-provider-guard":
+        # Purpose-built behavioral fixture, not a fully wired repo (no hook.sh, no per-tool
+        # config) -- it exists only to fire embed-provider.sh / embed-health.sh directly, so
+        # verify-graph-hooks.sh (which grades overall wiring) does not apply here.
+        return grade_embed_provider_guard(target)
 
     exps = [gc.run_verify_script(VERIFY, target)]
     # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder

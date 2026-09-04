@@ -103,7 +103,8 @@ what the board cannot model.
 The stage a piece of work targets. An open string, ordered per board by a **ladder** running
 lowest to highest; an unlabelled document reads as the lowest. Naming an environment does not
 duplicate the work — the same fix at two stages is two documents with two pieces of evidence.
-_Avoid_: stage, tier, deployment target
+_Avoid_: stage, deployment target, and `tier` **as a synonym for this**. `tier` is not a
+reserved word — see **search tier**, which is a different concept in a different subsystem.
 
 **Sensitivity**:
 How the tooling must handle a document — whether it may be exported, delegated, or shown
@@ -114,6 +115,43 @@ boundary.
 The version of the document format. Distinguished from **payload version**, which is the
 version of the installed tooling. They move at different rates and only schema triggers
 migration.
+
+## Graph
+
+**Search tier**:
+What the graph's semantic search *can* do in a repo, set by which vectors it holds —
+**custom** (an external OpenAI-compatible provider), **local** (the built-in model), or
+**keyword** (no vectors, name matching only). A property of the repo, not of a query.
+Distinguished from **search mode**, which is what one query actually did. Unrelated to
+**environment**, which is where work is deployed.
+_Avoid_: search level, embedding quality, provider tier
+
+**Search mode**:
+What a single `semantic_search_nodes_tool` call actually used — `semantic`, `fts`, or
+`keyword` — returned per call. A mode below the repo's **search tier** means the vectors did
+not answer that query, which is the one case where falling back to `grep` is warranted.
+_Avoid_: search type, fallback
+
+**Provider**:
+Which embedding backend writes and reads a repo's vectors. Three buckets, by transport, not
+by vendor: **local** (in-process model), **openai-compatible** (anything speaking
+`/v1/embeddings`), and **native** (a backend with its own SDK path). `ollama` and `lmstudio`
+are aliases *within* openai-compatible — presets that autofill an endpoint and a model — never
+peers of it.
+_Avoid_: vendor, service, backend, LLM
+
+**Driven**:
+Of a provider — one this repo's tooling configures for you, writing its credentials and
+mirroring them to the read path. Only **local** and **openai-compatible** are driven.
+A provider can be **recognised** and health-checked without being driven; the two are
+independent, and conflating them is what produced ADR 0007.
+_Avoid_: supported, enabled
+
+**Embedding identity**:
+The string stamped on every vector recording who wrote it — `local:<model>` or
+`openai:<model>@<endpoint>`. What **drift** is measured against, and why mixing two providers
+in one index degrades every later search.
+_Avoid_: provider string, signature
 
 ## Delegation
 
