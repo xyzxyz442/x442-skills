@@ -507,7 +507,7 @@ section "7. Document schema (advisory — ADR 0004)"
 # schema recorded their dependency graph in prose, folded closure evidence into an activity log,
 # and grew hand-rolled "Resolution (date)" headings because the template had nowhere to put the
 # current state. Reporting is the whole intervention.
-SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_NEW=0 SENS_RESTRICTED=0
+SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_OLD_ARCH=0 SCHEMA_LIVE=0 SCHEMA_ARCH=0 SCHEMA_NEW=0 SENS_RESTRICTED=0
 fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 
 # The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
@@ -616,9 +616,28 @@ while IFS= read -r doc; do
   # Documents that predate the board's schema. Counted below rather than warned here, for the same
   # reason staleness is: a board mid-upgrade has many, and one warning each teaches people to skip
   # the section.
+  #
+  # Live and archived are counted SEPARATELY, and the split is not cosmetic — it is what keeps the
+  # warning's advice true. `./handoff migrate` walks the live section only (ADR 0003), so a count
+  # that pooled the two produced the state this split fixes: an accurate number attached to a
+  # command that cannot act on most of it. On the board that motivated this, 41 of 49 docs were
+  # behind and all 41 were archived, so the advice was a no-op every time it was followed.
+  #
+  # Archived docs are still COUNTED, never skipped — they are reported on their own line below,
+  # which is also what keeps this loop honest: the schema count is the only check here that runs
+  # for an archived doc, so anything that exits the iteration early (see the `continue` note in the
+  # current-state arm above) shows up as a missing archive line rather than as silence.
+  #
+  # `ahead` is deliberately NOT split. A doc ahead of the CLI is a fact about the TOOL — this
+  # payload is stale — and re-running setup-handoff fixes it wherever the doc sits. A doc behind is
+  # a fact about the DOC, and its remedy only reaches the live section. Different subject, so
+  # different scope.
   dsch="$(fm "$doc" schema)"
   case "$dsch" in '' | *[!0-9]*) dsch=0 ;; esac
-  [ -n "$CLI_SCHEMA" ] && [ "$dsch" -lt "$CLI_SCHEMA" ] && SCHEMA_OLD=$((SCHEMA_OLD + 1))
+  if [ "$darch" = 1 ]; then SCHEMA_ARCH=$((SCHEMA_ARCH + 1)); else SCHEMA_LIVE=$((SCHEMA_LIVE + 1)); fi
+  if [ -n "$CLI_SCHEMA" ] && [ "$dsch" -lt "$CLI_SCHEMA" ]; then
+    if [ "$darch" = 1 ]; then SCHEMA_OLD_ARCH=$((SCHEMA_OLD_ARCH + 1)); else SCHEMA_OLD=$((SCHEMA_OLD + 1)); fi
+  fi
   [ -n "$CLI_SCHEMA" ] && [ "$dsch" -gt "$CLI_SCHEMA" ] && SCHEMA_NEW=$((SCHEMA_NEW + 1))
 
   # A bundle whose roster names documents that were never filed can never close, and until now
@@ -671,12 +690,20 @@ else
   [ "$SCHEMA_STALE" -gt 0 ] \
     && warn board.staleness "$SCHEMA_STALE of $SCHEMA_DOCS open doc(s) have not been updated in over 30 days — the board is accumulating, not closing" \
     || ok board.staleness "no open doc has gone 30 days without an update"
+  # Reported before the live/ahead verdict so the archive is never the thing a reader has to infer
+  # from a number that does not add up. Emitted only when there is something to say, and always as
+  # a PASS: an archived doc below schema is not a defect and not a to-do — `migrate` leaves it
+  # alone on purpose, because rewriting a closed doc's frontmatter appends an activity-log entry
+  # and an empty '## Current state' to a document nobody will read again. This line exists so that
+  # fact is stated rather than looking like an undercount.
+  [ "$SCHEMA_OLD_ARCH" -gt 0 ] \
+    && ok board.schema.archive "$SCHEMA_OLD_ARCH of $SCHEMA_ARCH archived doc(s) predate schema $CLI_SCHEMA — left alone by design; './handoff migrate' walks the live section only, and a closed doc's shape is history. Not counted in doc.schema.behind."
   if [ "$SCHEMA_NEW" -gt 0 ]; then
     warn doc.schema.ahead "$SCHEMA_NEW of $SCHEMA_DOCS doc(s) are NEWER than schema $CLI_SCHEMA — this payload can read them but refuses to write them. Re-run setup-handoff."
   elif [ "$SCHEMA_OLD" -gt 0 ]; then
-    warn doc.schema.behind "$SCHEMA_OLD of $SCHEMA_DOCS doc(s) predate schema $CLI_SCHEMA — run './handoff migrate'. Reads and writes both still work."
+    warn doc.schema.behind "$SCHEMA_OLD of $SCHEMA_LIVE live doc(s) predate schema $CLI_SCHEMA — run './handoff migrate'. Reads and writes both still work."
   else
-    ok doc.schema "every doc is at schema ${CLI_SCHEMA:-?}"
+    ok doc.schema "every live doc is at schema ${CLI_SCHEMA:-?}"
   fi
 fi
 

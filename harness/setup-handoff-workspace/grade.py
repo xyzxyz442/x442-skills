@@ -2131,25 +2131,44 @@ def _scope_notice_expectations(sh, ho, board, tag):
 
 
 def grade_schema_behind(_target):
-    """Archived documents below the board's schema must be COUNTED.
+    """`doc.schema.behind` counts the LIVE section; the archive is reported on its own line.
 
-    Regression for a `continue` written inside a `case` arm: it was meant to skip the
-    current-state check for archived docs and instead exited the whole loop iteration, so every
-    archived coordination and orchestrator doc also skipped the schema count at the bottom of the
-    loop. On a real board it reported "4 of 47 doc(s) predate schema 1" where the true number was
-    41 -- a drift detector hiding drift.
+    Two defects meet here.
 
-    The two boards below are built so the FINDING ID discriminates, never the prose. Asserting the
-    count would mean parsing a message, and this harness asserts on ids precisely because prose is
+    The first was a `continue` written inside a `case` arm: it was meant to skip the current-state
+    check for archived docs and instead exited the whole loop iteration, so every archived
+    coordination and orchestrator doc also skipped the schema count at the bottom of the loop. On a
+    real board it reported "4 of 47 doc(s) predate schema 1" where the true number was 41 -- a
+    drift detector hiding drift.
+
+    The second was the fix for the first. With the count accurate, the same board reported "41 of
+    49 doc(s) predate schema 1 -- run './handoff migrate'", and running it did nothing for those
+    41: `migrate` walks the live section only, and all 41 were archived. An accurate number
+    attached to advice that cannot act on it is its own way of teaching people to skip the section.
+    So the count is now SPLIT, and `migrate` keeps its scope: archived docs are counted onto
+    `board.schema.archive` (a PASS -- a closed doc keeping the shape it was closed in is not a
+    to-do), and `doc.schema.behind` warns only for docs migrate can actually reach.
+
+    The four boards are built so the FINDING ID discriminates, never the prose. Asserting the count
+    would mean parsing a message, and this harness asserts on ids precisely because prose is
     reworded freely:
 
-      * `archived-coordination` -- the only doc below schema is an archived COORDINATION doc. The
-        buggy verifier never reaches its schema check, counts zero, and reports the all-clear
-        `doc.schema`. The fixed one reports `doc.schema.behind`.
+      * `archived-coordination` -- the only doc below schema is an archived COORDINATION doc. This
+        is the board the `continue` broke: the buggy verifier never reaches its schema check, so it
+        counts the doc into NOTHING and `board.schema.archive` never fires. The fixed one reports
+        it there. The live section is clean either way, so `doc.schema` all-clear is not what
+        separates them -- the archive line is.
       * `archived-standalone` -- the only doc below schema is an archived STANDALONE doc. It never
-        enters the case arm, so BOTH versions count it and both report `doc.schema.behind`. This
-        is what made the real number 4 rather than 0, and it is the control: a "fix" that simply
-        exempts everything archived would pass the first board and fail this one.
+        enters the case arm, so both versions see it. This is the control: it proves the archive
+        line is driven by the doc's LOCATION and not by its type, and that a naive fix which drops
+        archived docs from the sweep entirely (rather than routing them) fails here.
+      * `live-behind` -- the warn branch, and the reason this case cannot be all-clears. A live doc
+        below schema must still raise `doc.schema.behind`; without this board the whole finding
+        could be dead code and every other assertion here would still pass. It then runs the very
+        command the warning names and asserts the all-clear, which is the assertion the second
+        defect above would have failed: advice a check gives has to work when followed.
+      * `all-current` -- nothing stripped anywhere, so the all-clear fires and no archive line does.
+        A warn is then evidence of a real condition rather than a check that always fires.
 
     Self-contained; ignores the passed fixture.
     """
@@ -2171,42 +2190,39 @@ def grade_schema_behind(_target):
         doc.write_text("".join(kept))
         return True
 
+    def scaffold(name: str) -> Path:
+        """A git repo with a board installed and one live doc left at the current schema.
+
+        The live doc matters on every board here: one where EVERYTHING is behind would warn no
+        matter which branch ran, and one with no live doc at all cannot show an all-clear.
+        """
+        repo = base / name
+        (repo / "src").mkdir(parents=True)
+        (repo / "AGENTS.md").write_text("# AGENTS\n")
+        (repo / "src/app.js").write_text("// app\n")
+        gc.git_init_commit(repo)
+        r = _run(
+            ["bash", str(SETUP), str(repo), "--tools", "claude", "--primary", "claude"],
+            repo,
+        )
+        e.append(
+            gc.expectation(
+                f"[{name}] install scaffolds a board",
+                r.returncode == 0,
+                f"exit {r.returncode}: {r.stderr.strip()[:120]}",
+            )
+        )
+        _handoff(repo, "new", "live", "--title", "Live doc at the current schema")
+        return repo
+
     try:
         for case, doc_args in (
             ("archived-coordination", []),
             ("archived-standalone", ["--standalone"]),
         ):
             tag = f"[{case}]"
-            repo = base / case
-            (repo / "src").mkdir(parents=True)
-            (repo / "AGENTS.md").write_text("# AGENTS\n")
-            (repo / "src/app.js").write_text("// app\n")
-            gc.git_init_commit(repo)
-
-            r = _run(
-                [
-                    "bash",
-                    str(SETUP),
-                    str(repo),
-                    "--tools",
-                    "claude",
-                    "--primary",
-                    "claude",
-                ],
-                repo,
-            )
-            e.append(
-                gc.expectation(
-                    f"{tag} install scaffolds a board",
-                    r.returncode == 0,
-                    f"exit {r.returncode}: {r.stderr.strip()[:120]}",
-                )
-            )
-
+            repo = scaffold(case)
             board = repo / HD
-            # A live doc that STAYS at the current schema, so the board is never uniformly stale --
-            # a board where everything is behind would warn no matter which branch ran.
-            _handoff(repo, "new", "live", "--title", "Live doc at the current schema")
             _handoff(
                 repo,
                 "new",
@@ -2244,49 +2260,84 @@ def grade_schema_behind(_target):
             )
 
             findings = gc.verify_findings(VERIFY, repo)
+            # THE regression assertion. The buggy verifier does not merely miscount the archived
+            # coordination doc -- it never reaches the count at all, so this id is simply absent.
             e.append(
                 gc.finding(
                     findings,
-                    "doc.schema.behind",
-                    "warn",
-                    label=f"{tag} the archived doc below schema is counted",
+                    "board.schema.archive",
+                    "pass",
+                    label=f"{tag} the archived doc below schema is counted onto the archive line",
                 )
             )
-            # The buggy verifier does not merely miscount -- with nothing else behind, it counts
-            # zero and reports the ALL-CLEAR. Asserting its absence is what makes this a
-            # regression test rather than a restatement of the warn above.
+            # ...and it is NOT folded into the live warning, whose remedy could not reach it.
             e.append(
                 gc.expectation(
-                    f"{tag} the all-clear does NOT fire while a doc is behind",
-                    "doc.schema" not in findings,
+                    f"{tag} an archived doc alone does not raise the live behind warning",
+                    "doc.schema.behind" not in findings,
                     (
-                        "doc.schema absent"
-                        if "doc.schema" not in findings
-                        else f"doc.schema reported: {findings['doc.schema']}"
+                        "doc.schema.behind absent"
+                        if "doc.schema.behind" not in findings
+                        else f"reported: {findings['doc.schema.behind']}"
                     ),
                 )
             )
 
-        # And the check can still pass: a board where nothing was stripped reports the all-clear,
-        # so a warn is evidence of a real condition rather than a check that always fires.
-        clean = base / "all-current"
-        (clean / "src").mkdir(parents=True)
-        (clean / "AGENTS.md").write_text("# AGENTS\n")
-        (clean / "src/app.js").write_text("// app\n")
-        gc.git_init_commit(clean)
-        _run(
-            [
-                "bash",
-                str(SETUP),
-                str(clean),
-                "--tools",
-                "claude",
-                "--primary",
-                "claude",
-            ],
-            clean,
+        # The warn branch, and the advice it gives, end to end.
+        behind = scaffold("live-behind")
+        board = behind / HD
+        _handoff(behind, "new", "stale", "--title", "Live doc, later stripped")
+        e.append(
+            gc.expectation(
+                "[live-behind] the live doc's schema stamp was stripped",
+                strip_schema(board / "stale-handoff.md"),
+                "stripped",
+            )
         )
-        _handoff(clean, "new", "live", "--title", "Live doc at the current schema")
+        findings = gc.verify_findings(VERIFY, behind)
+        e.append(
+            gc.finding(
+                findings,
+                "doc.schema.behind",
+                "warn",
+                label="[live-behind] a live doc below schema still warns",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[live-behind] the all-clear does NOT fire while a live doc is behind",
+                "doc.schema" not in findings,
+                (
+                    "doc.schema absent"
+                    if "doc.schema" not in findings
+                    else f"doc.schema reported: {findings['doc.schema']}"
+                ),
+            )
+        )
+        # Run the command the warning names. Before the split this board's archived-doc equivalent
+        # warned and migrate left it exactly as it was; the point of the split is that following
+        # the advice now clears the finding.
+        r = _handoff(behind, "migrate", "--yes")
+        e.append(
+            gc.expectation(
+                "[live-behind] './handoff migrate' -- the command the warning names -- succeeds",
+                r.returncode == 0,
+                f"exit {r.returncode}: {(r.stderr or r.stdout).strip()[:160]}",
+            )
+        )
+        findings = gc.verify_findings(VERIFY, behind)
+        e.append(
+            gc.finding(
+                findings,
+                "doc.schema",
+                "pass",
+                label="[live-behind] after migrating, the all-clear fires",
+            )
+        )
+
+        # And the check can still pass on a board where nothing was stripped: the all-clear fires
+        # and the archive line stays silent, so neither finding is one that always fires.
+        clean = scaffold("all-current")
         _handoff(
             clean, "new", "closed", "--title", "Closed doc, left at the current schema"
         )
@@ -2299,7 +2350,18 @@ def grade_schema_behind(_target):
                 findings,
                 "doc.schema",
                 "pass",
-                label="[all-current] every doc at schema reports the all-clear",
+                label="[all-current] every live doc at schema reports the all-clear",
+            )
+        )
+        e.append(
+            gc.expectation(
+                "[all-current] nothing behind in the archive, so no archive line",
+                "board.schema.archive" not in findings,
+                (
+                    "board.schema.archive absent"
+                    if "board.schema.archive" not in findings
+                    else f"reported: {findings['board.schema.archive']}"
+                ),
             )
         )
         return e

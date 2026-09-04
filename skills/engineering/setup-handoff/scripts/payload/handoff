@@ -3229,11 +3229,29 @@ cmd_migrate() {
     [ "$(doc_schema "$f")" -lt "$to" ] && pending=$((pending + 1))
   done < <(each_doc)
 
+  # The archive is OUT OF SCOPE, and says so rather than being silently absent from the number.
+  # An archived doc is closed: rewriting its frontmatter appends a post-closure activity entry and
+  # an empty `## Current state` to a document nobody will open again, which is history churn for
+  # no reader. `verify` counts these on their own line (board.schema.archive) for the same reason,
+  # so the two halves agree — the earlier state, where the count included the archive and this
+  # command did not, was advice that could not act on most of what it named. Tallied before the
+  # no-op return so a board whose ONLY stale docs are archived is told why it has nothing to do.
+  local archived_old=0 archive_note=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(doc_schema "$f")" -lt "$to" ] && archived_old=$((archived_old + 1))
+  done < <(each_archive)
+  [ "$archived_old" -gt 0 ] \
+    && archive_note="  ($archived_old archived doc(s) predate schema $to and are left alone — closed docs keep the shape they were closed in.)"
+
   if [ "$from" = "$to" ] && [ "$pending" = 0 ]; then
     echo "Board is already schema $to — nothing to migrate."
+    [ -n "$archive_note" ] && echo "$archive_note"
     return 0
   fi
   echo "Board schema $from → $to · $pending document(s) to rewrite${GROUP:+ in section $GROUP}."
+  [ -n "$archive_note" ] && echo "$archive_note"
+
   if [ "$dry" = 1 ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue

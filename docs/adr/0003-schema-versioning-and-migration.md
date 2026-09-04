@@ -48,6 +48,12 @@ one as upstream, and needs to add its own fields without waiting for upstream to
 - **Migration moves structure only.** It adds, renames, and moves keys. It never infers a
   value — not an environment, not a sensitivity, not a summary seeded from a log entry.
   Judgment stays lazy-on-touch, with the verifier listing what is still missing.
+- **Migration reaches the live section only, and the count says so.** An archived document is
+  closed; rewriting its frontmatter appends a post-closure activity entry and an empty
+  `## Current state` to something nobody will open again. So `migrate` leaves the archive
+  alone — and because it does, the verifier's `doc.schema.behind` counts live documents alone,
+  reporting archived ones on their own `board.schema.archive` line as a pass. A count and a
+  remedy with different scopes is advice that cannot be followed.
 
 ## Considered options
 
@@ -75,3 +81,6 @@ one as upstream, and needs to add its own fields without waiting for upstream to
 - The CLI needs machinery it does not have: it must read the version stamp at runtime, gain
   a `migrate` command, and be able to prompt from an interactive context while staying
   silent and non-blocking under a hook.
+- A long-lived board's archive outgrows its live section, so most documents below schema will
+  be permanently below it. That is the intended end state, not a backlog: the archive line is
+  an audit fact, and both `migrate` and `verify` are worded so nobody reads it as one.
