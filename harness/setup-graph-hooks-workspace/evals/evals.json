@@ -44,6 +44,13 @@
       "prompt": "Understand how `calculateInvoiceTotal` is used before refactoring it, using this repo's wired graph hooks.",
       "fixture": "fixtures/graph-built",
       "expected_output": "Behavioral case (not just wiring): hooks installed AND a real, hand-built code-review-graph `graph.db` + graphify `graph.json` exist, describing `calculateInvoiceTotal`/`InvoiceItem` (src/billing.ts) and `greet` (src/index.ts). Firing the dispatcher as Claude Code would must show it actually PREFERS the graph over grep/read during code search: session start emits a cheatsheet naming both backends; reading a source file is nudged toward the graph; a first grep for a real symbol is pre-answered inline from the graph (one-shot allow); repeating that same grep is BLOCKED once the graph already answered it; a first-time miss on a nonexistent symbol still allows the grep (no false block) while pointing at the graph tool for next time; and both the `--graph-tried` bypass and non-code (`.md`) targets are never intercepted."
+    },
+    {
+      "id": "embed-provider-guard",
+      "kind": "post-state",
+      "prompt": "This repo has graph hooks wired. Check whether its embedding provider configuration is safe and correctly reported before enabling semantic search.",
+      "fixture": "fixtures/embed-provider-guard",
+      "expected_output": "Behavioral case, not wiring: fires the repo's own `.graph-hooks/core/embed-provider.sh` and `embed-health.sh` with synthetic env/config, offline and with no real credentials. Regression guards: an ambient GOOGLE_API_KEY or MINIMAX_API_KEY with no explicit `CRG_EMBEDDING_PROVIDER` must NOT be silently selected as the provider (resolve() prints nothing); an explicit `CRG_EMBEDDING_PROVIDER` (voyage, google) is honoured; a complete `CRG_OPENAI_*` trio is still inferred as openai with no explicit provider; a nonsense provider name is REPORTED by embed-health.sh as an `unknown` line rather than silently dropped; a repo with a graph.db and an ambient cloud key but no explicit provider gets a `consent` notice; a clean repo with no graph and nothing configured stays silent; `embed-provider.sh --tier` against a graph.db row recorded as `openai:text-embedding-qwen3@http://localhost:1234` reports the model (`custom text-embedding-qwen3`), never a guessed vendor name like `lmstudio`; and a graph.db holding `google:text-embedding-004` with `CRG_EMBEDDING_PROVIDER=google` explicitly set produces NO drift line (the fixed false positive)."
     }
   ]
 }
