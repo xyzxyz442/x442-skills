@@ -40,6 +40,18 @@ const Configuration = {
       ],
     ],
     'body-max-line-length': [0, 'always'],
+    // OFF because it fires on prose, not on footers. conventional-commits-parser treats ANY line
+    // beginning `token:` as a footer, so a wrapped body line that happens to start with a word and
+    // a colon is parsed as one — and the prose after it then "has no leading blank line".
+    //
+    // Reproduce: these two differ only in where the line breaks, and only the first warns.
+    //   ...continues onto\nlint-staged: before it was bad.   -> footer-leading-blank
+    //   ...continues onto lint-staged\nand before it was bad. -> clean
+    //
+    // Every occurrence in this repo's history is that false positive. Kept as a warning it trained
+    // readers to skip commitlint output entirely, which is what would hide a real `type-enum` or
+    // `scope-enum` error — both of which are level 2 and must not be lost in noise.
+    'footer-leading-blank': [0, 'always'],
   },
 };
 
