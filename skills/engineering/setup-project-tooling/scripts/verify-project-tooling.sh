@@ -160,13 +160,28 @@ if [ -f package.json ] && is_json package.json; then
 import json,sys
 d=json.load(open("package.json"))
 dev=d.get("devDependencies",{})
-need={"@commitlint/cli","@commitlint/config-conventional","husky","lint-staged","prettier","prettier-plugin-sh"}
-# The hook-install command defaults to `prepare` but may carry any name (install:dev, setup, ...),
-# so look for the command that invokes husky rather than for a fixed script name.
-installs_hooks=any("husky" in v for v in d.get("scripts",{}).values())
+need={"@commitlint/cli","@commitlint/config-conventional","lint-staged","prettier","prettier-plugin-sh"}
+# `husky` is NOT required. Since payload 2 the installer sets core.hooksPath itself, with
+# `git config`, and the hooks it writes are complete shell scripts that call the dispatcher
+# directly — nothing invokes the husky binary any more. Demanding the package made every wired
+# repo carry a dependency it never runs, and reported a repo that removed it as broken.
+#
+# The hook-install command may carry any name (prepare, install:dev, setup, ...), so match the
+# INSTALLER it runs, not a script name and not a vendor name. The previous test looked for the
+# substring "husky" in a script value, which our own `scripts/husky.sh install` satisfied by
+# FILENAME — it would equally have passed a repo that lists husky and wires nothing, and failed a
+# repo that wires hooks correctly from a script not named after husky.
+#
+# What actually proves the hooks are wired is core.hooksPath naming a tracked directory that
+# exists, and hooks.path above checks exactly that. This check stays deliberately narrow: is
+# there a script that runs the hook installer at all?
+installs_hooks=any(
+    ".sh install" in v or "husky install" in v or v.strip().endswith("install-hooks")
+    for v in d.get("scripts",{}).values()
+)
 sys.exit(0 if need.issubset(dev) and installs_hooks else 1)
 PY
-  if [ $? -eq 0 ]; then ok devdeps.declared "package.json has commitlint/husky/lint-staged/prettier(+sh) devDeps + a husky-invoking hook-install command"; else bad devdeps.declared "package.json missing commitlint/husky/lint-staged/prettier(+sh) devDeps or a husky-invoking hook-install command"; fi
+  if [ $? -eq 0 ]; then ok devdeps.declared "package.json has commitlint/lint-staged/prettier(+sh) devDeps + a hook-install script"; else bad devdeps.declared "package.json missing commitlint/lint-staged/prettier(+sh) devDeps or a hook-install script"; fi
 else
   bad package_json.valid "package.json missing or invalid JSON (needed for the Node-rooted tooling)"
 fi
