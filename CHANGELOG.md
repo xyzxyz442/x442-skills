@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/xyzxyz442/x442-skills/compare/v0.12.0...v0.12.1) (2026-09-05)
+
+### 🐞 Bug Fixes
+
+- **bug:** stop pipefail discarding grep -q results on large docs ([aaa0937](https://github.com/xyzxyz442/x442-skills/commit/aaa0937177b650b6811b63a16ee6c24f8a2d1726))
+- **setup:** stop requiring a husky dependency nothing invokes ([c1a493f](https://github.com/xyzxyz442/x442-skills/commit/c1a493f93dd82cda2b89ccf98bf4196102552aae))
+
 ## [0.12.0](https://github.com/xyzxyz442/x442-skills/compare/v0.11.4...v0.12.0) (2026-09-05)
 
 ### 🚀 Features
