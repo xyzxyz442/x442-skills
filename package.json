@@ -1,6 +1,6 @@
 {
   "name": "x442-skills",
-  "version": "0.11.4",
+  "version": "0.12.0",
   "private": true,
   "description": "A collection of model-agnostic agent skills.",
   "scripts": {

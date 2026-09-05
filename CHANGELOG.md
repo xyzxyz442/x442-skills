@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.12.0](https://github.com/xyzxyz442/x442-skills/compare/v0.11.4...v0.12.0) (2026-09-05)
+
+### 🚀 Features
+
+- **feature:** add the credential detection and redaction engine ([e1e40e5](https://github.com/xyzxyz442/x442-skills/commit/e1e40e51f4ebadcb3ccb731c09c85cfd46351f8e))
+- **feature:** add the secret-guard AGENTS.md block and its splice ([15c0868](https://github.com/xyzxyz442/x442-skills/commit/15c0868625296963ec9248f3d01e7de0c57813c6))
+- **feature:** add the secret-guard verifier ([695ef8f](https://github.com/xyzxyz442/x442-skills/commit/695ef8f8ef1cc3dc8b2814043e7764321e31c576))
+- **feature:** add the setup-secret-guard installer and its settings merge ([129e0d8](https://github.com/xyzxyz442/x442-skills/commit/129e0d8543d3435bbf88cb015a805e3b97ae2b60))
+- **feature:** converge the consent gate onto the shared credential engine ([0d97c2f](https://github.com/xyzxyz442/x442-skills/commit/0d97c2ff0e89f5c313b9abb836ec649f616cc13a))
+
+### 🐞 Bug Fixes
+
+- **bug:** degrade the consent gate to a bash reader instead of exiting open ([7cbd37a](https://github.com/xyzxyz442/x442-skills/commit/7cbd37ad0cdf1cf866608963577c971c3f865453))
+- **bug:** let --dry-run show the whole plan and stop claiming it wired anything ([28afc16](https://github.com/xyzxyz442/x442-skills/commit/28afc1671e6d9286d25c953d99196b1f2a0a2697))
+- **bug:** make the secret-guard installer executable ([c4d4ef6](https://github.com/xyzxyz442/x442-skills/commit/c4d4ef6bcf3b1c4f0b289ff7aabf4e0511172885))
+- **bug:** ship the absolute-path deny anchors that were missing ([ad45b86](https://github.com/xyzxyz442/x442-skills/commit/ad45b86ddff6728f8f1252f7c4180c5b370d0de7))
+- **bug:** tell a command from an argument that merely looks like one ([bff4834](https://github.com/xyzxyz442/x442-skills/commit/bff48340fddf9cd0512a33734cb0e09d609829bb))
+- **graph-hooks:** stop inferring a cloud embedding provider from an ambient key ([c70e66f](https://github.com/xyzxyz442/x442-skills/commit/c70e66f935ebb985c23f69e0fb449a194503cb6b))
+- **setup:** track the git hooks so worktrees actually run them ([e225550](https://github.com/xyzxyz442/x442-skills/commit/e22555016227100caf4fe4cf7ed89702dcb7c7bc))
+- **test:** refresh the stale graph-hooks payload in every fixture ([3c71678](https://github.com/xyzxyz442/x442-skills/commit/3c716781ebdc7aec248c18b8512fa1d577a3ccb9))
+
+### 📚 Documentation
+
+- **adr:** record the upstream embedding-provider boundary as ADR 0007 ([d17e234](https://github.com/xyzxyz442/x442-skills/commit/d17e2347b55a6a5ec34a4974904da8696699b197))
+- **docs:** add secret guard, detection and redaction to the glossary ([ebea10c](https://github.com/xyzxyz442/x442-skills/commit/ebea10c37f744f2fabb41c1e81e62424988a8f73))
+- **docs:** index the setup-secret-guard skill ([8723147](https://github.com/xyzxyz442/x442-skills/commit/8723147deb9997fab528c0a8ab15fee9d9d1a953))
+- **docs:** normalise masking and scrubbing onto redaction ([7db53fa](https://github.com/xyzxyz442/x442-skills/commit/7db53fa86057913e3a511d2b6fa2159316b1b8b1))
+- **docs:** record one credential engine resolved through a cascade ([6e8f532](https://github.com/xyzxyz442/x442-skills/commit/6e8f532182529c7f63288315941ec06ebcb07173))
+- **docs:** settle outbound export as refuse, and say to rotate ([549f18a](https://github.com/xyzxyz442/x442-skills/commit/549f18a450c493f006dfb88ca61618dfec4aae15))
+- **graph-hooks:** document the providers this skill recognises but does not drive ([a9657db](https://github.com/xyzxyz442/x442-skills/commit/a9657db3f576566f67abdbe90acdffb34378ba43))
+
+### 💅 Styles
+
+- **other:** apply the formatting the worktree commits skipped ([608d3d6](https://github.com/xyzxyz442/x442-skills/commit/608d3d65dffe2b24171e50ebfd717b7f649e51a1))
+
+### 🧪 Tests
+
+- **graph-hooks:** guard the embedding-provider defects with an offline eval ([7e5f32e](https://github.com/xyzxyz442/x442-skills/commit/7e5f32ecb3b71af55a198a75dd8e5e9fbfc25ecf))
+- **test:** add the setup-secret-guard harness with leak cases ([62fc1e4](https://github.com/xyzxyz442/x442-skills/commit/62fc1e4fd21d5b7f607a30a287b843bf7992e18e))
+- **test:** assert the rewritten command actually runs and masks ([104b6bc](https://github.com/xyzxyz442/x442-skills/commit/104b6bc8385ce8aa75c910c90965d806bea71952))
+- **test:** grade the over-firing half, not only the leaks ([b69f932](https://github.com/xyzxyz442/x442-skills/commit/b69f932bad3ab33d5b473ef0c194b9e012b0b164))
+- **test:** pin the credential-read probe instead of inheriting the machine's guard ([05f914c](https://github.com/xyzxyz442/x442-skills/commit/05f914c3a43afc362fb292a34242fb93983928ce))
+
+### 🧹 Miscellaneous Chores
+
+- **graph-hooks:** lift this repo's own install to payload 3 ([d040025](https://github.com/xyzxyz442/x442-skills/commit/d040025c2ff63d3c995a95dfc43bc81009a2e2dc))
+
 ## [0.11.4](https://github.com/xyzxyz442/x442-skills/compare/v0.11.3...v0.11.4) (2026-09-04)
 
 ### 🐞 Bug Fixes
