@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x442-payload-version: setup-project-tooling 1
+# x442-payload-version: setup-project-tooling 2
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
 #
 # The marker line above is this skill's payload stamp. setup-project-tooling has no single
@@ -8,16 +8,26 @@
 # on line 2, byte-identical to scripts/payload.version, so a one-line read finds it. An ABSENT
 # marker means a pre-versioning install, not a corrupt one.
 #
-# One script owns both halves of the hook lifecycle: `install` generates the gitignored
-# .husky/ hook files, and the per-hook sub-commands are what those generated files execute.
+# One script owns both halves of the hook lifecycle: `install` writes the .husky/ hook files
+# and points core.hooksPath at them, and the per-hook sub-commands are what those files execute.
 # Each hook is a single line that calls back into this script with git's own arguments, so
 # hook logic lives here in reviewable shell instead of JSON-escaped fragments in package.json.
 #
-# Wired into package.json as one command (npm lifecycle `prepare` by default):
-#   "prepare": "scripts/husky.sh install"
+# COMMIT .husky/. The hook files are repo state, not user state: identical for everyone, and
+# tracking them is what makes a git worktree work. core.hooksPath lives in .git/config and is
+# shared by every worktree of a clone, so an untracked hooks directory leaves a worktree pointing
+# at something it does not have — and git then runs NO hook at all, silently.
+#
+# HOW TO WIRE THE INSTALL. `prepare` is the npm lifecycle script this would normally use, but it
+# also runs on install in CI, which can break a CI workflow that does not want git hooks. A repo
+# with that problem should use a plain script it calls deliberately instead:
+#   "prepare":    "scripts/husky.sh install"   # automatic, fires on every install
+#   "install:dev": "<pm> install && scripts/husky.sh install"   # manual, CI-safe
+# Pick one. With the manual form, a FRESH CLONE needs it run once; worktrees of that clone then
+# inherit core.hooksPath and find the tracked hooks with no further action.
 #
 # Usage: scripts/husky.sh <command> [args...]
-#   install      Run husky, then (re)generate .husky/commit-msg and .husky/pre-commit
+#   install      Point core.hooksPath at .husky/ and (re)generate the hook files
 #   commit-msg   Hook body: lint the commit message  (git passes the message file as $1)
 #   pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)
 #   -h, --help   Show usage information
@@ -31,7 +41,7 @@ SELF="scripts/husky.sh"
 
 print_usage() {
   echo "Usage: $0 <command> [args...]"
-  echo "  install      Run husky, then (re)generate .husky/commit-msg and .husky/pre-commit"
+  echo "  install      Point core.hooksPath at .husky/ and (re)generate the hook files"
   echo "  commit-msg   Hook body: lint the commit message (git passes the message file as \$1)"
   echo "  pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)"
   echo "  -h, --help   Show usage information"
@@ -98,8 +108,26 @@ hook_body() {
 
 install_hooks() {
   [ -f package.json ] || fail "no package.json in $(pwd); run this from the repo root."
-  echo "Running husky..."
-  pm_exec husky
+
+  # core.hooksPath points at .husky ITSELF, not husky's generated .husky/_ helper directory.
+  #
+  # The hooks this script writes are complete shell scripts that call back into it directly —
+  # they never source husky's `_/husky.sh` — so the `_` layer only ever supplied the hooksPath
+  # value. Owning that value here buys the thing husky cannot give us: `.husky/` can be TRACKED,
+  # and a tracked hooks directory exists in every git worktree with no install step at all.
+  #
+  # That is not a nicety. core.hooksPath lives in .git/config and is shared by every worktree of
+  # a clone, while `.husky/_` was generated and gitignored — so a linked worktree inherited a
+  # hooksPath naming a directory it did not have, and git ran NO hook at all. Not commitlint, not
+  # lint-staged, not verify-standalone.sh, and not setup-graph-hooks' post-commit refresh. It
+  # failed silently, which is the worst way for a guardrail to fail.
+  #
+  # `husky` the package is deliberately no longer invoked: calling it would reset core.hooksPath
+  # back to .husky/_ and undo this on the next install.
+  git rev-parse --git-dir > /dev/null 2>&1 || fail "not a git repository; cannot set core.hooksPath."
+  git config core.hooksPath .husky
+  echo "Set core.hooksPath to .husky"
+
   mkdir -p .husky
   local hook
   for hook in $HOOKS; do
@@ -108,7 +136,12 @@ install_hooks() {
     echo "Wrote .husky/$hook"
   done
   [ -f "$SELF" ] && chmod +x "$SELF"
-  echo "Husky hooks installed."
+
+  # A gitignored .husky/ reintroduces the exact defect this layout exists to remove, so say so.
+  if git check-ignore -q .husky 2> /dev/null; then
+    echo "WARNING: .husky/ is gitignored — commit it, or worktrees will silently run no hooks." >&2
+  fi
+  echo "Git hooks installed in .husky/. Commit them."
 }
 
 # section: hook bodies

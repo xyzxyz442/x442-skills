@@ -1,0 +1,3 @@
+#!/bin/sh
+
+scripts/husky.sh pre-commit "$@"

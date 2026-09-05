@@ -457,7 +457,7 @@ graphify-out/
 .claude/handoff/.locks/
 
 # user-specific
-.husky
+.husky/_
 .tmp
 
 # subagent-driven-development scratch: per-plan ledger, task briefs, implementer reports, and
