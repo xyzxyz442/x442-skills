@@ -329,7 +329,7 @@ d = json.load(open('$SETTINGS'))
 r = d.get('permissions', {}).get('deny', [])
 print(len(r) - len(set(r)))" 2> /dev/null || echo 0)"
     if [ "$DUPES" -gt 0 ]; then
-      warn "wiring.deny.duplicates" "${DUPES} duplicate deny rule(s) — harmless, but see secret-guard-deny-canonical-form-handoff"
+      warn "wiring.deny.duplicates" "${DUPES} EXACT duplicate deny rule(s) — harmless. Note a '//' twin of a '**/' rule is NOT a duplicate: one anchors at the working directory, the other at the filesystem root, and both are needed."
     fi
   else
     bad "wiring.json_valid" "settings.json is not valid JSON — the hook cannot load"
