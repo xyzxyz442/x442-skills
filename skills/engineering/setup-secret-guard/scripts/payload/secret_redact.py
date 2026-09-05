@@ -1,24 +1,25 @@
 """secret_redact — shared credential-redaction heuristics.
 
-Used by callers that must agree exactly -- the viewer that masks a file, the scanner
+Used by callers that must agree exactly -- the viewer that redacts a file, the scanner
 that answers yes/no, and the hook that decides allow/ask/deny. They are installed from
 one payload precisely so they cannot drift apart.
 
 Keeping the heuristics in one module stops the guard and the viewer from
 drifting apart -- a drift where the guard says "safe" and the viewer would
-have masked something is exactly how a secret reaches the transcript.
+would have redacted something is exactly how a secret reaches the transcript.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import re
-import sys
 
 MAX_BYTES = 2 * 1024 * 1024  # refuse to slurp huge blobs
 
 # ---------------------------------------------------------------- fingerprints
+
 
 def fingerprint(value: str) -> str:
     """Non-reversible stable tag for a secret value."""
@@ -100,7 +101,11 @@ def looks_secret_value(v) -> bool:
     if EMBEDDED_CRED_RE.search(s):
         return True
     # Long, high-entropy, no spaces, not a path or URL.
-    if len(s) >= 24 and " " not in s and not s.startswith(("/", "./", "http://", "https://")):
+    if (
+        len(s) >= 24
+        and " " not in s
+        and not s.startswith(("/", "./", "http://", "https://"))
+    ):
         classes = sum(bool(re.search(p, s)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]"))
         if classes >= 2 and PRIVKEY_RE.match(s.replace("-", "").replace("_", "")):
             return True
@@ -150,14 +155,20 @@ def render_blob(path: str, raw: bytes) -> str:
     global MASK_COUNT
     MASK_COUNT += 1
     digest = hashlib.sha256(raw).hexdigest()[:16]
-    kind = "PEM/text key material" if PEM_RE.search(
-        raw[:200].decode("utf-8", "replace")) else "opaque key material"
-    return (f"# {path}\n"
-            f"# {kind}, fully withheld\n"
-            f"# {len(raw)} bytes, sha256:{digest}\n")
+    kind = (
+        "PEM/text key material"
+        if PEM_RE.search(raw[:200].decode("utf-8", "replace"))
+        else "opaque key material"
+    )
+    return (
+        f"# {path}\n"
+        f"# {kind}, fully withheld\n"
+        f"# {len(raw)} bytes, sha256:{digest}\n"
+    )
 
 
 # ------------------------------------------------------------------ format: JSON
+
 
 def redact_json(obj, mask_all: bool, key=None):
     if isinstance(obj, dict):
@@ -187,7 +198,9 @@ def redact_lines(text: str, pattern: re.Pattern, mask_all: bool) -> str:
             global MASK_COUNT
             MASK_COUNT += 1
             in_block = True
-            out.append(re.sub(r"(-----BEGIN [^-]+-----).*", r"\1 <redacted body>", line))
+            out.append(
+                re.sub(r"(-----BEGIN [^-]+-----).*", r"\1 <redacted body>", line)
+            )
             continue
         if in_block:
             if "-----END" in line:
@@ -227,6 +240,7 @@ def redact_lines(text: str, pattern: re.Pattern, mask_all: bool) -> str:
 
 # ----------------------------------------------------------------------- driver
 
+
 def render(path: str, raw: bytes, mask_all: bool) -> str:
     global MASK_COUNT
     MASK_COUNT = 0
@@ -238,47 +252,72 @@ def render(path: str, raw: bytes, mask_all: bool) -> str:
     if PEM_RE.search(text) and name.endswith((".pem", ".key", ".crt", ".cer")):
         return render_blob(path, raw)
 
-    # Heuristic masking by default: ordinary config stays readable, credential-
-    # shaped values do not. `--all` forces every scalar to be masked.
+    # Heuristic by default: ordinary config stays readable, credential-shaped
+    # values do not. `--all` redacts every scalar.
     force_all = mask_all
 
-    header = f"# {path}  [redacted view — values masked, structure preserved]\n"
+    header = f"# {path}  [redacted view — values replaced by fingerprints, structure preserved]\n"
 
     # JSON first: structure-aware beats line-based.
     stripped = text.lstrip()
     if stripped.startswith(("{", "[")):
         try:
-            return header + json.dumps(
-                redact_json(json.loads(text), force_all), indent=2) + "\n"
+            return (
+                header
+                + json.dumps(redact_json(json.loads(text), force_all), indent=2)
+                + "\n"
+            )
         except (ValueError, RecursionError):
             pass  # fall through to line-based
 
     lower = name.lower()
     if lower.endswith((".yaml", ".yml")) or "kubeconfig" in lower:
         return header + redact_lines(text, YAML_LINE, force_all)
-    if lower in (".npmrc", ".pypirc", ".netrc") or lower.endswith((".ini", ".cfg", ".conf", ".toml")):
+    if lower in (".npmrc", ".pypirc", ".netrc") or lower.endswith(
+        (".ini", ".cfg", ".conf", ".toml")
+    ):
         return header + redact_lines(text, INI_LINE, force_all)
     # Default: dotenv shape.
     return header + redact_lines(text, DOTENV_LINE, force_all)
 
 
-
 # ------------------------------------------------------- content-based probe
 
-CONFIGISH = (".json", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".toml",
-             ".properties", ".env", ".npmrc", ".netrc", ".pypirc", ".xml")
+CONFIGISH = (
+    ".json",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".toml",
+    ".properties",
+    ".env",
+    ".npmrc",
+    ".netrc",
+    ".pypirc",
+    ".xml",
+)
+
 
 # Filenames that are secret regardless of content.
 def is_secret_name(path: str) -> bool:
     name = os.path.basename(path)
-    return bool(ALWAYS_MASK_ALL.search(path) or ALWAYS_MASK_ALL.search(name)
-                or OPAQUE_BLOB.search(name))
+    return bool(
+        ALWAYS_MASK_ALL.search(path)
+        or ALWAYS_MASK_ALL.search(name)
+        or OPAQUE_BLOB.search(name)
+    )
 
 
 def looks_configish(path: str) -> bool:
     name = os.path.basename(path).lower()
-    return name.endswith(CONFIGISH) or name.startswith(".env") or name in (
-        ".npmrc", ".netrc", ".pypirc") or "kubeconfig" in name
+    return (
+        name.endswith(CONFIGISH)
+        or name.startswith(".env")
+        or name in (".npmrc", ".netrc", ".pypirc")
+        or "kubeconfig" in name
+    )
 
 
 def _walk_json_has_secret(obj, key=None) -> bool:
@@ -293,7 +332,7 @@ def contains_secrets(path: str) -> bool:
     """True if reading this file raw would put a credential in the transcript.
 
     Filename alone is not enough: an ordinary-looking appsettings.json can hold a
-    password. This opens the file and applies the same masking heuristics the
+    password. This opens the file and applies the same heuristics the
     viewer would, so the guard and the viewer never disagree.
     """
     if is_secret_name(path):
@@ -336,7 +375,8 @@ def text_contains_secrets(text: str, name_hint: str = "") -> bool:
     if name.endswith((".yaml", ".yml")) or "kubeconfig" in name:
         pattern = YAML_LINE
     elif name in (".npmrc", ".pypirc", ".netrc") or name.endswith(
-            (".ini", ".cfg", ".conf", ".toml")):
+        (".ini", ".cfg", ".conf", ".toml")
+    ):
         pattern = INI_LINE
     else:
         pattern = DOTENV_LINE

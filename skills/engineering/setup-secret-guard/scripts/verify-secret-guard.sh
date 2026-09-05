@@ -148,14 +148,14 @@ if [ -x "$SCAN" ] && [ -x "$VIEW" ]; then
   fi
   # The value must never survive into the viewer's output.
   if "$VIEW" "${TMP}/sample-config" 2> /dev/null | grep -q 'not-a-real-password-000'; then
-    bad "engine.masks" "the viewer printed a value it should have masked"
+    bad "engine.masks" "the viewer printed a value it should have redacted"
   else
-    ok "engine.masks" "the viewer masks the value"
+    ok "engine.masks" "the viewer redacts the value"
   fi
   if "$VIEW" "${TMP}/clean.json" 2> /dev/null | cmp -s - "${TMP}/clean.json"; then
     ok "engine.passthrough" "a clean file passes through byte-identical"
   else
-    bad "engine.passthrough" "the viewer rewrote a file with nothing to mask"
+    bad "engine.passthrough" "the viewer rewrote a file with nothing to redact"
   fi
   # Findings name the rule, never the value.
   if "$SCAN" "${TMP}/sample-config" 2> /dev/null | grep -q 'not-a-real-password-000'; then
@@ -227,9 +227,9 @@ print(u.get("command", ""))' 2> /dev/null || true)"
   if [ -n "$REWRITE" ]; then
     RESULT="$(eval "$REWRITE" 2> /dev/null || true)"
     if printf '%s' "$RESULT" | grep -q 'not-a-real-password-000'; then
-      bad "guard.rewrite_runs" "the command the guard substituted printed the value it was meant to mask"
+      bad "guard.rewrite_runs" "the command the guard substituted printed the value it was meant to redact"
     elif printf '%s' "$RESULT" | grep -q 'redacted'; then
-      ok "guard.rewrite_runs" "the substituted command actually runs and masks"
+      ok "guard.rewrite_runs" "the substituted command actually runs and redacts"
     else
       bad "guard.rewrite_runs" "the substituted command did not produce a redacted view — the viewer it names may not resolve"
     fi

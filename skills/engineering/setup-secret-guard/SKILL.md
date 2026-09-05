@@ -3,7 +3,7 @@ name: x442-setup-secret-guard
 description: >-
   Use when credential values must not reach an agent transcript — "stop Claude reading my .env",
   "redact secrets", "why did it print my API key", or any request to guard credential files
-  across projects. Installs a redacting read-path guard plus the shared detection and masking
+  across projects. Installs a redacting read-path guard plus the shared detection and redaction
   engine (secret-scan, redact-view) into the .claude cascade, so a credential file stays usable
   while its values are replaced by stable fingerprints. Idempotent, and on by default for repos
   that never installed it.
@@ -16,7 +16,7 @@ content may be handled before it reaches a transcript, a committed document, or 
 recipient.
 
 The point is not to forbid credential files. It is to make them readable **without** their
-values. `cat .env` becomes a masked view — keys, structure and value types intact, each secret
+values. `cat .env` becomes a redacted view — keys, structure and value types intact, each secret
 replaced by a length and a truncated digest — so ordinary work continues and the transcript
 never holds the secret.
 
@@ -39,7 +39,7 @@ read path is the only place prevention is possible, and it was unguarded.
 | Verb          | Question                             | Answer                                     |
 | ------------- | ------------------------------------ | ------------------------------------------ |
 | `secret-scan` | may this content be written or sent? | exit 0 found / 1 clean, plus the rule name |
-| `redact-view` | show me this file, masked            | the file, values fingerprinted             |
+| `redact-view` | show me this file, redacted          | the file, values fingerprinted             |
 
 It never returns a verdict. `allow`/`ask`/`deny` are Claude Code's vocabulary and belong to the
 hook; write-or-refuse belongs to the handoff CLI; each consumer maps detections to its own
@@ -47,7 +47,7 @@ policy. A shared verdict vocabulary would drag an `ask` into a bash CLI with no 
 
 **The consumers** map detections to decisions:
 
-- `secret-file-guard.py` — the `PreToolUse` hook. Rewrites a plain read into a masked read,
+- `secret-file-guard.py` — the `PreToolUse` hook. Rewrites a plain read into a redacted read,
   asks on helm/Harness values files, denies extraction verbs, allows everything else.
 - `permissions.deny` in the tool's settings — covers `Read`/`Edit`, whose output a hook cannot
   filter.
@@ -61,12 +61,12 @@ and the transcript, not of the repository** — the guard has to be on for a rep
 into. "Enforce it everywhere" therefore means one install, not one per project.
 
 The repository layer exists only to **add**: extra path patterns, and `safe_keys` exceptions that
-suppress masking for a key already matched. It may never remove a path from the deny or rewrite
+suppress redaction for a key already matched. It may never remove a path from the deny or rewrite
 sets. Strict additive-only was rejected — unusable false positives get the whole guard switched
 off, which is worse than a scoped exception.
 
 > A `safe_keys` entry is a security change wearing the clothes of configuration. It is the
-> easiest layer to modify by ordinary pull request, and it suppresses masking. Review additions
+> easiest layer to modify by ordinary pull request, and it suppresses redaction. Review additions
 > as security changes.
 
 ## Failure posture is per call site
@@ -108,7 +108,7 @@ always needed once. It defends against later silent drift, not against a bad fir
   prose would fire on every security handoff that says "password", and a write-path scanner that
   cries wolf gets overridden by habit.
 - **It does not change export policy.** ADR 0005 has `export` refuse on a detection, and it still
-  does. Masking is a read-path capability.
+  does. Redaction is a read-path capability.
 - **It is not a sandbox.** It is a cooperative guard. It cannot stop a command that prints a
   secret without naming a credential path — `env`, a build that echoes a variable, a stack trace.
 

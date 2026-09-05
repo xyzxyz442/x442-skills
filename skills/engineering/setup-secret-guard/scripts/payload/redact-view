@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""redact-view -- print a credential-bearing file with its VALUES masked.
+"""redact-view -- print a credential-bearing file with its VALUES redacted.
 
 Claude gets the file's shape (which keys exist, JSON/YAML structure, value types)
 while every secret value is replaced by a stable fingerprint:
@@ -13,7 +13,7 @@ real entropy.
 
 Usage:
     redact-view FILE [FILE...]
-    redact-view --all FILE     # mask every scalar, not just secret-looking ones
+    redact-view --all FILE     # redact every scalar, not just secret-looking ones
     ... | redact-view -        # read stdin
 """
 import os

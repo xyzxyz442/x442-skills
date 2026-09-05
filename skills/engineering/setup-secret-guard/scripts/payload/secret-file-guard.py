@@ -5,7 +5,7 @@ entering the transcript.
 Policy, in order of preference:
 
   rewrite -> a plain read (`cat .env`) is rewritten to `redact-view .env`, which
-             prints the same file with values masked and structure intact. Claude
+             prints the same file with values redacted and structure intact. Claude
              gets the shape; the transcript never sees the secret.
   ask     -> helm/Harness values files: often secret-bearing, often ordinary work.
   deny    -> commands that would *extract* or *exfiltrate* a value (base64, scp,
@@ -374,7 +374,7 @@ def main():
             emit(
                 "allow",
                 f"Redirected through redact-view ({', '.join(touched)}): this file "
-                f"holds credential-shaped values. Structure preserved, values masked.",
+                f"holds credential-shaped values. Structure preserved, values redacted.",
                 updated=new_input,
             )
 
@@ -388,7 +388,7 @@ def main():
                 "ask",
                 f"This reads a helm/Harness values file ({hit.group(0).strip()!r}), which "
                 f"often carries secrets. Approve to see it raw, or cancel and use "
-                f'`"{REDACT_VIEW}" <file>` for a masked view.',
+                f'`"{REDACT_VIEW}" <file>` for a redacted view.',
             )
         sys.exit(0)
 
@@ -413,7 +413,7 @@ def main():
             emit(
                 "allow",
                 f"Redirected through redact-view ({', '.join(touched)}): values are "
-                f"masked with a length + sha256 fingerprint, structure preserved.",
+                f"redacted to a length + sha256 fingerprint, structure preserved.",
                 updated=new_input,
             )
 

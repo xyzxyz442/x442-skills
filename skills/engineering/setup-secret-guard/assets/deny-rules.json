@@ -1,15 +1,15 @@
 {
   "_comment": [
     "Permission rules the secret guard owns. These cover the Read and Edit tools, whose output",
-    "a PreToolUse hook cannot filter — the hook can rewrite a shell read into a masked read, but",
-    "it cannot mask what a file-reading tool returns, so those paths are denied outright.",
+    "a PreToolUse hook cannot filter — the hook can rewrite a shell read into a redacted read,",
+    "but it cannot redact what a file-reading tool returns, so those paths are denied outright.",
     "",
     "ONE canonical form per path. An earlier hand-maintained list carried both '**/x' and",
     "'//**/x' twins for about fifteen patterns; the installer emits this form only and reports",
     "unmanaged duplicates rather than deleting them, because a deny rule removed on a guess is a",
     "silent hole.",
     "",
-    "read: masking would be meaningful but the tool cannot be intercepted, so deny.",
+    "read: redaction would be meaningful but the tool cannot be intercepted, so deny.",
     "edit: raw key material and credential stores, where an edit is a rewrite of a secret."
   ],
   "read": [
