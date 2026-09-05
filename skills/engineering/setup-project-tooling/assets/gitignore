@@ -458,5 +458,5 @@ graphify-out/
 .agents/handoff/.locks/
 
 # user-specific
-.husky
+.husky/_
 .tmp

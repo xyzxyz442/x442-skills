@@ -123,6 +123,27 @@ if [ -f commitlint.config.mjs ]; then
     ok hook.commit_msg "commit-msg hook generated at install time (legacy package.json hook chain)"
     warn hook.legacy_chain "legacy hook chain detected; re-run setup-project-tooling to migrate to scripts/husky.sh"
   else bad hook.commit_msg "no local commit-msg enforcement (.husky/commit-msg absent and no command generates it)"; fi
+
+  # core.hooksPath must name a directory that EXISTS, and one that is TRACKED.
+  #
+  # A hook file present in this checkout proves nothing on its own. core.hooksPath lives in
+  # .git/config and is shared by every worktree of a clone, so if it names a generated,
+  # gitignored directory (husky's own .husky/_ is exactly that), a linked worktree inherits the
+  # setting, finds nothing there, and git runs NO hook — not commit-msg, not pre-commit, not
+  # post-commit. Nothing reports it. Commits land unchecked and look identical to checked ones.
+  #
+  # Both halves matter, so both are checked: a path that does not resolve here is already broken,
+  # and a path that resolves but is gitignored is broken in every worktree but this one.
+  hp="$(git config core.hooksPath 2> /dev/null || true)"
+  if [ -z "$hp" ]; then
+    ok hooks.path "core.hooksPath unset — git uses .git/hooks, which every worktree shares"
+  elif [ ! -d "$hp" ]; then
+    bad hooks.path.missing "core.hooksPath is '$hp' but no such directory exists — git runs NO hook here; fix: re-run setup-project-tooling"
+  elif git check-ignore -q "$hp" 2> /dev/null; then
+    bad hooks.path.ignored "core.hooksPath is '$hp', which is gitignored — hooks run in this checkout but in NO worktree; fix: track it and re-run setup-project-tooling"
+  else
+    ok hooks.path "core.hooksPath is '$hp' — present and tracked, so worktrees get the hooks too"
+  fi
 else
   bad commitlint.config "commitlint.config.mjs missing at repo root"
 fi
@@ -205,7 +226,17 @@ fi
 section "5. Git hygiene (.gitignore + .gitattributes)"
 if [ -f .gitignore ]; then
   ok gitignore.present ".gitignore present"
-  if grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then ok gitignore.husky ".gitignore ignores .husky (regenerated hooks stay untracked)"; else warn gitignore.husky ".gitignore does not ignore .husky (base .gitignore not applied)"; fi
+  # Inverted at payload 2. Ignoring .husky/ used to be correct, because core.hooksPath pointed at
+  # husky's generated .husky/_ and the hook files were regenerated on every install. It now points
+  # at .husky/ itself, and those files are repo state that every worktree needs — so ignoring the
+  # directory is the DEFECT, and ignoring only the vestigial .husky/_ is the fix.
+  if grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then
+    bad gitignore.husky ".gitignore ignores .husky/ — the hooks cannot be committed, so no worktree runs them; fix: ignore only .husky/_ and re-run setup-project-tooling"
+  elif grep -qE '^[[:space:]]*\.husky/_/?[[:space:]]*$' .gitignore; then
+    ok gitignore.husky ".gitignore ignores .husky/_ only — the hook files stay tracked"
+  else
+    warn gitignore.husky ".gitignore does not mention .husky/_ (husky's generated helper dir will show as untracked)"
+  fi
 else
   warn gitignore.present ".gitignore absent (base ignore set not applied)"
 fi

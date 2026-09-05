@@ -127,6 +127,10 @@ Follow the [Karpathy coding guidelines](skills/engineering/initial-project/refer
 
 Follow the [commit guidelines](skills/engineering/initial-project/references/commit-guidelines.md): Conventional Commits `type(scope): subject` (lowercase imperative subject, no trailing period). The enforced ruleset is [`commitlint.config.mjs`](commitlint.config.mjs) — the single source of truth; `setup-project-tooling` wires the husky `commit-msg` hook that enforces it locally.
 
+**`.husky/` is committed on purpose — do not add it back to `.gitignore`.** `core.hooksPath` points at `.husky/` itself, and that setting lives in `.git/config`, which every git worktree of a clone shares. Track the hook files and a worktree gets them for free; ignore them and a worktree inherits a hooks path naming a directory it does not have, so git runs **no** hook at all — not commitlint, not lint-staged, not [`verify-standalone.sh`](scripts/verify-standalone.sh), not the graph post-commit refresh — and says nothing. Only `.husky/_`, husky's generated helper directory, stays ignored. `verify-project-tooling.sh` fails on both broken shapes.
+
+A **fresh clone** still needs `pnpm run install:dev` once, to set `core.hooksPath`. Worktrees of that clone need nothing. (`install:dev` rather than a `prepare` script because `prepare` also runs on install in CI.)
+
 ## Workflow
 
 To add a new skill:
