@@ -93,11 +93,11 @@ Adapt `pnpm`/`npm`/`yarn`/`bun` to the detected manager.
 
 `scripts/husky.sh` is a sub-command dispatcher, the same shape as `initialize.sh`:
 
-| Sub-command  | Role                                                                                         |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `install`    | Runs husky, then writes `.husky/commit-msg` + `.husky/pre-commit` and marks them executable. |
-| `commit-msg` | Hook body — `commitlint --edit "$1"`.                                                        |
-| `pre-commit` | Hook body — the staged-file checks (`lint-staged`).                                          |
+| Sub-command  | Role                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `install`    | Points `core.hooksPath` at `.husky/`, then writes `.husky/commit-msg` + `.husky/pre-commit` and marks them executable. |
+| `commit-msg` | Hook body — `commitlint --edit "$1"`.                                                                                  |
+| `pre-commit` | Hook body — the staged-file checks (`lint-staged`).                                                                    |
 
 Each generated hook is one command that hands git's own arguments to the dispatcher:
 
@@ -107,8 +107,11 @@ Each generated hook is one command that hands git's own arguments to the dispatc
 scripts/husky.sh pre-commit "$@"
 ```
 
-This keeps `.husky/` out of version control (the base `.gitignore` below ignores `.husky`) and
-regenerates the hooks on every install, while the logic that runs on every commit stays in one
+**Commit `.husky/`.** The hook files are repo state, not user state — identical for everyone —
+and tracking them is what makes a git worktree work. `core.hooksPath` lives in `.git/config`, which
+every worktree of a clone shares, so an untracked hooks directory leaves a worktree pointing at
+something it does not have, and git then runs **no** hook at all, silently. Only `.husky/_`, husky's
+generated helper directory, stays ignored. The logic that runs on every commit stays in one
 committed, reviewable, prettier-formatted script instead of JSON-escaped shell fragments. Binaries
 are resolved through the detected package manager's exec form (`pnpm exec` / `yarn exec` / `bunx` /
 `npx --no --`), because `npx` cannot see local binaries under Yarn PnP or a strict pnpm store.
@@ -139,11 +142,9 @@ into `.husky/`. Remove those scripts, replace them with the single command above
 `prepare` entry is deleted. The bundled verifier accepts either shape and any command name, so a repo
 that has not been re-run does not fail CI in the meantime.
 
-Teams that prefer **committed** hooks commit `.husky/commit-msg` and `.husky/pre-commit` as those
-same one-line wrappers, drop `.husky` from `.gitignore`, and set the command to plain `husky`.
-`scripts/husky.sh` is committed either way — the two modes differ only in whether `.husky/` is
-tracked. [`assets/commit-msg`](assets/commit-msg) is the standalone hook body for a repo that wants
-neither the dispatcher nor install-time generation.
+Committed hooks are the only mode as of payload 3; the older layout regenerated them into a
+gitignored `.husky/` and is what broke worktrees. [`assets/commit-msg`](assets/commit-msg) is the
+standalone hook body for a repo that wants neither the dispatcher nor install-time generation.
 
 ### Base .gitignore and .gitattributes
 
@@ -204,7 +205,7 @@ graphify-out/
 .agents/handoff/.locks/
 
 # user-specific
-.husky
+.husky/_
 .tmp
 ```
 
@@ -324,9 +325,9 @@ to commit:
 - **Package-manager aware** — detects npm/pnpm/yarn/bun from the lockfile and runs `<pm> install`
   (provisioning yarn/pnpm via corepack when needed).
 - **Hook repair = re-run the hook-install command** — resolves the command name
-  (`install:dev` → `prepare` → whichever script invokes husky), restores the executable bit on
-  `scripts/husky.sh`, and
-  regenerates the gitignored `.husky/commit-msg` + `.husky/pre-commit`. A dispatcher that is present
+  (`install:dev` → `prepare` → whichever script runs the installer), restores the executable bit
+  on `scripts/husky.sh`, and
+  regenerates the tracked `.husky/commit-msg` + `.husky/pre-commit`. A dispatcher that is present
   but not executable counts as broken, since the hooks are one-line wrappers around it.
 - **Python** — makes the toolchain runnable through `scripts/py-tool.sh`. With uv or pipx present it
   pre-fetches the pinned tools so the first commit does not pay a download inside a git hook; with
@@ -363,7 +364,7 @@ When wiring:
 
 Merge into `package.json` (round-trip; preserve all other keys), pinned to the versions this repo
 runs. Base (always): `@commitlint/cli ^21.1.0`, `@commitlint/config-conventional ^21.1.0`,
-`@commitlint/types ^21.1.0`, `husky ^9.1.7`, `lint-staged ^17.0.8`, `prettier ^3.8.4`,
+`@commitlint/types ^21.1.0`, `lint-staged ^17.0.8`, `prettier ^3.8.4`,
 `prettier-plugin-sh ^0.18.1`. Release-only (when release-it is wired): `release-it ^20.2.0`,
 `@release-it/conventional-changelog ^11.0.1`, `conventional-changelog ^7.2.1`. Language toolchains
 add their own (see each module).
@@ -372,9 +373,12 @@ add their own (see each module).
 
 Tell the user to run the hook-install command once with the detected manager (do **not** run it
 automatically): `pnpm run install:dev` / `npm run install:dev` / `yarn install:dev` /
-`bun run install:dev`. It installs dependencies and then calls `scripts/husky.sh install`, which runs
-husky and writes `.husky/commit-msg` + `.husky/pre-commit`. After that, a bad message is rejected and
-staged files are linted on commit.
+`bun run install:dev`. It installs dependencies and then calls `scripts/husky.sh install`, which points
+`core.hooksPath` at `.husky/` and writes `.husky/commit-msg` + `.husky/pre-commit` — commit those.
+After that, a bad message is rejected and staged files are linted on commit.
+
+Only a **fresh clone** needs this. Worktrees of that clone inherit `core.hooksPath` and find the
+tracked hooks with no further action.
 
 Because the command is deliberately **not** the `prepare` lifecycle script, a plain
 `pnpm install` will _not_ wire the hooks — this run is required, and so is one per fresh clone.
@@ -538,7 +542,7 @@ failure). Then spot-check:
 5. **Editor:** `.editorconfig`, `.prettierrc`, `.prettierignore`, and `.vscode/settings.json`
    present; `.vscode/extensions.json` lists the stack's extensions; `.vscode/tasks.json` has the
    **Bootstrap Workspace** task and `initialize.sh` is present and executable.
-6. **Git hygiene:** `.gitignore` ignores `.husky` (plus the base AI paths) and does **not** ignore
+6. **Git hygiene:** `.gitignore` ignores `.husky/_` but **not** `.husky/` itself (the hook files are tracked; see above), ignores the base AI paths, and does **not** ignore
    `scripts/`. `.gitattributes` is present and forces LF on `*.sh`, so the shipped hook payloads
    survive a Windows checkout; `git check-attr text eol -- scripts/husky.sh` reports
    `text: set` / `eol: lf`, and `git ls-files --eol scripts/husky.sh` shows `i/lf`. To size a
