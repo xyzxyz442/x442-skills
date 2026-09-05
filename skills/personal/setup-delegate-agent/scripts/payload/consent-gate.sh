@@ -13,7 +13,20 @@
 # The asymmetry in (3) is deliberate. A read heading into a DISPATCH is denied outright: exposing
 # a third party to your credentials is not a call you get to make on their behalf. A read in your
 # own session only ASKS, because that is your own informed consent to give — and because a blanket
-# deny would block ordinary work like checking whether a .env has the right keys.
+# deny would block ordinary work like checking whether a credential file has the right keys.
+#
+# ...but only when nothing better is watching. Where the secret guard is installed it REWRITES an
+# own-session read into a masked one, so the value never reaches the transcript and there is
+# nothing to consent to. Asking on top of that is friction with no benefit, and worse than that:
+# `ask` outranks `allow`, so this gate was downgrading a silent masked read into a prompt. Wiring
+# delegation into a repo made the guard measurably worse, which is the opposite of the point. So
+# when the engine resolves, own-session reads are left to it and this gate keeps only the dispatch
+# rules, which are its own.
+#
+# Detection converges on `secret-scan` (ADR 0008) wherever it resolves. The path regex below is
+# now a FLOOR for when it does not, and it is a weak one -- it required `.env` to be preceded by a
+# slash, a space or the start of the string, so `staging.env` and `sample.env` walked straight
+# past it, and it never saw content at all.
 #
 # Honest about its ceiling: this is a cooperative gate, not a sandbox. It cannot stop a command
 # that prints a secret without naming a secret path (`env`, a build that echoes a var, a stack
@@ -184,6 +197,36 @@ else
   FILE_PATH="$(printf '%s\n' "$FIELDS" | sed -n 3p)"
 fi
 
+# The shared engine, resolved the way every other consumer resolves it: project layer, then home
+# layer, then an explicit override. Empty when nothing is installed, which is a supported state --
+# a board or a wired repo on a machine that never ran setup-secret-guard still has to work.
+SCAN=""
+for cand in \
+  "${CLAUDE_PROJECT_DIR:-}/.claude/bin/secret-scan" \
+  "${HOME:-}/.claude/bin/secret-scan" \
+  "${SECRET_GUARD_HOME:-}/bin/secret-scan"; do
+  case "$cand" in /*/.claude/bin/secret-scan | /*/bin/secret-scan) ;; *) continue ;; esac
+  if [ -x "$cand" ]; then
+    SCAN="$cand"
+    break
+  fi
+done
+
+DEGRADED_NOTE=""
+if [ -z "$SCAN" ]; then
+  DEGRADED_NOTE=" [DEGRADED -- the shared credential engine is not installed, so this decision came from a path-name regex that cannot see file contents. Install it with the setup-secret-guard skill.]"
+fi
+
+# is_credential <path> -- true when this file holds a credential. Content-aware where the engine
+# resolves, path-shaped where it does not. Never prints anything: the caller names the rule.
+is_credential() {
+  [ -n "${1:-}" ] || return 1
+  if [ -n "$SCAN" ] && [ -f "$1" ]; then
+    "$SCAN" --quiet "$1" > /dev/null 2>&1 && return 0
+  fi
+  printf '%s' "$1" | grep -qE "$SECRET_RE"
+}
+
 # Credential-shaped paths. Deliberately short: a floor, matched against the intersection of what
 # is gitignored and what looks like a secret. Content scanning at the dispatch boundary is the
 # real check; this only catches the obvious reach for a known credential file.
@@ -205,9 +248,24 @@ if [ -n "$CMD" ]; then
   if printf '%s' "$CMD" | grep -qE '(^|[/[:space:]])delegate-run([[:space:]]|$)'; then
     # Recording consent and dry runs never reach a backend.
     printf '%s' "$CMD" | grep -qE -- '--(approve|dry-run)([[:space:]]|=|$)' && exit 0
-    # (3, dispatch-bound) a dispatch that names a credential path is refused outright.
+    # (3, dispatch-bound) a dispatch that names a credential is refused outright. The path
+    # regex catches a path that is not on this machine at all; the engine catches a file that
+    # is here and holds a credential under an innocuous name. A dispatch is rare and
+    # irreversible, so it is worth spawning the scanner for the files it actually names.
     if printf '%s' "$CMD" | grep -qE "$SECRET_RE"; then
       decide deny "This dispatch names a credential-shaped path. Secrets are never sent to a delegated agent — that exposure is not yours to consent to on its behalf. Remove the path from the brief."
+    fi
+    if [ -n "$SCAN" ]; then
+      scanned=0
+      for tok in $CMD; do
+        [ "$scanned" -lt 4 ] || break
+        case "$tok" in -*) continue ;; esac
+        [ -f "$tok" ] || continue
+        scanned=$((scanned + 1))
+        if "$SCAN" --quiet "$tok" > /dev/null 2>&1; then
+          decide deny "This dispatch names a file that holds a credential, even though its name does not look like one. Secrets are never sent to a delegated agent — that exposure is not yours to consent to on its behalf. Remove it from the brief."
+        fi
+      done
     fi
     # (1) consent
     printf '%s' "$CMD" | grep -qE -- '--approved([[:space:]]|=)' || decide deny \
@@ -215,15 +273,25 @@ if [ -n "$CMD" ]; then
     exit 0
   fi
 
-  # (3, main session) reading a credential in your own session asks rather than denies.
-  if printf '%s' "$CMD" | grep -qE "$SECRET_RE"; then
+  # (3, main session) Left to the secret guard where it is installed: it rewrites the read
+  # into a masked one, so nothing reaches the transcript and there is nothing to ask about.
+  # Prompting anyway would turn a silent, safe read into an interruption -- and since `ask`
+  # outranks the guard's `allow`, it would actively undo the better outcome.
+  # Installed is not the same as runnable. The secret guard is a python script too, so when
+  # python3 is missing the thing this rule was standing down for cannot mask anything either,
+  # and yielding to it would leave the read unguarded by anyone. Yield only to a guard that
+  # can actually run.
+  if { [ -z "$SCAN" ] || [ "$HAVE_PY" -eq 0 ]; } && printf '%s' "$CMD" | grep -qE "$SECRET_RE"; then
     decide ask "This command reads a credential-shaped path. Anything it prints enters this transcript, which persists to disk and cannot be redacted afterwards. Allow only if you meant to."
   fi
 fi
 
+# The Read tool's output cannot be rewritten by any hook, so unlike a shell read there is no
+# masked version to fall back on. This one still asks, and the engine makes it see files whose
+# names give nothing away.
 if [ -n "$FILE_PATH" ] && [ "$TOOL_NAME" = "Read" ]; then
-  if printf '%s' "$FILE_PATH" | grep -qE "$SECRET_RE"; then
-    decide ask "Reading a credential-shaped path puts its contents in this transcript, which persists to disk and cannot be redacted afterwards. Allow only if you meant to."
+  if is_credential "$FILE_PATH"; then
+    decide ask "Reading this file puts a credential into this transcript, which persists to disk and cannot be redacted afterwards. Allow only if you meant to."
   fi
 fi
 

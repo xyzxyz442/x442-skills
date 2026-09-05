@@ -141,6 +141,16 @@ command can still print one by accident — and if it does, it is on disk perman
 - **Path rules are a pre-filter, not a classifier.** `neverDelegate` catches the obvious reach for
   a known credential file. Content scanning is the real check, and even that has gaps — trivy's
   default ruleset does not flag bare AWS access-key pairs.
+- **Detection converges on the shared engine.** Where `secret-scan` resolves through the
+  `.claude` cascade, the gate uses it and sees file contents; where it does not, the gate falls
+  back to its own path regex and says so in every decision. That regex is a floor, not a
+  classifier — it required a credential extension to be preceded by a slash or a space, so
+  `staging.env` walked past it, and it never opened a file at all.
+- **Own-session reads belong to the secret guard, when one can run.** The guard rewrites a
+  credential read into a masked one, so nothing reaches the transcript and there is nothing to
+  consent to; asking on top would outrank its `allow` and undo the masking. The gate stands down
+  only when the engine is present **and** `python3` is available — the guard is a Python script
+  too, and deferring to one that cannot run would leave the read guarded by nobody.
 - **The consent gate is cooperative, not a sandbox.** It raises skipping the assessment from an
   omission to a deliberate act. The real boundary is the tool allowlist and the worktree.
 - **Without `python3` the gate degrades; it does not surrender.** It falls back to a raw-text scan
