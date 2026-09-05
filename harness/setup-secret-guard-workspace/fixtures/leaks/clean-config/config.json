@@ -1,0 +1,8 @@
+{
+  "name": "acme-billing-service",
+  "port": 8080,
+  "environment": "staging",
+  "featureFlags": {
+    "newCheckout": true
+  }
+}
