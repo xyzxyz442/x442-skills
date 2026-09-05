@@ -503,11 +503,43 @@ def _grade_tiers(target, eval_id):
         except Exception:
             return "allow"
 
+    # Whether the gate asks or stands down now depends on a secret guard being present AND
+    # runnable, so both directions are pinned rather than inherited. Left to the ambient
+    # environment this case passed or failed depending on whether the machine running the
+    # harness happened to have the guard installed, which is not a property of the fixture.
+    no_engine = target / ".probe-no-engine"
+    no_engine.mkdir(exist_ok=True)
+    absent = {
+        "HOME": str(no_engine),
+        "CLAUDE_PROJECT_DIR": str(no_engine),
+        "SECRET_GUARD_HOME": str(no_engine),
+    }
+
+    with_engine = target / ".probe-with-engine"
+    (with_engine / "bin").mkdir(parents=True, exist_ok=True)
+    stub = with_engine / "bin" / "secret-scan"
+    # The stand-down rule never calls the scanner -- it only asks whether one exists and could
+    # run -- so a stub is a faithful stand-in for this assertion and keeps the case hermetic.
+    stub.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n")
+    stub.chmod(0o755)
+    present = {
+        "HOME": str(no_engine),
+        "CLAUDE_PROJECT_DIR": str(no_engine),
+        "SECRET_GUARD_HOME": str(with_engine),
+    }
+
     exps.append(
         gc.expectation(
-            "the orchestrator is asked before a credential read",
-            probe({}) == "ask",
+            "with no secret guard, the orchestrator is asked before a credential read",
+            probe(absent) == "ask",
             "ask expected",
+        )
+    )
+    exps.append(
+        gc.expectation(
+            "with a secret guard present, the gate stands down and lets it mask the read",
+            probe(present) == "allow",
+            "allow expected -- ask would outrank the guard's rewrite and undo the masking",
         )
     )
     exps.append(
