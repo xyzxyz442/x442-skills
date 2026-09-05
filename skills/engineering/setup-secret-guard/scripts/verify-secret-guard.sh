@@ -193,7 +193,11 @@ print(o.get("permissionDecision", "allow"))' 2> /dev/null || echo allow
   # that another tool might scan.
   DOTENV=".$(printf 'env')"
   payload_for() { # payload_for <command-string> -> a PreToolUse envelope
-    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"
+    # Built with a real JSON encoder, not printf. A probe command containing a quote used to
+    # produce malformed JSON, the guard bailed out of parsing it and returned allow, and the
+    # probe passed without exercising anything -- a test that cannot fail is worse than none.
+    python3 -c 'import json, sys
+print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$1"
   }
 
   PL="$(payload_for "cat ${DOTENV}")"
@@ -247,6 +251,36 @@ print(u.get("command", ""))' 2> /dev/null || true)"
     ok "guard.passthrough" "an unrelated command passes through"
   else
     bad "guard.passthrough" "the guard blocked an unrelated command — it is wedging the session"
+  fi
+
+  # A filter aimed at the credential file is the reason this rule exists, and it stays denied.
+  PL="$(payload_for "grep TOKEN ${DOTENV}")"
+  D="$(probe "$PL")"
+  if [ "$D" = "deny" ]; then
+    ok "guard.filter_denied" "a filter aimed at a credential file is denied"
+  else
+    bad "guard.filter_denied" "a filter aimed at a credential file was not denied (decided ${D})"
+  fi
+
+  # ...but only when it is aimed at the file. A filter downstream of some other command is
+  # reading that command's output, not the file, and refusing it taught people to rewrite
+  # honest commands until the guard stopped objecting.
+  PL="$(payload_for "somecmd --note \"fixed the staging${DOTENV} case\" | grep -v Wrote")"
+  D="$(probe "$PL")"
+  if [ "$D" = "allow" ]; then
+    ok "guard.no_false_deny_downstream" "a filter downstream of an unrelated command is allowed"
+  else
+    bad "guard.no_false_deny_downstream" "credential-shaped text in an argument was refused (decided ${D}) — the filter never touched the file"
+  fi
+
+  # The worse half of the same confusion: rewriting a read that is quoted DATA changes what
+  # the caller's command does, rather than merely refusing it.
+  PL="$(payload_for "printf '%s' '{\"command\":\"cat ${DOTENV}\"}' | parse.py")"
+  RW="$(printf '%s' "$PL" | python3 "$GUARD" 2> /dev/null | grep -c 'updatedInput' || true)"
+  if [ "$RW" = "0" ]; then
+    ok "guard.no_rewrite_of_quoted_data" "a read quoted inside an argument is left alone"
+  else
+    bad "guard.no_rewrite_of_quoted_data" "the guard rewrote a read that was quoted data — it altered the caller's argument"
   fi
 
   PL="$(payload_for "kubectl --kubeconfig=/tmp/kc get pods")"
