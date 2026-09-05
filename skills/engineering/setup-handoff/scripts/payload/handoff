@@ -1206,7 +1206,7 @@ scan_secrets() { # stdin -> matched rule names; 0 = something matched
   buf="$(cat)"
   while IFS="$(printf '\t')" read -r name re; do
     [ -n "$name" ] || continue
-    if printf '%s\n' "$buf" | grep -Eq -- "$re"; then
+    if grep -Eq -- "$re" <<< "$buf"; then
       printf '%s\n' "$name"
       hit=0
     fi
@@ -3081,7 +3081,7 @@ cmd_release() {
     # somebody typed `--verified-by "done"`. It was inert, and it read as though it were not.
     local copied=0
     if [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ] \
-      && printf '%s\n' "$(result_block "$f")" | grep -Fq -- "$verified_by"; then
+      && grep -Fq -- "$verified_by" <<< "$(result_block "$f")"; then
       copied=1
     fi
     # For DELEGATED work that is a refusal, not a warning. The executor is outside the board and
@@ -3553,7 +3553,12 @@ backlink_block() {
       # Body only: the frontmatter's own depends_on/blocked_on are real edges and are already
       # rendered as such. Counting them here would report every declared edge twice, once as
       # structure and once as gossip.
-      sed -n '/^---$/,/^---$/!p' "$f" | grep -qF "$tbase" 2> /dev/null || continue
+      # Process substitution, NOT a pipe. `grep -q` exits on its first match; with a pipe, sed is
+      # still writing any doc larger than the 64KB pipe buffer and dies of SIGPIPE (141), which
+      # `set -uo pipefail` (top of file) then reports as the PIPELINE's status — so `|| continue`
+      # discarded references grep had actually found. It silently dropped every backlink out of the
+      # board's three largest docs and made INDEX.md's table differ on every regeneration.
+      grep -qF "$tbase" < <(sed -n '/^---$/,/^---$/!p' "$f") 2> /dev/null || continue
       base="$(basename "$f" .md)"
       hits="$hits [$base](./$base.md)"
     done
@@ -3821,7 +3826,7 @@ cmd_children() {
           echo "  (could not file a stub for $want — file it by hand)"
         fi
       fi
-      if printf '%s\n' "$cur" | grep -qxF "$want"; then
+      if grep -qxF "$want" <<< "$cur"; then
         [ "$have" = 1 ] || echo "= $want is already a child of $parent"
         continue
       fi
@@ -3832,7 +3837,7 @@ cmd_children() {
       cur="${cur:+$cur$'\n'}$want"
       echo "+ $want"
     else
-      printf '%s\n' "$cur" | grep -qxF "$want" || die "$want is not a child of $parent"
+      grep -qxF "$want" <<< "$cur" || die "$want is not a child of $parent"
       # `|| true`: grep -v exits non-zero when it removes the only line, and an empty roster is a
       # legitimate result here (the bundle is being emptied, not failing).
       cur="$(printf '%s\n' "$cur" | grep -vxF "$want" || true)"
