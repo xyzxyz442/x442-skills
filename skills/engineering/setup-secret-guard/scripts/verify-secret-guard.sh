@@ -203,6 +203,36 @@ print(o.get("permissionDecision", "allow"))' 2> /dev/null || echo allow
     bad "guard.rewrites_read" "a plain credential read was NOT routed through the viewer"
   fi
 
+  # The rewrite is only as good as the command it produces. Asserting that the output
+  # mentions redact-view proves the guard INTENDED something; running what it emitted proves
+  # the intention was right. A resolver that picks a path which does not exist would turn a
+  # plain read into a broken command -- worse than allowing or denying it.
+  printf 'SERVICE=billing\nDB_PASSWORD=not-a-real-password-000\n' > "${TMP}/probe${DOTENV}"
+  PL="$(payload_for "cat ${TMP}/probe${DOTENV}")"
+  REWRITE="$(printf '%s' "$PL" | python3 "$GUARD" 2> /dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print(""); raise SystemExit
+try:
+    d = json.loads(raw)
+except Exception:
+    print(""); raise SystemExit
+u = d.get("hookSpecificOutput", {}).get("updatedInput") or d.get("updatedInput") or {}
+print(u.get("command", ""))' 2> /dev/null || true)"
+  if [ -n "$REWRITE" ]; then
+    RESULT="$(eval "$REWRITE" 2> /dev/null || true)"
+    if printf '%s' "$RESULT" | grep -q 'not-a-real-password-000'; then
+      bad "guard.rewrite_runs" "the command the guard substituted printed the value it was meant to mask"
+    elif printf '%s' "$RESULT" | grep -q 'redacted'; then
+      ok "guard.rewrite_runs" "the substituted command actually runs and masks"
+    else
+      bad "guard.rewrite_runs" "the substituted command did not produce a redacted view — the viewer it names may not resolve"
+    fi
+  else
+    bad "guard.rewrite_runs" "the guard produced no rewritten command for a plain credential read"
+  fi
+
   PL="$(payload_for "base64 ${DOTENV}")"
   D="$(probe "$PL")"
   if [ "$D" = "deny" ]; then
