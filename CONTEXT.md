@@ -109,7 +109,10 @@ reserved word — see **search tier**, which is a different concept in a differe
 **Sensitivity**:
 How the tooling must handle a document — whether it may be exported, delegated, or shown
 without a banner. A handling flag, never an access boundary; board membership is the access
-boundary.
+boundary. Distinguished from **redaction**, which it is often confused with — sensitivity is
+_declared_ by a person about a whole document and decides whether content moves at all;
+redaction is _detected_ from the content itself and decides what survives when it does. A
+restricted document is refused outright and never reaches a redactor.
 
 **Schema**:
 The version of the document format. Distinguished from **payload version**, which is the
@@ -152,6 +155,29 @@ The string stamped on every vector recording who wrote it — `local:<model>` or
 `openai:<model>@<endpoint>`. What **drift** is measured against, and why mixing two providers
 in one index degrades every later search.
 _Avoid_: provider string, signature
+
+## Secrets
+
+**Secret guard**:
+The interception point that decides how credential-bearing content may be handled before it
+reaches a transcript, a committed document, or an external recipient. Named for what it does —
+intercept and decide — not for any one of its outcomes.
+_Avoid_: scanner, filter, blocker
+
+**Detection**:
+Finding that content holds a credential, and which rule matched. Reports the rule, never the
+value — a refusal that prints what it caught has put that credential in a terminal, a
+scrollback, and probably a transcript, which is the harm the check exists to prevent.
+Distinguished from a **finding**, which is a verify-script check outcome; one word for both
+would cover two unrelated things.
+_Avoid_: scan result, hit, match
+
+**Redaction**:
+Replacing a credential value with a stable, non-reversible fingerprint while preserving the
+surrounding structure — key names, nesting, types. Distinguished from removal, which loses the
+structure, and from refusal, which yields nothing. The same secret fingerprints identically in
+two files, which answers whether two environments share a credential without disclosing either.
+_Avoid_: masking, scrubbing, sanitising
 
 ## Delegation
 

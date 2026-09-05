@@ -1,0 +1,56 @@
+{
+  "skill_name": "x442-setup-secret-guard",
+  "skill_path": "skills/engineering/setup-secret-guard",
+  "verify_script": "skills/engineering/setup-secret-guard/scripts/verify-secret-guard.sh",
+  "evals": [
+    {
+      "id": "home-fresh",
+      "kind": "post-state",
+      "prompt": "Install the secret guard's home layer on this machine so every repo, including ones that never installed anything, is guarded against a credential value reaching a transcript.",
+      "fixture": "fixtures/home-empty",
+      "expected_output": "The engine (secret_redact.py, secret-scan, redact-view) and the read-path hook land under the home layer, all executable where required, with a version stamp written. settings.json gets the PreToolUse hook and the deny rules. verify-secret-guard.sh --json reports every engine/guard/wiring check as pass and 0 failed. A second run leaves the tree clean."
+    },
+    {
+      "id": "home-diverged-adopt",
+      "kind": "post-state",
+      "prompt": "Install the secret guard's home layer where one payload file has already been hand-edited.",
+      "fixture": "fixtures/home-diverged",
+      "expected_output": "Without --adopt the installer refuses (exit 3), leaves the hand-edited file untouched, still installs the files that do not diverge, and makes no backup yet. With --adopt it backs up the previous copy, replaces it with the byte-identical shipped payload, and preserves the unrelated hook and keys already present in settings.json."
+    },
+    {
+      "id": "repo-fresh",
+      "kind": "post-state",
+      "prompt": "Wire this repo's AGENTS.md to route credential reads through the secret guard and scaffold its repo-level pattern-additions file.",
+      "fixture": "fixtures/repo-fresh",
+      "expected_output": "AGENTS.md gets exactly one secret-guard managed block and its pre-existing prose survives untouched. .agents/secret-guard.json is scaffolded with paths/safe_keys. A second run is a no-op (git status stays clean)."
+    },
+    {
+      "id": "repo-precondition-no-agents-md",
+      "kind": "precondition",
+      "prompt": "Wire this repo's secret guard.",
+      "fixture": "fixtures/precondition-no-agents-md",
+      "expected_output": "The installer refuses because there is no AGENTS.md, names initial-project as the fix, and fabricates neither AGENTS.md nor .agents/secret-guard.json."
+    },
+    {
+      "id": "leak-dotenv",
+      "kind": "behavioral",
+      "prompt": "Read this dotenv-style config through the guard's engine and confirm the credential is detected and masked.",
+      "fixture": "fixtures/leaks/dotenv-secret",
+      "expected_output": "secret-scan exits 0 (found) and names a rule; redact-view masks the password behind a sha256 fingerprint and leaves the surrounding keys intact. The planted value never appears in either tool's output."
+    },
+    {
+      "id": "leak-connection-string",
+      "kind": "behavioral",
+      "prompt": "Read this appsettings.json, whose password is embedded inside a connection-string value under an innocuous key name, through the guard's engine.",
+      "fixture": "fixtures/leaks/connection-string",
+      "expected_output": "secret-scan still detects the credential even though no key in the document looks secret by name; redact-view masks it while leaving the surrounding structure and unrelated values intact. The planted value never appears in either tool's output."
+    },
+    {
+      "id": "leak-false-positive",
+      "kind": "behavioral",
+      "prompt": "Read this ordinary config through the guard's engine and confirm it is left alone.",
+      "fixture": "fixtures/leaks/clean-config",
+      "expected_output": "secret-scan reports clean (exit 1, no findings printed) and redact-view passes the file through byte-identical."
+    }
+  ]
+}

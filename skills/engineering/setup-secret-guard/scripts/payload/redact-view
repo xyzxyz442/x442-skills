@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""redact-view -- print a credential-bearing file with its VALUES masked.
+
+Claude gets the file's shape (which keys exist, JSON/YAML structure, value types)
+while every secret value is replaced by a stable fingerprint:
+
+    <redacted len=32 sha256:a1b2c3d4>
+
+The digest is derived from the real value, so the same secret in two files shows
+the same tag. That answers "is staging using the same token as prod?" without
+disclosing either. It is a truncated SHA-256 -- not reversible for anything with
+real entropy.
+
+Usage:
+    redact-view FILE [FILE...]
+    redact-view --all FILE     # mask every scalar, not just secret-looking ones
+    ... | redact-view -        # read stdin
+"""
+import os
+import sys
+
+# The library sits beside this file in the payload, and one directory over once installed
+# (bin/ next to scripts/). Resolve rather than hardcode, so the same file works in the skill,
+# in a project-level install, and in the home layer of the cascade.
+def _lib_dir():
+    here = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+    for cand in (here, os.path.join(here, os.pardir, "scripts"),
+                 os.environ.get("SECRET_GUARD_HOME", "")):
+        if cand and os.path.isfile(os.path.join(cand, "secret_redact.py")):
+            return os.path.abspath(cand)
+    return here
+
+
+sys.path.insert(0, _lib_dir())
+from secret_redact import MAX_BYTES, render_or_verbatim  # noqa: E402
+
+
+def main(argv):
+    args = [a for a in argv[1:] if a != "--all"]
+    mask_all = "--all" in argv[1:]
+    if not args:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+
+    rc = 0
+    for path in args:
+        try:
+            if path == "-":
+                raw, path = sys.stdin.buffer.read(MAX_BYTES), "<stdin>"
+            else:
+                if os.path.getsize(path) > MAX_BYTES:
+                    print(f"# {path}: too large to redact safely", file=sys.stderr)
+                    rc = 1
+                    continue
+                with open(path, "rb") as fh:
+                    raw = fh.read(MAX_BYTES)
+        except OSError as exc:
+            print(f"# cannot read {path}: {exc}", file=sys.stderr)
+            rc = 1
+            continue
+        text, _ = render_or_verbatim(path, raw, mask_all)
+        sys.stdout.write(text)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
