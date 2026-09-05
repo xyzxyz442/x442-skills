@@ -119,6 +119,18 @@ different answers, and only the second lets ordinary work continue.
 - **A `repair-secret-guard` sibling.** Rejected against this repository's own test: no database,
   no leases, no daemon, no external install — only files it wrote plus a marked block in a shared
   settings file. Upgrade is re-running the installer; drift detection belongs in the verifier.
+- **Redacting outbound briefs instead of refusing them.** Rejected, and the reasoning is the
+  sharpest line in this record because it looks inconsistent until you see it. Masking is right
+  for a config file precisely because the credential **belongs there** — the file's job is to
+  hold it, and the reader only needs the shape. A handoff document never legitimately holds one;
+  every generated doc says so in its own header. So a detection on a brief is not content the
+  reader can safely be spared, it is **evidence of a mistake that has already happened**. And by
+  export time the value has been at rest in a file on a shared board, very likely committed
+  (ADR 0002), so redacting the outbound copy would let the sender proceed believing it handled
+  while the value sits in history that other people can clone. Refusal is what puts it in front
+  of the one person positioned to rotate it. The same reasoning is why the refusal now names
+  rotation rather than only redaction: removing a value from a document does not remove it from
+  the history of that document.
 
 ## Consequences
 

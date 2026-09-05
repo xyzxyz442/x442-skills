@@ -1170,6 +1170,11 @@ redaction_comment() {
 #      is the harm the check exists to prevent. Refusals name the RULE, never the value.
 #   2. It is a chokepoint, not a habit. Every write path calls this one function, so a new rule
 #      lands everywhere at once and no path can drift into scanning less than its neighbours.
+#   3. It refuses; it never redacts. The secret guard masks a CONFIG FILE because the credential
+#      belongs there and the reader only needs the shape. Nothing belongs in a handoff document,
+#      so a match here is evidence of a mistake, not content to be spared -- and by the time an
+#      outbound brief is rendered the value has been at rest in a file on a shared board. Masking
+#      the copy that leaves would hide that from the one person who can rotate it. See ADR 0008.
 #
 # The patterns are shaped like credentials, not like the word "password": every one of them has a
 # vendor prefix or a structural marker, so prose about secrets (which is most of what a security
@@ -1219,6 +1224,8 @@ die_on_secret() { # where hits
   die "$1 looks like it contains a credential — matched: $(printf '%s' "$2" | tr '\n' ' ' | sed 's/ $//').
        Nothing was written. Redact it and re-run, recording the credential's NAME (env var or
        secret-manager reference) rather than its value.
+       If this value has already been in a file on this board, redacting it now does NOT remove
+       it from that file's history — treat it as disclosed and rotate it.
        If this is a false positive, re-run with: --force-secret \"<why this is safe>\""
 }
 
