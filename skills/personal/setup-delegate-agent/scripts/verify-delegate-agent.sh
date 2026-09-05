@@ -207,6 +207,23 @@ else
 fi
 
 section "## 5. consent gate fires"
+GATE_SCAN=""
+for cand in \
+  "${REPO}/.claude/bin/secret-scan" \
+  "${HOME:-}/.claude/bin/secret-scan" \
+  "${SECRET_GUARD_HOME:-}/bin/secret-scan"; do
+  case "$cand" in /*/bin/secret-scan) ;; *) continue ;; esac
+  if [ -x "$cand" ]; then
+    GATE_SCAN="$cand"
+    break
+  fi
+done
+if [ -n "$GATE_SCAN" ]; then
+  ok gate.detector "content-aware detector live (${GATE_SCAN})"
+else
+  warn gate.detector "no shared engine resolved — the gate is on its path-name floor, which cannot see file contents or names like staging.env. Install it with setup-secret-guard."
+fi
+
 if [ -x "${BIN}/consent-gate.sh" ]; then
   probe() {
     printf '%s' "$1" | bash "${BIN}/consent-gate.sh" --tool claude 2> /dev/null \
@@ -221,10 +238,49 @@ print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev
     && ok gate.direct_wrapper_denied "direct wrapper invocation is denied" || bad gate.direct_wrapper_denied "direct wrapper invocation was NOT denied"
   [ "$(probe '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --task .env --approved t1"}}')" = "deny" ] \
     && ok gate.credential_path_denied "dispatch naming a credential path is denied" || bad gate.credential_path_denied "dispatch naming a credential path was NOT denied"
-  [ "$(probe '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}')" = "ask" ] \
-    && ok gate.credential_read_asks "main-session credential read asks" || bad gate.credential_read_asks "main-session credential read did not ask"
+  READ_DECISION="$(probe '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}')"
+  if [ -n "$GATE_SCAN" ]; then
+    [ "$READ_DECISION" = "allow" ] \
+      && ok gate.credential_read_yields "main-session credential read is left to the secret guard, which masks it" \
+      || bad gate.credential_read_yields "the gate returned '$READ_DECISION' for an own-session read the guard already masks — ask outranks allow, so this undoes the masking"
+  else
+    [ "$READ_DECISION" = "ask" ] \
+      && ok gate.credential_read_asks "main-session credential read asks (no guard installed)" \
+      || bad gate.credential_read_asks "main-session credential read did not ask"
+  fi
+  # The Read tool's output cannot be rewritten by any hook, so it asks either way.
+  [ "$(probe '{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}')" = "ask" ] \
+    && ok gate.read_tool_asks "a Read of a credential path asks" \
+    || bad gate.read_tool_asks "a Read of a credential path did not ask"
   [ "$(probe '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --prompt hi --approved t1"}}')" = "allow" ] \
     && ok gate.approved_allowed "approved dispatch is allowed" || bad gate.approved_allowed "approved dispatch was blocked"
+  if [ -n "$GATE_SCAN" ]; then
+    CT="$(mktemp -d)"
+    printf 'DB_PASSWORD=not-a-real-password-000\n' > "${CT}/staging.env"
+    printf '{ "ConnectionStrings": { "Default": "Server=db;User Id=svc;Password=not-a-real-password-000;" } }\n' > "${CT}/appsettings.json"
+    printf 'name=acme\nport=8080\n' > "${CT}/ordinary.conf"
+    # Built as plain assignments, never as escaped quotes nested inside a command substitution
+    # inside a test -- bash re-parses the substitution body and the escapes do not survive, so
+    # the test sees several words instead of one and reports a failure that is not there.
+    dispatch_pl() { printf '{"tool_name":"Bash","tool_input":{"command":"delegate-run --approved t1 --task %s"}}' "$1"; }
+
+    D1="$(probe "$(dispatch_pl "${CT}/staging.env")")"
+    [ "$D1" = "deny" ] \
+      && ok gate.dispatch_unprefixed_name "a dispatch naming staging.env is denied (the path floor misses this)" \
+      || bad gate.dispatch_unprefixed_name "a dispatch naming staging.env was allowed (decided ${D1})"
+
+    D2="$(probe "$(dispatch_pl "${CT}/appsettings.json")")"
+    [ "$D2" = "deny" ] \
+      && ok gate.dispatch_content_aware "a dispatch naming a file whose CONTENT holds a credential is denied" \
+      || bad gate.dispatch_content_aware "a dispatch naming a content-only credential was allowed (decided ${D2})"
+
+    D3="$(probe "$(dispatch_pl "${CT}/ordinary.conf")")"
+    [ "$D3" = "allow" ] \
+      && ok gate.dispatch_no_false_deny "a dispatch naming an ordinary file is allowed" \
+      || bad gate.dispatch_no_false_deny "an ordinary file in a dispatch was refused (decided ${D3})"
+    rm -f "${CT}"/* 2> /dev/null || true
+    rmdir "$CT" 2> /dev/null || true
+  fi
   [ "$(probe '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}')" = "allow" ] \
     && ok gate.passthrough "unrelated commands pass through" || bad gate.passthrough "gate blocked an unrelated command"
   # The gate used to `exit 0` the moment python3 was missing, taking the never-delegate paths,
@@ -253,9 +309,14 @@ print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev
     [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --task .env --approved t1"}}')" = "deny" ] \
       && ok gate.degraded_credential_denied "dispatch naming a credential path is denied without python3" \
       || bad gate.degraded_credential_denied "without python3 a dispatch naming a credential path was allowed"
-    [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}')" = "ask" ] \
-      && ok gate.degraded_credential_read_asks "main-session credential read asks without python3" \
-      || bad gate.degraded_credential_read_asks "without python3 a credential read did not ask"
+    # Without python3 the gate must ask REGARDLESS of whether the engine is installed: the
+    # secret guard it would otherwise defer to is a python script as well, so nothing is
+    # masking the read. Deferring to an installed-but-unrunnable guard is the one way this
+    # convergence could have made things worse than the rule it replaced.
+    DEG_READ="$(dprobe '{"tool_name":"Bash","tool_input":{"command":"cat .env"}}')"
+    [ "$DEG_READ" = "ask" ] \
+      && ok gate.degraded_credential_read_asks "credential read asks without python3, engine installed or not" \
+      || bad gate.degraded_credential_read_asks "without python3 the gate returned '$DEG_READ' — it deferred to a guard that cannot run"
     [ "$(dprobe '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}')" = "allow" ] \
       && ok gate.degraded_passthrough "unrelated commands still pass through without python3" \
       || bad gate.degraded_passthrough "without python3 the gate blocked an unrelated command -- it is wedging the session"
@@ -280,6 +341,12 @@ print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev
     # The invariant behind all of the above: the two lanes read the same three fields, so for any
     # payload they must reach the same decision. Enumerated cases catch the bug you thought of;
     # this catches the next one.
+    #
+    # Credential READS are deliberately not parity cases. Whether the gate asks or stands down
+    # depends on whether a guard is present AND runnable, and python3 decides the second half,
+    # so those two lanes are supposed to differ. Asserting they match would lock in the very
+    # defect this convergence removed. Dispatch decisions must never depend on python3, and
+    # those are what remain here.
     PARITY_BAD=0
     while IFS= read -r fixture; do
       [ -n "$fixture" ] || continue
@@ -289,12 +356,8 @@ print(d.get("hookSpecificOutput",{}).get("permissionDecision","allow"))' 2> /dev
 {"tool_name":"Bash","tool_input":{"command":"delegate-agent --backend x"}}
 {"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --prompt hi --approved t1"}}
 {"tool_name":"Bash","tool_input":{"command":".agents/bin/delegate-run --dry-run"}}
-{"tool_name":"Bash","tool_input":{"command":"cat .env"}}
-{"tool_name":"Bash","tool_input":{"command":"cat \".env\""}}
-{"tool_name":"Bash","tool_input":{"command":"cat server.pem"}}
 {"tool_name":"Bash","tool_input":{"command":"ls -la"}}
 {"tool_name":"Bash","tool_input":{"command":"npm run build"}}
-{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}
 {"tool_name":"Read","tool_input":{"file_path":"/home/u/notes.txt"},"context":"we discussed delegate-agent earlier"}
 {"tool_name":"Bash","tool_input":{"command":"delegate-run --task-id T1"},"context":"we used --approve elsewhere"}
 PARITY
