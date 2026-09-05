@@ -50,7 +50,7 @@ wholesale — you get type, byte count, and a digest.
   yours.
 - **Record a credential's NAME, never its value** — an environment variable or a secret-manager
   reference. This applies to every file you write, every commit message, and every handoff doc.
-- `redact-view --all FILE` masks every scalar, for when the key names themselves are sensitive.
+- `redact-view --all FILE` redacts every scalar, for when the key names themselves are sensitive.
 
 ### Enforcement is not uniform, and you should know which side you are on
 

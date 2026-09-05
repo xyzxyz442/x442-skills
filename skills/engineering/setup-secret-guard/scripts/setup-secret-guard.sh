@@ -187,8 +187,8 @@ install_repo() {
     "Repo-level additions to the secret guard. This layer may only ADD.",
     "",
     "paths:     extra credential-shaped path patterns for this repo.",
-    "safe_keys: key names whose values must NOT be masked here -- a public *.key file, a",
-    "           webhook field holding a public URL. This SUPPRESSES masking, so treat an",
+    "safe_keys: key names whose values must NOT be redacted here -- a public *.key file, a",
+    "           webhook field holding a public URL. This SUPPRESSES redaction, so treat an",
     "           addition as a security change and review it as one. It cannot remove a path",
     "           from the deny set; the floor is not lowerable from here."
   ],
