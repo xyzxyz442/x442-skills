@@ -117,7 +117,14 @@ install_home() {
     echo "On a first install this is expected — the shipped payload resolves its own paths"
     echo "instead of hardcoding one machine's, so it can never be byte-identical to a hand-"
     echo "maintained copy. --adopt is the answer; the backup is why it is safe."
-    exit 3
+    # A dry run must show the WHOLE plan, including the settings merge below. Stopping here
+    # would make --dry-run useless on exactly the machine that already has an install, which
+    # is the one where previewing matters most.
+    if [ "$DRY" -eq 0 ]; then
+      exit 3
+    fi
+    echo
+    echo "(--dry-run: continuing so the rest of the plan is visible; nothing is written)"
   fi
 
   if [ "$DRY" -eq 0 ]; then
@@ -137,8 +144,15 @@ install_home() {
     echo "  previous copies backed up to ${BACKUP_DIR}"
   fi
   echo
-  echo "Home layer wired. Every repo on this machine is now guarded, including ones that"
-  echo "never installed anything. Check it with: ${SKILL}/scripts/verify-secret-guard.sh"
+  if [ "$DRY" -eq 1 ]; then
+    echo "Dry run only — nothing was written."
+    if [ "$DIVERGED" -gt 0 ]; then
+      echo "Re-run with --adopt to take the payload this skill ships, backing up yours first."
+    fi
+  else
+    echo "Home layer wired. Every repo on this machine is now guarded, including ones that"
+    echo "never installed anything. Check it with: ${SKILL}/scripts/verify-secret-guard.sh"
+  fi
 }
 
 # ------------------------------------------------------------------------- the repo layer
