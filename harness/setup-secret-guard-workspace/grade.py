@@ -54,9 +54,15 @@ HOME_WIRED_PASS_IDS = (
     "engine.passthrough",
     "engine.findings_quiet",
     "guard.rewrites_read",
+    "guard.rewrite_runs",
     "guard.denies_extraction",
     "guard.passthrough",
     "guard.consumer_allowed",
+    # The over-firing half. A guard that refuses honest commands gets switched off, so a
+    # clean COMMAND matters here as much as the clean FILE the leak cases already cover.
+    "guard.filter_denied",
+    "guard.no_false_deny_downstream",
+    "guard.no_rewrite_of_quoted_data",
     "wiring.json_valid",
     "wiring.hook",
     "wiring.deny",

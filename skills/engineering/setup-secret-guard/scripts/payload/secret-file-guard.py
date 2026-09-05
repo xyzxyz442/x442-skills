@@ -18,18 +18,23 @@ Policy, in order of preference:
 Permission deny rules cover the Read/Edit tools but NOT Bash, so this hook is the
 load-bearing half of the policy.
 """
+
 import json
 import os
 import re
 import sys
+
 
 # The library sits beside this file in the payload, and one directory over once installed
 # (bin/ next to scripts/). Resolve rather than hardcode, so the same file works in the skill,
 # in a project-level install, and in the home layer of the cascade.
 def _lib_dir():
     here = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
-    for cand in (here, os.path.join(here, os.pardir, "scripts"),
-                 os.environ.get("SECRET_GUARD_HOME", "")):
+    for cand in (
+        here,
+        os.path.join(here, os.pardir, "scripts"),
+        os.environ.get("SECRET_GUARD_HOME", ""),
+    ):
         if cand and os.path.isfile(os.path.join(cand, "secret_redact.py")):
             return os.path.abspath(cand)
     return here
@@ -42,10 +47,14 @@ except Exception:  # library missing -> fall back to filename matching only
     contains_secrets = None
     looks_configish = None
 
+
 def _redact_view():
     here = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
-    for cand in (here, os.path.join(here, os.pardir, "bin"),
-                 os.environ.get("SECRET_GUARD_HOME", "")):
+    for cand in (
+        here,
+        os.path.join(here, os.pardir, "bin"),
+        os.environ.get("SECRET_GUARD_HOME", ""),
+    ):
         if not cand:
             continue
         p = os.path.abspath(os.path.join(cand, "redact-view"))
@@ -145,10 +154,66 @@ def strip_heredocs(cmd: str) -> str:
     return "\n".join(out)
 
 
+# ------------------------------------------------------------------ shell shape
+
+
+def quoted_mask(line: str):
+    """True at each character that sits inside a shell quote.
+
+    The guard's two worst false positives both came from treating quoted text as
+    shell syntax: a credential-shaped name inside a sentence, and a `cat <file>`
+    inside a JSON fixture. One produced a refusal for a command that read nothing;
+    the other silently REWROTE the fixture, altering data the caller was passing
+    through. Knowing which characters are quoted separates a command from an
+    argument that merely looks like one.
+    """
+    mask = [False] * len(line)
+    q = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if q is None:
+            if c in "\"'":
+                q, mask[i] = c, True
+            elif c == "\\":
+                i += 1
+        else:
+            mask[i] = True
+            if c == "\\" and q == '"':
+                if i + 1 < len(line):
+                    mask[i + 1] = True
+                i += 1
+            elif c == q:
+                q = None
+        i += 1
+    return mask
+
+
+def stages(cmd: str):
+    """Split a command into pipeline/list stages, ignoring separators inside quotes.
+
+    `foo ".env" | grep bar` is two stages: nothing in the second one reads the file,
+    so the filter is operating on the first command's OUTPUT, not slicing a
+    credential. Only a stage holding both a filter and a credential path is a slice.
+    """
+    mask = quoted_mask(cmd)
+    parts, cur, i = [], [], 0
+    while i < len(cmd):
+        if not mask[i] and cmd[i] in "|;&\n":
+            parts.append("".join(cur))
+            cur = []
+            while i < len(cmd) and not mask[i] and cmd[i] in "|;&\n":
+                i += 1
+            continue
+        cur.append(cmd[i])
+        i += 1
+    parts.append("".join(cur))
+    return [x for x in parts if x.strip()]
+
+
 def scrub(cmd: str) -> str:
     """Remove already-safe constructs before deciding anything."""
     return REDACTED_CALL.sub(" ", strip_heredocs(cmd))
-
 
 
 # Config formats that can carry credentials. A read of one of these is routed
@@ -228,9 +293,17 @@ def rewrite_reads(cmd: str, cwd: str = ""):
     Returns (new_command, [paths_rewritten]).
     """
     touched = []
+    line_mask = []
 
     def repl(m):
         verb, flags, path = m.group(1), m.group(2) or "", m.group(3)
+        # A read whose VERB is inside quotes is data being passed along -- a fixture, a
+        # message, a command being described -- not a command being run. Rewriting there
+        # corrupts the caller's argument, which is worse than any decision this hook makes:
+        # it changes what the command does. The operand may still be quoted (`cat ".env"`
+        # is an ordinary read); it is the verb's position that settles it.
+        if m.start(1) < len(line_mask) and line_mask[m.start(1)]:
+            return m.group(0)
         if not leaks(path, cwd):
             return m.group(0)
         touched.append(path)
@@ -248,6 +321,7 @@ def rewrite_reads(cmd: str, cwd: str = ""):
             if line.strip() == terminator:
                 terminator = None
             continue
+        line_mask = quoted_mask(line)
         m = HEREDOC_START.search(line)
         if m:
             # The command part precedes the heredoc marker; body starts next line.
@@ -273,9 +347,11 @@ def main():
             sys.exit(0)
         target = " ".join(str(ti.get(k, "")) for k in ("path", "glob"))
         if SECRET_RE.search(target):
-            emit("deny",
-                 "Grep in content mode would print raw secret lines. Read the file "
-                 f'through the redacting viewer instead: `"{REDACT_VIEW}" <file> | grep ...`')
+            emit(
+                "deny",
+                "Grep in content mode would print raw secret lines. Read the file "
+                f'through the redacting viewer instead: `"{REDACT_VIEW}" <file> | grep ...`',
+            )
         sys.exit(0)
 
     if tool != "Bash":
@@ -295,29 +371,37 @@ def main():
         if touched:
             new_input = dict(ti)
             new_input["command"] = rewritten
-            emit("allow",
-                 f"Redirected through redact-view ({', '.join(touched)}): this file "
-                 f"holds credential-shaped values. Structure preserved, values masked.",
-                 updated=new_input)
+            emit(
+                "allow",
+                f"Redirected through redact-view ({', '.join(touched)}): this file "
+                f"holds credential-shaped values. Structure preserved, values masked.",
+                updated=new_input,
+            )
 
     if not SECRET_RE.search(probe):
         # No secret path left once safe constructs are removed.
-        if ASK_RE.search(probe) and (FILTER_RE.search(probe) or READ_CALL.search(probe)):
+        if ASK_RE.search(probe) and (
+            FILTER_RE.search(probe) or READ_CALL.search(probe)
+        ):
             hit = ASK_RE.search(probe)
-            emit("ask",
-                 f"This reads a helm/Harness values file ({hit.group(0).strip()!r}), which "
-                 f'often carries secrets. Approve to see it raw, or cancel and use '
-                 f'`"{REDACT_VIEW}" <file>` for a masked view.')
+            emit(
+                "ask",
+                f"This reads a helm/Harness values file ({hit.group(0).strip()!r}), which "
+                f"often carries secrets. Approve to see it raw, or cancel and use "
+                f'`"{REDACT_VIEW}" <file>` for a masked view.',
+            )
         sys.exit(0)
 
     # ---- extraction / exfiltration: redaction cannot help --------------------
     if EXTRACT_RE.search(probe) or SOURCE_RE.search(probe):
         verb = (EXTRACT_RE.search(probe) or SOURCE_RE.search(probe)).group(0).strip()
-        emit("deny",
-             f"Blocked: `{verb}` on a credential file would put the raw value in the "
-             f"transcript. If a process needs the secret, let it read the file itself "
-             f"(it inherits the environment) — you do not need to see the value. For "
-             f'structure only: `"{REDACT_VIEW}" <file>`.')
+        emit(
+            "deny",
+            f"Blocked: `{verb}` on a credential file would put the raw value in the "
+            f"transcript. If a process needs the secret, let it read the file itself "
+            f"(it inherits the environment) — you do not need to see the value. For "
+            f'structure only: `"{REDACT_VIEW}" <file>`.',
+        )
 
     # ---- plain read: rewrite through the redacting viewer --------------------
     rewritten, touched = rewrite_reads(original, cwd)
@@ -326,17 +410,26 @@ def main():
         if not SECRET_RE.search(leftover) or not FILTER_RE.search(leftover):
             new_input = dict(ti)
             new_input["command"] = rewritten
-            emit("allow",
-                 f"Redirected through redact-view ({', '.join(touched)}): values are "
-                 f"masked with a length + sha256 fingerprint, structure preserved.",
-                 updated=new_input)
+            emit(
+                "allow",
+                f"Redirected through redact-view ({', '.join(touched)}): values are "
+                f"masked with a length + sha256 fingerprint, structure preserved.",
+                updated=new_input,
+            )
 
     # ---- filters aimed straight at a secret file ----------------------------
-    if FILTER_RE.search(probe):
-        emit("deny",
-             "Blocked: this would slice raw values out of a credential file. Pipe from "
-             f'the redacting viewer instead: `"{REDACT_VIEW}" <file> | grep ...` — key '
-             f"names and structure survive, values do not.")
+    # Same stage, not merely the same command line. `something ".env" | grep x` puts the
+    # filter on the first command's output; it never opens the file, and refusing it taught
+    # people to rewrite honest commands until the guard stopped objecting -- which is how a
+    # guard trains the habit it exists to prevent.
+    for stage in stages(probe):
+        if FILTER_RE.search(stage) and SECRET_RE.search(stage):
+            emit(
+                "deny",
+                "Blocked: this would slice raw values out of a credential file. Pipe from "
+                f'the redacting viewer instead: `"{REDACT_VIEW}" <file> | grep ...` — key '
+                f"names and structure survive, values do not.",
+            )
 
     # A secret path is present but nothing prints it (e.g. `kubectl --kubeconfig=x`).
     sys.exit(0)
