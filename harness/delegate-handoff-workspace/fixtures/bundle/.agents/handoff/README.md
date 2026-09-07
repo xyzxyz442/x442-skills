@@ -17,11 +17,11 @@ wired hook command still point at `<board>/handoff`.
 
 **Which CLI runs** — first match wins:
 
-| Source             | Where                                                                              |
-| ------------------ | ---------------------------------------------------------------------------------- |
-| `$HANDOFF_BIN`     | an explicit override — testing an unreleased CLI                                   |
-| user-level install | `${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`, written by `setup-handoff` |
-| vendored copy      | `<board>/scripts/handoff-cli`, so a cold clone with nothing but bash still works   |
+| Source             | Where                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| `$HANDOFF_BIN`     | an explicit override — testing an unreleased CLI                                                |
+| vendored copy      | `<board>/scripts/handoff-cli` — this board runs the CLI it was installed with                   |
+| user-level install | `${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`, for a board carrying no copy of its own |
 
 **Which board it acts on** — first match wins:
 

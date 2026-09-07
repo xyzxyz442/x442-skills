@@ -18,11 +18,20 @@
 # (which must know whether a CLI exists at all before it denies anybody an edit). A hand-copied
 # ladder in three files is the same drift this resolver exists to end.
 #
-# Order is fixed and deliberate:  $HANDOFF_BIN  >  user-level install  >  the board's vendored copy.
+# Order is fixed and deliberate:  $HANDOFF_BIN  >  the board's vendored copy  >  user-level install.
 # The env var is an operator override (testing an unreleased CLI, or a harness pointing every
-# fixture at one binary). The user-level install is what setup-handoff writes and what upgrades on
-# its own cadence. The vendored copy is last because it is the one that goes stale — but it is
-# still there, because a cold clone with nothing but bash must work.
+# fixture at one binary). Then the board's OWN copy, so a board runs the CLI it was installed with.
+# The user-level install is last: one copy per machine, the rung that answers for a board carrying
+# no CLI of its own (--no-vendor-cli).
+#
+# The vendored copy used to be last, on the reasoning that it is the one that goes stale. That got
+# the failure backwards. A machine-global rung outranking the board's own copy means a board
+# installed at one payload version silently EXECUTES another, and nothing reports it: the board's
+# stamp keeps naming the version it was installed with while a different binary does the work, so
+# the one artifact that could reveal the substitution is the one that reads as fine. Staleness is
+# visible — the stamp says so and the verifier warns. Silent substitution is not, and it is worse:
+# a newer CLI on an older board writes documents in a shape that board's own tooling does not
+# expect. Per-board determinism first; one-upgrade-per-machine is a convenience, not an invariant.
 handoff_cli_home() { # -> the directory setup-handoff installs the user-level CLI into
   printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff"
 }
@@ -46,13 +55,13 @@ handoff_cli_resolve() { # board-dir -> prints "<source> <path>"; returns 1 when 
     printf 'env %s' "$HANDOFF_BIN"
     return 0
   fi
+  if [ -n "$board" ] && handoff_cli_usable "$board/scripts/handoff-cli"; then
+    printf 'vendored %s' "$board/scripts/handoff-cli"
+    return 0
+  fi
   c="$(handoff_cli_home)/handoff"
   if handoff_cli_usable "$c"; then
     printf 'user %s' "$c"
-    return 0
-  fi
-  if [ -n "$board" ] && handoff_cli_usable "$board/scripts/handoff-cli"; then
-    printf 'vendored %s' "$board/scripts/handoff-cli"
     return 0
   fi
   return 1
