@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2](https://github.com/xyzxyz442/x442-skills/compare/v0.12.1...v0.12.2) (2026-09-07)
+
+### 🐞 Bug Fixes
+
+- **bug:** let a board run the CLI it was installed with ([f4d5b62](https://github.com/xyzxyz442/x442-skills/commit/f4d5b624bfce6f5119d6d4497e2af703bbf6c30e))
+
 ## [0.12.1](https://github.com/xyzxyz442/x442-skills/compare/v0.12.0...v0.12.1) (2026-09-05)
 
 ### 🐞 Bug Fixes
