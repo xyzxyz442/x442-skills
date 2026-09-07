@@ -34,10 +34,13 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
    migrated on the next install (`git mv`, hook commands rewritten), and keeps working until then.
    The `handoff` entry point is a **dispatcher**, not the CLI: the CLI is ~180 KB and changes on
    every fix, so a copy of it on every board made each fix an N-file regeneration. The dispatcher
-   resolves `$HANDOFF_BIN` → a **user-level install** (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`,
-   written by this installer — the one thing it writes outside the repo) → the board's vendored
-   `scripts/handoff-cli`, which is what keeps a cold clone working with nothing but bash. Pass
-   `--no-vendor-cli` to skip the vendored copy on a board that is never cloned cold. Which board
+   resolves `$HANDOFF_BIN` → the board's vendored `scripts/handoff-cli` → a **user-level install**
+   (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`, written by this installer — the one
+   thing it writes outside the repo). The board's own copy outranks the machine's so that a board
+   runs the CLI it was installed with: a machine-global rung on top meant a board silently executed
+   a build its own stamp did not name, which is the one discrepancy nothing would report. Pass
+   `--no-vendor-cli` to skip the vendored copy on a board that is never cloned cold — such a board
+   resolves to the user-level install, which is what that rung is now for. Which board
    and which CLI answered is always reportable with `./handoff --which`, and repointing a repo at
    another board needs no committed edit — export `HANDOFF_BOARD_PATH`.
 2. **One enforcement core (`hooks.sh`).** A single dispatcher runs every hook kind
