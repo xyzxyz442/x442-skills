@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.3](https://github.com/xyzxyz442/x442-skills/compare/v0.12.2...v0.12.3) (2026-09-07)
+
+### 🐞 Bug Fixes
+
+- **test:** refresh the handoff fixture boards to payload 30 ([762373b](https://github.com/xyzxyz442/x442-skills/commit/762373be8f39019814f4fae3697b2feee3346150))
+- **test:** sync the legacy-config fixture mirrors to payload 30 ([464f4b6](https://github.com/xyzxyz442/x442-skills/commit/464f4b6ec3170caf8b3ae5085a7722691a0207fc))
+
+### 🔁 CI/CD
+
+- **ci:** refuse a payload bump that leaves the fixture boards behind ([c92da3a](https://github.com/xyzxyz442/x442-skills/commit/c92da3abe45e0c2d2514c239a8075d90a46fbd72))
+
 ## [0.12.2](https://github.com/xyzxyz442/x442-skills/compare/v0.12.1...v0.12.2) (2026-09-07)
 
 ### 🐞 Bug Fixes
