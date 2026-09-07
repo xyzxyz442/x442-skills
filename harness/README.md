@@ -106,6 +106,14 @@ It only refreshes files a fixture already carries, never adds new ones, and skip
 whose board is a deliberately old install (`stale-stamp`, `legacy-install`) — there, the stale
 mirror _is_ the scenario.
 
+`--check` is a **gate**, not advice: the pre-commit hook (`scripts/husky.sh pre-commit`) runs it
+over the whole tree and refuses the commit on drift, and the `harness-fixtures` workflow runs it
+in CI for the case where the hook was bypassed or never installed. The stamp is the reason it is
+whole-tree rather than staged-only — a bump to `payload.version` is what makes every fixture
+stale, and the fixtures are not what is staged. Payloads 28, 29 and 30 each shipped without
+this refresh and the graders were the first thing to notice; the gate exists so that cannot
+recur.
+
 The `handoff` CLI is deliberately **not** mirrored into fixtures. A board's `handoff` is a small
 dispatcher; the harness points `$HANDOFF_BIN` at the skill's payload
 (`grade_common.payload_cli`), so every fixture runs the binary under test by construction and a

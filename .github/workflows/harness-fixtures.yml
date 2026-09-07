@@ -1,0 +1,31 @@
+name: harness-fixtures
+
+# Harness fixture boards are committed snapshots of an installed setup-handoff board, so the
+# files the installer copies verbatim — and the payload stamp inside handoff.json — are mirrors
+# of the skill's payload. A payload bump that lands without refreshing them fails the
+# idempotency and stamp graders with a message that names the symptom, not the file. The
+# pre-commit hook refuses such a commit locally; this catches it when the hook was bypassed or
+# never installed.
+#
+# Refresh: bash scripts/sync-fixture-boards.sh. Rationale: harness/README.md, "Keeping fixture
+# boards in sync with the payload".
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-fixture-boards:
+    name: fixture boards match the payload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check every fixture board against the payload
+        run: bash scripts/sync-fixture-boards.sh --check

@@ -29,7 +29,7 @@
 # Usage: scripts/husky.sh <command> [args...]
 #   install      Point core.hooksPath at .husky/ and (re)generate the hook files
 #   commit-msg   Hook body: lint the commit message  (git passes the message file as $1)
-#   pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)
+#   pre-commit   Hook body: run the staged-file checks (standalone rule, fixture mirrors, then lint-staged)
 #   -h, --help   Show usage information
 
 set -euo pipefail
@@ -43,7 +43,7 @@ print_usage() {
   echo "Usage: $0 <command> [args...]"
   echo "  install      Point core.hooksPath at .husky/ and (re)generate the hook files"
   echo "  commit-msg   Hook body: lint the commit message (git passes the message file as \$1)"
-  echo "  pre-commit   Hook body: run the staged-file checks (standalone rule, then lint-staged)"
+  echo "  pre-commit   Hook body: run the staged-file checks (standalone rule, fixture mirrors, then lint-staged)"
   echo "  -h, --help   Show usage information"
 }
 
@@ -156,6 +156,19 @@ run_pre_commit() {
   if [ -x scripts/verify-standalone.sh ]; then
     echo "husky: verify-standalone"
     scripts/verify-standalone.sh --staged
+  fi
+  # Harness fixture boards mirror setup-handoff's payload. Three payload bumps in a row shipped
+  # without the mirrors, and the graders were the first thing to notice. Whole tree, not staged
+  # files: a bump to payload.version is what makes every fixture stale, and the fixtures are not
+  # what is staged. Quiet on pass; the full drift list only when it refuses.
+  if [ -x scripts/sync-fixture-boards.sh ]; then
+    echo "husky: sync-fixture-boards --check"
+    local drift
+    if ! drift="$(bash scripts/sync-fixture-boards.sh --check 2>&1)"; then
+      printf '%s\n' "$drift"
+      fail "fixture boards have drifted from the payload — run: bash scripts/sync-fixture-boards.sh"
+    fi
+    printf '%s\n' "$drift" | tail -1
   fi
   run_step lint-staged --concurrent false
 }
