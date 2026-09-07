@@ -147,7 +147,15 @@ install_cli() { # board-dir
     # side effect an install should have. Say it is there and leave the choice to the operator.
     echo "setup-handoff: --no-vendor-cli, but $b/scripts/handoff-cli already exists — left in place; remove it yourself to finish de-vendoring."
   fi
-  # User-level install: one copy per machine, upgraded on its own cadence, shared by every board.
+  # User-level install: the LAST rung, and since payload 30 it is written only for a board that
+  # carries no CLI of its own. Writing it unconditionally is a leftover from when it outranked the
+  # vendored copy: it put a machine-global binary on every machine that installed anything, which
+  # is the thing that silently answered for boards that never asked for it. A board that vendors
+  # has no use for it, so not writing it is not a missing feature — it is the rung staying empty
+  # until something needs it.
+  if [ "$VENDOR_CLI" = "1" ]; then
+    return 0
+  fi
   # Best-effort — a read-only or unset HOME is not a reason to fail an install whose board half
   # just succeeded, and the vendored copy (or $HANDOFF_BIN) still answers.
   home="$(handoff_cli_home)"
