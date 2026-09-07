@@ -7,8 +7,8 @@
 #   1. Which board am I? — the directory this file sits in. That is the one fact a board-local
 #      file knows for certain, and it is why the dispatcher lives here rather than the CLI: every
 #      wired tool's hook command, every README, and every habit already points at <board>/handoff.
-#   2. Which CLI runs it? — $HANDOFF_BIN, else the user-level install, else the board's vendored
-#      copy. The ladder itself lives in scripts/config.sh (handoff_cli_resolve) so the CLI and
+#   2. Which CLI runs it? — $HANDOFF_BIN, else the board's vendored copy, else the user-level
+#      install. The ladder itself lives in scripts/config.sh (handoff_cli_resolve) so the CLI and
 #      hooks.sh resolve it identically.
 #
 # The point of the split: the CLI is ~180 KB and changes constantly, so a copy of it on every
@@ -41,12 +41,12 @@ if ! command -v handoff_cli_resolve > /dev/null 2>&1; then
       printf 'env %s' "$HANDOFF_BIN"
       return 0
     }
-    handoff_cli_usable "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff" && {
-      printf 'user %s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff"
-      return 0
-    }
     [ -n "$board" ] && handoff_cli_usable "$board/scripts/handoff-cli" && {
       printf 'vendored %s' "$board/scripts/handoff-cli"
+      return 0
+    }
+    handoff_cli_usable "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff" && {
+      printf 'user %s' "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff"
       return 0
     }
     return 1
@@ -83,8 +83,8 @@ _resolved="$(handoff_cli_resolve "$BOARD")" || {
 handoff: no CLI found for this board ($BOARD).
          Looked at, in order:
            \$HANDOFF_BIN                  $(_why "${HANDOFF_BIN:-}")
-           user-level install            $(_why "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff")
            vendored copy                 $(_why "$BOARD/scripts/handoff-cli")
+           user-level install            $(_why "${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff")
          Fix: re-run the setup-handoff skill against this repo, or point \$HANDOFF_BIN at a CLI.
          Until then the lease gate is OFF — edits are allowed, so coordinate by hand.
 EOF
