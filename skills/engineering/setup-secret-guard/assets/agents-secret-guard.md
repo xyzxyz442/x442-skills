@@ -50,6 +50,12 @@ wholesale — you get type, byte count, and a digest.
   yours.
 - **Record a credential's NAME, never its value** — an environment variable or a secret-manager
   reference. This applies to every file you write, every commit message, and every handoff doc.
+- **A read inside an embedded shell is asked, not rewritten.** `docker run/exec`,
+  `docker compose exec`, `ssh` (including the `gcloud`/`az`/`fly` wrappers), `kubectl exec`,
+  `lxc`/`incus`/`multipass`/`limactl` shells and multi-line `-c '...'` scripts execute in another
+  filesystem namespace where the host's `redact-view` does not exist, so no rewrite can both work
+  and withhold the value. Reads of merely config-shaped paths there pass through untouched;
+  credential-named ones prompt. Prefer reading on the host, or redact inside the guest.
 - `redact-view --all FILE` redacts every scalar, for when the key names themselves are sensitive.
 
 ### Enforcement is not uniform, and you should know which side you are on

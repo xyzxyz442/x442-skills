@@ -157,8 +157,41 @@ def strip_heredocs(cmd: str) -> str:
 # ------------------------------------------------------------------ shell shape
 
 
-def quoted_mask(line: str):
-    """True at each character that sits inside a shell quote.
+# Launchers that move the rest of the line into another filesystem namespace. A read
+# downstream of one of these does not open a host file, so rewriting it to the host's
+# redact-view produces a path the guest cannot resolve. `ssh` is matched only as a bare
+# word so `ssh-keygen` and `~/.ssh/config` do not read as remote execution.
+#
+# Every entry here WIDENS a pass-through, so each one is a security trade rather than a
+# convenience: downstream reads stop being redacted, and only credential-named ones ask.
+# The bar for adding one is that it unambiguously crosses a namespace boundary. Note the
+# bare-`ssh` branch already covers the cloud wrappers that end in a bare `ssh` word --
+# `gcloud compute ssh`, `az vm ssh`, `fly ssh console` -- so those need no entry of their
+# own; adding them would only widen the match without changing a decision.
+#
+# `compose` is called out separately because the subcommand sits between the binary and
+# `exec`: `docker compose exec` does not match `docker\s+exec`, so it was being rewritten
+# to a host path -- the same `redact-view: not found` breakage this pattern exists to stop.
+REMOTE_EXEC_RE = re.compile(
+    r"""(?:\b(?:docker|podman|nerdctl)\s+(?:exec|run)\b)"""
+    r"""|(?:\b(?:docker|podman|nerdctl)\s+compose\s+(?:exec|run)\b)"""
+    r"""|(?:\bkubectl\s+exec\b)"""
+    r"""|(?<!\S)ssh(?=\s)"""
+    r"""|(?:\bdistrobox\s+enter\b)|(?:\btoolbox\s+run\b)"""
+    r"""|(?:\bvagrant\s+ssh\b)|(?:\bheroku\s+run\b)"""
+    r"""|(?:\blimactl\s+shell\b)|(?:\bmultipass\s+(?:exec|shell)\b)"""
+    r"""|(?:\b(?:incus|lxc)\s+exec\b)"""
+)
+
+
+def quoted_mask(line: str, q=None):
+    """True at each character that sits inside a shell quote, plus the quote left open.
+
+    `q` carries the quote a previous line opened and did not close. A shell quote is
+    not a line-local construct: `docker run sh -c '` opens one that stays open over
+    every following line. Resetting the state per line made those lines look like
+    bare commands, so a read inside an embedded script was rewritten to a host path
+    that does not exist in the container -- `sh: 2: .../redact-view: not found`.
 
     The guard's two worst false positives both came from treating quoted text as
     shell syntax: a credential-shaped name inside a sentence, and a `cat <file>`
@@ -168,7 +201,6 @@ def quoted_mask(line: str):
     argument that merely looks like one.
     """
     mask = [False] * len(line)
-    q = None
     i = 0
     while i < len(line):
         c = line[i]
@@ -186,7 +218,7 @@ def quoted_mask(line: str):
             elif c == q:
                 q = None
         i += 1
-    return mask
+    return mask, q
 
 
 def stages(cmd: str):
@@ -196,7 +228,7 @@ def stages(cmd: str):
     so the filter is operating on the first command's OUTPUT, not slicing a
     credential. Only a stage holding both a filter and a credential path is a slice.
     """
-    mask = quoted_mask(cmd)
+    mask, _ = quoted_mask(cmd)
     parts, cur, i = [], [], 0
     while i < len(cmd):
         if not mask[i] and cmd[i] in "|;&\n":
@@ -290,10 +322,19 @@ def emit(decision: str, reason: str, updated=None):
 def rewrite_reads(cmd: str, cwd: str = ""):
     """Redirect plain reads of credential-bearing files through redact-view.
 
-    Returns (new_command, [paths_rewritten]).
+    Returns (new_command, [paths_rewritten], [paths_embedded]).
+
+    `paths_embedded` are credential reads sitting inside a quoted script that a
+    previous line opened -- an embedded shell (`docker run sh -c '...'`, `ssh host
+    '...'`). They are deliberately NOT rewritten: the viewer is a host path with no
+    meaning in that namespace. They are reported instead, because silently passing
+    one through would print the raw value that this guard exists to withhold.
     """
     touched = []
+    embedded = []
     line_mask = []
+    carried = False
+    remote_at = None
 
     def repl(m):
         verb, flags, path = m.group(1), m.group(2) or "", m.group(3)
@@ -302,7 +343,13 @@ def rewrite_reads(cmd: str, cwd: str = ""):
         # corrupts the caller's argument, which is worse than any decision this hook makes:
         # it changes what the command does. The operand may still be quoted (`cat ".env"`
         # is an ordinary read); it is the verb's position that settles it.
-        if m.start(1) < len(line_mask) and line_mask[m.start(1)]:
+        masked = m.start(1) < len(line_mask) and line_mask[m.start(1)]
+        # `carried` -> inside a quote a previous line opened (a multi-line -c script).
+        # `remote_at` -> a launcher earlier on this line already crossed the boundary.
+        nested = carried or (remote_at is not None and m.start(1) > remote_at)
+        if masked or nested:
+            if nested and SECRET_RE.search(path):
+                embedded.append(path)
             return m.group(0)
         if not leaks(path, cwd):
             return m.group(0)
@@ -314,14 +361,20 @@ def rewrite_reads(cmd: str, cwd: str = ""):
 
     # Apply only outside heredoc bodies: text inside one is a document being
     # written, not a command being run. Rewriting there would corrupt the file.
-    out, terminator = [], None
+    out, terminator, pending = [], None, None
     for line in cmd.split("\n"):
         if terminator is not None:
             out.append(line)
             if line.strip() == terminator:
                 terminator = None
             continue
-        line_mask = quoted_mask(line)
+        carried = pending is not None
+        line_mask, pending = quoted_mask(line, pending)
+        remote_at = None
+        for rm in REMOTE_EXEC_RE.finditer(line):
+            if rm.start() >= len(line_mask) or not line_mask[rm.start()]:
+                remote_at = rm.start()
+                break
         m = HEREDOC_START.search(line)
         if m:
             # The command part precedes the heredoc marker; body starts next line.
@@ -329,7 +382,7 @@ def rewrite_reads(cmd: str, cwd: str = ""):
             out.append(READ_CALL.sub(repl, line))
             continue
         out.append(READ_CALL.sub(repl, line))
-    return "\n".join(out), touched
+    return "\n".join(out), touched, embedded
 
 
 def main():
@@ -367,7 +420,7 @@ def main():
     # Content probe: a plain read of an innocuously-named file that nonetheless
     # holds credentials must still be redirected through the viewer.
     if not SECRET_RE.search(probe):
-        rewritten, touched = rewrite_reads(original, cwd)
+        rewritten, touched, _ = rewrite_reads(original, cwd)
         if touched:
             new_input = dict(ti)
             new_input["command"] = rewritten
@@ -404,7 +457,21 @@ def main():
         )
 
     # ---- plain read: rewrite through the redacting viewer --------------------
-    rewritten, touched = rewrite_reads(original, cwd)
+    rewritten, touched, embedded = rewrite_reads(original, cwd)
+
+    # A credential read inside an embedded shell: redaction cannot cross the
+    # namespace boundary, so there is no rewrite that both works and withholds the
+    # value. Ask rather than deny -- the operator may have a reason, and a guard
+    # that refuses outright is a guard that gets switched off.
+    if embedded:
+        emit(
+            "ask",
+            f"`{', '.join(sorted(set(embedded)))}` is read inside an embedded shell "
+            f"(docker/ssh/-c script). redact-view is a host path with no meaning in "
+            f"that namespace, so the value would reach the transcript unredacted. "
+            f"Prefer running the read on the host, or redacting inside the guest.",
+        )
+
     if touched:
         leftover = scrub(rewritten)
         if not SECRET_RE.search(leftover) or not FILTER_RE.search(leftover):

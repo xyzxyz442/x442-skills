@@ -290,6 +290,92 @@ print(u.get("command", ""))' 2> /dev/null || true)"
   else
     bad "guard.consumer_allowed" "a process consuming a credential was blocked — it never needed the value"
   fi
+
+  # --- reads inside an embedded shell ---------------------------------------------------
+  # A launcher like `docker run`, `docker exec`, `ssh` or `kubectl exec` moves the rest of the
+  # line into another filesystem namespace, where the host's redact-view does not exist. The
+  # guard used to rewrite there anyway, producing `sh: 2: .../redact-view: not found` -- a guard
+  # that breaks the command instead of guarding it. Worse, a shell quote is not line-local, so
+  # `sh -c '` on line 1 left line 2 looking like a bare host command.
+  #
+  # The two halves below only work TOGETHER, and each is the other's safety rail. Passing guest
+  # reads through fixes the breakage but would silently print a credential; asking on the
+  # credential-named ones closes that, but asking on ALL of them would train the habit of
+  # dismissing the prompt. Assert both or neither is meaningful.
+  embedded_ask() { # embedded_ask <id> <command> <prose>
+    D="$(probe "$(payload_for "$2")")"
+    if [ "$D" = "ask" ]; then
+      ok "guard.embedded.$1" "$3 prompts"
+    else
+      bad "guard.embedded.$1" "$3 decided ${D} — a credential read in a guest must ask, never pass silently"
+    fi
+  }
+  embedded_untouched() { # embedded_untouched <id> <command> <prose>
+    PL="$(payload_for "$2")"
+    D="$(probe "$PL")"
+    if [ "$D" = "allow" ] && ! rewritten "$PL"; then
+      ok "guard.embedded.$1" "$3 is left untouched"
+    else
+      bad "guard.embedded.$1" "$3 was interfered with (decided ${D}) — a rewrite here names a host path the guest cannot resolve"
+    fi
+  }
+
+  # A multi-line `-c` script: the case that regressed. The quote opens on line 1 and the read
+  # sits on line 2, so this only passes if quote state survives the line break.
+  embedded_untouched multiline_config \
+    "docker run --rm --entrypoint sh img -c '
+echo hi
+cat /app/pyvenv.cfg'" \
+    "a config read inside a multi-line -c script"
+  embedded_ask multiline_credential \
+    "docker run --rm --entrypoint sh img -c '
+echo hi
+cat /app/${DOTENV}'" \
+    "a credential read inside a multi-line -c script"
+
+  embedded_ask docker_exec "docker exec c1 cat /app/${DOTENV}" \
+    "a credential read behind docker exec"
+  embedded_untouched docker_exec_config "docker exec c1 cat /app/pyvenv.cfg" \
+    "a config read behind docker exec"
+  embedded_ask ssh "ssh prod cat /etc/app/${DOTENV}" \
+    "a credential read behind ssh"
+  embedded_ask kubectl_exec "kubectl exec pod -- cat /var/run/${DOTENV}" \
+    "a credential read behind kubectl exec"
+
+  # `ssh` is matched only as a bare word. Were it a substring match, ssh-keygen and every
+  # ~/.ssh/... path would read as remote execution and stop being guarded at all -- the widened
+  # pass-through is the security cost of every launcher added to that pattern.
+  embedded_untouched ssh_prefix_not_remote "ssh-keygen -f /home/u/.ssh/id_rsa -y" \
+    "an ssh-prefixed command that is not remote execution"
+
+  # `compose` puts a subcommand between the binary and `exec`, so it does not match the
+  # plain `docker\s+exec` branch and was still being rewritten to a host path. It is the
+  # most common of these launchers in day-to-day work, so it gets both halves pinned.
+  embedded_ask compose_exec "docker compose exec svc cat /app/${DOTENV}" \
+    "a credential read behind docker compose exec"
+  embedded_untouched compose_exec_config "docker compose exec svc cat /app/pyvenv.cfg" \
+    "a config read behind docker compose exec"
+  embedded_ask vm_shell "lxc exec c1 -- cat /app/${DOTENV}" \
+    "a credential read behind a container/VM shell"
+
+  # The cloud wrappers end in a bare `ssh` word, so the bare-ssh branch already covers them.
+  # Pinned so nobody adds a redundant alternation for them, and so a future tightening of
+  # that branch cannot silently drop them.
+  embedded_ask cloud_ssh_wrapper "gcloud compute ssh vm --command \"cat /app/${DOTENV}\"" \
+    "a credential read behind a cloud ssh wrapper"
+
+  # The host side of the same boundary must keep being rewritten. If widening the launcher
+  # pattern ever swallowed an ordinary local read, these are what catch it.
+  if rewritten "$(payload_for "head -5 /srv/app/${DOTENV}")"; then
+    ok "guard.host_read_still_rewritten" "a host read with a flag is still routed through the viewer"
+  else
+    bad "guard.host_read_still_rewritten" "a host read with a flag stopped being routed through the viewer"
+  fi
+  if rewritten "$(payload_for "cat /home/u/.ssh/config")"; then
+    ok "guard.host_ssh_config_rewritten" "a host read of an ssh config is still routed through the viewer"
+  else
+    bad "guard.host_ssh_config_rewritten" "a host read of an ssh config stopped being routed through the viewer"
+  fi
 else
   bad "guard.present" "secret-file-guard.py missing — the read path is unguarded"
 fi
