@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.4](https://github.com/xyzxyz442/x442-skills/compare/v0.12.3...v0.12.4) (2026-09-08)
+
+### 🐞 Bug Fixes
+
+- **bug:** ask instead of rewriting a read inside an embedded shell ([40b32b4](https://github.com/xyzxyz442/x442-skills/commit/40b32b452fbe02c2ab47e95055cf5124bfa35b6b))
+- **bug:** recognise compose and VM shells as embedded shells ([40abb25](https://github.com/xyzxyz442/x442-skills/commit/40abb25692e1280f3992fb503d752f1938c9b535))
+
+### 🧪 Tests
+
+- **test:** pin the embedded-shell decision table as permanent cases ([f1ef327](https://github.com/xyzxyz442/x442-skills/commit/f1ef3273c6f5f8d5da5cf8d34b0ed30daa786808))
+- **test:** stop the grader installing a CLI into the real home ([723e7d4](https://github.com/xyzxyz442/x442-skills/commit/723e7d4f5f36e24d368f9daa87c2dadb8b22b51e))
+
 ## [0.12.3](https://github.com/xyzxyz442/x442-skills/compare/v0.12.2...v0.12.3) (2026-09-07)
 
 ### 🐞 Bug Fixes
