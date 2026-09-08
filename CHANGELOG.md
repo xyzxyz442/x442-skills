@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.5](https://github.com/xyzxyz442/x442-skills/compare/v0.12.4...v0.12.5) (2026-09-08)
+
+### 🐞 Bug Fixes
+
+- **test:** give the empty-$HANDOFF_BIN regression a rung to fall through to ([192ceb4](https://github.com/xyzxyz442/x442-skills/commit/192ceb4bfb806cb80bbb2c2503f263930e361627))
+
 ## [0.12.4](https://github.com/xyzxyz442/x442-skills/compare/v0.12.3...v0.12.4) (2026-09-08)
 
 ### 🐞 Bug Fixes
