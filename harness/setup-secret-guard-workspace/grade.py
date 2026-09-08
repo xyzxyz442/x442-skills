@@ -68,6 +68,19 @@ HOME_WIRED_PASS_IDS = (
     "wiring.deny",
     "selftest.splice-agents-block",
     "selftest.merge-settings",
+    # Reads inside an embedded shell (docker/ssh/kubectl exec, multi-line -c scripts). The
+    # host's redact-view has no meaning in another filesystem namespace, so these assert the
+    # two halves that only work together: guest reads pass through untouched, but a
+    # credential-named one asks rather than printing the value into the transcript.
+    "guard.embedded.multiline_config",
+    "guard.embedded.multiline_credential",
+    "guard.embedded.docker_exec",
+    "guard.embedded.docker_exec_config",
+    "guard.embedded.ssh",
+    "guard.embedded.kubectl_exec",
+    "guard.embedded.ssh_prefix_not_remote",
+    "guard.host_read_still_rewritten",
+    "guard.host_ssh_config_rewritten",
 )
 
 
