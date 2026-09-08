@@ -489,6 +489,28 @@ def grade_payload_downgrade(target):
     return e
 
 
+def _live_user_cli_env():
+    """An environment whose one working rung is the user-level install.
+
+    The empty-$HANDOFF_BIN regression below needs a rung to fall THROUGH to, and the board it
+    runs against vendors no copy -- so the only rung left is the user-level one. Until this was
+    explicit, the rung that answered was the harness machine's own install, which meant the
+    assertion passed only where an earlier --no-vendor-cli case had written one into the REAL
+    home, and stopped passing at all once that leak was closed by sandboxing XDG_DATA_HOME. A
+    test may not depend on contamination it does not create. So ship the rung with the case.
+
+    Its own temp dir, not the module sandbox: that one has to stay EMPTY, because it is what
+    every other case resolves $XDG_DATA_HOME to when it wants no user-level CLI to exist.
+    """
+    root = tempfile.mkdtemp(prefix="handoff-grade-user-cli-")
+    atexit.register(shutil.rmtree, root, True)
+    dest = Path(root) / "handoff" / "handoff"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(gc.payload_cli(HERE), dest)
+    dest.chmod(0o755)
+    return {"XDG_DATA_HOME": root}
+
+
 def _dead_cli_env(target):
     """An environment in which NO rung of the CLI ladder resolves.
 
@@ -588,16 +610,19 @@ def grade_cli_unresolvable(target):
     # The regression. An EMPTY $HANDOFF_BIN must not shadow the working rung below it.
     empty = Path(target) / ".harness-empty-cli"
     empty.write_bytes(b"")
+    live = _live_user_cli_env()
     r = _run(
         ["bash", str(board / "handoff"), "claim", "gated", "steal"],
         target,
-        {"HANDOFF_BIN": str(empty), "HANDOFF_SESSION_ID": "sess-ZZZ"},
+        {**live, "HANDOFF_BIN": str(empty), "HANDOFF_SESSION_ID": "sess-ZZZ"},
     )
     out = r.stdout + r.stderr
     e.append(
         gc.expectation(
             "an EMPTY $HANDOFF_BIN is skipped, so the claim still reaches a CLI",
-            r.returncode != 0,
+            # Both halves, or this passes for the wrong reason: "no CLI found" also exits
+            # non-zero, so a vanished rung below would read as a correctly-skipped one above.
+            r.returncode != 0 and "no CLI found" not in out,
             f"exit {r.returncode}: {out.strip()[:140]}",
         )
     )
