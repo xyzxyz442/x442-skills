@@ -14,11 +14,13 @@ eval_id ∈ {no-agents-md | fresh | claude-wired | advisory-wired | legacy-insta
 script-behavior}. Exits 0 iff nothing failed.
 """
 
+import atexit
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -50,6 +52,25 @@ CLAUDE_CFG = ".claude/settings.json"
 # a green run proved the MACHINE was current, not the payload. The other three handoff workspaces
 # already pinned it; this one was missed. Set once, for every subprocess this grader spawns.
 os.environ.setdefault("HANDOFF_BIN", str(gc.payload_cli(HERE)))
+
+# Same reasoning as $HANDOFF_BIN above, applied to the ladder's OTHER machine-global rung. The
+# installer writes the user-level CLI to $XDG_DATA_HOME/handoff (falling back to $HOME/.local/share)
+# whenever a board vendors no copy of its own — which is exactly what the --no-vendor-cli case below
+# asks for. Unsandboxed, GRADING A REPO INSTALLS A BINARY INTO THE REAL HOME of whoever ran it, and
+# the suite never even reads it: $HANDOFF_BIN above wins the ladder for every case that does not
+# explicitly unset it. Pure side effect, so there is nothing to lose by containing it.
+#
+# Assigned, not setdefault: a grader must be hermetic even on a machine that already exports
+# XDG_DATA_HOME, and unlike HANDOFF_BIN there is no version of this an operator would want to steer.
+# Cases needing their own value still win — _run layers env_extra over os.environ.
+#
+# The sandbox lives OUTSIDE the fixture on purpose. `git_diff_empty` asserts on `git status
+# --porcelain`, which counts UNTRACKED files, and the fixtures are their own git repos — so a
+# sandbox under the target would read as drift in the very idempotency check that follows the
+# --no-vendor-cli install, turning this fix into a failing eval.
+_XDG_SANDBOX = tempfile.mkdtemp(prefix="handoff-grade-xdg-")
+atexit.register(shutil.rmtree, _XDG_SANDBOX, True)
+os.environ["XDG_DATA_HOME"] = _XDG_SANDBOX
 
 # Legacy shell key -> camelCase JSON key. Mirrors the installer's own migration map; kept here
 # rather than imported because the grader must be able to disagree with the code under test.
