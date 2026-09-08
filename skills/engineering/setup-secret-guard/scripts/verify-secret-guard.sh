@@ -348,6 +348,22 @@ cat /app/${DOTENV}'" \
   embedded_untouched ssh_prefix_not_remote "ssh-keygen -f /home/u/.ssh/id_rsa -y" \
     "an ssh-prefixed command that is not remote execution"
 
+  # `compose` puts a subcommand between the binary and `exec`, so it does not match the
+  # plain `docker\s+exec` branch and was still being rewritten to a host path. It is the
+  # most common of these launchers in day-to-day work, so it gets both halves pinned.
+  embedded_ask compose_exec "docker compose exec svc cat /app/${DOTENV}" \
+    "a credential read behind docker compose exec"
+  embedded_untouched compose_exec_config "docker compose exec svc cat /app/pyvenv.cfg" \
+    "a config read behind docker compose exec"
+  embedded_ask vm_shell "lxc exec c1 -- cat /app/${DOTENV}" \
+    "a credential read behind a container/VM shell"
+
+  # The cloud wrappers end in a bare `ssh` word, so the bare-ssh branch already covers them.
+  # Pinned so nobody adds a redundant alternation for them, and so a future tightening of
+  # that branch cannot silently drop them.
+  embedded_ask cloud_ssh_wrapper "gcloud compute ssh vm --command \"cat /app/${DOTENV}\"" \
+    "a credential read behind a cloud ssh wrapper"
+
   # The host side of the same boundary must keep being rewritten. If widening the launcher
   # pattern ever swallowed an ordinary local read, these are what catch it.
   if rewritten "$(payload_for "head -5 /srv/app/${DOTENV}")"; then

@@ -79,6 +79,10 @@ HOME_WIRED_PASS_IDS = (
     "guard.embedded.ssh",
     "guard.embedded.kubectl_exec",
     "guard.embedded.ssh_prefix_not_remote",
+    "guard.embedded.compose_exec",
+    "guard.embedded.compose_exec_config",
+    "guard.embedded.vm_shell",
+    "guard.embedded.cloud_ssh_wrapper",
     "guard.host_read_still_rewritten",
     "guard.host_ssh_config_rewritten",
 )

@@ -161,12 +161,26 @@ def strip_heredocs(cmd: str) -> str:
 # downstream of one of these does not open a host file, so rewriting it to the host's
 # redact-view produces a path the guest cannot resolve. `ssh` is matched only as a bare
 # word so `ssh-keygen` and `~/.ssh/config` do not read as remote execution.
+#
+# Every entry here WIDENS a pass-through, so each one is a security trade rather than a
+# convenience: downstream reads stop being redacted, and only credential-named ones ask.
+# The bar for adding one is that it unambiguously crosses a namespace boundary. Note the
+# bare-`ssh` branch already covers the cloud wrappers that end in a bare `ssh` word --
+# `gcloud compute ssh`, `az vm ssh`, `fly ssh console` -- so those need no entry of their
+# own; adding them would only widen the match without changing a decision.
+#
+# `compose` is called out separately because the subcommand sits between the binary and
+# `exec`: `docker compose exec` does not match `docker\s+exec`, so it was being rewritten
+# to a host path -- the same `redact-view: not found` breakage this pattern exists to stop.
 REMOTE_EXEC_RE = re.compile(
     r"""(?:\b(?:docker|podman|nerdctl)\s+(?:exec|run)\b)"""
+    r"""|(?:\b(?:docker|podman|nerdctl)\s+compose\s+(?:exec|run)\b)"""
     r"""|(?:\bkubectl\s+exec\b)"""
     r"""|(?<!\S)ssh(?=\s)"""
     r"""|(?:\bdistrobox\s+enter\b)|(?:\btoolbox\s+run\b)"""
     r"""|(?:\bvagrant\s+ssh\b)|(?:\bheroku\s+run\b)"""
+    r"""|(?:\blimactl\s+shell\b)|(?:\bmultipass\s+(?:exec|shell)\b)"""
+    r"""|(?:\b(?:incus|lxc)\s+exec\b)"""
 )
 
 
