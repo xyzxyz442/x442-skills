@@ -35,14 +35,15 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
    The `handoff` entry point is a **dispatcher**, not the CLI: the CLI is ~180 KB and changes on
    every fix, so a copy of it on every board made each fix an N-file regeneration. The dispatcher
    resolves `$HANDOFF_BIN` → the board's vendored `scripts/handoff-cli` → a **user-level install**
-   (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`, written by this installer — the one
-   thing it writes outside the repo). The board's own copy outranks the machine's so that a board
-   runs the CLI it was installed with: a machine-global rung on top meant a board silently executed
-   a build its own stamp did not name, which is the one discrepancy nothing would report. Pass
-   `--no-vendor-cli` to skip the vendored copy on a board that is never cloned cold — such a board
-   resolves to the user-level install, which is what that rung is now for. Which board
-   and which CLI answered is always reportable with `./handoff --which`, and repointing a repo at
-   another board needs no committed edit — export `HANDOFF_BOARD_PATH`.
+   (`${XDG_DATA_HOME:-$HOME/.local/share}/handoff/handoff`), for a board carrying no copy of its
+   own. The board's own copy outranks the machine's so that a board runs the CLI it was installed
+   with: a machine-global rung on top meant a board silently executed a build its own stamp did not
+   name, which is the one discrepancy nothing would report. A default install vendors the CLI and
+   **writes nothing outside the repo and its board**; the user-level copy is written **only under
+   `--no-vendor-cli`**, which skips the vendored copy — so after an ordinary install that rung is
+   empty, and nothing should assume it exists. Which board and which CLI answered is always
+   reportable with `./handoff --which`, and repointing a repo at another board needs no committed
+   edit — export `HANDOFF_BOARD_PATH`.
 2. **One enforcement core (`hooks.sh`).** A single dispatcher runs every hook kind
    (`sessionstart` / `pretool-edit` / `posttool-edit` / `stop`). It parses each tool's payload
    with **python3** (this repo standardises on python3, not `jq`) and emits that tool's native
@@ -156,8 +157,16 @@ path and is a no-op when the install is already generic and current.
 bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" \
   --tools <comma-list> --primary <tool|none> \
   [--topology single-repo|cross-repo] [--handoff-dir <path>] \
-  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring]
+  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli]
 ```
+
+`--no-vendor-cli` skips the board's vendored CLI and writes the user-level copy instead — the
+one flag that makes the installer write outside the repo and its board. Do not offer it on an
+ordinary install, and do not prompt for it: a board has to work for a teammate who clones it cold
+on a machine with no copy of this skill, and only the vendored copy guarantees that. Offer it only
+when the user says the board is never cloned cold (a throwaway or test-fixture board) and wants to
+avoid committing a ~180 KB byte-copy of the CLI. On a board that already vendors, it leaves the
+existing `scripts/handoff-cli` in place and says so; removing it is the user's call.
 
 `--allow-verify-cmd` records the opt-in that lets `release --status done --run-verify` execute a
 doc's `verify:` command (off by default — see the safety note). Re-running with a different
