@@ -121,6 +121,27 @@ else
   ok "payload.content" "installed files match the shipped payload byte for byte"
 fi
 
+# The tools are deliberately NOT on PATH: a generic name like `secret-scan` can resolve to some
+# other program first, and for a redactor that failure is silent and prints raw values. So the
+# AGENTS.md block documents a full home-layer path. Check the command the block actually shows,
+# not a path this script builds for itself -- every other check here calls the tools by full
+# path, which is how a documented bare `redact-view` that failed with `command not found` once
+# passed this whole script.
+DOC_INVOKE="$(awk '/^```bash/{f=1; next} /^```/{f=0} f && /redact-view/{print $1; exit}' "${SKILL}/assets/agents-secret-guard.md" 2> /dev/null)"
+case "$DOC_INVOKE" in
+  "~/.claude/"*) DOC_RESOLVED="${HOME_DIR}/${DOC_INVOKE#\~/.claude/}" ;;
+  *) DOC_RESOLVED="" ;;
+esac
+if [ -z "$DOC_INVOKE" ]; then
+  bad "docs.invocation" "the AGENTS.md block shows no redact-view command to check"
+elif [ -z "$DOC_RESOLVED" ]; then
+  bad "docs.invocation" "the AGENTS.md block invokes '${DOC_INVOKE}', which depends on PATH — document the home-layer path"
+elif [ -x "$DOC_RESOLVED" ]; then
+  ok "docs.invocation" "the documented invocation '${DOC_INVOKE}' resolves to the installed viewer"
+else
+  bad "docs.invocation" "the documented invocation '${DOC_INVOKE}' does not resolve to an executable"
+fi
+
 if grep -rqnI --exclude-dir=__pycache__ '/Users/\|/home/[a-z]' "${SKILL}/scripts/payload" 2> /dev/null; then
   bad "payload.depersonalised" "the shipped payload contains an absolute user path — it is bound to one machine"
 else
@@ -254,6 +275,15 @@ print(u.get("command", ""))' 2> /dev/null || true)"
     fi
   else
     bad "guard.rewrite_runs" "the guard produced no rewritten command for a plain credential read"
+  fi
+
+  # A path behind a shell variable cannot be opened here, so the guard routes it by extension
+  # alone. A backup copy keeps its credentials but buries the extension under suffixes, and
+  # that path once let `app.yaml.pre-rotation.20260913` print raw.
+  if rewritten "$(payload_for 'cat "$DIR/app.yaml.pre-rotation.20260913"')"; then
+    ok "guard.rewrites_backup_unresolved" "an unresolvable read of a backup-suffixed config is routed through the viewer"
+  else
+    bad "guard.rewrites_backup_unresolved" "an unresolvable read of a backup-suffixed config was NOT routed through the viewer"
   fi
 
   if rewritten "$(payload_for "cat ${DOTENV}rc")"; then
