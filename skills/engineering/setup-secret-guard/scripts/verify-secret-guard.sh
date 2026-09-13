@@ -132,9 +132,14 @@ fi
 section "## 2. engine decides correctly"
 SCAN="${HOME_DIR}/bin/secret-scan"
 VIEW="${HOME_DIR}/bin/redact-view"
+printf 'SERVICE=billing\nDB_PASSWORD=not-a-real-password-000\n' > "${TMP}/sample-config"
+printf '{ "name": "acme", "port": 8080 }\n' > "${TMP}/clean.json"
+# The Helm shapes a line-local reader printed raw: a value on the lines AFTER its key, and a
+# credential-shaped word in a SIBLING key. Each needs structure to see.
+printf 'image:\n  tag: 1.2.3\nenv:\n  - name: DB_PASSWORD\n    value: not-a-real-password-001\nextra:\n  dbPassword: |\n    not-a-real-password-002\n' > "${TMP}/values.yaml"
+# A Kubernetes Secret: arbitrary key names, base64 values -- secret by kind, not by look.
+printf 'apiVersion: v1\nkind: Secret\ndata:\n  DB_URL: bm90LWEtcmVhbC0wMDM=\n' > "${TMP}/manifest.yaml"
 if [ -x "$SCAN" ] && [ -x "$VIEW" ]; then
-  printf 'SERVICE=billing\nDB_PASSWORD=not-a-real-password-000\n' > "${TMP}/sample-config"
-  printf '{ "name": "acme", "port": 8080 }\n' > "${TMP}/clean.json"
 
   if "$SCAN" --quiet "${TMP}/sample-config" > /dev/null 2>&1; then
     ok "engine.detects" "a credential-bearing config is detected"
@@ -162,6 +167,20 @@ if [ -x "$SCAN" ] && [ -x "$VIEW" ]; then
     bad "engine.findings_quiet" "a finding echoed the value it matched"
   else
     ok "engine.findings_quiet" "findings name the rule, not the value"
+  fi
+  # The scanner and the viewer must agree. They once did not: the scanner flagged a Helm
+  # block scalar that the viewer then printed verbatim, because nothing in it was redacted.
+  if ! "$SCAN" --quiet "${TMP}/values.yaml" > /dev/null 2>&1; then
+    bad "engine.masks_helm" "a Helm values file holding credentials was reported clean"
+  elif "$VIEW" "${TMP}/values.yaml" 2> /dev/null | grep -q 'not-a-real-password-00[12]'; then
+    bad "engine.masks_helm" "the viewer printed a Helm env value or block scalar it should have redacted"
+  else
+    ok "engine.masks_helm" "Helm env name/value pairs and block scalars are detected and redacted"
+  fi
+  if "$VIEW" "${TMP}/manifest.yaml" 2> /dev/null | grep -q 'bm90LWEtcmVhbC0wMDM='; then
+    bad "engine.masks_k8s_secret" "the viewer printed a Kubernetes Secret's data value"
+  else
+    ok "engine.masks_k8s_secret" "a Kubernetes Secret's data values are redacted"
   fi
 else
   bad "engine.runnable" "secret-scan or redact-view is missing or not executable"
@@ -235,6 +254,32 @@ print(u.get("command", ""))' 2> /dev/null || true)"
     fi
   else
     bad "guard.rewrite_runs" "the guard produced no rewritten command for a plain credential read"
+  fi
+
+  if rewritten "$(payload_for "cat ${DOTENV}rc")"; then
+    ok "guard.rewrites_envrc" "a read of a direnv file is routed through the viewer"
+  else
+    bad "guard.rewrites_envrc" "a read of a direnv file was NOT routed through the viewer"
+  fi
+
+  # The Read tool returns a file raw and no hook can filter that output, so a file whose
+  # CONTENT holds a credential -- invisible to a filename deny rule -- must prompt. A clean
+  # one must not, or every config read becomes a prompt people learn to dismiss.
+  read_payload_for() { # read_payload_for <path> -> a Read-tool PreToolUse envelope
+    python3 -c 'import json, sys
+print(json.dumps({"tool_name": "Read", "tool_input": {"file_path": sys.argv[1]}}))' "$1"
+  }
+  D="$(probe "$(read_payload_for "${TMP}/values.yaml")")"
+  if [ "$D" = "ask" ]; then
+    ok "guard.read_tool_asks" "the Read tool prompts before opening a credential-bearing Helm values file"
+  else
+    bad "guard.read_tool_asks" "the Read tool opened a credential-bearing Helm values file without asking (decided ${D})"
+  fi
+  D="$(probe "$(read_payload_for "${TMP}/clean.json")")"
+  if [ "$D" = "allow" ]; then
+    ok "guard.read_tool_clean_allowed" "the Read tool opens a clean config without a prompt"
+  else
+    bad "guard.read_tool_clean_allowed" "the Read tool prompted on a clean config (decided ${D})"
   fi
 
   PL="$(payload_for "base64 ${DOTENV}")"
@@ -399,6 +444,19 @@ print(sum(1 for g in d.get('hooks', {}).get('PreToolUse', [])
       bad "wiring.hook" "the guard is not wired into settings.json — nothing intercepts a read"
     else
       warn "wiring.hook.duplicated" "the guard is wired ${HOOKED} times — it will run more than once per call"
+    fi
+    if [ "$HOOKED" != "0" ]; then
+      MATCHES_READ="$(python3 -c "
+import json
+d = json.load(open('$SETTINGS'))
+ms = [g.get('matcher', '') for g in d.get('hooks', {}).get('PreToolUse', [])
+      for h in g.get('hooks', []) if 'secret-file-guard' in str(h.get('command', ''))]
+print('yes' if ms and all('Read' in m.split('|') for m in ms) else 'no')" 2> /dev/null || echo no)"
+      if [ "$MATCHES_READ" = "yes" ]; then
+        ok "wiring.hook_matcher" "the guard's matcher covers Read, so content-bearing config prompts"
+      else
+        warn "wiring.hook_matcher.stale" "the guard's matcher does not cover Read — a Helm values file opens raw; re-run setup-secret-guard.sh"
+      fi
     fi
     DENY="$(python3 -c "
 import json

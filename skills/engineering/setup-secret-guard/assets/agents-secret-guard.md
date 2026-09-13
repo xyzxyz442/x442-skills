@@ -26,6 +26,15 @@ This is content-driven, not just filename-driven: an ordinary-looking `appsettin
 a `database.password` — or a connection string with an embedded `Password=` — is redacted too.
 Files with nothing secret in them pass through **byte-identical**, so the detour is invisible.
 
+Dotenv files in every naming (`.env`, `.env.local`, `prod.env`, `.envrc`) and YAML are read
+structurally. In a Helm values file or Kubernetes manifest, three kinds of value are redacted:
+an `env` entry whose `name` is credential-shaped, a `key: |` block under a secret key, and
+every `data`/`stringData` value of a `kind: Secret`.
+
+The `Read` tool cannot redact what it returns. Opening a config file whose content holds a
+credential therefore **prompts**. Decline and use `cat FILE` instead, which is routed through the
+viewer.
+
 ### What is still blocked
 
 Commands whose whole purpose is to obtain the raw value: `base64`, `openssl`, `xxd`, `strings`,
