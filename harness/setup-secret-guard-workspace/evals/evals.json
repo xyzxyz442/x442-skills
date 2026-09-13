@@ -67,6 +67,13 @@
       "expected_output": "secret-scan detects the file (exit 0); redact-view masks every data and stringData value of the Secret document, including a block scalar, while the ConfigMap document's data survives. No planted value appears in either tool's output."
     },
     {
+      "id": "leak-backup-suffix",
+      "kind": "behavioral",
+      "prompt": "Read a backup copy of a Helm values file — its name ends in a pre-change tag and a date, not in .yaml — through the guard's engine.",
+      "fixture": "fixtures/leaks/backup-suffix",
+      "expected_output": "The backup suffix does not change the verdict: secret-scan detects the file (exit 0) and redact-view masks all four planted values exactly as it does for values.yaml, while ordinary entries survive. No planted value appears in either tool's output."
+    },
+    {
       "id": "leak-helm-false-positive",
       "kind": "behavioral",
       "prompt": "Read this ordinary Helm values file — imagePullSecrets, a secretKeyRef, auth switches, an embedded application.yaml — through the guard's engine and confirm it is left alone.",

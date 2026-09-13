@@ -183,6 +183,19 @@ def grade(target, eval_id):
             ],
             survivors=["LOG_LEVEL: info", "kind: Secret", "type: Opaque"],
         )
+    if eval_id == "leak-backup-suffix":
+        # The same planted values as leak-helm-values, under a name that no longer ends in
+        # .yaml. The raw name once routed this to the dotenv grammar and printed it raw.
+        return _grade_leak_structured(
+            target,
+            "values.staging.yaml.pre-rotation.20260101",
+            secrets=[f"not-a-real-secret-gamma-00{n}" for n in (3, 4, 5, 6)],
+            survivors=[
+                "repository: ghcr.io/acme/acme-api",
+                "value: info",
+                "enabled: true",
+            ],
+        )
     if eval_id == "leak-helm-false-positive":
         return _grade_leak_false_positive(target, "values.yaml")
     return [

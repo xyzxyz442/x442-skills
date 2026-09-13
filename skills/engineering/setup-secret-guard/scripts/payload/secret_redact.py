@@ -560,6 +560,27 @@ def redact_yaml(text: str, mask_all: bool, nested: bool = False) -> str:
 # ----------------------------------------------------------------------- driver
 
 
+# A copy made by hand or by an editor keeps its credentials and loses its extension:
+# `values.yaml.bak`, `app.env~`, `values.prd.yaml.pre-rotation.20260913`. Judged by the raw
+# name, such a file falls through to the dotenv grammar, which cannot see a single
+# `key: value` line -- and a YAML backup was printed raw exactly that way. Strip these,
+# repeatedly, before any decision that reads the name.
+BACKUP_SUFFIX_RE = re.compile(
+    r"(~|\.(bak|backup|orig|old|save|sav|swp|swo|tmp|rej"
+    r"|(pre|post)-[A-Za-z0-9_-]+|\d{6,14}(-\d{2,6})?|\d{4}-\d{2}-\d{2}))$",
+    re.IGNORECASE,
+)
+
+
+def _logical_name(name: str) -> str:
+    """The name a file had before it was backed up: `values.yaml.pre-x.20260913` -> `values.yaml`."""
+    while True:
+        stripped = BACKUP_SUFFIX_RE.sub("", name)
+        if stripped == name or not stripped:
+            return name
+        name = stripped
+
+
 def _is_yaml(name: str, text: str) -> bool:
     lower = name.lower()
     if YAML_NAME_RE.search(lower) or "kubeconfig" in lower:
@@ -583,7 +604,7 @@ def _render_body(name: str, text: str, mask_all: bool) -> str:
         except (ValueError, RecursionError):
             pass  # fall through to line-based
 
-    base = os.path.basename(name).lower()
+    base = _logical_name(os.path.basename(name)).lower()
     if _is_yaml(base if name and not name.startswith("<") else name, text):
         return redact_yaml(text, mask_all)
     if base in (".npmrc", ".pypirc", ".netrc") or base.endswith(
@@ -597,7 +618,7 @@ def _render_body(name: str, text: str, mask_all: bool) -> str:
 def render(path: str, raw: bytes, mask_all: bool) -> str:
     global MASK_COUNT
     MASK_COUNT = 0
-    name = os.path.basename(path)
+    name = _logical_name(os.path.basename(path))
     if OPAQUE_BLOB.search(name) or b"\x00" in raw[:4096]:
         return render_blob(path, raw)
 
@@ -632,7 +653,7 @@ CONFIGISH = (
 
 # Filenames that are secret regardless of content.
 def is_secret_name(path: str) -> bool:
-    name = os.path.basename(path)
+    name = _logical_name(os.path.basename(path))
     return bool(
         ALWAYS_MASK_ALL.search(path)
         or ALWAYS_MASK_ALL.search(name)
@@ -641,7 +662,7 @@ def is_secret_name(path: str) -> bool:
 
 
 def looks_configish(path: str) -> bool:
-    name = os.path.basename(path).lower()
+    name = _logical_name(os.path.basename(path)).lower()
     return (
         name.endswith(CONFIGISH)
         or bool(YAML_NAME_RE.search(name))
