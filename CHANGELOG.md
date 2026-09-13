@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.6](https://github.com/xyzxyz442/x442-skills/compare/v0.12.5...v0.12.6) (2026-09-13)
+
+### 🐞 Bug Fixes
+
+- **bug:** redact helm and kubernetes yaml and guard the read tool ([c87edb6](https://github.com/xyzxyz442/x442-skills/commit/c87edb6782aab105ee1284175afb8d07aacbf86f))
+- **docs:** say setup-handoff writes the user-level cli only under --no-vendor-cli ([10ae482](https://github.com/xyzxyz442/x442-skills/commit/10ae4827d7c9e2d4586015c09a859df3f46ddd7c))
+
 ## [0.12.5](https://github.com/xyzxyz442/x442-skills/compare/v0.12.4...v0.12.5) (2026-09-08)
 
 ### 🐞 Bug Fixes
