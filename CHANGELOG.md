@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.7](https://github.com/xyzxyz442/x442-skills/compare/v0.12.6...v0.12.7) (2026-09-13)
+
+### 🐞 Bug Fixes
+
+- **bug:** document full-path invocation and route unresolved backup reads ([a8c4ccd](https://github.com/xyzxyz442/x442-skills/commit/a8c4ccd6f835156f549fabf81781f5a2dab9272d))
+- **bug:** redact credential files whose names carry a backup suffix ([c09c4b8](https://github.com/xyzxyz442/x442-skills/commit/c09c4b8523021c13e2c4fe8168e2bb0f76ad5d05))
+
 ## [0.12.6](https://github.com/xyzxyz442/x442-skills/compare/v0.12.5...v0.12.6) (2026-09-13)
 
 ### 🐞 Bug Fixes
