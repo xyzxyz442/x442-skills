@@ -43,10 +43,14 @@ def _lib_dir():
 sys.path.insert(0, _lib_dir())
 try:
     from secret_redact import MAX_BYTES, contains_secrets, looks_configish
+    from secret_redact import _logical_name as logical_name
 except Exception:  # library missing -> fall back to filename matching only
     MAX_BYTES = 2 * 1024 * 1024
     contains_secrets = None
     looks_configish = None
+
+    def logical_name(name):
+        return name
 
 
 def _redact_view():
@@ -263,8 +267,13 @@ CONFIGISH_EXT = re.compile(
 
 def configish_token(token: str) -> bool:
     t = token.strip().strip("\"'")
-    # A shell-variable path still exposes its extension; that is enough to route.
-    return bool(CONFIGISH_EXT.search(t))
+    # A shell-variable path still exposes its extension; that is enough to route. A backup
+    # copy buries it under suffixes (`app.yaml.pre-rotation.20260913`), so judge the name the
+    # file had before it was backed up -- the same stripping the engine applies to real paths.
+    return bool(
+        CONFIGISH_EXT.search(t)
+        or CONFIGISH_EXT.search(logical_name(os.path.basename(t)))
+    )
 
 
 def _resolve(token: str, cwd: str) -> str:

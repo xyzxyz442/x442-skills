@@ -53,6 +53,17 @@ policy. A shared verdict vocabulary would drag an `ask` into a bash CLI with no 
   everything else.
 - `permissions.deny` in the tool's settings — covers credential-**named** files (`.env*`,
   `*.env`, `.envrc`, keys, kubeconfigs) for `Read`/`Edit`, whose output a hook cannot filter.
+- The `AGENTS.md` block — the rules an agent follows where no hook can intercept.
+
+### The verbs are not on PATH, by design
+
+`secret-scan` and `redact-view` install to `~/.claude/bin` and are called by full path — by the
+hook, and in the `AGENTS.md` block. Nothing links them onto `PATH`. A generic name there can
+resolve to another program first, and for a redactor that failure is silent: output that looks
+redacted, printed raw. A bare `redact-view` failing with `command not found` is therefore
+expected, not a broken install. A person who wants the short name can alias it in an interactive
+shell, where it cannot shadow what a script or agent runs. `verify-secret-guard.sh` checks the
+invocation the block actually documents (`docs.invocation`).
 
 ### YAML is read by structure
 
@@ -68,8 +79,6 @@ indentation instead, stdlib only, and redacts:
 
 `secret-scan` derives its answer from the viewer's own redaction count. The two cannot disagree,
 so a file the scanner flags is never printed raw by the viewer.
-
-- The `AGENTS.md` block — the rules an agent follows where no hook can intercept.
 
 ## Resolution: a cascade, with the home layer load-bearing
 

@@ -42,8 +42,13 @@ Commands whose whole purpose is to obtain the raw value: `base64`, `openssl`, `x
 `grep` at a secret file is blocked too — pipe from the viewer instead:
 
 ```bash
-redact-view .env | grep TOKEN
+~/.claude/bin/redact-view .env | grep TOKEN
 ```
+
+The tools are called by full path on purpose, and are not on `PATH`. A generic name like
+`secret-scan` can resolve to some other program first, and for a redactor that failure is
+silent. A bare `redact-view` fails with `command not found`, which is expected, not a broken
+install.
 
 Raw key material (`*.pem`, `id_rsa`, `*.p12`) has no structure worth showing, so it is withheld
 wholesale — you get type, byte count, and a digest.
@@ -65,7 +70,8 @@ wholesale — you get type, byte count, and a digest.
   filesystem namespace where the host's `redact-view` does not exist, so no rewrite can both work
   and withhold the value. Reads of merely config-shaped paths there pass through untouched;
   credential-named ones prompt. Prefer reading on the host, or redact inside the guest.
-- `redact-view --all FILE` redacts every scalar, for when the key names themselves are sensitive.
+- `~/.claude/bin/redact-view --all FILE` redacts every scalar, for when the key names themselves
+  are sensitive.
 
 ### Enforcement is not uniform, and you should know which side you are on
 
@@ -73,7 +79,7 @@ Claude Code enforces this with a `PreToolUse` hook that can rewrite a command be
 Other tools get deny/ask rules where their hook model allows it. **This block is documentation,
 not enforcement** — where a tool cannot intercept, these rules hold only because you follow them.
 
-`secret-scan FILE` answers whether content holds a credential (exit 0 = found, 1 = clean) and
+`~/.claude/bin/secret-scan FILE` answers whether content holds a credential (exit 0 = found, 1 = clean) and
 names the rule that matched, never the value. Use it before writing or sending content you did
 not author.
 

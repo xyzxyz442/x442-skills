@@ -58,6 +58,10 @@ HOME_WIRED_PASS_IDS = (
     "guard.rewrites_read",
     "guard.rewrite_runs",
     "guard.rewrites_envrc",
+    "guard.rewrites_backup_unresolved",
+    # The command the AGENTS.md block tells an agent to run must work as written. The tools are
+    # not on PATH by design, so a bare name there is a documentation bug, not a user's problem.
+    "docs.invocation",
     # The Read tool returns a file raw, so content-bearing config must prompt -- and clean
     # config must not, or the prompt becomes one people dismiss by reflex.
     "guard.read_tool_asks",
