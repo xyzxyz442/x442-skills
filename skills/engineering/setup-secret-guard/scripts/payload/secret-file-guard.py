@@ -42,8 +42,9 @@ def _lib_dir():
 
 sys.path.insert(0, _lib_dir())
 try:
-    from secret_redact import contains_secrets, looks_configish
+    from secret_redact import MAX_BYTES, contains_secrets, looks_configish
 except Exception:  # library missing -> fall back to filename matching only
+    MAX_BYTES = 2 * 1024 * 1024
     contains_secrets = None
     looks_configish = None
 
@@ -70,6 +71,7 @@ REDACT_VIEW = _redact_view()
 # Files whose values must never be transcribed verbatim.
 SECRET_PATTERNS = [
     r"\.env\b",
+    r"\.envrc\b",
     r"\.npmrc\b",
     r"\.pypirc\b",
     r"\.netrc\b",
@@ -385,6 +387,28 @@ def rewrite_reads(cmd: str, cwd: str = ""):
     return "\n".join(out), touched, embedded
 
 
+def read_file_guard(file_path: str, cwd: str):
+    """Ask before the Read tool opens a file whose content holds a credential."""
+    if not file_path or contains_secrets is None:
+        return  # engine absent: the filename deny rules are the floor
+    path = _resolve(file_path, cwd)
+    try:
+        # Oversized files are left to the Read tool's own limits. contains_secrets treats
+        # them as positive, which would prompt on every large lockfile and teach dismissal.
+        if not os.path.isfile(path) or os.path.getsize(path) > MAX_BYTES:
+            return
+        hit = contains_secrets(path)
+    except Exception:
+        return  # read path fails open
+    if hit:
+        emit(
+            "ask",
+            f"`{file_path}` holds credential-shaped values, and the Read tool cannot redact "
+            f"what it returns. Approve to see it raw, or cancel and run "
+            f"`cat {file_path}` (routed through redact-view) for a redacted view.",
+        )
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -405,6 +429,15 @@ def main():
                 "Grep in content mode would print raw secret lines. Read the file "
                 f'through the redacting viewer instead: `"{REDACT_VIEW}" <file> | grep ...`',
             )
+        sys.exit(0)
+
+    # ---- Read: the tool returns the file raw, and no hook can filter its output --------
+    # Deny rules cover credential-NAMED files. A Helm values file or an appsettings.json is
+    # named like ordinary config, so only its content says whether it holds a credential.
+    # Ask rather than deny: the Edit tool requires a prior Read, and refusing outright would
+    # make every secret-bearing values.yaml uneditable -- a guard that gets switched off.
+    if tool == "Read":
+        read_file_guard(ti.get("file_path") or "", payload.get("cwd") or os.getcwd())
         sys.exit(0)
 
     if tool != "Bash":

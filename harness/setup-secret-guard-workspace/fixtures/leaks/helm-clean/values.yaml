@@ -1,0 +1,34 @@
+# Default values for acme-api. Nothing here is a credential.
+replicaCount: 2
+image:
+  repository: ghcr.io/acme/acme-api
+  tag: "1.4.2"
+  pullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: regcred
+serviceAccount:
+  create: true
+  name: ""
+auth:
+  enabled: true
+  type: oidc
+existingSecretName: acme-api-secrets
+env:
+  - name: LOG_LEVEL
+    value: info
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: acme-db
+        key: password
+configMap:
+  application.yaml: |
+    server:
+      port: 8080
+    logging:
+      level: INFO
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi

@@ -53,8 +53,15 @@ HOME_WIRED_PASS_IDS = (
     "engine.masks",
     "engine.passthrough",
     "engine.findings_quiet",
+    "engine.masks_helm",
+    "engine.masks_k8s_secret",
     "guard.rewrites_read",
     "guard.rewrite_runs",
+    "guard.rewrites_envrc",
+    # The Read tool returns a file raw, so content-bearing config must prompt -- and clean
+    # config must not, or the prompt becomes one people dismiss by reflex.
+    "guard.read_tool_asks",
+    "guard.read_tool_clean_allowed",
     "guard.denies_extraction",
     "guard.passthrough",
     "guard.consumer_allowed",
@@ -65,6 +72,7 @@ HOME_WIRED_PASS_IDS = (
     "guard.no_rewrite_of_quoted_data",
     "wiring.json_valid",
     "wiring.hook",
+    "wiring.hook_matcher",
     "wiring.deny",
     "selftest.splice-agents-block",
     "selftest.merge-settings",
@@ -153,6 +161,30 @@ def grade(target, eval_id):
         return _grade_leak_connection_string(target)
     if eval_id == "leak-false-positive":
         return _grade_leak_false_positive(target)
+    if eval_id == "leak-helm-values":
+        return _grade_leak_structured(
+            target,
+            "values.yaml",
+            secrets=[f"not-a-real-secret-gamma-00{n}" for n in (3, 4, 5, 6)],
+            survivors=[
+                "repository: ghcr.io/acme/acme-api",
+                "value: info",
+                "enabled: true",
+            ],
+        )
+    if eval_id == "leak-k8s-secret":
+        return _grade_leak_structured(
+            target,
+            "secret.yaml",
+            secrets=[
+                "bm90LWEtcmVhbC1zZWNyZXQtZGVsdGEtMDA3",
+                "bm90LWEtcmVhbC1zZWNyZXQtZGVsdGEtMDA4",
+                "not-a-real-secret-delta-009",
+            ],
+            survivors=["LOG_LEVEL: info", "kind: Secret", "type: Opaque"],
+        )
+    if eval_id == "leak-helm-false-positive":
+        return _grade_leak_false_positive(target, "values.yaml")
     return [
         gc.expectation(
             f"eval id '{eval_id}' is recognized", False, "no grader for this id"
@@ -598,10 +630,84 @@ def _grade_leak_connection_string(target):
         cleanup()
 
 
-def _grade_leak_false_positive(target):
+def _grade_leak_structured(target, filename, secrets, survivors):
+    """A YAML leak whose values are only visible through structure.
+
+    Each planted value sits where a line-local reader cannot see it is a credential: on the
+    lines after its key, in a sibling key, or in a document whose `kind` is Secret. The
+    viewer once printed exactly this raw while the scanner flagged it, so both are asserted.
+    """
     home, cleanup = _isolated_home(None)
     try:
-        f = Path(target) / "config.json"
+        f = Path(target) / filename
+        raw = f.read_text()
+        missing = [s for s in secrets if s not in raw]
+        exps = [
+            gc.expectation(
+                "fixture actually plants every secret value",
+                not missing,
+                "planted" if not missing else f"{len(missing)} MISSING FROM FIXTURE",
+            )
+        ]
+        scan = _run(["python3", str(PAYLOAD / "secret-scan"), str(f)], home)
+        exps.append(
+            gc.expectation(
+                "secret-scan detects the credential (exit 0)",
+                scan.returncode == 0,
+                f"exit {scan.returncode}",
+            )
+        )
+        scan_out = scan.stdout + scan.stderr
+        echoed = [s for s in secrets if s in scan_out]
+        exps.append(
+            gc.expectation(
+                "secret-scan's own output never echoes a planted value",
+                not echoed,
+                (
+                    "absent (correct)"
+                    if not echoed
+                    else f"{len(echoed)} LEAKED into secret-scan output"
+                ),
+            )
+        )
+        view = _run(["python3", str(PAYLOAD / "redact-view"), str(f)], home)
+        view_out = view.stdout + view.stderr
+        leaked = [s for s in secrets if s in view_out]
+        exps.append(
+            gc.expectation(
+                "redact-view's output contains none of the planted values",
+                not leaked,
+                (
+                    "absent (correct)"
+                    if not leaked
+                    else f"{len(leaked)} LEAKED into redact-view output"
+                ),
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "redact-view fingerprints each planted value",
+                view.stdout.count("sha256:") >= len(secrets),
+                f"{view.stdout.count('sha256:')} fingerprint(s) for {len(secrets)} value(s)",
+            )
+        )
+        lost = [s for s in survivors if s not in view.stdout]
+        exps.append(
+            gc.expectation(
+                "ordinary keys and values survive the mask",
+                not lost,
+                "all survive" if not lost else f"lost: {lost}",
+            )
+        )
+        return exps
+    finally:
+        cleanup()
+
+
+def _grade_leak_false_positive(target, filename="config.json"):
+    home, cleanup = _isolated_home(None)
+    try:
+        f = Path(target) / filename
         raw_bytes = f.read_bytes()
         scan = _run(["python3", str(PAYLOAD / "secret-scan"), str(f)], home)
         exps = [

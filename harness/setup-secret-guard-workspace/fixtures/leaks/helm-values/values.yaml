@@ -1,0 +1,17 @@
+# Synthetic Helm values for acme-api. Every credential below is fake.
+replicaCount: 2
+image:
+  repository: ghcr.io/acme/acme-api
+  tag: "1.4.2"
+env:
+  - name: LOG_LEVEL
+    value: info
+  - name: DB_PASSWORD
+    value: not-a-real-secret-gamma-003
+extraConfig:
+  signingKey: |
+    not-a-real-secret-gamma-004
+secrets:
+  STRIPE_KEY: not-a-real-secret-gamma-005
+  enabled: true
+"apiKey": "not-a-real-secret-gamma-006"

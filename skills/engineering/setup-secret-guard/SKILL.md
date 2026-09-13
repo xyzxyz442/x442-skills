@@ -47,10 +47,28 @@ policy. A shared verdict vocabulary would drag an `ask` into a bash CLI with no 
 
 **The consumers** map detections to decisions:
 
-- `secret-file-guard.py` — the `PreToolUse` hook. Rewrites a plain read into a redacted read,
-  asks on helm/Harness values files, denies extraction verbs, allows everything else.
-- `permissions.deny` in the tool's settings — covers `Read`/`Edit`, whose output a hook cannot
-  filter.
+- `secret-file-guard.py` — the `PreToolUse` hook (matcher `Bash|Grep|Read`). Rewrites a plain
+  read into a redacted read, asks on helm/Harness values files, denies extraction verbs, and
+  asks before the `Read` tool opens a config file whose **content** holds a credential. It allows
+  everything else.
+- `permissions.deny` in the tool's settings — covers credential-**named** files (`.env*`,
+  `*.env`, `.envrc`, keys, kubeconfigs) for `Read`/`Edit`, whose output a hook cannot filter.
+
+### YAML is read by structure
+
+A line-local reader misses where Helm and Kubernetes put credentials. The viewer tracks
+indentation instead, stdlib only, and redacts:
+
+- the body of a `key: |` / `key: >` block scalar under a secret-shaped key
+- `value:` in an `env` entry whose sibling `name:` is secret-shaped (`DB_PASSWORD`)
+- children of a `secrets:` / `credentials:` parent, except switches and `imagePullSecrets`
+- every `data`/`stringData` value in a document with `kind: Secret`, whatever the key is called
+- credentials inside an ordinary block, such as a ConfigMap's embedded `application.yaml` or
+  `app.env`
+
+`secret-scan` derives its answer from the viewer's own redaction count. The two cannot disagree,
+so a file the scanner flags is never printed raw by the viewer.
+
 - The `AGENTS.md` block — the rules an agent follows where no hook can intercept.
 
 ## Resolution: a cascade, with the home layer load-bearing

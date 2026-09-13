@@ -51,6 +51,27 @@
       "prompt": "Read this ordinary config through the guard's engine and confirm it is left alone.",
       "fixture": "fixtures/leaks/clean-config",
       "expected_output": "secret-scan reports clean (exit 1, no findings printed) and redact-view passes the file through byte-identical."
+    },
+    {
+      "id": "leak-helm-values",
+      "kind": "behavioral",
+      "prompt": "Read this Helm values file through the guard's engine — its credentials sit in an env name/value pair, a block scalar, a secrets map, and a quoted key.",
+      "fixture": "fixtures/leaks/helm-values",
+      "expected_output": "secret-scan detects the file (exit 0); redact-view masks all four planted values behind sha256 fingerprints while the image, replica count, and LOG_LEVEL entry survive, and the scanner and viewer agree. No planted value appears in either tool's output."
+    },
+    {
+      "id": "leak-k8s-secret",
+      "kind": "behavioral",
+      "prompt": "Read this multi-document manifest through the guard's engine — a ConfigMap followed by a Kubernetes Secret with arbitrary key names and base64 values.",
+      "fixture": "fixtures/leaks/k8s-secret",
+      "expected_output": "secret-scan detects the file (exit 0); redact-view masks every data and stringData value of the Secret document, including a block scalar, while the ConfigMap document's data survives. No planted value appears in either tool's output."
+    },
+    {
+      "id": "leak-helm-false-positive",
+      "kind": "behavioral",
+      "prompt": "Read this ordinary Helm values file — imagePullSecrets, a secretKeyRef, auth switches, an embedded application.yaml — through the guard's engine and confirm it is left alone.",
+      "fixture": "fixtures/leaks/helm-clean",
+      "expected_output": "secret-scan reports clean (exit 1, no findings printed) and redact-view passes the file through byte-identical."
     }
   ]
 }

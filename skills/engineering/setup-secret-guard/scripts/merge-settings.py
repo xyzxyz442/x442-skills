@@ -23,7 +23,10 @@ import json
 import os
 import sys
 
-HOOK_MATCHER = "Bash|Grep"
+# Read joined in payload v8: the hook asks before the Read tool opens a file whose CONTENT
+# holds a credential, which a filename deny rule cannot see. An install carrying the older
+# "Bash|Grep" matcher is upgraded in place by merge_hook.
+HOOK_MATCHER = "Bash|Grep|Read"
 HOOK_MARK = "secret-file-guard.py"
 
 
@@ -206,6 +209,32 @@ def _selftest():
             if HOOK_MARK in str(h.get("command", ""))
         )
         == 1,
+    )
+
+    # An install from before Read joined the matcher is upgraded in place, not duplicated.
+    old = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash|Grep",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": 'python3 "/x/secret-file-guard.py"',
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    check(
+        "an old Bash|Grep matcher reports a change",
+        merge_hook(old, "/x/secret-file-guard.py"),
+    )
+    groups = old["hooks"]["PreToolUse"]
+    check(
+        "the old matcher is upgraded in place to cover Read",
+        len(groups) == 1 and groups[0]["matcher"] == HOOK_MATCHER,
     )
 
     # A rule we used to own and no longer ship is withdrawn; one we never owned is not.
