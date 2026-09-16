@@ -659,6 +659,159 @@ def grade_cli_unresolvable(target):
     return e
 
 
+IGNORE_NEEDS = SKILL / "scripts/ignore-needs.sh"
+
+
+def grade_ignore_detection(target):
+    """ADR 0010 — setup and verify detect what needs ignoring, and suggest rather than write.
+
+    Four places a board or per-user config gets committed by whoever runs `git add` next. Each is a
+    named `warn` in the verifier (a risk, not a broken install), and setup offers the fix and writes
+    nothing without `--ignore`. The layouts that need a SECOND repository are built in temp trees:
+    the isolated fixture copy has exactly one.
+    """
+    e = []
+    t = Path(target)
+
+    def git(*a, cwd):
+        subprocess.run(["git", *a], cwd=str(cwd), capture_output=True, check=False)
+
+    def needs(repo, board):
+        r = subprocess.run(
+            ["bash", str(IGNORE_NEEDS), str(repo), str(board)],
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout
+
+    # --- 1. handoff.local.json inside the repo, not ignored ---------------------------------
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    (t / ".agents" / "handoff.local.json").write_text(
+        '{"group": "mine"}\n', encoding="utf-8"
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "repo.ignore.local_config", "warn"))
+
+    gi_before = (
+        (t / ".gitignore").read_text(encoding="utf-8")
+        if (t / ".gitignore").exists()
+        else ""
+    )
+    exclude = t / ".git" / "info" / "exclude"
+    ex_before = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    r = _install(t)
+    e.append(
+        gc.expectation(
+            "setup suggests an ignore for handoff.local.json",
+            "handoff.local.json" in r.stdout and "--ignore" in r.stdout,
+            r.stdout[-400:],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and writes neither .gitignore nor .git/info/exclude without a choice",
+            (
+                (t / ".gitignore").read_text(encoding="utf-8")
+                if (t / ".gitignore").exists()
+                else ""
+            )
+            == gi_before
+            and (exclude.read_text(encoding="utf-8") if exclude.exists() else "")
+            == ex_before,
+            "both files unchanged",
+        )
+    )
+    r = _install(t, "--ignore", "exclude")
+    e.append(
+        gc.expectation(
+            "--ignore exclude writes .git/info/exclude, not .gitignore",
+            exclude.exists()
+            and ".agents/handoff.local.json" in exclude.read_text(encoding="utf-8")
+            and ".agents/handoff.local.json"
+            not in (t / ".gitignore").read_text(encoding="utf-8"),
+            r.stdout[-300:],
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.ignore.local_config",
+            "pass",
+            label="an excluded local config passes",
+        )
+    )
+
+    # --- 2. a board one developer keeps for themselves inside the repo ----------------------
+    top = Path(tempfile.mkdtemp(prefix="ignore-needs-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    solo = top / "solo"
+    (solo / ".agents" / "mine").mkdir(parents=True)
+    (solo / ".agents" / "mine" / "INDEX.md").write_text(
+        "# Handoffs\n", encoding="utf-8"
+    )
+    git("init", "-q", cwd=solo)
+    (solo / ".agents" / "handoff.local.json").write_text(
+        '{"board": ".agents/mine"}\n', encoding="utf-8"
+    )
+    out = needs(solo, solo / ".agents" / "mine")
+    e.append(
+        gc.expectation(
+            "a personal in-repo board named by handoff.local.json needs ignoring",
+            "repo.ignore.personal_board" in out,
+            out[-300:],
+        )
+    )
+
+    # --- 3. a board that is its own repository inside another repo's worktree ---------------
+    outer = top / "outer"
+    (outer / "boards" / "team").mkdir(parents=True)
+    git("init", "-q", cwd=outer)
+    git("init", "-q", cwd=outer / "boards" / "team")
+    out = needs(outer, outer / "boards" / "team")
+    e.append(
+        gc.expectation(
+            "a board repo nested in another repo's worktree needs ignoring there",
+            "repo.ignore.nested_board_repo" in out,
+            out[-300:],
+        )
+    )
+    (outer / ".gitignore").write_text("boards/team/\n", encoding="utf-8")
+    out = needs(outer, outer / "boards" / "team")
+    e.append(
+        gc.expectation(
+            "and is silent once the outer repo ignores it",
+            "repo.ignore.nested_board_repo" not in out,
+            out[-300:],
+        )
+    )
+
+    # --- 4. a board inside a workspace repository that is not its own repository ------------
+    ws = top / "ws"
+    (ws / ".agents" / "handoff").mkdir(parents=True)
+    (ws / "src" / "app").mkdir(parents=True)
+    git("init", "-q", cwd=ws)
+    git("init", "-q", cwd=ws / "src" / "app")
+    out = needs(ws / "src" / "app", ws / ".agents" / "handoff")
+    e.append(
+        gc.expectation(
+            "a board inside a workspace repo that is not its own repo asks: repo or ignore",
+            "board.git.inside_workspace_repo" in out,
+            out[-300:],
+        )
+    )
+    out = needs(solo, solo / ".agents" / "mine")
+    e.append(
+        gc.expectation(
+            "an ordinary in-repo board of the same repo is not reported as a workspace board",
+            "board.git.inside_workspace_repo" not in out,
+            out[-300:],
+        )
+    )
+    return e
+
+
 def grade_board_override(target):
     """$HANDOFF_BOARD_PATH re-points the dispatcher at another board, visibly.
 
@@ -3249,6 +3402,9 @@ def _grade(target, eval_id):
 
     if eval_id == "migration-offer":
         return grade_migration_offer(target)
+
+    if eval_id == "ignore-detection":
+        return grade_ignore_detection(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 

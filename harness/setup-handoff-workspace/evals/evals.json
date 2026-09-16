@@ -142,6 +142,13 @@
       "prompt": "This board is still at the old document schema. Make the CLI say so when I write to it.",
       "expected_output": "ADR 0003's \"Migration is offered, never silent\" on a WRITE command. Self-contained: the case scaffolds its own schema-0 boards. An interactive write (real pty) offers the migration; declining still does the write and migrates nothing; accepting migrates the board and document, then does the write. $HANDOFF_NONINTERACTIVE and a piped invocation never prompt and never block, and no offer appears while a lease in the section would make `migrate` refuse — every `release` holds one, and an offer guaranteed to fail is how an offer teaches people to answer no. The hook half is unchanged — one line on the session banner, never a prompt.",
       "fixture": "fixtures/fresh"
+    },
+    {
+      "id": "ignore-detection",
+      "kind": "post-state",
+      "prompt": "Make sure nobody on this repo commits a personal board or their local handoff config by accident.",
+      "expected_output": "ADR 0010 — setup and verify detect what needs ignoring and suggest, never write silently. Self-contained: the case builds its own second repositories. The verifier reports a named warn for each of handoff.local.json not ignored (repo.ignore.local_config), a personal in-repo board (repo.ignore.personal_board), a board that is its own repo inside another worktree (repo.ignore.nested_board_repo), and a board inside a workspace repo that is not its own repo (board.git.inside_workspace_repo). Setup prints the suggestion and writes neither .gitignore nor .git/info/exclude until --ignore exclude|gitignore names the choice.",
+      "fixture": "fixtures/fresh"
     }
   ]
 }

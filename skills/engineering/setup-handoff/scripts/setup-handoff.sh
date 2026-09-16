@@ -19,6 +19,10 @@
 #   and committed forever. gemini and copilot have no uncommitted config location, so they are
 #   skipped with a notice rather than written to a file the flag promised not to touch.
 #
+#   --ignore exclude|gitignore writes the ignore rules setup would otherwise only SUGGEST (ADR 0010):
+#   handoff.local.json, a personal in-repo board, a board repo nested in this worktree, a board in a
+#   workspace repo. `exclude` is .git/info/exclude (this clone only); `gitignore` is committed.
+#
 #   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
 #       no per-tool wiring, no AGENTS.md edit, no git/AGENTS.md precondition. This is what
@@ -295,7 +299,7 @@ with open(dest, "w") as fh:
 PY
 }
 
-REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0
+REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0 IGNORE_TO=""
 LOCAL_WIRING=0
 # Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
 # works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
@@ -352,6 +356,12 @@ while [ $# -gt 0 ]; do
     --local-wiring)
       LOCAL_WIRING=1
       shift
+      ;;
+    --ignore)
+      require_value --ignore "$#" "${2:-}"
+      IGNORE_TO="${2:-}"
+      case "$IGNORE_TO" in exclude | gitignore) ;; *) die "--ignore takes exclude or gitignore, got: $IGNORE_TO" ;; esac
+      shift 2
       ;;
     --force-downgrade)
       FORCE_DOWNGRADE=1
@@ -803,5 +813,30 @@ with open(path, "w") as fh:
     json.dump(dict(sorted(cfg.items())), fh, indent=2)
     fh.write("\n")
 PYEOF
+
+# --- what needs ignoring (ADR 0010) ------------------------------------------------------
+# Suggest, never write silently. Whether a board or a local config is private is the developer's
+# call, and .gitignore is committed — so a rule is written only where --ignore says: `exclude`
+# (.git/info/exclude, this clone only — preferred for a per-user choice) or `gitignore` (the team).
+# ignore-needs.sh is the one list verify-setup-handoff.sh reports from too.
+while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
+  [ -n "$_nid" ] || continue
+  if [ -z "$IGNORE_TO" ]; then
+    echo "setup-handoff: $_nmsg"
+    echo "  Nothing written. Re-run with --ignore exclude (only this clone) or --ignore gitignore (the whole team) to add '$_nrel' in $_nrepo."
+    continue
+  fi
+  if [ "$IGNORE_TO" = exclude ]; then
+    _nfile="$(git -C "$_nrepo" rev-parse --git-path info/exclude 2> /dev/null)"
+    case "$_nfile" in /*) ;; *) _nfile="$_nrepo/$_nfile" ;; esac
+    mkdir -p "$(dirname "$_nfile")"
+  else
+    _nfile="$_nrepo/.gitignore"
+  fi
+  if ! grep -qxF "$_nrel" "$_nfile" 2> /dev/null; then
+    printf '%s\n' "$_nrel" >> "$_nfile"
+    echo "setup-handoff: ignored '$_nrel' in $_nfile (--ignore $IGNORE_TO)"
+  fi
+done < <(bash "$SKILL_DIR/scripts/ignore-needs.sh" "$REPO" "$HDEST" 2> /dev/null)
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

@@ -171,7 +171,8 @@ path and is a no-op when the install is already generic and current.
 bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" \
   --tools <comma-list> --primary <tool|none> \
   [--topology single-repo|cross-repo] [--handoff-dir <path>] \
-  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli]
+  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli] \
+  [--ignore exclude|gitignore]
 ```
 
 `--no-vendor-cli` skips the board's vendored CLI and writes the user-level copy instead — the
@@ -181,6 +182,16 @@ on a machine with no copy of this skill, and only the vendored copy guarantees t
 when the user says the board is never cloned cold (a throwaway or test-fixture board) and wants to
 avoid committing a ~180 KB byte-copy of the CLI. On a board that already vendors, it leaves the
 existing `scripts/handoff-cli` in place and says so; removing it is the user's call.
+
+**Ignore rules are suggested, never written silently** (ADR 0010). After installing, setup lists
+anything that could be committed by accident — a `.agents/handoff.local.json`, a board one
+developer keeps inside the repo, a board that is its own repository inside this worktree, a board
+inside a workspace repository that is not its own — and writes nothing. **Ask the user
+(`AskUserQuestion`)** where each rule belongs, then re-run with `--ignore exclude` (`.git/info/exclude`,
+this clone only — recommend it for a per-user choice, since `.gitignore` is committed and publishes
+one person's preference) or `--ignore gitignore` (the whole team). For a board inside a workspace
+repository, also offer making it a repository (`--board-only`) instead. `verify-setup-handoff.sh`
+reports each case as a warning until it is resolved.
 
 `--allow-verify-cmd` records the opt-in that lets `release --status done --run-verify` execute a
 doc's `verify:` command (off by default — see the safety note). Re-running with a different

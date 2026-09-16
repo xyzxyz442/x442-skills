@@ -134,7 +134,7 @@ HD="$ROOT/.agents/handoff"
 # on a single repo it is the ONLY path that runs, and it used to miss.
 if [ ! -d "$HD" ]; then
   D="$(
-    python3 - "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
+    python3 - "$ROOT/.agents/handoff.local.json" "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
 import json, os, sys
 
 for path in sys.argv[1:]:
@@ -348,6 +348,18 @@ if [ "$TOPO" = "cross-repo" ]; then
   fi
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok repo.gitignore.locks ".gitignore excludes .locks/" || warn repo.gitignore.locks ".gitignore missing a .locks/ entry — leases could get committed"
+fi
+# What could be committed by accident (ADR 0010). Warnings, never failures: each describes a risk,
+# not a broken install. The list comes from ignore-needs.sh, the same one setup suggests from.
+if [ -f "$SCRIPT_DIR/ignore-needs.sh" ]; then
+  IGNORE_NEEDS="$(bash "$SCRIPT_DIR/ignore-needs.sh" "$ROOT" "$HD" 2> /dev/null)"
+  while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
+    [ -n "$_nid" ] || continue
+    warn "$_nid" "$_nmsg Fix: re-run setup-handoff with --ignore exclude|gitignore, or add '$_nrel' by hand."
+  done <<< "$IGNORE_NEEDS"
+  if [ -f "$ROOT/.agents/handoff.local.json" ] && ! printf '%s' "$IGNORE_NEEDS" | grep -q '^repo.ignore.local_config'; then
+    ok repo.ignore.local_config ".agents/handoff.local.json is ignored"
+  fi
 fi
 # Content-aware, not presence-only: a block that exists but predates an asset change still reads
 # as installed while advertising commands the CLI no longer documents (agents-block-drift-handoff).
