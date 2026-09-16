@@ -216,7 +216,7 @@ LOCKS="$(sec_dir)/.locks"
 # nobody listening, and taking a session down over a board upgrade is how a hook gets deleted.
 # Reported in both directions, because they need opposite actions — an older board wants
 # `handoff migrate`, a newer one wants the payload updated first.
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 schema_note() { # -> one line, or nothing
   local board=0 ahead=0 f v
   if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then

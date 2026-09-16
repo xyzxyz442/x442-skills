@@ -17,6 +17,7 @@ script-behavior}. Exits 0 iff nothing failed.
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,20 @@ SKILL = REPO / "skills/engineering/setup-handoff"
 SETUP = SKILL / "scripts/setup-handoff.sh"
 VERIFY = SKILL / "scripts/verify-setup-handoff.sh"
 DETECT = SKILL / "scripts/detect-handoff.sh"
+
+
+def _cli_schema() -> int:
+    """The document schema the shipped CLI writes. Read, never spelled: a spelled number breaks
+    every schema-aware case on the next bump."""
+    for line in (
+        (SKILL / "scripts/payload/handoff").read_text(encoding="utf-8").splitlines()
+    ):
+        if line.startswith("SCHEMA_VERSION="):
+            return int(line.split("=", 1)[1])
+    raise RuntimeError("SCHEMA_VERSION not found in the payload CLI")
+
+
+CLI_SCHEMA = _cli_schema()
 # setup-graph-hooks' installer, used by the custom-board-name case as the NEGATIVE half: it writes
 # `--kind` hook commands into the very config files check_tool reads, so it is the realistic thing
 # a widened pattern would wrongly claim as handoff wiring. Driving the real installer rather than a
@@ -251,7 +266,13 @@ def grade_schema_forward(target):
     _handoff(target, "new", "future", "--title", "Written by a newer CLI")
     _handoff(target, "new", "ordinary", "--title", "An ordinary doc")
     fut = doc / "future-handoff.md"
-    text = fut.read_text(encoding="utf-8").replace("schema: 1", "schema: 99", 1)
+    text = re.sub(
+        r"^schema: [0-9]+$",
+        "schema: 99",
+        fut.read_text(encoding="utf-8"),
+        count=1,
+        flags=re.M,
+    )
     # A key this CLI has never heard of, to prove nothing quietly eats it on the way through.
     fut.write_text(
         text.replace("status: open", "status: open\nquantum_flux: 7", 1),
@@ -270,7 +291,7 @@ def grade_schema_forward(target):
     e.append(
         gc.expectation(
             "with one warning naming BOTH versions",
-            "is schema 99" in out and "understands 1" in out,
+            "is schema 99" in out and f"understands {CLI_SCHEMA}" in out,
             f"warning: {'is schema 99' in out}",
         )
     )
@@ -362,7 +383,9 @@ def grade_schema_board_ahead(target):
     e.append(
         gc.expectation(
             "new is REFUSED, naming both versions",
-            r.returncode != 0 and "is schema 99" in out and "understands 1" in out,
+            r.returncode != 0
+            and "is schema 99" in out
+            and f"understands {CLI_SCHEMA}" in out,
             f"exit {r.returncode}: {out.strip()[-140:]}",
         )
     )
@@ -654,6 +677,70 @@ def grade_cli_unresolvable(target):
             "a rejected rung is reported as EMPTY, not merely 'looked at'",
             "EMPTY" in out,
             f"out: {out.strip()[:220]}",
+        )
+    )
+    return e
+
+
+def grade_external_tracker(target):
+    """ADR 0011, level 1 — a board attaches at most one tracker, and verify audits the attachment.
+
+    The CLI refuses a bad reference at write time; the verifier is what catches the rest: a
+    tracker declared with an unknown kind or a broken pattern, and a reference that was typed into
+    the frontmatter by hand. All advisory, so all asserted by id.
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    cfg_path = t / HD / "handoff.json"
+
+    def set_external(ext):
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["external"] = ext
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+    set_external({"kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+"})
+    r = _handoff(t, "new", "ticketed", "--title", "Ticketed", "--ref", "ABC-12")
+    e.append(gc.expectation("new --ref succeeds", r.returncode == 0, r.stdout[-200:]))
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "board.external.kind", "pass"))
+    e.append(gc.finding(f, "board.external.pattern", "pass"))
+    e.append(
+        gc.finding(
+            f,
+            "board.config.unknown_keys",
+            "pass",
+            label="external is a known board key",
+        )
+    )
+
+    doc = t / HD / "ticketed-handoff.md"
+    doc.write_text(
+        doc.read_text(encoding="utf-8").replace(
+            "external_ref: ABC-12", "external_ref: abc12", 1
+        ),
+        encoding="utf-8",
+    )
+    set_external({"kind": "kanban", "refPattern": "[A-Z"})
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(f, "board.external.kind", "warn", label="an unknown kind warns")
+    )
+    e.append(
+        gc.finding(
+            f, "board.external.pattern", "warn", label="an invalid pattern warns"
+        )
+    )
+
+    set_external({"kind": "issues", "refPattern": "[A-Z]+-[0-9]+"})
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "doc.external_ref.pattern",
+            "warn",
+            label="a hand-typed reference that does not match warns",
         )
     )
     return e
@@ -3016,14 +3103,15 @@ def grade_migration_offer(_target):
         e.append(
             gc.expectation(
                 "[accept] the offer runs the migration",
-                board_stamp(repo) == 1,
+                board_stamp(repo) == CLI_SCHEMA,
                 f"stamp: {board_stamp(repo)}, out: {out[:200]!r}",
             )
         )
         e.append(
             gc.expectation(
                 "[accept] the document was migrated too, not only the board stamp",
-                "schema: 1" in (Path(repo) / HD / "demo-handoff.md").read_text(),
+                f"schema: {CLI_SCHEMA}"
+                in (Path(repo) / HD / "demo-handoff.md").read_text(),
                 "doc frontmatter",
             )
         )
@@ -3079,7 +3167,7 @@ def grade_migration_offer(_target):
         e.append(
             gc.expectation(
                 "[hook] the session banner still reports the drift in one line",
-                "predate schema 1" in note and "migrate" in note,
+                f"predate schema {CLI_SCHEMA}" in note and "migrate" in note,
                 f"note: {note[-200:]!r}",
             )
         )
@@ -3405,6 +3493,9 @@ def _grade(target, eval_id):
 
     if eval_id == "ignore-detection":
         return grade_ignore_detection(target)
+
+    if eval_id == "external-tracker":
+        return grade_external_tracker(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 

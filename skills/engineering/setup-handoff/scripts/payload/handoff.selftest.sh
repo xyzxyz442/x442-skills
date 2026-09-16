@@ -1339,12 +1339,15 @@ printf '\nschema versioning — read forward, refuse to write backward (ADR 0003
 # older CLI could read a newer doc, release it, and silently drop every field it did not know.
 # Shipping only the read half is worse than shipping neither, so both are asserted together.
 SV="$(mkboard)"
+# The CLI's own schema, read off the frozen copy — a test that spells the number breaks on every bump.
+CLI_SCHEMA="$(sed -n 's/^SCHEMA_VERSION=//p' "$SRC/handoff" | head -1)"
 hb "$SV" new from-the-future --title "Written by a newer CLI" > /dev/null
 FUT="$SV/.agents/handoff/from-the-future-handoff.md"
 python3 - "$FUT" << 'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-s = p.read_text().replace("schema: 1", "schema: 99", 1)
+import re
+s = re.sub(r"^schema: [0-9]+$", "schema: 99", p.read_text(), count=1, flags=re.M)
 # A field this CLI has never heard of, to prove nothing quietly eats it. Deliberately nonsense:
 # it was `sensitivity` until that became a real field, and a placeholder the CLI later learns
 # stops testing anything.
@@ -1354,7 +1357,7 @@ hb "$SV" new ordinary-doc --title "An ordinary doc" > /dev/null
 
 SV_LIST="$(hb "$SV" list)"
 chk_contains "a newer doc is still LISTED" "$SV_LIST" "from-the-future-handoff"
-chk_contains "with one warning naming both versions" "$SV_LIST" "is schema 99; this CLI understands 1"
+chk_contains "with one warning naming both versions" "$SV_LIST" "is schema 99; this CLI understands $CLI_SCHEMA"
 chk "the warning is printed once, not once per doc" "1" \
   "$(printf '%s' "$SV_LIST" | grep -c 'this CLI understands' | tr -d ' ')"
 
@@ -1404,12 +1407,12 @@ chk_contains "a live lease in the section blocks migration" "$(hb "$SM" migrate 
 hb "$SM" release legacy-one --status open > /dev/null
 
 MIG="$(hb "$SM" migrate --yes)"
-chk_contains "migration reports the version move" "$MIG" "Board schema 0 → 1"
+chk_contains "migration reports the version move" "$MIG" "Board schema 0 → $CLI_SCHEMA"
 chk "environment becomes EXPLICIT (absent already meant dev — this asserts nothing new)" "dev" \
   "$(sed -n 's/^environment: //p' "$SMB/legacy-one-handoff.md" | head -1)"
 chk "depends_on gains its empty list" "[]" \
   "$(sed -n 's/^depends_on: //p' "$SMB/legacy-one-handoff.md" | head -1)"
-chk "the doc is stamped" "1" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+chk "the doc is stamped" "$CLI_SCHEMA" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
 chk "a rewritable Current state section is added" "yes" \
   "$(grep -q '^## Current state' "$SMB/legacy-one-handoff.md" && echo yes || echo no)"
 # STRUCTURE ONLY. A migration that seeded Current state from the activity log, or stamped a
@@ -1419,7 +1422,7 @@ chk "but it is left EMPTY — no value was inferred" "" \
   "$(sed -n '/^## Current state/,/^## /p' "$SMB/legacy-one-handoff.md" | grep -v '^## \|^<!--\|^$' | head -1)"
 chk "each migrated doc gains exactly one activity entry" "1" \
   "$(grep -c 'migrated to schema 1' "$SMB/legacy-one-handoff.md" | tr -d ' ')"
-chk "the board itself is stamped" "1" \
+chk "the board itself is stamped" "$CLI_SCHEMA" \
   "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$SMB/handoff.json")"
 chk_contains "re-running is a no-op, not a second rewrite" "$(hb "$SM" migrate --yes)" "nothing to migrate"
 
@@ -1717,6 +1720,60 @@ chk_contains "checkpoint on a standalone doc refuses — there is no lease to ke
     cph "$CP_ME" new cp-ref --standalone --title "ref" --audience acme-api > /dev/null
     cph "$CP_ME" checkpoint cp-ref "x"
   )" "standalone"
+
+printf '\nan external tracker attaches per board, by reference (ADR 0011, schema 2)\n'
+XR="$(mkboard)"
+XRB="$XR/.agents/handoff"
+chk_contains "--ref on a board that attaches no tracker refuses" \
+  "$(hb "$XR" new no-tracker --title "t" --ref ABC-1)" "attaches no external tracker"
+chk "and creates nothing" "no" "$([ -f "$XRB/no-tracker-handoff.md" ] && echo yes || echo no)"
+printf '{ "external": { "kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+" } }\n' > "$XRB/handoff.json"
+hb "$XR" new ticketed --title "Ticketed" --ref ABC-12 > /dev/null
+chk "new --ref records external_ref" "ABC-12" "$(sed -n 's/^external_ref: //p' "$XRB/ticketed-handoff.md" | head -1)"
+chk "a new doc is stamped with the current schema" "2" "$(sed -n 's/^schema: //p' "$XRB/ticketed-handoff.md" | head -1)"
+chk_contains "a reference that does not match refPattern refuses" \
+  "$(hb "$XR" new mistyped --title "m" --ref abc12)" "does not match"
+chk "and creates nothing" "no" "$([ -f "$XRB/mistyped-handoff.md" ] && echo yes || echo no)"
+chk_contains "the pattern matches the WHOLE reference, not a substring" \
+  "$(hb "$XR" new padded --title "p" --ref "see ABC-12 please")" "does not match"
+hb "$XR" new other --title "Other" --ref XYZ-9 > /dev/null
+hb "$XR" new unticketed --title "Unticketed" > /dev/null
+XR_LIST="$(hb "$XR" list --ref ABC-12)"
+chk_contains "list --ref shows the matching doc" "$XR_LIST" "ticketed-handoff"
+chk "and nothing else" "0" "$(printf '%s\n' "$XR_LIST" | grep -c 'other-handoff\|unticketed-handoff')"
+chk "a doc without a reference carries no external_ref line" "0" \
+  "$(grep -c '^external_ref' "$XRB/unticketed-handoff.md")"
+
+printf '\nmigrating schema 1 to 2 changes structure only\n'
+XM="$(mkboard)"
+XMB="$XM/.agents/handoff"
+hb "$XM" new one-doc --title "One" > /dev/null
+hb "$XM" new zero-doc --title "Zero" > /dev/null
+git -C "$XM" add -A && git -C "$XM" commit -qm "board"
+# Age the board: one doc at schema 1, one at schema 0 (no stamp, no Current state).
+XT="$(mktemp)"
+awk '{ sub(/^schema: 2$/, "schema: 1"); print }' "$XMB/one-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/one-doc-handoff.md"
+awk '/^schema: /{next} /^environment: /{next} /^depends_on: /{next} /^## Current state/{skip=1; next} skip && /^## /{skip=0} !skip{print}' \
+  "$XMB/zero-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/zero-doc-handoff.md"
+
+printf '{ "schema": 1 }\n' > "$XMB/handoff.json"
+git -C "$XM" add -A && git -C "$XM" commit -qm "aged"
+XM_OUT="$(hb "$XM" migrate --yes)"
+chk_contains "migrate names the step" "$XM_OUT" "1 → 2"
+chk "a schema-1 doc is stamped 2" "2" "$(sed -n 's/^schema: //p' "$XMB/one-doc-handoff.md" | head -1)"
+chk "a schema-0 doc goes all the way to 2" "2" "$(sed -n 's/^schema: //p' "$XMB/zero-doc-handoff.md" | head -1)"
+chk "and still gains its Current state on the way" "yes" \
+  "$(grep -q '^## Current state' "$XMB/zero-doc-handoff.md" && echo yes || echo no)"
+chk "no reference is invented" "0" "$(grep -c '^external_ref' "$XMB/one-doc-handoff.md")"
+chk_contains "the migration is logged on the doc" "$(cat "$XMB/one-doc-handoff.md")" "migrated to schema 2"
+chk "the board is stamped 2" "2" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$XMB/handoff.json")"
+
+# A schema-1 CLI must refuse to write a schema-2 doc: it would silently drop external_ref (ADR 0003).
+XO="$(mktemp -d)"
+sed 's/^SCHEMA_VERSION=2$/SCHEMA_VERSION=1/' "$SRC/handoff" > "$XO/handoff"
+chk_contains "a schema-1 CLI refuses to claim a schema-2 doc" \
+  "$(cd "$XR" && HANDOFF_BOARD_PATH="$XRB" bash "$XO/handoff" claim ticketed "old tool" 2>&1)" "refusing to write"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

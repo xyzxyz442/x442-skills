@@ -185,6 +185,18 @@ more.
 `reference`, `brief-archive` — where `type` says what its lifecycle is. A coordination doc points
 at its spec with `spec:`, which the reader resolves as a path, then a URL, then a board id.
 
+**`external_ref` points at the ticket the work is planned under** (ADR 0011). When the board
+attaches a tracker — a sprint tool or an issue tracker, declared once under `external` in the
+board's `handoff.json` — record the ticket at filing time and find work by it later:
+
+```text
+handoff new ID --title "…" --ref ABC-123
+handoff list --ref ABC-123
+```
+
+The reference must match the board's `refPattern` in full, and a board with no tracker refuses
+`--ref`. It is a pointer, not a sync: nothing calls the tracker, and planning stays there.
+
 **Evidence is a field.** `release --status done --verified-by "…"` now persists what you wrote as
 `verified_by:`, not only as a sentence in the activity log. Write something the next reader can
 re-run: a command, a `file:line`, a commit. Evidence naming none of those is a claim about your

@@ -715,7 +715,7 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
 # offline-import path dies on an unknown format instead; that is right for a brief (one file, one
 # executor, a bad parse means wrong work) and wrong here, where one newer document would take
 # `list` down for every member of a shared board.
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 
 # Absent means schema 0 — every document written before the format was versioned. Not "unknown":
 # those docs have a known shape, it is simply the one that predates the stamp.
@@ -1389,7 +1389,7 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret=""
+  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref=""
   id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
@@ -1458,6 +1458,11 @@ cmd_new() {
         sensitivity="${2:-}"
         shift 2
         ;;
+      --ref)
+        require_value --ref "$#" "${2:-}"
+        ext_ref="$2"
+        shift 2
+        ;;
       --force-secret)
         # Reason REQUIRED, and recorded on the doc. An override with no stated reason is a silent
         # bypass wearing a flag, and the whole point of putting the scanner on the write path is
@@ -1473,6 +1478,7 @@ cmd_new() {
     esac
   done
   case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
+  [ -n "${ext_ref:-}" ] && { ext_ref="$(validate_external_ref "$ext_ref")" || exit 3; }
   [ "$sensitivity" = "restricted" ] && [ "$type" = "standalone" ] \
     && die "--sensitivity applies to work that can be delegated; a standalone/reference doc is never exported. Keep the material off the board instead."
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
@@ -1677,6 +1683,7 @@ cmd_new() {
   # placeholder left unsubstituted would put the literal string into the frontmatter.
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
   [ -n "$spec" ] && set_field "$target" spec "$spec"
+  [ -n "${ext_ref:-}" ] && set_field "$target" external_ref "$ext_ref"
   # Coordination and orchestrator docs carry it explicitly so the field is discoverable at the one
   # moment somebody is looking at the frontmatter. A standalone doc is never exported or delegated,
   # so the field would assert a handling rule that has nothing to apply to.
@@ -2627,12 +2634,18 @@ cmd_list() {
   # ignored outright — and one in second position stayed invisible even when the first was valid.
   # `list` only reads, so the cost was a wrong VIEW rather than a damaged doc, but it is the same
   # rule as the four write commands and it is applied here for the same reason.
-  local VERBOSE=0 _a
-  for _a in "$@"; do
-    case "$_a" in
+  local VERBOSE=0 want_ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
       --verbose | -v) VERBOSE=1 ;;
-      *) reject_unknown_flag "$_a" ;;
+      --ref)
+        require_value --ref "$#" "${2:-}"
+        want_ref="$(fold_colons "$2")"
+        shift
+        ;;
+      *) reject_unknown_flag "$1" ;;
     esac
+    shift
   done
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
@@ -2655,6 +2668,9 @@ cmd_list() {
     local base
     base="$(basename "$f" .md)"
     case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+    # --ref narrows to one ticket's work. Every doc type is filtered alike: a bundle can map to an
+    # epic just as a coordination doc maps to a story.
+    [ -z "$want_ref" ] || [ "$(meta "$f" external_ref)" = "$want_ref" ] || continue
     if is_orchestrator "$f"; then
       local prog done total out
       prog="$(child_progress "$f")"
@@ -2950,6 +2966,37 @@ cmd_touch() {
   # push cannot land, the extension is still real locally and saying "touch failed" would be false.
   release_commit_push "handoff: extend lease on $id" "$(doc_of "$id" 2> /dev/null)"
   echo "Lease on $id extended ${TTL_HOURS}h."
+}
+
+# ADR 0011 — a board attaches AT MOST ONE external tracker, declared under `external` in the board's
+# own handoff.json, and a handoff points at a ticket in it with `external_ref`. Level 1 is reference
+# only: no network, no token, nothing but a string checked against the board's `refPattern`. Read
+# from the BOARD file alone — a tracker is board-global, and a member repo's config must not be able
+# to swap it for its own.
+external_setting() { # key -> the board's external.<key>, or nothing
+  [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+e = d.get("external") if isinstance(d, dict) else None
+v = e.get(sys.argv[2]) if isinstance(e, dict) else None
+print(v if isinstance(v, str) else "")' "$DIR/handoff.json" "$1" 2> /dev/null
+}
+
+validate_external_ref() { # ref -> prints the ref as stored; non-zero with a message when refused
+  local ref pat
+  ref="$(fold_colons "$1")"
+  pat="$(external_setting refPattern)"
+  if [ -z "$pat" ]; then
+    echo "handoff: this board attaches no external tracker (no external.refPattern in $DIR/handoff.json), so --ref has nothing to point into." >&2
+    return 1
+  fi
+  # -x: the WHOLE reference must match. A substring match would accept "see ABC-12 please".
+  if ! printf '%s\n' "$ref" | grep -Eqx -- "$pat"; then
+    echo "handoff: --ref '$ref' does not match this board's external.refPattern ($pat)." >&2
+    return 1
+  fi
+  printf '%s' "$ref"
 }
 
 # ADR 0011 — a progress checkpoint. Progress used to reach the team only at `release`, and `touch`
@@ -3453,6 +3500,14 @@ migrate_doc_0_to_1() { # path -> 0 when it changed the file
   return $((1 - changed))
 }
 
+# One document, schema 1 -> 2 (ADR 0011). Schema 2 adds `external_ref`, which is OPTIONAL: absent
+# means "no ticket", so there is nothing to write into a doc but the stamp. The bump exists so a
+# schema-1 CLI refuses to write a doc that may carry the field, instead of dropping it (ADR 0003).
+migrate_doc_1_to_2() { # path
+  set_field "$1" schema 2
+  log_activity "$1" "migrated to schema 2 (structure only — external_ref is optional and never inferred)"
+}
+
 cmd_migrate() {
   local yes=0 dry=0
   while [ $# -gt 0 ]; do
@@ -3558,15 +3613,22 @@ cmd_migrate() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ "$(doc_schema "$f")" -lt "$to" ] || continue
-    if migrate_doc_0_to_1 "$f"; then
-      migrated=$((migrated + 1))
-      echo "  migrated $(basename "$f" .md)"
-    else
-      # Already structurally current; it only lacked the stamp. Still counted and still logged, so
-      # the activity trail matches the commit.
-      migrated=$((migrated + 1))
-      echo "  stamped $(basename "$f" .md) (already structurally current)"
+    # Steps run in order, each from the schema the previous one left, so a schema-0 doc takes the
+    # same path to the current schema as a doc that was migrated one release at a time.
+    if [ "$(doc_schema "$f")" -lt 1 ]; then
+      if migrate_doc_0_to_1 "$f"; then
+        echo "  migrated $(basename "$f" .md) (0 → 1)"
+      else
+        # Already structurally current; it only lacked the stamp. Still logged, so the activity
+        # trail matches the commit.
+        echo "  stamped $(basename "$f" .md) (already structurally current)"
+      fi
     fi
+    if [ "$(doc_schema "$f")" -lt 2 ]; then
+      migrate_doc_1_to_2 "$f"
+      echo "  migrated $(basename "$f" .md) (1 → 2)"
+    fi
+    migrated=$((migrated + 1))
   done < <(each_doc)
 
   board_write_schema "$to"
