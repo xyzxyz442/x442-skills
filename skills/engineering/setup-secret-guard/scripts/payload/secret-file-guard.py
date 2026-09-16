@@ -135,9 +135,16 @@ HEREDOC_START = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
 
 # A bare path token that looks like a secret file.
 PATH_TOKEN = r"""(?:"[^"]+"|'[^']+'|[^\s|;&><]+)"""
+# A flag's VALUE stops at a shell separator, exactly as a path token does. `\S+` here
+# did not: in `head -20 /etc/passwd; cat .env` the value ran on through `/etc/passwd;`,
+# so this match's "path" became `cat` -- the real credential read was swallowed by the
+# earlier match, never re-examined by the next `sub()` scan, and never rewritten. Nothing
+# was denied either, because `cat` is not a secret-looking path, so the command simply ran
+# and printed the file. See secret-guard-compound-cat-bypass-handoff.
+FLAG_VALUE = PATH_TOKEN
 READ_CALL = re.compile(
     rf"(?<![-/\w.])({REDACTABLE_VERBS})\b"
-    rf"((?:\s+-{{1,2}}[A-Za-z0-9-]+(?:[= ]\S+)?)*)\s+({PATH_TOKEN})"
+    rf"((?:\s+-{{1,2}}[A-Za-z0-9-]+(?:[= ]{FLAG_VALUE})?)*)\s+({PATH_TOKEN})"
 )
 # An already-redacted call, so we don't re-flag our own rewrite.
 REDACTED_CALL = re.compile(
@@ -396,6 +403,52 @@ def rewrite_reads(cmd: str, cwd: str = ""):
     return "\n".join(out), touched, embedded
 
 
+# A verb at the head of a stage, used by the backstop below.
+STAGE_VERB = re.compile(rf"(?<![-/\w.])({REDACTABLE_VERBS})\b")
+
+
+def missed_reads(cmd: str, cwd: str, limit: int = 40):
+    """Credential reads the rewriter did not catch.
+
+    The rewriter is one regex over a whole shell line, and the defect this exists for was
+    that regex quietly consuming the very read it should have rewritten. Such a miss is
+    invisible: nothing is denied, the command is simply allowed, and the value is printed.
+    Prevention is the only lever this guard has, so ask the question a second time in a
+    different shape -- per stage, token by token -- and prefer a prompt over a silent pass.
+
+    Deliberately narrow. Stages already routed through the viewer, and stages that cross a
+    namespace boundary (handled by the embedded-shell path), are skipped.
+    """
+    found, probes = [], 0
+    for stage in stages(cmd):
+        if REDACTED_CALL.search(stage) or REMOTE_EXEC_RE.search(stage):
+            continue
+        mask, _ = quoted_mask(stage)
+        vm = STAGE_VERB.search(stage)
+        if not vm or (vm.start() < len(mask) and mask[vm.start()]):
+            continue  # no plain reader here, or it is quoted data rather than a command
+        for tok in stage[vm.end() :].split():
+            if tok.startswith("-") or probes >= limit:
+                continue
+            probes += 1
+            if leaks(tok, cwd):
+                found.append(tok)
+    return found
+
+
+def backstop(cmd: str, cwd: str):
+    """Last line of defence: never exit quiet on a read that still looks credential-bearing."""
+    missed = missed_reads(cmd, cwd)
+    if missed:
+        emit(
+            "ask",
+            f"`{', '.join(sorted(set(missed)))}` looks credential-bearing and this guard "
+            f"could not rewrite the read automatically, so the raw value would reach the "
+            f'transcript. Cancel and run `"{REDACT_VIEW}" <file>` for a redacted view, '
+            f"or approve if you know this file holds no secret.",
+        )
+
+
 def read_file_guard(file_path: str, cwd: str):
     """Ask before the Read tool opens a file whose content holds a credential."""
     if not file_path or contains_secrets is None:
@@ -485,6 +538,7 @@ def main():
                 f"often carries secrets. Approve to see it raw, or cancel and use "
                 f'`"{REDACT_VIEW}" <file>` for a redacted view.',
             )
+        backstop(original, cwd)
         sys.exit(0)
 
     # ---- extraction / exfiltration: redaction cannot help --------------------
@@ -541,6 +595,7 @@ def main():
             )
 
     # A secret path is present but nothing prints it (e.g. `kubectl --kubeconfig=x`).
+    backstop(rewritten, cwd)
     sys.exit(0)
 
 
