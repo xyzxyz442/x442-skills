@@ -48,6 +48,15 @@ reading it implicitly still works and warns. This amends ADR 0002's per-machine 
   layer, read when `handoff.local.json` or an environment variable names it.
 - **Implicit reads are deprecated over one release.** For one release the user layer is still
   read when present, with a warning naming the opt-in. After it, only the opt-in reads it.
+- **Tooling never writes to the user layer.** The repo-location cache — until now the `locations`
+  map in `~/.agents/handoff.json`, written back by the location scan — moves into the board as
+  `<board>/.locations.json`, per machine and ignored by the board's own `.gitignore`. A location
+  belongs to one board on one disk, so the board is its home.
+- **A legacy `locations` map is migrated on a prompt, never silently.** When the CLI finds entries
+  for the current board in the user layer, an interactive command offers to move them into
+  `<board>/.locations.json` and recommends it; a hook reports it in one line and never blocks.
+  Accepting copies the entries and removes only those entries from the user map; the user file
+  itself is never deleted. Declining leaves both, and the offer repeats.
 - **Setup and verify detect what needs ignoring**, and suggest rather than write:
   - `handoff.local.json` inside a repo — ignore it.
   - A board a developer keeps for themselves inside a repo — offer `.git/info/exclude` (only
@@ -71,6 +80,10 @@ reading it implicitly still works and warns. This amends ADR 0002's per-machine 
   lets the answer change when a folder appears.
 - **Writing ignore rules without asking.** Rejected — `.gitignore` is committed, and whether a
   board is private is the developer's call.
+- **Caching locations in each member's `handoff.local.json`.** Rejected — it scatters one board's
+  locations across every member repo, and a repo that is not yet wired has nowhere to hold them.
+- **Migrating the legacy map automatically.** Rejected — it rewrites a file in a namespace other
+  tools share, without the user seeing it.
 
 ## Consequences
 
@@ -79,5 +92,7 @@ reading it implicitly still works and warns. This amends ADR 0002's per-machine 
 - The CLI's resolver reads `handoff.local.json` and emits the one-release deprecation warning
   when it falls through to the user layer.
 - `register-cross-repo-handoff` keeps the user layer in its cascade, documented as opt-in.
+- The location scan writes `<board>/.locations.json`; setup adds it to the board's `.gitignore`
+  beside `.locks/`; the CLI gains the migration offer for a legacy `locations` map.
 - The verifier gains checks for each ignore case above, reported as warnings — they describe a
   risk, not a broken install.
