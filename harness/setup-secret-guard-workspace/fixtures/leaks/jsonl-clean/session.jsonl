@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"list the services and their ports"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Note: the token refresh runs hourly.\nHere are the services."}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"NODE_ENV=development\nPORT=3000\nLOG_LEVEL=info\n"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"services:\n  acme-api:\n    port: 8080\n    replicas: 2\n  acme-web:\n    port: 3000\n"}]}}

@@ -100,12 +100,72 @@ def main():
                             f"reached the transcript unredacted"
                         )
 
+        # A second mention of the credential path plus a filter ANYWHERE in the command.
+        # The rewrite was judged on the whole command -- "a secret path and a filter are
+        # both still present" -- so it was discarded, while the deny below it is per stage
+        # and found no stage holding both. No decision, and the original command ran.
+        for name, mention in (
+            ("ls", "ls -la .env"),
+            ("test-f", "test -f .env"),
+            ("bracket-f", "[ -f .env ]"),
+            ("ls-two", "ls .env .env.example"),
+        ):
+            cmd = f"{mention}; ps aux | grep node | head; cat .env"
+            checked += 1
+            decision, updated = decide(cmd, d)
+            if not (updated and "redact-view" in updated):
+                failures.append(
+                    f"second-mention/{name}: {cmd!r} was not rewritten ({decision})"
+                )
+
+        # A filter aimed straight at the file is still a slice, and still denied.
+        for cmd in (
+            "grep TOKEN .env",
+            "awk -F= '{print $2}' .env",
+            "cat .env; grep KEY .env",
+        ):
+            checked += 1
+            decision, _ = decide(cmd, d)
+            if decision != "deny":
+                failures.append(f"slice: {cmd!r} was {decision}, expected deny")
+
+        # A session transcript stores a printed file as one JSON string per line. The
+        # detector used to miss a credential there, so `cat` of it was not rewritten.
+        with open(os.path.join(d, "session.jsonl"), "w") as fh:
+            fh.write(
+                json.dumps({"type": "user", "message": "show the env"})
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "tool_result",
+                        "content": "NODE_ENV=development\n"
+                        "AUTH0_CLIENT_SECRET=FAKEfake0123456789abcdefFAKEfake\n",
+                    }
+                )
+                + "\n"
+            )
+        with open(os.path.join(d, "clean.jsonl"), "w") as fh:
+            fh.write(
+                json.dumps({"type": "user", "message": "list the files"})
+                + "\n"
+                + json.dumps({"type": "tool_result", "content": "a.txt\nb.txt\n"})
+                + "\n"
+            )
+        checked += 1
+        if not protected(f"cd {d} && cat session.jsonl", d):
+            failures.append("jsonl: a transcript holding a credential ran raw")
+
         # A command that reads nothing secret must still pass through untouched,
         # or the guard is just noise people switch off.
         for cmd in (
             f"cd {d} && head -20 /etc/passwd",
             "ps aux | grep node | head -n 20",
             f"ls -la {d}",
+            # A heredoc BODY is a document being written, not a read being run.
+            "cat > notes.md <<'EOF'\nRun `cat .env` to see the keys.\nEOF",
+            'something ".env" | grep x',
+            'echo "cat .env" >> notes.txt',
+            "cat clean.jsonl",
         ):
             checked += 1
             decision, updated = decide(cmd, d)

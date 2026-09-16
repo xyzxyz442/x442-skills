@@ -79,6 +79,20 @@
       "prompt": "Read this ordinary Helm values file — imagePullSecrets, a secretKeyRef, auth switches, an embedded application.yaml — through the guard's engine and confirm it is left alone.",
       "fixture": "fixtures/leaks/helm-clean",
       "expected_output": "secret-scan reports clean (exit 1, no findings printed) and redact-view passes the file through byte-identical."
+    },
+    {
+      "id": "leak-jsonl-transcript",
+      "kind": "behavioral",
+      "prompt": "Read a session transcript through the guard's engine — one JSON document per line, where a printed dotenv file and a printed YAML file each sit escaped inside one string value.",
+      "fixture": "fixtures/leaks/jsonl-transcript",
+      "expected_output": "secret-scan detects the file (exit 0); redact-view masks both planted values behind sha256 fingerprints while every line stays a JSON document and ordinary entries survive. No planted value appears in either tool's output."
+    },
+    {
+      "id": "leak-jsonl-false-positive",
+      "kind": "behavioral",
+      "prompt": "Read an ordinary session transcript — embedded dotenv and YAML output with no credentials, and a sentence that mentions a token — through the guard's engine and confirm it is left alone.",
+      "fixture": "fixtures/leaks/jsonl-clean",
+      "expected_output": "secret-scan reports clean (exit 1, no findings printed) and redact-view passes the file through byte-identical."
     }
   ]
 }
