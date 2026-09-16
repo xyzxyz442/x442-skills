@@ -225,6 +225,26 @@ edited it), secret-scans it, commits and pushes, and **keeps your lease**. Only 
 the lease can checkpoint. Checkpoint at a natural stopping point — a passing test, a design
 decision, before a long build — not on every edit.
 
+## Moving a handoff to another board
+
+A handoff has **one board of record**. When work belongs on a different board — a draft on your
+own board that is ready for the team, or work filed in the wrong place — move it, never copy it
+(ADR 0011):
+
+```text
+handoff claim ID "moving it"
+handoff move ID --to ../workspace/.agents/handoff [--group SECTION] [--id NEW-ID]
+```
+
+The doc lands on the target unclaimed, and an archived one-line pointer stays behind. Its
+`depends_on` cannot cross boards, so it becomes an external blocker naming the ids it waited on.
+`move` runs the same secret scan as `export`.
+
+**The remote decides the trust boundary.** Same git host and owner, or a target with no remote,
+proceeds. A different owner is refused and both remotes are named. Move only if the user confirms
+the material belongs there, then name the target with `--to-remote HOST/OWNER`. A
+`sensitivity: restricted` handoff never crosses a differing remote, even when named.
+
 ## When the board refuses to let you write
 
 `claim`/`release`/`export` can refuse with _"this doc is schema N and this CLI understands M"_.

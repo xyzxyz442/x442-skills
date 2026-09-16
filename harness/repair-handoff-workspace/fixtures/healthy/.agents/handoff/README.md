@@ -206,6 +206,10 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- `./handoff move <id> --to <board>` transfers a handoff to another board (ADR 0011): it lands
+  unclaimed through the target's own `import`, records `moved_from`, and leaves an archived
+  pointer carrying `moved_to`. Same git host and owner, or a target with no remote, proceeds;
+  a different owner needs `--to-remote host/owner`, and a restricted doc never crosses one.
 - `./handoff checkpoint <id> ["current state"]` publishes progress without releasing: it rewrites
   `## Current state`, commits and pushes, and keeps the lease. Only the holding session may run it.
 

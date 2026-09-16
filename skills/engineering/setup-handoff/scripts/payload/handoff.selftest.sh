@@ -1775,6 +1775,98 @@ sed 's/^SCHEMA_VERSION=2$/SCHEMA_VERSION=1/' "$SRC/handoff" > "$XO/handoff"
 chk_contains "a schema-1 CLI refuses to claim a schema-2 doc" \
   "$(cd "$XR" && HANDOFF_BOARD_PATH="$XRB" bash "$XO/handoff" claim ticketed "old tool" 2>&1)" "refusing to write"
 
+printf '\nmove transfers a handoff between boards, checked against the remotes (ADR 0011)\n'
+# A board's trust boundary is read from its git remote: same host and owner, or a target with no
+# remote, proceeds; anything else refuses until the target's host/owner is named. The bare remotes
+# stay local — url.insteadOf maps each hosted-looking URL onto its bare directory, so pushes land
+# while the configured URL still carries the host and owner the check reads.
+mkremote() { # url -> a shared board whose origin is configured as <url>
+  local b bare
+  b="$(mkshared)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '%s' "$b"
+}
+MV_ME="mv-self-$$"
+mvh() { # board subcommand... -> that board's CLI as this session
+  local b="$1"
+  shift
+  (cd "$b" && HANDOFF_SESSION_ID="$MV_ME" ./handoff "$@") 2>&1
+}
+MVA="$(mkremote "git@github.com:acme/board-a.git")"
+MVB="$(mkremote "https://github.com/acme/board-b.git")"
+MVC="$(mkremote "git@github.com:globex/board-c.git")"
+
+mvh "$MVA" new mv-work --title "Movable work" --audience acme-api > /dev/null
+mvh "$MVA" new mv-base --title "Base" --audience acme-api > /dev/null
+mvh "$MVA" new mv-dep --title "Dependent" --audience acme-api --after mv-base > /dev/null
+
+chk_contains "move refuses a handoff this session does not hold" \
+  "$(mvh "$MVA" move mv-work --to "$MVB")" "claim it first"
+
+mvh "$MVA" claim mv-work "moving it" > /dev/null
+MV_OUT="$(mvh "$MVA" move mv-work --to "$MVB")"
+chk_contains "same host and owner proceeds" "$MV_OUT" "Moved mv-work-handoff"
+chk "the doc lands on the target" "yes" "$([ -f "$MVB/mv-work-handoff.md" ] && echo yes || echo no)"
+chk "and arrives unclaimed" "no" "$([ -d "$MVB/.locks/mv-work-handoff" ] && echo yes || echo no)"
+chk_contains "the target records where it came from" "$(sed -n 's/^moved_from: //p' "$MVB/mv-work-handoff.md")" "github.com/acme/board-a"
+chk "the source no longer lists it as open work" "0" "$(mvh "$MVA" list | grep -c 'mv-work-handoff')"
+chk "the source keeps an archived pointer, not a copy" "yes" \
+  "$([ -f "$MVA/archive/mv-work-handoff.md" ] && grep -q '^moved_to: ' "$MVA/archive/mv-work-handoff.md" && echo yes || echo no)"
+chk "the pointer's body is one line" "1" \
+  "$(awk 'n >= 2 && NF { print } /^---$/ { n++ }' "$MVA/archive/mv-work-handoff.md" | wc -l | tr -d ' ')"
+chk "a same-owner move is not logged as crossing remotes" "0" "$(grep -c 'across remotes' "$MVB/mv-work-handoff.md")"
+chk "the source lease is gone" "no" "$([ -d "$MVA/.locks/mv-work-handoff" ] && echo yes || echo no)"
+chk "the target commit is pushed" "" "$(git -C "$MVB" status -sb | grep -o 'ahead')"
+chk "the source commit is pushed" "" "$(git -C "$MVA" status -sb | grep -o 'ahead')"
+
+mvh "$MVA" new mv-away --title "Away" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-away "moving" > /dev/null
+MV_X="$(mvh "$MVA" move mv-away --to "$MVC")"
+chk_contains "a different owner refuses" "$MV_X" "refusing"
+chk_contains "and names both remotes" "$MV_X" "github.com/globex"
+chk "and moves nothing" "no" "$([ -f "$MVC/mv-away-handoff.md" ] && echo yes || echo no)"
+chk_contains "a wrong --to-remote is still refused" \
+  "$(mvh "$MVA" move mv-away --to "$MVC" --to-remote github.com/acme)" "refusing"
+chk_contains "naming the target's host/owner proceeds" \
+  "$(mvh "$MVA" move mv-away --to "$MVC" --to-remote github.com/globex)" "Moved mv-away-handoff"
+chk "a named crossing is recorded on the moved doc" "1" "$(grep -c 'across remotes, target named as github.com/globex' "$MVC/mv-away-handoff.md")"
+
+mvh "$MVA" new mv-secret --title "Restricted" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$MVA" claim mv-secret "moving" > /dev/null
+chk_contains "a restricted doc never crosses a differing remote, even when named" \
+  "$(mvh "$MVA" move mv-secret --to "$MVC" --to-remote github.com/globex)" "restricted"
+chk "and stays put" "yes" "$([ -f "$MVA/mv-secret-handoff.md" ] && echo yes || echo no)"
+chk_contains "but moves within the same owner" \
+  "$(mvh "$MVA" move mv-secret --to "$MVB")" "Moved mv-secret-handoff"
+
+mvh "$MVA" claim mv-dep "moving" > /dev/null
+mvh "$MVA" move mv-dep --to "$MVB" > /dev/null
+chk "depends_on does not cross boards" "[]" "$(sed -n 's/^depends_on: //p' "$MVB/mv-dep-handoff.md")"
+chk_contains "it becomes an external blocker naming the dependency" \
+  "$(sed -n 's/^blocked_on: //p' "$MVB/mv-dep-handoff.md")" "mv-base-handoff"
+
+mvh "$MVB" new mv-clash --title "Already here" --audience acme-api > /dev/null
+mvh "$MVA" new mv-clash --title "Clash" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-clash "moving" > /dev/null
+chk_contains "an id already on the target refuses" "$(mvh "$MVA" move mv-clash --to "$MVB")" "--id"
+chk_contains "--id gives it a new id on the target" \
+  "$(mvh "$MVA" move mv-clash --to "$MVB" --id mv-clash-2)" "mv-clash-2-handoff"
+chk "under that id" "yes" "$([ -f "$MVB/mv-clash-2-handoff.md" ] && echo yes || echo no)"
+
+printf '\nx\n' >> "$MVA/mv-base-handoff.md"
+mvh "$MVA" claim mv-base "moving" > /dev/null
+printf 'key %s\n' "$AWSKEY" >> "$MVA/mv-base-handoff.md"
+chk_contains "a doc holding a credential is refused" \
+  "$(mvh "$MVA" move mv-base --to "$MVB")" "looks like it contains a credential"
+
+MVN="$(mkboard_nogit)"
+mvh "$MVA" new mv-local --title "Local" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-local "moving" > /dev/null
+chk_contains "a target with no remote proceeds — it keeps material on one machine" \
+  "$(mvh "$MVA" move mv-local --to "$MVN/.agents/handoff")" "Moved mv-local-handoff"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing
