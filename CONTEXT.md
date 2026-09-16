@@ -42,6 +42,20 @@ _Avoid_: team, workspace, namespace
 Where a group's documents physically live on the board — a subfolder or an id prefix. A
 group's layout, not the group itself.
 
+**Trust boundary**:
+The line between organizations whose material must not mix — an employer, a client, a person's
+own projects. One board per trust boundary. Read from a board's git remote host and owner, not
+declared.
+_Avoid_: tenant, account
+
+**External tracker**:
+The one project tracker a board links to — a sprint tool or an issue tracker — where planning
+lives. Linked by reference; mirrored only where it is the team's issue backlog. Never the board.
+_Avoid_: board, backend, sync target
+
+A board a developer keeps for their own drafts is an ordinary board with no role of its own.
+_Avoid_: personal board, private board, scratch board
+
 **Handoff**:
 One unit of coordinated work, or one self-contained reference document, recorded as a single
 markdown file with frontmatter.
