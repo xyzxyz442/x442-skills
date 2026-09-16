@@ -99,6 +99,18 @@ The rewritable section saying where a handoff stands right now. Distinguished fr
 **Activity**, the append-only one-line-per-event log. A reader should never have to replay
 Activity to learn Current state.
 
+**Ruled out**:
+The optional, append-only section listing approaches that were tried and failed — each with why
+and the evidence. Distinguished from **Decisions**, which says what to do and is read before
+starting; Ruled out says what not to retry and is read when an approach looks tempting.
+_Avoid_: dead ends, tried, rejected approaches
+
+**Slice**:
+One child of an orchestrator, sized so it has its own runnable Verify, lands as one change on its
+own, and can be checked without another child's unfinished work. A vertical cut through the work,
+not a layer of it.
+_Avoid_: subtask, ticket, chunk
+
 **Evidence**:
 What a closing session recorded to show it verified against live code — a command and its
 output, or a file reference it checked. Persisted as a field, not as prose.
