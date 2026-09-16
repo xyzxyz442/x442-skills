@@ -266,7 +266,7 @@ def scrub(cmd: str) -> str:
 # command substitution) -- the viewer re-decides at runtime with the real path,
 # and returns clean files byte-identical, so the detour is invisible.
 CONFIGISH_EXT = re.compile(
-    r"\.(json|ya?ml|ini|cfg|conf|toml|properties|env|npmrc|netrc|pypirc)"
+    r"\.(jsonl?|ndjson|ya?ml|ini|cfg|conf|toml|properties|env|npmrc|netrc|pypirc)"
     r"(\.[A-Za-z0-9_-]+)?$|(^|/)\.env(\.|$)|kubeconfig",
     re.IGNORECASE,
 )
@@ -420,7 +420,9 @@ def missed_reads(cmd: str, cwd: str, limit: int = 40):
     namespace boundary (handled by the embedded-shell path), are skipped.
     """
     found, probes = [], 0
-    for stage in stages(cmd):
+    # Heredoc bodies are documents being written, not reads being run -- the rewriter skips
+    # them, and asking here would prompt on every note that mentions `cat .env`.
+    for stage in stages(strip_heredocs(cmd)):
         if REDACTED_CALL.search(stage) or REMOTE_EXEC_RE.search(stage):
             continue
         mask, _ = quoted_mask(stage)
@@ -569,8 +571,14 @@ def main():
         )
 
     if touched:
+        # Judge the leftover per stage, exactly as the deny below does. A whole-command
+        # test ("a secret path and a filter are both still in there") discarded the rewrite
+        # for `ls .env; ps aux | grep node; cat .env`, and the per-stage deny then found no
+        # stage holding both -- so no decision was emitted and the ORIGINAL command ran.
         leftover = scrub(rewritten)
-        if not SECRET_RE.search(leftover) or not FILTER_RE.search(leftover):
+        if not any(
+            FILTER_RE.search(s) and SECRET_RE.search(s) for s in stages(leftover)
+        ):
             new_input = dict(ti)
             new_input["command"] = rewritten
             emit(
@@ -595,7 +603,9 @@ def main():
             )
 
     # A secret path is present but nothing prints it (e.g. `kubectl --kubeconfig=x`).
-    backstop(rewritten, cwd)
+    # Check the command that will actually run: no rewrite was emitted, so that is the
+    # original. Checking `rewritten` skipped the very reads the discarded rewrite had routed.
+    backstop(original, cwd)
     sys.exit(0)
 
 

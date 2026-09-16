@@ -202,6 +202,17 @@ def grade(target, eval_id):
         )
     if eval_id == "leak-helm-false-positive":
         return _grade_leak_false_positive(target, "values.yaml")
+    if eval_id == "leak-jsonl-transcript":
+        # A transcript stores a printed file as one escaped JSON string per line. No key and
+        # no whole string looks secret, so the engine once returned the file verbatim.
+        return _grade_leak_structured(
+            target,
+            "session.jsonl",
+            secrets=[f"not-a-real-secret-epsilon-01{n}" for n in (0, 1)],
+            survivors=["NODE_ENV=development", "host: db.internal", '"type": "user"'],
+        )
+    if eval_id == "leak-jsonl-false-positive":
+        return _grade_leak_false_positive(target, "session.jsonl")
     return [
         gc.expectation(
             f"eval id '{eval_id}' is recognized", False, "no grader for this id"

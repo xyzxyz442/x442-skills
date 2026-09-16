@@ -88,7 +88,32 @@ backstop makes the next instance loud.
 - The narrow scope is load-bearing, not incidental. Widening it later — to masked regions, to more
   verbs, to uncapped probing — trades away the property that makes the prompt worth reading. Treat
   any such widening as revisiting this ADR.
-- `verify-secret-guard.sh` now runs the 135-case read-rewrite regression suite
+- `verify-secret-guard.sh` now runs the read-rewrite regression suite
   (`selftest.read-rewrite`). That is the only gate that runs it — CI checks the standalone rule
   and the fixture boards and nothing else — so removing it from the verifier silently retires the
   tests too.
+
+## Amendment — 2026-09-16, payload v12
+
+The backstop above did not catch the event it was written after. Its real cause was a second,
+independent defect, and the backstop was pointed at the wrong command:
+
+```text
+ls -la SECRETFILE; ps aux | grep node | head; cat SECRETFILE
+```
+
+The rewriter did route the read. The guard then decided whether to keep that rewrite from the
+**whole** command: a credential path and a filter verb were both still in it, so the rewrite was
+discarded. The deny after it works per stage and found no stage holding both. The backstop ran on
+the discarded rewrite, where the read was already a `redact-view` call, so it skipped it. No
+decision was emitted, and the original command ran.
+
+Three changes, each closing the hole independently of the others:
+
+- The keep-the-rewrite test is judged per stage, the same rule as the deny.
+- The terminal backstop checks the **original** command, which is what runs when no rewrite is
+  emitted.
+- The backstop skips heredoc bodies, as the rewriter does. Splitting them into stages made a
+  document that mentions a read prompt, which is the honest-command prompting this record rejects.
+
+The narrow scope is unchanged: skipping heredoc bodies narrows it, it does not widen it.

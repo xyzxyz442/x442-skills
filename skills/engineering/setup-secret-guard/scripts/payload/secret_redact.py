@@ -208,7 +208,40 @@ def redact_json(obj, mask_all: bool, key=None):
         return [redact_json(v, mask_all, key=key) for v in obj]
     if should_mask(key, obj, mask_all):
         return mask_value(obj)
+    if isinstance(obj, str):
+        return _redact_embedded_text(obj)
     return obj
+
+
+def _redact_embedded_text(s: str) -> str:
+    """A string value that carries a whole file: `KEY=value` lines, or `key: value` ones.
+
+    A session transcript stores every printed file as one JSON string, so a `.env` that was
+    once printed sits under an innocuous key like `content`, escaped onto one line. Nothing
+    about that key or the string as a whole looks secret, and the file was returned verbatim.
+    Read the string with the line grammars; keep it untouched unless something was masked.
+    The YAML reading needs a newline, so a one-line sentence like `Note: token expired` in an
+    ordinary config is not mistaken for a key.
+    """
+    before = MASK_COUNT
+    out = redact_lines(s, DOTENV_LINE, False)
+    if "\n" in s:
+        out = redact_yaml(out, False)
+    return out if MASK_COUNT > before else s
+
+
+def _redact_json_lines(text: str, mask_all: bool):
+    """JSON Lines (a session transcript, a log): one document per line, or None if it is not."""
+    lines = text.splitlines()
+    try:
+        docs = [json.loads(line) if line.strip() else None for line in lines]
+    except (ValueError, RecursionError):
+        return None
+    out = [
+        line if doc is None else json.dumps(redact_json(doc, mask_all))
+        for line, doc in zip(lines, docs)
+    ]
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
 # ------------------------------------------------- format: dotenv / ini (line based)
@@ -602,7 +635,10 @@ def _render_body(name: str, text: str, mask_all: bool) -> str:
         try:
             return json.dumps(redact_json(json.loads(text), mask_all), indent=2) + "\n"
         except (ValueError, RecursionError):
-            pass  # fall through to line-based
+            jsonl = _redact_json_lines(text, mask_all)
+            if jsonl is not None:
+                return jsonl
+            # otherwise fall through to line-based
 
     base = _logical_name(os.path.basename(name)).lower()
     if _is_yaml(base if name and not name.startswith("<") else name, text):
@@ -636,6 +672,8 @@ def render(path: str, raw: bytes, mask_all: bool) -> str:
 
 CONFIGISH = (
     ".json",
+    ".jsonl",
+    ".ndjson",
     ".yaml",
     ".yml",
     ".ini",
