@@ -2942,6 +2942,73 @@ def grade_migration_offer(_target):
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _detect_parent_levels():
+    """ADR 0010 — detection scans the repo and two parent levels, and stops on ambiguity.
+
+    Built in a temp tree rather than a fixture, because the parents ARE the scenario: a fixture
+    copied into an isolated git root would carry none of them.
+    """
+
+    def board(d: Path) -> None:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "INDEX.md").write_text("# Handoffs\n", encoding="utf-8")
+
+    def detect(repo: Path, *extra: str) -> str:
+        return subprocess.run(
+            ["bash", str(DETECT), str(repo), *extra], capture_output=True, text=True
+        ).stdout
+
+    top = Path(tempfile.mkdtemp(prefix="detect-levels-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    repo = top / "ws0" / "ws" / "src" / "repo-a"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+
+    board(top / "ws0" / ".agents" / "handoff")  # level 3 — out of range by default
+    out3 = detect(repo)
+    deeper = detect(repo, "--parents", "3")
+
+    board(repo.parent / ".agents" / "handoff")  # ws/src — level 1
+    out1 = detect(repo)
+
+    board(top / "ws0" / "ws" / ".agents" / "handoff")  # ws — level 2
+    out2 = detect(repo)
+
+    return [
+        gc.expectation(
+            "a board only at level 3 is not a candidate",
+            "CANDIDATES 0" in out3 and "FOUND" not in out3,
+            out3[-300:],
+        ),
+        gc.expectation(
+            "--parents 3 is the deeper scan that finds it",
+            "level=3" in deeper and "CANDIDATES 1" in deeper,
+            deeper[-300:],
+        ),
+        gc.expectation(
+            "a board at ws/src is one parent candidate at level 1",
+            "scope=parent" in out1
+            and "level=1" in out1
+            and "CANDIDATES 1" in out1
+            and "AMBIGUOUS" not in out1,
+            out1[-300:],
+        ),
+        gc.expectation(
+            "a single outside candidate is proposed for confirmation, not migrated",
+            "Propose it and confirm" in out1 and "UPGRADE + MIGRATE" not in out1,
+            out1[-300:],
+        ),
+        gc.expectation(
+            "boards at ws/src and ws are two candidates, marked ambiguous",
+            "level=1" in out2
+            and "level=2" in out2
+            and "CANDIDATES 2" in out2
+            and "AMBIGUOUS" in out2,
+            out2[-300:],
+        ),
+    ]
+
+
 def grade(target, eval_id):
     gc.pre_state_hint(HERE, eval_id)
     graded, cleanup = gc.isolated_git_target(target)
@@ -3121,7 +3188,7 @@ def _grade(target, eval_id):
             gc.expectation(
                 "reports one install detected", "Detected: 1 install" in out, out[-120:]
             ),
-        ]
+        ] + _detect_parent_levels()
 
     if eval_id == "custom-location":
         r = _install(target, "--primary", "claude", "--handoff-dir", ".claude/handoff")

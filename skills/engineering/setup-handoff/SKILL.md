@@ -129,23 +129,37 @@ Ask (`AskUserQuestion`, single-select), default **single-repo**:
 ### 5. Detect an existing install and offer to upgrade + migrate
 
 Always run the detector first — it scans repo-level (`.agents/handoff`, `.claude/handoff`,
-`.gemini/handoff`, `.github/handoff`, `.handoff`) and parent-level (`../.agents/handoff`,
-`../handoff`) locations and classifies each install:
+`.gemini/handoff`, `.github/handoff`, `.handoff`) locations and **two parent levels**
+(`../.agents/handoff`, `../../.agents/handoff`, and the `.claude/handoff` and `handoff` spellings
+at each) and classifies each install. Two levels cover both common layouts, `workspace/src/<repo>`
+and `workspace/<repo>`, and stop before a workspace that merely contains another one (ADR 0010):
 
 ```bash
-bash "$SKILL_DIR/scripts/detect-handoff.sh" "$REPO"
-# FOUND <path> | scope=repo|parent | kind=generic|legacy-toolpath|shared | version=current|legacy | docs=<n>
+bash "$SKILL_DIR/scripts/detect-handoff.sh" "$REPO" # --parents 3 for a deeper scan
+# FOUND <path> | scope=repo|parent | kind=generic|legacy-toolpath|shared | version=current|legacy | docs=<n> | level=<n>
+# CANDIDATES <n>   (+ AMBIGUOUS <n> when n >= 2)
 # ... + a Suggestion + `Detected: N install(s)`
 ```
 
-- **`Detected: 0`** → fresh install; skip to the apply step.
-- **A generic, current `.agents/handoff/`** already present → no migration needed (re-run is a
-  no-op).
-- **A legacy or tool-path install** (e.g. `.claude/handoff`, or `version=legacy`) → **ask the user
-  (`AskUserQuestion`)** whether to upgrade + migrate it, and to **where**:
+Detection never picks. Act on the candidate count:
+
+- **`CANDIDATES 0`** → **stop and ask (`AskUserQuestion`)**: a new in-repo board, a deeper scan
+  (`--parents 3`), or an explicit path to an existing board (`--topology cross-repo
+--handoff-dir <path>`).
+- **`CANDIDATES 1`, outside the repo** (`scope=parent`) → **propose it and confirm** before wiring
+  with `--topology cross-repo --handoff-dir <path>`. Never wire it on detection alone.
+- **`CANDIDATES 1`, a generic current `.agents/handoff/`** in the repo → no migration needed (re-run
+  is a no-op).
+- **`CANDIDATES 1`, a legacy or tool-path install** (e.g. `.claude/handoff`, or `version=legacy`)
+  → **ask the user (`AskUserQuestion`)** whether to upgrade + migrate it, and to **where**:
   - **current repo-level** — `--migrate <found>` (moves to `.agents/handoff/`, the default).
   - **parent-level shared** — `--topology cross-repo --migrate <found>` (for a board siblings share).
   - **specific location** — `--handoff-dir <path> --migrate <found>`.
+- **`AMBIGUOUS`** → **stop and ask** which board this repo uses, listing every FOUND path. Do not
+  proceed without an answer.
+
+Where the answer is written follows who it belongs to: a team decision goes to the committed
+`.agents/handoff.json`; one developer's choice goes to `.agents/handoff.local.json`.
 
 Migration `git mv`s the docs and `archive/` (history preserved), drops the machine-local
 `.locks/`, installs the fixed scripts, and re-points every wired config. It is the "enhancing"
