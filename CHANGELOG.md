@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.8](https://github.com/xyzxyz442/x442-skills/compare/v0.12.7...v0.12.8) (2026-09-16)
+
+### 🐞 Bug Fixes
+
+- **bug:** bound a flag value at shell separators in the read guard ([a395a69](https://github.com/xyzxyz442/x442-skills/commit/a395a69da0ad2348373434637d211576b35d06b9))
+
+### 📚 Documentation
+
+- **docs:** record the read-guard backstop as ADR 0009 and wire its tests ([f1d80e2](https://github.com/xyzxyz442/x442-skills/commit/f1d80e283a0bb5cfe197c16324487f96a990307e))
+
 ## [0.12.7](https://github.com/xyzxyz442/x442-skills/compare/v0.12.6...v0.12.7) (2026-09-13)
 
 ### 🐞 Bug Fixes
