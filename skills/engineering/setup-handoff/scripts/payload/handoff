@@ -2952,6 +2952,75 @@ cmd_touch() {
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
+# ADR 0011 — a progress checkpoint. Progress used to reach the team only at `release`, and `touch`
+# extends a lease without carrying any, so a long piece of work was invisible until it ended. This
+# rewrites `## Current state` (or, with no text, takes the doc as the holder already edited it),
+# commits and pushes like a release, and KEEPS the lease: the work is still yours.
+#
+# Only the live holder may checkpoint, proven by session id exactly as lease_is_mine proves it. The
+# edit gate already stops a non-holder editing the doc; a checkpoint that pushed someone else's
+# lease-protected doc would walk straight around it.
+cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
+  local id="${1:?usage: handoff checkpoint <id> [\"current state\"] [--force-secret REASON]}"
+  shift
+  local raw_id="$id" text="" force_secret=""
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
+      *)
+        reject_unknown_flag "$1" "the Current state text is a trailing positional, not a flag"
+        text="${text:+$text }$1"
+        shift
+        ;;
+    esac
+  done
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  require_writable "$f" "$id"
+  is_standalone "$f" && die "$id is a standalone handoff — there is no lease to keep; edit it and commit."
+  is_orchestrator "$f" && die "$id is an orchestrator — its state is derived from its children; checkpoint a child."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is done — nothing to checkpoint"
+  local kind owner exp
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$id")")"
+  [ "$kind" = "free" ] && die "$id is not claimed — claim it first: handoff claim $id"
+  lease_is_mine "$id" || die "this session does not hold the lease on $id (held by ${owner:-unknown}, $kind). Only the holder can checkpoint it."
+
+  local hits=""
+  if [ -n "$text" ] && hits="$(printf '%s\n' "$text" | scan_secrets)"; then
+    [ -n "$force_secret" ] || die_on_secret "the checkpoint of $id" "$hits"
+  fi
+
+  if [ -n "$text" ]; then
+    local t tf
+    t="$(mktemp)" || die "mktemp failed"
+    tf="$(mktemp)" || die "mktemp failed"
+    printf '%s\n' "$text" > "$tf"
+    # Body read from a file with getline, never passed through `awk -v` (see set_field): the text is
+    # free-form and must land byte-for-byte. A doc that predates the section gets one above Context.
+    awk -v tf="$tf" '
+      function body() { print ""; while ((getline line < tf) > 0) print line; close(tf); print "" }
+      /^## Current state$/ { print; body(); skip = 1; done = 1; next }
+      skip && /^## / { skip = 0 }
+      !done && /^## Context$/ { print "## Current state"; body(); done = 1 }
+      !skip { print }
+    ' "$f" > "$t" && cat "$t" > "$f"
+    rm -f "$t" "$tf"
+  fi
+  set_field "$f" updated "$(today)"
+  if [ -n "$force_secret" ] && [ -n "$hits" ]; then
+    log_activity "$f" "checkpoint secret-scan OVERRIDDEN ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+  fi
+  log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
+  cmd_index > /dev/null
+  release_commit_push "handoff: checkpoint $id" "$f"
+  echo "Checkpointed $id — Current state published, lease kept."
+}
+
 # Every release path ends the same way: drop the lease, then regenerate the index. It is a helper
 # rather than three copies because the standalone and orchestrator branches `return` early and used
 # to skip the `clear_lock` at the function's end — stranding any lease held on a doc that was
@@ -4003,6 +4072,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_touch "$@"
       ;;
+    checkpoint)
+      shift
+      cmd_checkpoint "$@"
+      ;;
     release)
       shift
       cmd_release "$@"
@@ -4021,6 +4094,6 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_locations "$@"
       ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
   esac
 fi

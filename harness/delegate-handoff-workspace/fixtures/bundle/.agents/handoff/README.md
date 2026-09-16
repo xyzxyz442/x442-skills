@@ -206,6 +206,8 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- `./handoff checkpoint <id> ["current state"]` publishes progress without releasing: it rewrites
+  `## Current state`, commits and pushes, and keeps the lease. Only the holding session may run it.
 
 ### On a board with a remote, the lock crosses machines
 

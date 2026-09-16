@@ -1663,6 +1663,61 @@ chk "nothing is left to offer" "0" \
   "$(HANDOFF_NO_MAIN=1 . "$SRC/config.sh" && handoff_legacy_locations "$LC2/.agents/handoff")"
 export HOME="$LC_HOME_SAVE"
 
+printf '\ncheckpoint publishes Current state and keeps the lease (ADR 0011)\n'
+# Progress used to reach teammates only at `release`, and `touch` extends a lease without carrying
+# any. A checkpoint is the middle: rewrite Current state, commit and push, keep holding the work.
+CPB="$(mkshared)"
+cph() { # session subcommand... -> run the shared board's CLI as that session
+  local s="$1"
+  shift
+  HANDOFF_SESSION_ID="$s" "$CPB/handoff" "$@" 2>&1
+}
+CP_ME="cp-self-$$"
+cph "$CP_ME" new cp-work --title "Checkpoint work" --audience acme-api > /dev/null
+CPD="$CPB/cp-work-handoff.md"
+chk_contains "checkpoint on an unclaimed handoff refuses" \
+  "$(cph "$CP_ME" checkpoint cp-work "early")" "not claimed"
+cph "$CP_ME" claim cp-work "starting" > /dev/null
+CP_OUT="$(cph "$CP_ME" checkpoint cp-work "Parser written; tests next.")"
+chk_contains "checkpoint reports what it did" "$CP_OUT" "Checkpointed cp-work-handoff"
+chk "Current state holds exactly the new text" "Parser written; tests next." \
+  "$(doc_section "$CPD" "Current state")"
+cph "$CP_ME" checkpoint cp-work "Tests pass; docs next." > /dev/null
+chk "a second checkpoint overwrites, never appends" "Tests pass; docs next." \
+  "$(doc_section "$CPD" "Current state")"
+chk "the section still sits above Context" "before" \
+  "$([ "$(grep -n '^## Current state' "$CPD" | cut -d: -f1)" -lt "$(grep -n '^## Context' "$CPD" | cut -d: -f1)" ] && echo before || echo after)"
+chk "updated is stamped" "$(date +%Y-%m-%d)" "$(sed -n 's/^updated: //p' "$CPD" | head -1)"
+chk "the status is untouched" "open" "$(sed -n 's/^status: //p' "$CPD" | head -1)"
+chk "the lease is still held by this session" "$CP_ME" \
+  "$(sed -n 's/^session=//p' "$CPB/.locks/cp-work-handoff/owner" 2> /dev/null)"
+chk "the checkpoint is committed" "yes" \
+  "$(git -C "$CPB" log -1 --format=%s | grep -q 'checkpoint cp-work-handoff' && echo yes || echo no)"
+chk "and pushed" "" "$(git -C "$CPB" status -sb | grep -o 'ahead')"
+chk "the remote has the new Current state" "yes" \
+  "$(git -C "$CPB" show "origin/$(git -C "$CPB" rev-parse --abbrev-ref HEAD):cp-work-handoff.md" | grep -qx 'Tests pass; docs next.' && echo yes || echo no)"
+
+chk_contains "another session cannot checkpoint a lease it does not hold" \
+  "$(cph "cp-other-$$" checkpoint cp-work "hijack")" "does not hold"
+chk "and nothing was written" "Tests pass; docs next." "$(doc_section "$CPD" "Current state")"
+
+CP_LEAK="$(cph "$CP_ME" checkpoint cp-work "key $AWSKEY in the config")"
+chk_contains "the Current state text is secret-scanned" "$CP_LEAK" "looks like it contains a credential"
+chk "and a refused checkpoint writes nothing" "Tests pass; docs next." "$(doc_section "$CPD" "Current state")"
+
+# With no text, a checkpoint publishes the doc as the holder already edited it by hand.
+awk '/^## Current state/ { print; print ""; print "Edited by hand under the lease."; skip = 1; next }
+     skip && /^## / { skip = 0; print "" }
+     !skip { print }' "$CPD" > "$CPD.tmp" && cat "$CPD.tmp" > "$CPD"
+cph "$CP_ME" checkpoint cp-work > /dev/null
+chk "a text-less checkpoint pushes the hand edit" "yes" \
+  "$(git -C "$CPB" show "origin/$(git -C "$CPB" rev-parse --abbrev-ref HEAD):cp-work-handoff.md" | grep -qx 'Edited by hand under the lease.' && echo yes || echo no)"
+chk_contains "checkpoint on a standalone doc refuses — there is no lease to keep" \
+  "$(
+    cph "$CP_ME" new cp-ref --standalone --title "ref" --audience acme-api > /dev/null
+    cph "$CP_ME" checkpoint cp-ref "x"
+  )" "standalone"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing

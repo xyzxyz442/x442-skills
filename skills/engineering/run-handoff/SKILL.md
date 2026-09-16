@@ -201,6 +201,18 @@ adding a `Resolution (date)` or `Execution log` heading, what you want is `## Cu
 boards that motivated this schema are full of exactly those improvised headings, and nobody can
 find anything in them.
 
+**Checkpoint long work instead of sitting silent until release** (ADR 0011). On a board with a
+remote, other machines see progress only when it is pushed, and a release is the last push:
+
+```text
+handoff checkpoint ID "Parser written and tested; wiring the CLI next."
+```
+
+It overwrites `## Current state` with that text (or, with no text, publishes the doc as you already
+edited it), secret-scans it, commits and pushes, and **keeps your lease**. Only the session holding
+the lease can checkpoint. Checkpoint at a natural stopping point — a passing test, a design
+decision, before a long build — not on every edit.
+
 ## When the board refuses to let you write
 
 `claim`/`release`/`export` can refuse with _"this doc is schema N and this CLI understands M"_.
