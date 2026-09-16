@@ -138,7 +138,7 @@ handoff_config_load() {
       echo "handoff: handoff.json needs python3, which is not installed" >&2
       return 3
     fi
-    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ]; }; then
+    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ] || [ -f "$repo/.agents/handoff.local.json" ]; }; then
       echo "handoff: $repo/.agents/handoff.json needs python3, which is not installed" >&2
       return 3
     fi
@@ -204,8 +204,13 @@ if repo:
     # board", which is the board's `repoName` (ADR 0006 — each layer names its subject from its
     # own file's point of view, so the two are NOT converged). `boardPath` was a second name for
     # `board`; both are accepted, and both mean the same thing — where this repo's board is.
+    #
+    # `handoff.local.json` is the same scope for ONE developer, applied last so it wins (ADR 0010):
+    # a board or section someone keeps for themselves, never committed. The CLI's board lookup reads
+    # the same files in the same order, so the gate and the CLI cannot disagree about the board.
     for src in (os.path.join(repo, ".agents", "handoff.config.json"),
-                os.path.join(repo, ".agents", "handoff.json")):
+                os.path.join(repo, ".agents", "handoff.json"),
+                os.path.join(repo, ".agents", "handoff.local.json")):
         data = read_json(src)
         for key, val in data.items():
             if key in ("repo", "board"):
@@ -276,4 +281,101 @@ _handoff_config_legacy_nopython() {
   printf 'HC_ALLOW_VERIFY_CMD=%s\n' "$(printf %q "${allow:-0}")"
   printf 'HC_BOARD_PATH=%s\n' "''"
   printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
+}
+
+# handoff_legacy_locations BOARD_DIR [--move] -> prints how many legacy location entries belong to
+# this board; with --move, moves them into the board and prints how many moved.
+#
+# The repo-location cache used to be the `locations` map in ~/.agents/handoff.json (and, before
+# that, ~/.agents/handoff-locations.json). ADR 0010 moves it into `<board>/.locations.json`, and
+# moves an existing map only on a prompt — so this function counts and moves, and never decides to
+# move. The CLI asks a human; a hook prints one line; nothing moves silently.
+#
+# "Belongs to this board" means a root commit this board's registry declares. Everything else in the
+# user map — another board's repos, unrelated keys — stays exactly where it is, and the user file
+# itself is never deleted. An entry already in the board's cache wins over the user map.
+handoff_legacy_locations() {
+  local board="$1" mode="${2:-}"
+  command -v python3 > /dev/null 2>&1 || {
+    printf '0'
+    return 0
+  }
+  python3 - "$board" "$mode" << 'PY'
+import json, os, sys
+
+board, mode = sys.argv[1], sys.argv[2]
+home = os.path.expanduser("~")
+USER_FILES = (os.path.join(home, ".agents", "handoff-locations.json"),
+              os.path.join(home, ".agents", "handoff.json"))  # newer name last, so it wins
+BOARD_FILE = os.path.join(board, ".locations.json")
+
+
+def load(path):
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+roots = set()
+for path, key in ((os.path.join(board, "handoff.json"), "_generated"),
+                  (os.path.join(board, "repos.json"), None)):
+    data = load(path)
+    block = (data or {}).get(key) if key else data
+    repos = block.get("repos") if isinstance(block, dict) else None
+    if isinstance(repos, list):
+        roots.update(r["rootCommit"] for r in repos
+                     if isinstance(r, dict) and isinstance(r.get("rootCommit"), str))
+
+found = {}
+for path in USER_FILES:
+    locs = (load(path) or {}).get("locations")
+    if isinstance(locs, dict):
+        found.update({k: v for k, v in locs.items() if k in roots and isinstance(v, str)})
+
+if mode != "--move" or not found:
+    sys.stdout.write(str(len(found)))
+    raise SystemExit(0)
+
+try:
+    cache = load(BOARD_FILE) or {}
+    locs = cache.get("locations") if isinstance(cache.get("locations"), dict) else {}
+    for sha, path in found.items():
+        locs.setdefault(sha, path)
+    cache["locations"] = locs
+    write(BOARD_FILE, cache)
+    for path in USER_FILES:
+        data = load(path)
+        if not data or not isinstance(data.get("locations"), dict):
+            continue
+        kept = {k: v for k, v in data["locations"].items() if k not in found}
+        if len(kept) != len(data["locations"]):
+            data["locations"] = kept
+            write(path, data)
+except OSError as exc:
+    sys.stderr.write("handoff: could not move legacy locations: %s\n" % exc)
+    raise SystemExit(1)
+sys.stdout.write(str(len(found)))
+PY
+}
+
+# handoff_ignore_locations BOARD_DIR -> makes sure the board's .gitignore lists .locations.json.
+# The cache is true for one disk, so unlike .locks/ there is no board on which committing it is
+# right, and no choice to ask anyone about. Prints a line only when it changed the file.
+handoff_ignore_locations() {
+  local gi="$1/.gitignore"
+  [ -d "$1" ] || return 0
+  grep -qxF '.locations.json' "$gi" 2> /dev/null && return 0
+  printf '.locations.json\n' >> "$gi" 2> /dev/null || return 0
+  echo "Added '.locations.json' to $gi — the location cache is per machine and never committed." >&2
 }

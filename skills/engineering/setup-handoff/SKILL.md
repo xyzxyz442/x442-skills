@@ -294,8 +294,12 @@ depends on _where_ it sits, not on what it is called — the same shape `AGENTS.
 Nearest wins:
 
 ```text
-env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
+env  >  <repo>/.agents/handoff.local.json  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
 ```
+
+`<repo>/.agents/handoff.local.json` is the same scope for **one developer** — a board or section
+someone keeps for themselves. It is never committed. The CLI never searches above the repo for a
+board: a board outside it is detected at setup and written into config (ADR 0010).
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two
 never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while

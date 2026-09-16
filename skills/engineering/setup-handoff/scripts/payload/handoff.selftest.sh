@@ -1092,10 +1092,10 @@ OF_OUT="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/
 chk "the registry resolves from _generated inside handoff.json" \
   "ok|$(cd "$OF_TARGET" && pwd -P)|$OF_ROOT" "$OF_OUT"
 
-# The machine-local layer is the same filename at $HOME. It is the one layer that must never be
-# committed, which is why it lives there rather than as a gitignored file inside a cloned board.
-chk "the location map is the ~ layer of the same file" "yes" \
-  "$([ -f "$HOME/.agents/handoff.json" ] && echo yes || echo no)"
+# That answer came from the LEGACY user map above, which is still read until someone moves it into
+# the board (ADR 0010). Reading it must never write it back — the board owns the cache now.
+chk "reading the legacy ~ map leaves the board's cache unwritten" "no" \
+  "$([ -e "$OF/.agents/handoff/.locations.json" ] && echo yes || echo no)"
 
 # Every board now HAS a handoff.json, so "present but declares no fleet" is the ordinary state of a
 # single-repo board. Reporting that as a corrupt registry would send someone to repair a good file.
@@ -1541,6 +1541,127 @@ S2_MISS="$(cd "$S2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$S2
 chk "an identified but unlocatable repo says so, rather than claiming it is undeclared" \
   "no-location||$S2_ROOT" "$S2_MISS"
 export HOME="$HOME_SAVE"
+
+printf '\nboard resolution stays inside the repo, and handoff.local.json outranks handoff.json (ADR 0010)\n'
+# A CLI that sits in no board, so rung 2 (this file's own directory) cannot answer and the repo's
+# config decides — the shape of a user-level install, which is where an unbounded walk did harm.
+BR_BIN="$(mktemp -d)"
+cp "$SRC/handoff" "$BR_BIN/handoff"
+brun() { # dir subcommand... -> run the unhoused CLI from dir, with no board exported
+  (cd "$1" && shift && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE bash "$BR_BIN/handoff" "$@") 2>&1
+}
+brboard() { # dir -> make dir a board the resolver recognizes
+  mkdir -p "$1/scripts"
+  cp "$SRC/config.sh" "$1/scripts/config.sh"
+}
+BR_WS="$(cd "$(mktemp -d)" && pwd -P)"
+brboard "$BR_WS/.agents/handoff"
+BR_REPO="$BR_WS/src/nested/repo"
+mkdir -p "$BR_REPO/sub"
+git -C "$BR_REPO" init -q
+chk_contains "an unwired repo two folders below an unrelated board resolves no board" \
+  "$(brun "$BR_REPO" which)" "no board found"
+chk "and says so with exit 3, not by acting on that board" 3 \
+  "$(
+    brun "$BR_REPO/sub" which > /dev/null
+    echo $?
+  )"
+mkdir -p "$BR_WS/plain/dir"
+chk_contains "a folder outside any repo does not walk up either" \
+  "$(brun "$BR_WS/plain/dir" which)" "no board found"
+chk_contains "the folder that holds the board still resolves it" \
+  "$(brun "$BR_WS" which)" "$BR_WS/.agents/handoff"
+
+brboard "$BR_REPO/.agents/handoff"
+chk_contains "an in-repo board resolves from a subfolder of that repo" \
+  "$(brun "$BR_REPO/sub" which)" "in-repo .agents/handoff"
+
+BR_TEAM="$(cd "$(mktemp -d)" && pwd -P)"
+BR_MINE="$(cd "$(mktemp -d)" && pwd -P)"
+brboard "$BR_TEAM"
+brboard "$BR_MINE"
+printf '{ "board": "%s" }\n' "$BR_TEAM" > "$BR_REPO/.agents/handoff.json"
+chk_contains "the committed config outranks the in-repo board" \
+  "$(brun "$BR_REPO" which)" "$BR_TEAM"
+printf '{ "board": "%s" }\n' "$BR_MINE" > "$BR_REPO/.agents/handoff.local.json"
+BR_OUT="$(brun "$BR_REPO" which)"
+chk_contains "handoff.local.json outranks handoff.json" "$BR_OUT" "$BR_MINE"
+chk_contains "and which names it as the source" "$BR_OUT" "handoff.local.json"
+printf '{ "group": "mine" }\n' > "$BR_REPO/.agents/handoff.local.json"
+chk_contains "a local file that names no board falls through to handoff.json" \
+  "$(brun "$BR_REPO" which)" "$BR_TEAM"
+printf '{ "board": "%s/gone" }\n' "$BR_MINE" > "$BR_REPO/.agents/handoff.local.json"
+BR_GONE="$(brun "$BR_REPO" which)"
+chk_contains "a local board that is absent is a hard error, never a fallback" "$BR_GONE" "does not exist"
+chk_contains "and the error names the local file" "$BR_GONE" "handoff.local.json"
+
+printf '\nthe location cache lives in the board, not under ~ (ADR 0010)\n'
+LC="$(mkboard)"
+LC_TARGET="$(cd "$(mktemp -d)" && pwd -P)/acme-lib"
+mkdir -p "$LC_TARGET"
+git -C "$LC_TARGET" init -q
+git -C "$LC_TARGET" config user.email "test@example.com"
+git -C "$LC_TARGET" config user.name "test"
+printf 'x\n' > "$LC_TARGET/README.md"
+git -C "$LC_TARGET" add -A
+git -C "$LC_TARGET" commit -qm "initial commit"
+LC_ROOT="$(git -C "$LC_TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+cat > "$LC/.agents/handoff/handoff.json" << JSON
+{
+  "topology": "cross-repo",
+  "_generated": {
+    "schema": 2,
+    "repos": [
+      { "group": "acme", "alias": "lib", "audience": "acme-lib-$$", "rootCommit": "$LC_ROOT" }
+    ]
+  }
+}
+JSON
+LC_HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+LC_OUT="$(cd "$LC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC/.agents/handoff" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$")"
+chk "a discovered checkout resolves" "ok|$LC_TARGET|$LC_ROOT" "$LC_OUT"
+chk "and is cached in the board's .locations.json" "$LC_TARGET" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["locations"][sys.argv[2]])' "$LC/.agents/handoff/.locations.json" "$LC_ROOT" 2> /dev/null)"
+chk "and nothing is written under ~" "no" \
+  "$([ -e "$HOME/.agents" ] && echo yes || echo no)"
+LC_CACHED="$(cd "$LC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC/.agents/handoff" WORKSPACE_ROOT="/nonexistent" board_repo_entry "acme-lib-$$")"
+chk "the board cache answers without a scan" "ok|$LC_TARGET|$LC_ROOT" "$LC_CACHED"
+
+# A legacy map still ANSWERS until it is moved — declining the move must not break resolution.
+LC2="$(mkboard)"
+cp "$LC/.agents/handoff/handoff.json" "$LC2/.agents/handoff/handoff.json"
+mkdir -p "$HOME/.agents"
+printf '{ "locations": { "%s": "%s", "someoneelse": "/elsewhere" }, "groups": {} }\n' \
+  "$LC_ROOT" "$LC_TARGET" > "$HOME/.agents/handoff.json"
+LC_LEGACY="$(cd "$LC2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC2/.agents/handoff" WORKSPACE_ROOT="/nonexistent" board_repo_entry "acme-lib-$$")"
+chk "an unmigrated legacy map still resolves" "ok|$LC_TARGET|$LC_ROOT" "$LC_LEGACY"
+chk "and resolving from it writes nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+chk "the offer counts only this board's entries" "1" \
+  "$(HANDOFF_NO_MAIN=1 . "$SRC/config.sh" && handoff_legacy_locations "$LC2/.agents/handoff")"
+chk_contains "locations names the pending move" "$(hb "$LC2" locations)" "1 legacy location(s)"
+chk "and reporting it moves nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+# Declining is what every non-interactive write does: no tty, so no prompt and no move.
+hb "$LC2" new offer-probe --title "probe" > /dev/null
+chk "a write with nobody to ask moves nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+LC_MOVED="$(hb "$LC2" locations --move)"
+chk_contains "locations --move reports the move" "$LC_MOVED" "Moved 1 location(s)"
+chk "the entry is now in the board" "$LC_TARGET" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["locations"][sys.argv[2]])' "$LC2/.agents/handoff/.locations.json" "$LC_ROOT" 2> /dev/null)"
+chk "and gone from the user map" "False" \
+  "$(python3 -c 'import json,sys; print(sys.argv[2] in json.load(open(sys.argv[1]))["locations"])' "$HOME/.agents/handoff.json" "$LC_ROOT")"
+chk "another board's entry stays in the user map" "True" \
+  "$(python3 -c 'import json,sys; print("someoneelse" in json.load(open(sys.argv[1]))["locations"])' "$HOME/.agents/handoff.json")"
+chk "unrelated keys in the user file are untouched" "True" \
+  "$(python3 -c 'import json,sys; print("groups" in json.load(open(sys.argv[1])))' "$HOME/.agents/handoff.json")"
+chk "the board ignores its cache" "yes" \
+  "$(grep -qxF '.locations.json' "$LC2/.agents/handoff/.gitignore" && echo yes || echo no)"
+chk "nothing is left to offer" "0" \
+  "$(HANDOFF_NO_MAIN=1 . "$SRC/config.sh" && handoff_legacy_locations "$LC2/.agents/handoff")"
+export HOME="$LC_HOME_SAVE"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

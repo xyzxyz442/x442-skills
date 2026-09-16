@@ -9,7 +9,8 @@
 # workspace directory that is often not a git repo (e.g. ~/Work/Projects). Member/board paths
 # resolve relative to the manifest that DECLARED them, so committed relative paths are portable.
 #
-#   1. user     ~/.agents/handoff-repos.json          (personal, this machine, not committed)
+#   1. user     ~/.agents/handoff.json                (personal, this machine, not committed —
+#                                                      OPT-IN per ADR 0010, see user_layer_opted_in)
 #   2. scope    <scope>/.handoff-repos.json           (the workspace manifest — the default)
 #   3. subdir   <dir>/.handoff-repos.json for each dir strictly between <scope> and <from>, deepest last
 #
@@ -37,6 +38,18 @@ LEGACY_MANIFEST = ".handoff-repos.json"
 USER_MANIFEST = os.path.join(os.path.expanduser("~"), ".agents", "handoff.json")
 LEGACY_USER_MANIFEST = os.path.join(
     os.path.expanduser("~"), ".agents", "handoff-repos.json"
+)
+# ADR 0010 — the user layer is allowed, not recommended. It is read when something names it: the
+# HANDOFF_USER_LAYER environment variable, or `"userLayer": true` in a handoff.local.json at the
+# scope or at `from`. For one release an un-named user layer is still read, with this warning; after
+# that release only the opt-in reads it. `~/.agents/` is a namespace other tools share, and it is the
+# one layer a teammate's checkout never sees, so the same repo resolves differently per machine.
+USER_LAYER_ENV = "HANDOFF_USER_LAYER"
+LOCAL_MANIFEST = os.path.join(".agents", "handoff.local.json")
+USER_LAYER_WARNING = (
+    "%s was read implicitly. The user layer is opt-in (ADR 0010): implicit reads are deprecated and "
+    'stop in the next release. Keep it with %s=1, or add "userLayer": true to '
+    ".agents/handoff.local.json — or move these groups into the workspace manifest."
 )
 DEFAULT_LAYOUT = "subfolder"
 VALID_LAYOUTS = ("subfolder", "prefix")
@@ -76,6 +89,35 @@ def layer_files(scope: str, frm: str) -> list[tuple[str, str, bool]]:
             out.append((name, os.path.join(cur, LEGACY_MANIFEST), True))
             out.append((name, os.path.join(cur, MANIFEST), True))
     return out
+
+
+def user_layer_opted_in(scope: str, frm: str, env: "dict | None" = None) -> bool:
+    """True when the environment or a handoff.local.json names the user layer (ADR 0010).
+
+    Only the two directories the caller named are consulted — the scope and `from` — because the
+    opt-in is one developer's statement about THIS resolution, not something to discover by walking.
+    """
+    env = os.environ if env is None else env
+    if str(env.get(USER_LAYER_ENV, "")).strip().lower() in ("1", "true", "yes"):
+        return True
+    for d in (scope, frm):
+        try:
+            with open(os.path.join(d, LOCAL_MANIFEST)) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("userLayer") is True:
+            return True
+    return False
+
+
+def user_layer_contributes(groups: dict, board, remote, layout) -> bool:
+    """Whether a user-layer file changed the resolution at all.
+
+    A file holding only the legacy `locations` cache contributes nothing to the cascade, so it earns
+    no deprecation warning here — that map has its own prompted move, in the handoff CLI.
+    """
+    return bool(groups) or bool(board) or bool(remote) or layout is not None
 
 
 def resolve_path(raw: str, manifest_dir: str) -> str:
@@ -317,6 +359,31 @@ def _selftest() -> int:
         assert resolve_path(os.path.join(td, "ws"), decl) == os.path.join(td, "ws")
         assert resolve_path("~", decl) == os.path.realpath(os.path.expanduser("~"))
 
+    # --- ADR 0010: the user layer is opt-in, and an implicit read warns ------------------------
+    with tempfile.TemporaryDirectory() as td:
+        td = os.path.realpath(td)
+        ws, leaf = os.path.join(td, "ws"), os.path.join(td, "ws", "leaf")
+        os.makedirs(os.path.join(leaf, ".agents"))
+        os.makedirs(os.path.join(ws, ".agents"))
+        assert not user_layer_opted_in(ws, leaf, env={}), "nothing names it"
+        assert user_layer_opted_in(
+            ws, leaf, env={USER_LAYER_ENV: "1"}
+        ), "the env names it"
+        assert not user_layer_opted_in(
+            ws, leaf, env={USER_LAYER_ENV: "0"}
+        ), "0 is not a yes"
+        with open(os.path.join(leaf, LOCAL_MANIFEST), "w") as fh:
+            json.dump({"userLayer": "yes"}, fh)
+        assert not user_layer_opted_in(ws, leaf, env={}), "only a JSON true opts in"
+        with open(os.path.join(ws, LOCAL_MANIFEST), "w") as fh:
+            json.dump({"userLayer": True}, fh)
+        assert user_layer_opted_in(ws, leaf, env={}), "the scope's local file names it"
+    assert not user_layer_contributes(
+        {}, None, None, None
+    ), "a locations-only file is silent"
+    assert user_layer_contributes({"g": {}}, None, None, None)
+    assert user_layer_contributes({}, "./board", None, None)
+
     print("register-cross-repo-handoff resolve selftest OK")
     return 0
 
@@ -339,6 +406,7 @@ def main() -> int:
     effective: dict = {}
     layout = None
     layout_from = None
+    user_opted_in = user_layer_opted_in(scope, frm)
 
     for name, file, committed in layer_files(scope, frm):
         present = os.path.exists(file)
@@ -351,6 +419,14 @@ def main() -> int:
         groups, default_board_raw, default_remote_raw, lay = load_layer(
             file, errors, warnings
         )
+        if (
+            name == "user"
+            and not user_opted_in
+            and user_layer_contributes(
+                groups, default_board_raw, default_remote_raw, lay
+            )
+        ):
+            warnings.append(USER_LAYER_WARNING % (file, USER_LAYER_ENV))
         if lay is not None:
             layout, layout_from = lay, file  # nearest layer that sets layout wins
         for gname, gval in groups.items():

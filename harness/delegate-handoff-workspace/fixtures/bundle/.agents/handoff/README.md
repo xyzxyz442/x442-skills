@@ -25,16 +25,27 @@ wired hook command still point at `<board>/handoff`.
 
 **Which board it acts on** — first match wins:
 
-| Source                        | Where                                                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `$HANDOFF_BOARD_PATH`         | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
-| the CLI's own directory       | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
-| `<repo>/.agents/handoff.json` | its `board`, what a cross-repo install records (`boardPath` is a legacy alias, still read)                         |
-| `.agents/handoff/`            | walking up from the working directory                                                                              |
+| Source                              | Where                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `$HANDOFF_BOARD_PATH`               | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
+| the CLI's own directory             | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
+| `<repo>/.agents/handoff.local.json` | its `board` — one developer's choice, never committed                                                              |
+| `<repo>/.agents/handoff.json`       | its `board`, what a cross-repo install records (`boardPath` is a legacy alias, still read)                         |
+| `<repo>/.agents/handoff/`           | an in-repo board. Outside a repo, `./.agents/handoff/` only                                                        |
+
+**Nothing above the repo is searched** (ADR 0010). A board in a parent folder is found once, by
+setup, and written into config; a lookup that walked upward would resolve a board from whatever
+workspace happens to enclose the repo — another trust boundary, reached silently.
 
 `$HANDOFF_BOARD_PATH` is how you point a repo at a different board **without editing any committed
 file**. A board that is named but absent is a hard error, never a silent fallback to a different
 one — writing leases into the wrong board is not a failure anyone would notice.
+
+**The repo-location cache lives in the board**, as `.locations.json` — per machine, and listed in the
+board's `.gitignore`. It used to be the `locations` map in `~/.agents/handoff.json`; that map is still
+read until you move it. `./handoff locations` counts what is left there and `./handoff locations
+--move` moves this board's entries, leaving the user file and every other entry in place. A write
+from a terminal offers the same move.
 
 `./handoff --which` prints both answers and where each came from. Reach for it whenever the board
 behaves like a different board, or a fixed bug appears to still be present.

@@ -525,6 +525,16 @@ Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
     [ -n "$SCHEMA_NOTE" ] && ctx="${ctx}
 
 Schema: ${SCHEMA_NOTE}"
+    # ADR 0010 — a legacy location cache under ~ is reported, never moved: the move is the CLI's
+    # prompt or an explicit `handoff locations --move`. One line, same rules as the schema note.
+    LOC_N=0
+    command -v handoff_legacy_locations > /dev/null 2>&1 && LOC_N="$(handoff_legacy_locations "$DIR" 2> /dev/null)"
+    case "$LOC_N" in
+      '' | 0 | *[!0-9]*) ;;
+      *) ctx="${ctx}
+
+Locations: ~/.agents caches ${LOC_N} checkout location(s) for this board. Run \`${hd}/handoff locations --move\` to move them into the board (recommended)." ;;
+    esac
     [ -n "$health" ] && ctx="${ctx}
 
 Board needs attention:

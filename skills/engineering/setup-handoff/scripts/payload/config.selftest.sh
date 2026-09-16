@@ -40,6 +40,15 @@ chk "repo beats board" 12 "$HC_TTL_HOURS"
 chk "repo identity" myrepo "$HC_REPO_NAME"
 chk "repo group" g1 "$HC_GROUP"
 
+# ADR 0010 — handoff.local.json is the same scope for one developer, and it outranks handoff.json.
+mkdir -p "$T/repo_local/.agents"
+printf '{"repo":"myrepo","group":"team","board":"../workspace/team-board"}\n' > "$T/repo_local/.agents/handoff.json"
+printf '{"group":"mine","board":"../workspace/my-board"}\n' > "$T/repo_local/.agents/handoff.local.json"
+eval "$(handoff_config_load "$T/board" "$T/repo_local")"
+chk "local group beats the committed one" mine "$HC_GROUP"
+chk "local board beats the committed one" ../workspace/my-board "$HC_BOARD_PATH"
+chk "keys the local file omits still come from handoff.json" myrepo "$HC_REPO_NAME"
+
 mkdir -p "$T/board_null"
 printf '{"ttlHours": null}\n' > "$T/board_null/config.json"
 eval "$(handoff_config_load "$T/board_null")"

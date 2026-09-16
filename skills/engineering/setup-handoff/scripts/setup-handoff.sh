@@ -418,10 +418,12 @@ board_write_gitignore() { # board-dir
   # remote-backed one, so the rule is derived from the remote rather than assumed. Rewritten on
   # every run, because a board that gains a remote later must stop ignoring its leases — the CLI
   # repairs the same file on the claim path for a board that gains one between installs.
-  [ -f "$gi" ] && grep -vxF '.locks/' "$gi" > "$t"
+  [ -f "$gi" ] && grep -vxF -e '.locks/' -e '.locations.json' "$gi" > "$t"
   if [ -z "$(git -C "$b" remote 2> /dev/null)" ]; then
     printf '.locks/\n' >> "$t"
   fi
+  # The repo-location cache (ADR 0010) is one disk's truth on every board, remote or not.
+  printf '.locations.json\n' >> "$t"
   if [ -s "$t" ] || [ -f "$gi" ]; then
     cmp -s "$t" "$gi" 2> /dev/null || cat "$t" > "$gi"
   fi

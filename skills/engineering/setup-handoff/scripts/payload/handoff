@@ -22,9 +22,16 @@ set -uo pipefail
 #   2. this file's directory — only when the file itself sits in a board. This is the vendored
 #                              install and every board that predates the split: invoking the CLI
 #                              inside a board has always meant that board, and it still does.
-#   3. the repo's own config — .agents/handoff.json `board`/`boardPath`, what a cross-repo install
-#                              records. This is how a user-level CLI finds a shared board.
-#   4. an in-repo board      — .agents/handoff/ walking up from the working directory.
+#   3. the repo's own config — .agents/handoff.local.json, then .agents/handoff.json, each by its
+#                              `board`/`boardPath`. The local file is one developer's choice and is
+#                              never committed; the other is the team's and is what a cross-repo
+#                              install records. This is how a user-level CLI finds a shared board.
+#   4. an in-repo board      — <repo>/.agents/handoff/, or ./.agents/handoff/ outside any repo.
+#
+# RUNG 4 NEVER WALKS UPWARD (ADR 0010). It used to climb to `/`, so a repo with no board config
+# that sat anywhere under a workspace holding a board resolved to THAT board — a different trust
+# boundary, reached silently. A board outside the repo is found once, at setup (which scans two
+# parent levels and asks), and written into config; runtime only reads what setup wrote.
 #
 # CONFIGURED-BUT-ABSENT IS A HARD ERROR, never a fallback. Rungs 1 and 3 are someone stating where
 # the board is; if it is not there, the honest answer is to say so. Silently sliding down to rung 4
@@ -36,13 +43,17 @@ _board_looks_real() { [ -f "$1/scripts/config.sh" ] || [ -f "$1/config.sh" ]; }
 # and this is the lookup that finds the board. Deliberately the narrowest possible reader: one key,
 # no precedence, no legacy shell format (a machine with a KEY=value config predates board/binary
 # separation and resolves by rung 2 anyway).
-_board_from_repo_config() { # repo-dir -> prints the configured board path, or nothing
-  local repo="$1" f
+#
+# Prints "file<TAB>board" for the first file, highest precedence first, that names a board. A file
+# that exists but names none falls through: a handoff.local.json holding only a `group` is a
+# per-user section choice, not a claim about where the board is.
+_board_from_repo_config() { # repo-dir -> prints "config-file<TAB>board path", or nothing
+  local repo="$1" f v
   [ -n "$repo" ] || return 0
-  for f in "$repo/.agents/handoff.json" "$repo/.agents/handoff.config.json"; do
+  for f in "$repo/.agents/handoff.local.json" "$repo/.agents/handoff.json" "$repo/.agents/handoff.config.json"; do
     [ -f "$f" ] || continue
     if command -v python3 > /dev/null 2>&1; then
-      python3 -c 'import json,sys
+      v="$(python3 -c 'import json,sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
@@ -50,11 +61,14 @@ except Exception:
 if isinstance(d, dict):
     v = d.get("board") or d.get("boardPath") or ""
     if isinstance(v, str) and v:
-        sys.stdout.write(v)' "$f" && return 0
+        sys.stdout.write(v)' "$f")"
     else
-      sed -n 's/.*"board\(Path\)\{0,1\}"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' "$f" | head -1
-      return 0
+      v="$(sed -n 's/.*"board\(Path\)\{0,1\}"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' "$f" | head -1)"
     fi
+    [ -n "$v" ] && {
+      printf '%s\t%s' "$f" "$v"
+      return 0
+    }
   done
 }
 
@@ -79,30 +93,22 @@ elif _board_looks_real "$_self_dir"; then
 else
   _cfg_board="$(_board_from_repo_config "$_repo_top")"
   if [ -n "$_cfg_board" ]; then
-    BOARD_SOURCE="$_repo_top/.agents/handoff.json"
-    DIR="$_cfg_board"
+    BOARD_SOURCE="${_cfg_board%%$'\t'*}"
+    DIR="${_cfg_board#*$'\t'}"
     case "$DIR" in /*) ;; *) DIR="$(cd "$_repo_top/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
     [ -d "$DIR" ] || {
-      echo "handoff: this repo's .agents/handoff.json points at $DIR, which does not exist." >&2
-      echo "         Refusing to fall back to another board — fix the config, or re-run setup-handoff." >&2
+      echo "handoff: this repo's $(basename "$BOARD_SOURCE") points at $DIR, which does not exist." >&2
+      echo "         Refusing to fall back to another board — fix $BOARD_SOURCE, or re-run setup-handoff." >&2
       exit 3
     }
-  else
-    _walk="${_repo_top:-$PWD}"
-    while :; do
-      if _board_looks_real "$_walk/.agents/handoff"; then
-        BOARD_SOURCE="in-repo .agents/handoff"
-        DIR="$(cd "$_walk/.agents/handoff" && pwd)"
-        break
-      fi
-      [ "$_walk" = "/" ] && break
-      _walk="$(dirname "$_walk")"
-    done
+  elif _board_looks_real "${_repo_top:-$PWD}/.agents/handoff"; then
+    BOARD_SOURCE="in-repo .agents/handoff"
+    DIR="$(cd "${_repo_top:-$PWD}/.agents/handoff" && pwd)"
   fi
 fi
 [ -n "$DIR" ] || {
-  echo "handoff: no board found." >&2
-  echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, this repo's .agents/handoff.json, then .agents/handoff/ upward from $PWD." >&2
+  echo "handoff: no board found for ${_repo_top:-$PWD}." >&2
+  echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, .agents/handoff.local.json and .agents/handoff.json here, then .agents/handoff/ here. Nothing above this folder is searched." >&2
   echo "         Fix: run the setup-handoff skill in this repo, or export HANDOFF_BOARD_PATH=<board>." >&2
   exit 3
 }
@@ -740,6 +746,7 @@ require_writable() { # path id
   v="$(doc_schema "$1")"
   [ "$v" -le "$SCHEMA_VERSION" ] && {
     offer_migration
+    offer_locations_move
     return 0
   }
   die "$2 is schema $v and this CLI understands $SCHEMA_VERSION — refusing to write it.
@@ -772,6 +779,7 @@ require_board_writable() { # what-this-command-would-do
   v="$(board_schema)"
   [ "$v" -le "$SCHEMA_VERSION" ] && {
     offer_migration
+    offer_locations_move
     return 0
   }
   die "this board is schema $v and this CLI understands $SCHEMA_VERSION — refusing to $1.
@@ -830,6 +838,57 @@ offer_migration() {
     echo "⚠️  The migration did not run (see above) — continuing without it." >&2
   fi
   return 0
+}
+
+# ADR 0010 — the repo-location cache moved from ~/.agents/handoff.json into <board>/.locations.json,
+# and an existing map moves only when someone says yes. Same shape as offer_migration above, for the
+# same reasons: never blocks, never prompts a hook or CI, asks once per command. It differs in one
+# way: this offer RECOMMENDS yes, because unlike a schema migration the move has no precondition
+# that can fail and nothing on the board changes but an ignored file. Declining changes nothing, so
+# the offer comes back on the next write. `handoff locations --move` does the same thing unprompted.
+_LOCATIONS_OFFERED=0
+offer_locations_move() {
+  [ "$_LOCATIONS_OFFERED" = 0 ] || return 0
+  _LOCATIONS_OFFERED=1
+  migrate_can_prompt || return 0
+  command -v handoff_legacy_locations > /dev/null 2>&1 || return 0
+  local n
+  n="$(handoff_legacy_locations "$DIR")"
+  case "$n" in '' | 0 | *[!0-9]*) return 0 ;; esac
+  echo "ℹ️  ~/.agents/handoff.json caches $n checkout location(s) for this board. That cache now lives in the board, as .locations.json (ignored by git)." >&2
+  printf 'Move them into the board? Recommended — only these entries leave the user file. [Y/n] ' >&2
+  local reply=""
+  read -r reply < /dev/tty || reply="n"
+  case "$reply" in
+    '' | y | Y | yes | YES) ;;
+    *)
+      echo "Not moving — continuing. They still resolve from ~, and this will be offered again." >&2
+      return 0
+      ;;
+  esac
+  cmd_locations --move >&2 || echo "⚠️  The move did not complete (see above) — continuing without it." >&2
+  return 0
+}
+
+cmd_locations() { # [--move]
+  local move=0 n
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --move) move=1 ;;
+      *) die "unknown flag: $1 (usage: handoff locations [--move])" ;;
+    esac
+    shift
+  done
+  command -v handoff_legacy_locations > /dev/null 2>&1 \
+    || die "this board's scripts/config.sh predates the location move — re-run setup-handoff first."
+  if [ "$move" = 0 ]; then
+    n="$(handoff_legacy_locations "$DIR")"
+    echo "$n legacy location(s) for this board in ~/.agents. Move them with: handoff locations --move"
+    return 0
+  fi
+  n="$(handoff_legacy_locations "$DIR" --move)" || die "could not move the legacy locations."
+  handoff_ignore_locations "$DIR"
+  echo "Moved $n location(s) into $DIR/.locations.json. The user file was kept; only those entries left it."
 }
 
 VALID_ROLES="steering spec reference brief-archive"
@@ -2063,15 +2122,16 @@ import json, os, subprocess, sys
 
 reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 HOME = os.path.expanduser("~")
-# The per-machine layer. It sits beside ~/.agents/handoff-repos.json — the cascade's user layer —
-# because it answers the same kind of question ("where on THIS disk") and must never be committed
-# for the same reason. A gitignored file inside the board was rejected: a board is cloned by every
-# member, and a location map is true for exactly one of them.
-# The machine layer of the same cascade, under the same filename. It is the one layer that must
-# never be committed — a location map is true for exactly one disk — which is why it lives at $HOME
-# rather than as a gitignored file inside a board that everybody clones.
-LOCATIONS = os.path.join(HOME, ".agents", "handoff.json")
-LEGACY_LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
+# The per-machine location cache lives IN the board (ADR 0010): a location belongs to one board on
+# one disk, so the board is its home. It is ignored by the board's own .gitignore beside .locks/, so
+# cloning the board never carries one machine's paths to another. It used to live in
+# ~/.agents/handoff.json — a namespace other tools share, and one this tooling no longer writes.
+LOCATIONS = os.path.join(board, ".locations.json")
+# The legacy user-layer maps are still READ, below the board's own cache, so a machine that has not
+# accepted the move keeps resolving. They are never written: moving entries out of them is the
+# prompted migration in config.sh (handoff_legacy_locations), never a side effect of a lookup.
+USER_LOCATIONS = (os.path.join(HOME, ".agents", "handoff-locations.json"),
+                  os.path.join(HOME, ".agents", "handoff.json"))
 
 
 def out(s):
@@ -2094,7 +2154,7 @@ def root_commit(path):
 
 def load_locations():
     out = {}
-    for path in (LEGACY_LOCATIONS, LOCATIONS):  # current name last, so it wins
+    for path in USER_LOCATIONS + (LOCATIONS,):  # the board's own cache last, so it wins
         try:
             with open(path) as fh:
                 data = json.load(fh)
@@ -2107,10 +2167,9 @@ def load_locations():
 
 
 def remember(sha, path):
-    """Cache a discovered location. Best-effort: a machine that cannot write $HOME still resolves,
-    it just pays for the scan again next time."""
+    """Cache a discovered location in the board. Best-effort: a board this machine cannot write
+    still resolves, it just pays for the scan again next time."""
     try:
-        os.makedirs(os.path.dirname(LOCATIONS), exist_ok=True)
         try:
             with open(LOCATIONS) as fh:
                 data = json.load(fh)
@@ -2127,6 +2186,17 @@ def remember(sha, path):
             json.dump(data, fh, indent=2, sort_keys=True)
             fh.write("\n")
         os.replace(tmp, LOCATIONS)
+        # The cache is one disk's truth, so it must never ride a `git add` into a board everybody
+        # clones. Setup writes this rule; a board installed before the cache moved gets it here.
+        gi = os.path.join(board, ".gitignore")
+        try:
+            with open(gi) as fh:
+                listed = ".locations.json" in fh.read().splitlines()
+        except OSError:
+            listed = False
+        if not listed:
+            with open(gi, "a") as fh:
+                fh.write(".locations.json\n")
     except OSError:
         pass
 
@@ -2286,7 +2356,7 @@ brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
         # not have it anywhere the resolver looks. That is a per-machine problem with a per-machine
         # fix, and saying so is more useful than the generic "not declared" warning.
         target=""
-        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in \`~/.agents/handoff-locations.json\`, then re-export."
+        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in this board's \`.locations.json\` (a \`locations\` map of root commit to path), then re-export."
         ;;
       bad-registry)
         target=""
@@ -3947,6 +4017,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       ;;
     index) cmd_index ;;
     --which | which) cmd_which ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | --which]" ;;
+    locations)
+      shift
+      cmd_locations "$@"
+      ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
   esac
 fi
