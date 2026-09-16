@@ -527,6 +527,23 @@ for h in splice-agents-block merge-settings; do
   fi
 done
 
+# The read-rewrite regression suite. Slower than the helper selftests above (it spawns the guard
+# once per case) and it tests the payload this skill SHIPS, not the copy installed at HOME_DIR --
+# so it is not a health check of this machine. It runs here anyway because this verifier is the
+# only gate that would ever run it: CI checks the standalone rule and the fixture boards, nothing
+# else, and the harness grader wraps this script. A regression test nothing runs is a regression
+# test that rots, and the defect it covers is one the guard fails SILENTLY.
+if [ -f "${SKILL}/scripts/test-secret-file-guard.py" ]; then
+  if python3 "${SKILL}/scripts/test-secret-file-guard.py" > /dev/null 2>&1; then
+    ok "selftest.read-rewrite" "read-rewrite regression suite passes"
+  else
+    bad "selftest.read-rewrite" \
+      "read-rewrite regression suite FAILS — a credential read is not being rewritten"
+  fi
+else
+  bad "selftest.read-rewrite" "test-secret-file-guard.py missing"
+fi
+
 # ---------------------------------------------------------------------------------- output
 
 if [ "$JSON" -eq 1 ]; then

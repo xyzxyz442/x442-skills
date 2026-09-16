@@ -179,6 +179,14 @@ structure, and from refusal, which yields nothing. The same secret fingerprints 
 two files, which answers whether two environments share a credential without disclosing either.
 _Avoid_: masking, scrubbing, sanitising
 
+**Backstop**:
+A second, independent check that asks the same question in a different shape and prefers a prompt
+over a silent pass. It exists for the outcome a **secret guard** cannot report on itself — a
+credential read it failed to recognise is not refused, it is simply allowed. Distinguished from a
+fallback, which takes over when the first path fails visibly; a backstop fires precisely when the
+first path believed it had succeeded.
+_Avoid_: fallback, safety net, second pass
+
 ## Delegation
 
 **Delegate**:
