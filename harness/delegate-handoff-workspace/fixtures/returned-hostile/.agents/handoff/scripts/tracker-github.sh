@@ -8,15 +8,20 @@
 #
 #   list      {"repo", "label"?}                                 -> [{"number","state","title","body","labels"}]
 #   create    {"repo", "title", "body", "labels"}                -> {"number", "url"}
-#   update    {"repo", "number", "title", "body", "labels", "state"?}  -> {}
+#   update    {"repo", "number", "title", "body", "labels", "managed", "state"?}  -> {}
 #   close     {"repo", "number", "comment"}                      -> {}
 #   comments  {"repo", "number"}                                 -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                          -> {"visibility": "public"|"private"|"internal"}
 #     A failure exits non-zero; the CLI treats that — and anything unrecognised — as public (ADR 0013).
 #
-# Labels the mirror manages carry a known prefix (handoff-, status:, severity:, env:, section:,
-# type:). On update only those are reconciled; a label a person added by hand is left alone.
-# Source: https://cli.github.com/manual/gh_issue
+# An update request names the label prefixes the mirror manages in "managed". Only labels carrying
+# one of them are reconciled; a label a person added by hand is left alone.
+#
+# Sources:
+#   https://cli.github.com/manual/gh_issue
+#   https://cli.github.com/manual/gh_repo_view — `--json visibility` reports PUBLIC, PRIVATE or INTERNAL
+#   https://docs.github.com/en/repositories/creating-and-managing-repositories/about-repositories#about-repository-visibility
+#     — internal repositories are visible only to members of the owning enterprise
 set -uo pipefail
 op="${1:?usage: tracker-github.sh list|create|update|close|comments|visibility}"
 command -v gh > /dev/null 2>&1 || {
@@ -35,7 +40,8 @@ print("title=%s" % shlex.quote(str(r.get("title", ""))))
 print("label=%s" % shlex.quote(str(r.get("label", ""))))
 print("comment=%s" % shlex.quote(str(r.get("comment", ""))))
 print("want_state=%s" % shlex.quote(str(r.get("state", ""))))
-print("labels=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("labels", [])))')" || {
+print("labels=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("labels", [])))
+print("managed=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("managed", [])))')" || {
   echo "tracker-github: unreadable request" >&2
   exit 2
 }
@@ -61,6 +67,14 @@ quiet_gh() { # gh-args... -> gh's stdout; its stderr only on failure
   [ $rc -eq 0 ] || cat "$err" >&2
   rm -f "$err"
   return $rc
+}
+
+is_managed() { # label -> 0 when it carries a prefix the request names as managed
+  local p
+  for p in ${managed[@]+"${managed[@]}"}; do
+    case "$1" in "$p"*) return 0 ;; esac
+  done
+  return 1
 }
 
 ensure_labels() { # labels... -> creates any that do not exist yet (idempotent)
@@ -109,7 +123,7 @@ print("\n".join(l["name"] for l in json.load(sys.stdin).get("labels", [])))')"
     for l in "${labels[@]}"; do args+=(--add-label "$l"); done
     while IFS= read -r l; do
       [ -n "$l" ] || continue
-      case "$l" in handoff-* | status:* | severity:* | env:* | section:* | type:*) ;; *) continue ;; esac
+      is_managed "$l" || continue
       # Here-string, not a pipe: under pipefail `printf | grep -q` fails whenever grep exits first.
       grep -qxF "$l" <<< "$(printf '%s\n' "${labels[@]}")" || args+=(--remove-label "$l")
     done <<< "$current"

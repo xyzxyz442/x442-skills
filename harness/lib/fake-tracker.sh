@@ -7,7 +7,7 @@
 #
 #   list      {"repo", "label"}                          -> [{"number","state","title","body","labels"}]
 #   create    {"repo", "title", "body", "labels"}        -> {"number", "url"}
-#   update    {"repo", "number", "title", "body", "labels", "state"}  -> {}
+#   update    {"repo", "number", "title", "body", "labels", "managed", "state"}  -> {}
 #   close     {"repo", "number", "comment"}              -> {}
 #   comments  {"repo", "number"}                         -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                  -> {"visibility": $FAKE_TRACKER_VISIBILITY, default "private"}
@@ -62,9 +62,14 @@ elif op == "create":
     out = {"number": n, "url": "https://tracker.invalid/%s/issues/%d" % (req["repo"], n)}
 elif op == "update":
     i = issue(req["number"])
-    for k in ("title", "body", "labels", "state"):
+    for k in ("title", "body", "state"):
         if k in req:
             i[k] = req[k]
+    if "labels" in req:
+        # Like the real adapter: labels outside the managed prefixes are a person's, and stay.
+        managed = tuple(req.get("managed", []))
+        kept = [l for l in i.get("labels", []) if not (managed and l.startswith(managed)) and l not in req["labels"]]
+        i["labels"] = kept + list(req["labels"])
 elif op == "close":
     i = issue(req["number"])
     i["state"] = "closed"
