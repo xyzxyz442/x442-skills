@@ -145,6 +145,35 @@ several units, or the open work against one subsystem — file an **orchestrator
 handoff new <id> --orchestrator --children a,b,c --title "..."
 ```
 
+**Size every child as a slice, and confirm the slices before you file.** A child is a **slice**
+when all three hold:
+
+1. It has its own runnable Verify — a command or check that passes when this child is done.
+2. It lands as one change on its own, without waiting on a sibling to land in the same change.
+3. It can be checked without another child's unfinished work.
+
+A slice is a vertical cut through the work, not a layer of it: "API, then UI, then tests" is three
+layers, none of which can be verified alone. The idea is borrowed from the common practice of
+splitting a feature into vertical-slice tickets; there is no numeric size cap, only the three tests.
+
+Before running `handoff new --orchestrator`, **present the child list and its `depends_on` edges to
+the user and wait for them to confirm.** This step is required. The CLI does not prompt — it runs in
+agent shells with no terminal — so the confirmation is yours to ask for. A roster filed without it
+is a plan nobody agreed to, and every child it creates has to be re-sliced or pruned later.
+
+A wide refactor that cannot land in one change still slices, as **expand–contract**: add the new
+shape beside the old one, move callers across in batches, then remove the old shape. Each step
+keeps the code working, so each is its own slice. Record the order in the bundle's `## Sequencing`:
+
+```text
+## Sequencing
+
+- rename-expand — add the new `tenant_id` column and dual-write it; old readers keep working.
+- rename-migrate-1 — move the billing readers to `tenant_id` (depends_on rename-expand).
+- rename-migrate-2 — move the reporting readers to `tenant_id` (depends_on rename-expand).
+- rename-contract — drop the old column once no reader uses it (depends_on both migrate slices).
+```
+
 It holds no work of its own, so it is never claimed; claim one of its children instead. `list` shows
 live progress (`2/3 done`) derived from each child's own status, and the bundle doc carries that same
 derivation as a **generated `## Children` table** — status, who acts next, lease holder, blocked-on,
@@ -377,6 +406,8 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
 - Writing a compaction brief that restates the diff → the next agent can read the diff; what it
   cannot recover is why you chose that approach and what you already ruled out.
+- Filing a bundle without confirming its slices with the user → a roster nobody agreed to, re-sliced
+  after the work has started.
 - Writing child status into an orchestrator by hand, or hand-editing its `children:` list →
   the `## Children` table is generated and your edit is overwritten on the next `index`; use
   `handoff children add|rm` to change the roster.
