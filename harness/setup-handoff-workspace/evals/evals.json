@@ -170,6 +170,13 @@
       "prompt": "Keep a record of the approaches that failed on a handoff, and flag bundle children nobody can verify.",
       "expected_output": "ADR 0012 — a new doc from the template carries an empty `## Ruled out` section, with no schema change. The verifier warns bundle.child.verify_empty for an open orchestrator child whose `## Verify` holds only the template comment, naming that child, and does not warn for a child with a filled Verify, a closed child, or a doc outside any bundle. No finding asks for a Ruled out section on docs that lack one.",
       "fixture": "fixtures/fresh"
+    },
+    {
+      "id": "compact-context",
+      "kind": "post-state",
+      "prompt": "When my session gets compacted mid-task, bring back what I need to keep working on the handoff I hold.",
+      "expected_output": "ADR 0012 — on Claude Code, SessionStart with source compact re-injects, for every live lease the session holds, Current state, Verify, Decisions, and Ruled out in that order (template comments stripped), alongside the ordinary banner. A doc past ~2,000 characters is cut with `… (truncated — run: handoff show <id> --section <name>)`; leases past the ~6,000 total appear as id, expiry, and `handoff show <id>` only. Nothing names a doc path. Lease expiry is reported in one line and never extended; the hook never blocks; any other session start is unchanged.",
+      "fixture": "fixtures/fresh"
     }
   ]
 }

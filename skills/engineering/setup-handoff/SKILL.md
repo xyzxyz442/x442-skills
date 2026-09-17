@@ -69,6 +69,16 @@ is the behavioral guarantee. Sources: [Claude Code hooks](https://code.claude.co
 [Gemini CLI hooks](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md),
 [Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference).
 
+**Context after compaction is restored on Claude Code only** (ADR 0012). Claude Code re-runs
+`SessionStart` with `source: "compact"` after compacting, and `sessionstart` then re-injects, for
+each live lease the session holds, that handoff's Current state, Verify, Decisions, and Ruled out —
+about 2,000 characters per doc and 6,000 in total, with anything cut pointing at
+`handoff show <id> --section <name>`. It reports lease expiry and never extends the lease. **On
+Gemini CLI and Copilot CLI held-lease context is not restored after compaction:** Gemini's
+`PreCompress` is advisory and cannot inject, its `SessionStart` has no compaction trigger, and
+Copilot has no compaction event. The `run-handoff` skill tells agents there to re-read their held
+handoffs with `handoff show` when they notice a compaction.
+
 ## Preconditions
 
 1. **`AGENTS.md` exists at the repo root.** This skill chains after `initial-project`. If it is

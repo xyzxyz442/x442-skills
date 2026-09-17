@@ -209,6 +209,10 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- After a Claude Code compaction, the session-start hook re-injects the held handoffs' Current
+  state, Verify, Decisions, and Ruled out, capped at `HANDOFF_COMPACT_DOC_CHARS` (2000) per doc and
+  `HANDOFF_COMPACT_TOTAL_CHARS` (6000) in total, naming ids and never doc paths (ADR 0012). Other
+  tools have no hook that can do this; re-read with `./handoff show <id>`.
 - `./handoff mirror [--dry-run]` projects this section's open work one way into the board's issue
   tracker (`external.kind: issues`, `external.system`, `external.repo`), through
   `scripts/tracker-<system>.sh` — the GitHub adapter uses `gh`, so no credential lives on the board.

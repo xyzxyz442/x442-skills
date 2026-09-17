@@ -291,7 +291,7 @@ lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
 # --- payload field extraction: python3 first (repo standard), sed fallback ------------
-py_field() { # $1 = session|path
+py_field() { # $1 = session|path|source
   printf '%s' "$PAYLOAD" | python3 -c '
 import json, sys
 try:
@@ -301,14 +301,17 @@ except Exception:
 w = sys.argv[1]
 if w == "session":
     print(d.get("session_id") or d.get("sessionId") or "")
+elif w == "source":
+    print(d.get("source") or "")
 else:
     ti = d.get("tool_input") or d.get("toolArgs") or {}
     tr = d.get("tool_response") or {}
     print(ti.get("file_path") or ti.get("filePath") or tr.get("filePath") or "")
 ' "$1" 2> /dev/null
 }
-sed_field() { # $1 = session|path  (best-effort, no python3)
+sed_field() { # $1 = session|path|source  (best-effort, no python3)
   case "$1" in
+    source) printf '%s' "$PAYLOAD" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
     session) printf '%s' "$PAYLOAD" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
     path) printf '%s' "$PAYLOAD" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
   esac
@@ -448,11 +451,106 @@ board_health() {
   fi
 }
 
+# --- context that returns after compaction (ADR 0012) ----------------------------------
+# Compaction drops what a session knew about the work it holds a lease on: how to verify it, what
+# was settled, what already failed. Claude Code re-runs SessionStart with source "compact" after
+# compacting, and that is the only hook on any wired tool that can put text back, so this is where
+# the working set returns. Gemini CLI and Copilot CLI have no such event; the gap is documented in
+# setup-handoff rather than faked here.
+#
+# Capped, because compaction happened for want of room: re-injecting whole docs would undo it. Every
+# pointer names an id and a CLI command, never a doc path — a path goes stale on archive or move.
+HELD_DOC_CAP="${HANDOFF_COMPACT_DOC_CHARS:-2000}"
+HELD_TOTAL_CAP="${HANDOFF_COMPACT_TOTAL_CHARS:-6000}"
+HELD_SECTIONS="Current state|Verify|Decisions|Ruled out"
+
+section_text() { # path heading -> the section body, template comments stripped, blank edges trimmed
+  awk -v h="## $2" '
+    $0 == h { inside = 1; next }
+    inside && /^## / { exit }
+    !inside { next }
+    {
+      line = $0; out = ""
+      while (1) {
+        if (incomment) { e = index(line, "-->"); if (!e) { line = ""; break } line = substr(line, e + 3); incomment = 0 }
+        b = index(line, "<!--"); if (!b) break
+        out = out substr(line, 1, b - 1); line = substr(line, b + 4); incomment = 1
+      }
+      out = out line
+      if (out ~ /^[[:space:]]*$/ && (incomment || $0 ~ /-->[[:space:]]*$/)) next
+      buf[++n] = out
+    }
+    END {
+      first = 1; last = n
+      while (first <= n && buf[first] ~ /^[[:space:]]*$/) first++
+      while (last >= first && buf[last] ~ /^[[:space:]]*$/) last--
+      for (i = first; i <= last; i++) print buf[i]
+    }
+  ' "$1"
+}
+
+held_context() { # session -> the re-injected working set for every live lease it holds, or nothing
+  local sess="$1" f key id exp now left total=0 out="" block used sec body cut name mins
+  [ -n "$sess" ] || return 0
+  now="$(date +%s)"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    key="$(basename "$f" .md)"
+    [ "$(lock_session "$key")" = "$sess" ] && lock_live "$key" || continue
+    # The CLI takes the unprefixed id; a prefix-layout stem carries the section in front of it.
+    id="$key"
+    [ "$LAYOUT" = "prefix" ] && [ -n "$GROUP" ] && id="${key#"$GROUP"--}"
+    exp="$(lock_expires "$key")"
+    left=$((exp - now))
+    if [ "$left" -lt 1800 ]; then
+      mins=$((left / 60))
+      name="lease expires in ${mins} min, at $(date -r "$exp" '+%H:%M' 2> /dev/null || date -d "@$exp" '+%H:%M' 2> /dev/null) — touch it if you are still working: ${hd}/handoff touch ${id}"
+    else
+      name="lease expires $(date -r "$exp" '+%Y-%m-%d %H:%M' 2> /dev/null || date -d "@$exp" '+%Y-%m-%d %H:%M' 2> /dev/null)"
+    fi
+    if [ "$total" -ge "$HELD_TOTAL_CAP" ]; then
+      out="${out}- ${id} — ${name} — run: ${hd}/handoff show ${id}"$'\n'
+      continue
+    fi
+    block="### ${id} — $(meta "$f" title)"$'\n'"${name}"$'\n'
+    used=0
+    while IFS= read -r sec; do
+      body="$(section_text "$f" "$sec")"
+      [ -n "$body" ] || continue
+      if [ "$used" -ge "$HELD_DOC_CAP" ]; then
+        block="${block}"$'\n'"#### ${sec}"$'\n'"… (truncated — run: ${hd}/handoff show ${id} --section \"${sec}\")"$'\n'
+        continue
+      fi
+      if [ $((used + ${#body})) -gt "$HELD_DOC_CAP" ]; then
+        cut="$(printf '%s' "$body" | awk -v max=$((HELD_DOC_CAP - used)) '{ if (len + length($0) + 1 > max) exit; len += length($0) + 1; print }')"
+        body="${cut:+$cut
+}… (truncated — run: ${hd}/handoff show ${id} --section \"${sec}\")"
+        used="$HELD_DOC_CAP"
+      else
+        used=$((used + ${#body}))
+      fi
+      block="${block}"$'\n'"#### ${sec}"$'\n'"${body}"$'\n'
+    done < <(printf '%s\n' "$HELD_SECTIONS" | tr '|' '\n')
+    if [ $((total + ${#block})) -gt "$HELD_TOTAL_CAP" ] && [ "$total" -gt 0 ]; then
+      total="$HELD_TOTAL_CAP"
+      out="${out}- ${id} — ${name} — run: ${hd}/handoff show ${id}"$'\n'
+      continue
+    fi
+    total=$((total + ${#block}))
+    out="${out}${block}"$'\n'
+  done < <(each_doc)
+  [ -n "$out" ] || return 0
+  printf 'Context compacted — the handoffs you hold, restored (read the rest with %s/handoff show <id>):\n\n%s' "$hd" "$out"
+}
+
 case "$KIND" in
 
   sessionstart)
     reap_expired # stale leases self-heal at the start of every session
     health="$(board_health)"
+    held=""
+    # Reported, never extended: an automatic touch here would hide a session that has stalled.
+    [ "$(field source)" = "compact" ] && [ "$CLI_OK" = "1" ] && held="$(held_context "$(field session)")"
     out=""
     refs=""
     while IFS= read -r f; do
@@ -484,7 +582,11 @@ case "$KIND" in
       # the id discloses as much as the title does.
       [ "$(meta "$f" sensitivity)" = "restricted" ] \
         && line="$line [🔴 RESTRICTED — never export or delegate; do it in this session]"
-      if lock_live "$id"; then
+      if lock_live "$id" && [ -n "$(field session)" ] && [ "$(lock_session "$id")" = "$(field session)" ]; then
+        # This session's own lease — a resumed or compacted session reads the banner too, and
+        # "do not work on it" would tell it to abandon its own work.
+        line="$line [🔒 held by this session — keep working, release when you stop]"
+      elif lock_live "$id"; then
         line="$line [🔒 HELD by $(lock_owner "$id") — do not work on it]"
       elif [ -d "$LOCKS/$id" ]; then
         line="$line [⚠️ stale lease from $(lock_owner "$id") — reclaimable]"
@@ -497,7 +599,7 @@ case "$KIND" in
     done < <(each_doc)
     # CLI_OK is part of this guard: a board with nothing open still has to report a dead gate,
     # and an empty board is exactly where a broken install goes unnoticed longest.
-    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && [ "$CLI_OK" = "1" ] && exit 0
+    [ -z "$out" ] && [ -z "$refs" ] && [ -z "$held" ] && [ -z "$health" ] && [ "$CONFIG_MISSING" != "1" ] && [ "$CLI_OK" = "1" ] && exit 0
     # Name the board. `hd` is the RELATIVE path this repo was wired with, which reads as
     # ".agents/handoff" whether the board is in this repo or three directories up in a shared
     # workspace — the two cases where acting on the wrong one costs the most. When the resolved
@@ -523,6 +625,9 @@ Note: this checkout's handoff CLI uses ${LOCAL_NOTE} (set in .agents/handoff.loc
     # actually running. Telling an agent its edits are gated while the gate is off is worse than
     # saying nothing: it is the sentence that stops them from coordinating by hand.
     if [ "$CLI_OK" = "1" ]; then claim_note="claim before working — editing a doc without its lease is blocked"; else claim_note="claim before working — BUT the lease gate is off this session, see below"; fi
+    [ -n "$held" ] && ctx="${ctx}
+
+${held}"
     [ -n "$out" ] && ctx="${ctx}
 
 Open (${claim_note}):

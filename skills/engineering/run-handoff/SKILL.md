@@ -45,6 +45,13 @@ A path goes stale when a doc is archived or moved to another board; an id does n
 read-only and offline, needs no lease, and looks only in your section. A restricted doc prints the
 same handling banner as `claim`. Resolve `--path` when you need it, and never write it into a doc.
 
+**After your context is compacted, re-read what you hold before you continue.** On Claude Code the
+session-start hook does it for you: it re-injects each held handoff's Current state, Verify,
+Decisions, and Ruled out, and anything it cut ends with the `handoff show` command that prints the
+rest. On Gemini CLI and Copilot CLI nothing does — when you notice a compaction (a summary where
+your earlier turns were), run `handoff show <id> --section Verify` and the same for `Decisions` and
+`"Ruled out"` for every handoff you hold before touching the work again.
+
 ## 2. Claim your unit
 
 ```text
