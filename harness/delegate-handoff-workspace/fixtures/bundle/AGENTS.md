@@ -27,6 +27,10 @@ will not finish here (SEVERITY is low, medium, or high):
 .agents/handoff/handoff new HANDOFF_ID --title "..." --severity SEVERITY
 ```
 
+Carrying your own work into your next session is not a handoff. Solo session continuity — notes to
+yourself, a to-do list, where you left off — stays off the board, in whatever notes or session tool
+you already use. The board is for work another session, agent, or repo has to pick up.
+
 Titles must not contain `:` — a colon breaks the doc's YAML frontmatter in markdown previews. Use
 an em dash instead (`Handoff — auth suite`); the tool folds any colon you pass to `—` anyway, in
 `--title`, `--note`, `--audience`, `--severity`, and `--blocked-on`.

@@ -106,6 +106,13 @@ title from, is folded to `—`. The one blocker convention that reads as a colon
 "external: vendor ticket"` — is still the spelling to type, but it is stored as
 `blocked_on: external — vendor ticket`; both spellings are accepted.
 
+**Solo session continuity is not a handoff.** Carrying your own work into tomorrow's session —
+where you stopped, what to try next, a scratch to-do list — needs no lease, no board, and no
+verifier. Keep it off the board, in whatever notes or session-continuity tool you already use. File
+a handoff when the work crosses a boundary: another session or agent will pick it up, another repo
+has to act, or the work must survive you. A board full of private reminders is a board nobody can
+read for the work that actually needs coordinating.
+
 **Every bug you find becomes a handoff — including one you fix on the spot.** Wrong behavior, a
 silent failure, a gap that will bite the next agent: file it, with the reproduction you actually
 ran. If you are not fixing it, the handoff is how it survives the session. If you _are_ fixing it,
