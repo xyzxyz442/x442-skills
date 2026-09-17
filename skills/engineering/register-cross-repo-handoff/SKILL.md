@@ -34,8 +34,11 @@ Do **not** use it for a single repo's own handoffs — that is plain `setup-hand
 
 A cascade, lowest precedence first, nearest wins (exactly like `AGENTS.md` / `CLAUDE.md`):
 
-1. **user** — `~/.agents/handoff.json` (personal, uncommitted — also where the machine-local
-   checkout locations live)
+1. **user** — `~/.agents/handoff.json` (personal, uncommitted). **Allowed, not recommended, and
+   opt-in** (ADR 0010): it is read when `HANDOFF_USER_LAYER=1` is set or a `.agents/handoff.local.json`
+   at the scope or the sync folder holds `"userLayer": true`. For one release an un-opted file is
+   still read and the resolver warns; after that only the opt-in reads it. `~/.agents/` is shared
+   with other tools, and it is the one layer a teammate's checkout never sees.
 2. **workspace** — `<scope>/.agents/handoff.json` (the default; committed if the workspace is a repo)
 3. **subdir** — `<dir>/.agents/handoff.json` for dirs between scope and where you sync from
 
@@ -185,11 +188,13 @@ be committed, cloned, and still useless to the person who cloned it (ADR 0002).
 
 Location is now a per-machine concern, resolved by the CLI in this order:
 
-1. `~/.agents/handoff.json` — the `locations` map in the cascade's own user layer, which is the
-   one layer that is never committed (a location is true for exactly one disk).
+1. `<board>/.locations.json` — the board's own cache, per machine and ignored by the board's
+   `.gitignore` (a location is true for exactly one disk). A legacy `locations` map in
+   `~/.agents/handoff.json` is still read below it, until `handoff locations --move` moves this
+   board's entries in. Nothing writes to `~` any more.
 2. A schema-1 entry's `path`, if the file still has one. Still honoured, still unverified.
 3. A bounded scan of `$WORKSPACE_ROOT` and the board's parent directories, one level deep, whose
-   answer is cached back into the map.
+   answer is cached into `<board>/.locations.json`.
 
 `rootCommit` remains an **attestation, not a value to copy**: export reads the live root commit at
 whatever location resolved and trusts it only when the two agree. Everything that can go wrong
@@ -213,7 +218,7 @@ file exists to eliminate.
 
 A repo the registry identifies but this machine cannot locate reports `no-location` rather than
 "not declared". The two look alike and are fixed differently: the first wants a clone (or an entry
-in the location map), the second wants a manifest change and a re-sync.
+in the board's `.locations.json`), the second wants a manifest change and a re-sync.
 
 ## The board's remote
 

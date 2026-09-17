@@ -19,7 +19,7 @@ ASSETS="$(cd "$HERE/../../assets" && pwd)"
 SRC="$(mktemp -d)"
 TPL="$SRC/templates"
 mkdir -p "$TPL"
-cp "$HERE/handoff" "$HERE/config.sh" "$SRC/"
+cp "$HERE/handoff" "$HERE/config.sh" "$HERE/dispatcher" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
 chmod +x "$SRC/handoff"
 P=0
@@ -1092,10 +1092,10 @@ OF_OUT="$(cd "$OF" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$OF/
 chk "the registry resolves from _generated inside handoff.json" \
   "ok|$(cd "$OF_TARGET" && pwd -P)|$OF_ROOT" "$OF_OUT"
 
-# The machine-local layer is the same filename at $HOME. It is the one layer that must never be
-# committed, which is why it lives there rather than as a gitignored file inside a cloned board.
-chk "the location map is the ~ layer of the same file" "yes" \
-  "$([ -f "$HOME/.agents/handoff.json" ] && echo yes || echo no)"
+# That answer came from the LEGACY user map above, which is still read until someone moves it into
+# the board (ADR 0010). Reading it must never write it back — the board owns the cache now.
+chk "reading the legacy ~ map leaves the board's cache unwritten" "no" \
+  "$([ -e "$OF/.agents/handoff/.locations.json" ] && echo yes || echo no)"
 
 # Every board now HAS a handoff.json, so "present but declares no fleet" is the ordinary state of a
 # single-repo board. Reporting that as a corrupt registry would send someone to repair a good file.
@@ -1339,12 +1339,15 @@ printf '\nschema versioning — read forward, refuse to write backward (ADR 0003
 # older CLI could read a newer doc, release it, and silently drop every field it did not know.
 # Shipping only the read half is worse than shipping neither, so both are asserted together.
 SV="$(mkboard)"
+# The CLI's own schema, read off the frozen copy — a test that spells the number breaks on every bump.
+CLI_SCHEMA="$(sed -n 's/^SCHEMA_VERSION=//p' "$SRC/handoff" | head -1)"
 hb "$SV" new from-the-future --title "Written by a newer CLI" > /dev/null
 FUT="$SV/.agents/handoff/from-the-future-handoff.md"
 python3 - "$FUT" << 'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-s = p.read_text().replace("schema: 1", "schema: 99", 1)
+import re
+s = re.sub(r"^schema: [0-9]+$", "schema: 99", p.read_text(), count=1, flags=re.M)
 # A field this CLI has never heard of, to prove nothing quietly eats it. Deliberately nonsense:
 # it was `sensitivity` until that became a real field, and a placeholder the CLI later learns
 # stops testing anything.
@@ -1354,7 +1357,7 @@ hb "$SV" new ordinary-doc --title "An ordinary doc" > /dev/null
 
 SV_LIST="$(hb "$SV" list)"
 chk_contains "a newer doc is still LISTED" "$SV_LIST" "from-the-future-handoff"
-chk_contains "with one warning naming both versions" "$SV_LIST" "is schema 99; this CLI understands 1"
+chk_contains "with one warning naming both versions" "$SV_LIST" "is schema 99; this CLI understands $CLI_SCHEMA"
 chk "the warning is printed once, not once per doc" "1" \
   "$(printf '%s' "$SV_LIST" | grep -c 'this CLI understands' | tr -d ' ')"
 
@@ -1404,12 +1407,12 @@ chk_contains "a live lease in the section blocks migration" "$(hb "$SM" migrate 
 hb "$SM" release legacy-one --status open > /dev/null
 
 MIG="$(hb "$SM" migrate --yes)"
-chk_contains "migration reports the version move" "$MIG" "Board schema 0 → 1"
+chk_contains "migration reports the version move" "$MIG" "Board schema 0 → $CLI_SCHEMA"
 chk "environment becomes EXPLICIT (absent already meant dev — this asserts nothing new)" "dev" \
   "$(sed -n 's/^environment: //p' "$SMB/legacy-one-handoff.md" | head -1)"
 chk "depends_on gains its empty list" "[]" \
   "$(sed -n 's/^depends_on: //p' "$SMB/legacy-one-handoff.md" | head -1)"
-chk "the doc is stamped" "1" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
+chk "the doc is stamped" "$CLI_SCHEMA" "$(sed -n 's/^schema: //p' "$SMB/legacy-one-handoff.md" | head -1)"
 chk "a rewritable Current state section is added" "yes" \
   "$(grep -q '^## Current state' "$SMB/legacy-one-handoff.md" && echo yes || echo no)"
 # STRUCTURE ONLY. A migration that seeded Current state from the activity log, or stamped a
@@ -1419,7 +1422,7 @@ chk "but it is left EMPTY — no value was inferred" "" \
   "$(sed -n '/^## Current state/,/^## /p' "$SMB/legacy-one-handoff.md" | grep -v '^## \|^<!--\|^$' | head -1)"
 chk "each migrated doc gains exactly one activity entry" "1" \
   "$(grep -c 'migrated to schema 1' "$SMB/legacy-one-handoff.md" | tr -d ' ')"
-chk "the board itself is stamped" "1" \
+chk "the board itself is stamped" "$CLI_SCHEMA" \
   "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$SMB/handoff.json")"
 chk_contains "re-running is a no-op, not a second rewrite" "$(hb "$SM" migrate --yes)" "nothing to migrate"
 
@@ -1541,6 +1544,402 @@ S2_MISS="$(cd "$S2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$S2
 chk "an identified but unlocatable repo says so, rather than claiming it is undeclared" \
   "no-location||$S2_ROOT" "$S2_MISS"
 export HOME="$HOME_SAVE"
+
+printf '\nboard resolution stays inside the repo, and handoff.local.json outranks handoff.json (ADR 0010)\n'
+# A CLI that sits in no board, so rung 2 (this file's own directory) cannot answer and the repo's
+# config decides — the shape of a user-level install, which is where an unbounded walk did harm.
+BR_BIN="$(mktemp -d)"
+cp "$SRC/handoff" "$BR_BIN/handoff"
+brun() { # dir subcommand... -> run the unhoused CLI from dir, with no board exported
+  (cd "$1" && shift && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE bash "$BR_BIN/handoff" "$@") 2>&1
+}
+brboard() { # dir -> make dir a board the resolver recognizes
+  mkdir -p "$1/scripts"
+  cp "$SRC/config.sh" "$1/scripts/config.sh"
+}
+BR_WS="$(cd "$(mktemp -d)" && pwd -P)"
+brboard "$BR_WS/.agents/handoff"
+BR_REPO="$BR_WS/src/nested/repo"
+mkdir -p "$BR_REPO/sub"
+git -C "$BR_REPO" init -q
+chk_contains "an unwired repo two folders below an unrelated board resolves no board" \
+  "$(brun "$BR_REPO" which)" "no board found"
+chk "and says so with exit 3, not by acting on that board" 3 \
+  "$(
+    brun "$BR_REPO/sub" which > /dev/null
+    echo $?
+  )"
+mkdir -p "$BR_WS/plain/dir"
+chk_contains "a folder outside any repo does not walk up either" \
+  "$(brun "$BR_WS/plain/dir" which)" "no board found"
+chk_contains "the folder that holds the board still resolves it" \
+  "$(brun "$BR_WS" which)" "$BR_WS/.agents/handoff"
+
+brboard "$BR_REPO/.agents/handoff"
+chk_contains "an in-repo board resolves from a subfolder of that repo" \
+  "$(brun "$BR_REPO/sub" which)" "in-repo .agents/handoff"
+
+BR_TEAM="$(cd "$(mktemp -d)" && pwd -P)"
+BR_MINE="$(cd "$(mktemp -d)" && pwd -P)"
+brboard "$BR_TEAM"
+brboard "$BR_MINE"
+printf '{ "board": "%s" }\n' "$BR_TEAM" > "$BR_REPO/.agents/handoff.json"
+chk_contains "the committed config outranks the in-repo board" \
+  "$(brun "$BR_REPO" which)" "$BR_TEAM"
+printf '{ "board": "%s" }\n' "$BR_MINE" > "$BR_REPO/.agents/handoff.local.json"
+BR_OUT="$(brun "$BR_REPO" which)"
+chk_contains "handoff.local.json outranks handoff.json" "$BR_OUT" "$BR_MINE"
+chk_contains "and which names it as the source" "$BR_OUT" "handoff.local.json"
+printf '{ "group": "mine" }\n' > "$BR_REPO/.agents/handoff.local.json"
+chk_contains "a local file that names no board falls through to handoff.json" \
+  "$(brun "$BR_REPO" which)" "$BR_TEAM"
+printf '{ "board": "%s/gone" }\n' "$BR_MINE" > "$BR_REPO/.agents/handoff.local.json"
+BR_GONE="$(brun "$BR_REPO" which)"
+chk_contains "a local board that is absent is a hard error, never a fallback" "$BR_GONE" "does not exist"
+chk_contains "and the error names the local file" "$BR_GONE" "handoff.local.json"
+
+printf '\nthe location cache lives in the board, not under ~ (ADR 0010)\n'
+LC="$(mkboard)"
+LC_TARGET="$(cd "$(mktemp -d)" && pwd -P)/acme-lib"
+mkdir -p "$LC_TARGET"
+git -C "$LC_TARGET" init -q
+git -C "$LC_TARGET" config user.email "test@example.com"
+git -C "$LC_TARGET" config user.name "test"
+printf 'x\n' > "$LC_TARGET/README.md"
+git -C "$LC_TARGET" add -A
+git -C "$LC_TARGET" commit -qm "initial commit"
+LC_ROOT="$(git -C "$LC_TARGET" rev-list --max-parents=0 HEAD | tail -1)"
+cat > "$LC/.agents/handoff/handoff.json" << JSON
+{
+  "topology": "cross-repo",
+  "_generated": {
+    "schema": 2,
+    "repos": [
+      { "group": "acme", "alias": "lib", "audience": "acme-lib-$$", "rootCommit": "$LC_ROOT" }
+    ]
+  }
+}
+JSON
+LC_HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+LC_OUT="$(cd "$LC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC/.agents/handoff" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$")"
+chk "a discovered checkout resolves" "ok|$LC_TARGET|$LC_ROOT" "$LC_OUT"
+chk "and is cached in the board's .locations.json" "$LC_TARGET" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["locations"][sys.argv[2]])' "$LC/.agents/handoff/.locations.json" "$LC_ROOT" 2> /dev/null)"
+chk "and nothing is written under ~" "no" \
+  "$([ -e "$HOME/.agents" ] && echo yes || echo no)"
+LC_CACHED="$(cd "$LC" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC/.agents/handoff" WORKSPACE_ROOT="/nonexistent" board_repo_entry "acme-lib-$$")"
+chk "the board cache answers without a scan" "ok|$LC_TARGET|$LC_ROOT" "$LC_CACHED"
+
+# A legacy map still ANSWERS until it is moved — declining the move must not break resolution.
+LC2="$(mkboard)"
+cp "$LC/.agents/handoff/handoff.json" "$LC2/.agents/handoff/handoff.json"
+mkdir -p "$HOME/.agents"
+printf '{ "locations": { "%s": "%s", "someoneelse": "/elsewhere" }, "groups": {} }\n' \
+  "$LC_ROOT" "$LC_TARGET" > "$HOME/.agents/handoff.json"
+LC_LEGACY="$(cd "$LC2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$LC2/.agents/handoff" WORKSPACE_ROOT="/nonexistent" board_repo_entry "acme-lib-$$")"
+chk "an unmigrated legacy map still resolves" "ok|$LC_TARGET|$LC_ROOT" "$LC_LEGACY"
+chk "and resolving from it writes nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+chk "the offer counts only this board's entries" "1" \
+  "$(HANDOFF_NO_MAIN=1 . "$SRC/config.sh" && handoff_legacy_locations "$LC2/.agents/handoff")"
+chk_contains "locations names the pending move" "$(hb "$LC2" locations)" "1 legacy location(s)"
+chk "and reporting it moves nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+# Declining is what every non-interactive write does: no tty, so no prompt and no move.
+hb "$LC2" new offer-probe --title "probe" > /dev/null
+chk "a write with nobody to ask moves nothing" "no" \
+  "$([ -e "$LC2/.agents/handoff/.locations.json" ] && echo yes || echo no)"
+LC_MOVED="$(hb "$LC2" locations --move)"
+chk_contains "locations --move reports the move" "$LC_MOVED" "Moved 1 location(s)"
+chk "the entry is now in the board" "$LC_TARGET" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["locations"][sys.argv[2]])' "$LC2/.agents/handoff/.locations.json" "$LC_ROOT" 2> /dev/null)"
+chk "and gone from the user map" "False" \
+  "$(python3 -c 'import json,sys; print(sys.argv[2] in json.load(open(sys.argv[1]))["locations"])' "$HOME/.agents/handoff.json" "$LC_ROOT")"
+chk "another board's entry stays in the user map" "True" \
+  "$(python3 -c 'import json,sys; print("someoneelse" in json.load(open(sys.argv[1]))["locations"])' "$HOME/.agents/handoff.json")"
+chk "unrelated keys in the user file are untouched" "True" \
+  "$(python3 -c 'import json,sys; print("groups" in json.load(open(sys.argv[1])))' "$HOME/.agents/handoff.json")"
+chk "the board ignores its cache" "yes" \
+  "$(grep -qxF '.locations.json' "$LC2/.agents/handoff/.gitignore" && echo yes || echo no)"
+chk "nothing is left to offer" "0" \
+  "$(HANDOFF_NO_MAIN=1 . "$SRC/config.sh" && handoff_legacy_locations "$LC2/.agents/handoff")"
+export HOME="$LC_HOME_SAVE"
+
+printf '\ncheckpoint publishes Current state and keeps the lease (ADR 0011)\n'
+# Progress used to reach teammates only at `release`, and `touch` extends a lease without carrying
+# any. A checkpoint is the middle: rewrite Current state, commit and push, keep holding the work.
+CPB="$(mkshared)"
+cph() { # session subcommand... -> run the shared board's CLI as that session
+  local s="$1"
+  shift
+  HANDOFF_SESSION_ID="$s" "$CPB/handoff" "$@" 2>&1
+}
+CP_ME="cp-self-$$"
+cph "$CP_ME" new cp-work --title "Checkpoint work" --audience acme-api > /dev/null
+CPD="$CPB/cp-work-handoff.md"
+chk_contains "checkpoint on an unclaimed handoff refuses" \
+  "$(cph "$CP_ME" checkpoint cp-work "early")" "not claimed"
+cph "$CP_ME" claim cp-work "starting" > /dev/null
+CP_OUT="$(cph "$CP_ME" checkpoint cp-work "Parser written; tests next.")"
+chk_contains "checkpoint reports what it did" "$CP_OUT" "Checkpointed cp-work-handoff"
+chk "Current state holds exactly the new text" "Parser written; tests next." \
+  "$(doc_section "$CPD" "Current state")"
+cph "$CP_ME" checkpoint cp-work "Tests pass; docs next." > /dev/null
+chk "a second checkpoint overwrites, never appends" "Tests pass; docs next." \
+  "$(doc_section "$CPD" "Current state")"
+chk "the section still sits above Context" "before" \
+  "$([ "$(grep -n '^## Current state' "$CPD" | cut -d: -f1)" -lt "$(grep -n '^## Context' "$CPD" | cut -d: -f1)" ] && echo before || echo after)"
+chk "updated is stamped" "$(date +%Y-%m-%d)" "$(sed -n 's/^updated: //p' "$CPD" | head -1)"
+chk "the status is untouched" "open" "$(sed -n 's/^status: //p' "$CPD" | head -1)"
+chk "the lease is still held by this session" "$CP_ME" \
+  "$(sed -n 's/^session=//p' "$CPB/.locks/cp-work-handoff/owner" 2> /dev/null)"
+chk "the checkpoint is committed" "yes" \
+  "$(git -C "$CPB" log -1 --format=%s | grep -q 'checkpoint cp-work-handoff' && echo yes || echo no)"
+chk "and pushed" "" "$(git -C "$CPB" status -sb | grep -o 'ahead')"
+chk "the remote has the new Current state" "yes" \
+  "$(git -C "$CPB" show "origin/$(git -C "$CPB" rev-parse --abbrev-ref HEAD):cp-work-handoff.md" | grep -qx 'Tests pass; docs next.' && echo yes || echo no)"
+
+chk_contains "another session cannot checkpoint a lease it does not hold" \
+  "$(cph "cp-other-$$" checkpoint cp-work "hijack")" "does not hold"
+chk "and nothing was written" "Tests pass; docs next." "$(doc_section "$CPD" "Current state")"
+
+CP_LEAK="$(cph "$CP_ME" checkpoint cp-work "key $AWSKEY in the config")"
+chk_contains "the Current state text is secret-scanned" "$CP_LEAK" "looks like it contains a credential"
+chk "and a refused checkpoint writes nothing" "Tests pass; docs next." "$(doc_section "$CPD" "Current state")"
+
+# With no text, a checkpoint publishes the doc as the holder already edited it by hand.
+awk '/^## Current state/ { print; print ""; print "Edited by hand under the lease."; skip = 1; next }
+     skip && /^## / { skip = 0; print "" }
+     !skip { print }' "$CPD" > "$CPD.tmp" && cat "$CPD.tmp" > "$CPD"
+cph "$CP_ME" checkpoint cp-work > /dev/null
+chk "a text-less checkpoint pushes the hand edit" "yes" \
+  "$(git -C "$CPB" show "origin/$(git -C "$CPB" rev-parse --abbrev-ref HEAD):cp-work-handoff.md" | grep -qx 'Edited by hand under the lease.' && echo yes || echo no)"
+chk_contains "checkpoint on a standalone doc refuses — there is no lease to keep" \
+  "$(
+    cph "$CP_ME" new cp-ref --standalone --title "ref" --audience acme-api > /dev/null
+    cph "$CP_ME" checkpoint cp-ref "x"
+  )" "standalone"
+
+printf '\nan external tracker attaches per board, by reference (ADR 0011, schema 2)\n'
+XR="$(mkboard)"
+XRB="$XR/.agents/handoff"
+chk_contains "--ref on a board that attaches no tracker refuses" \
+  "$(hb "$XR" new no-tracker --title "t" --ref ABC-1)" "attaches no external tracker"
+chk "and creates nothing" "no" "$([ -f "$XRB/no-tracker-handoff.md" ] && echo yes || echo no)"
+printf '{ "external": { "kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+" } }\n' > "$XRB/handoff.json"
+hb "$XR" new ticketed --title "Ticketed" --ref ABC-12 > /dev/null
+chk "new --ref records external_ref" "ABC-12" "$(sed -n 's/^external_ref: //p' "$XRB/ticketed-handoff.md" | head -1)"
+chk "a new doc is stamped with the current schema" "2" "$(sed -n 's/^schema: //p' "$XRB/ticketed-handoff.md" | head -1)"
+chk_contains "a reference that does not match refPattern refuses" \
+  "$(hb "$XR" new mistyped --title "m" --ref abc12)" "does not match"
+chk "and creates nothing" "no" "$([ -f "$XRB/mistyped-handoff.md" ] && echo yes || echo no)"
+chk_contains "the pattern matches the WHOLE reference, not a substring" \
+  "$(hb "$XR" new padded --title "p" --ref "see ABC-12 please")" "does not match"
+hb "$XR" new other --title "Other" --ref XYZ-9 > /dev/null
+hb "$XR" new unticketed --title "Unticketed" > /dev/null
+XR_LIST="$(hb "$XR" list --ref ABC-12)"
+chk_contains "list --ref shows the matching doc" "$XR_LIST" "ticketed-handoff"
+chk "and nothing else" "0" "$(printf '%s\n' "$XR_LIST" | grep -c 'other-handoff\|unticketed-handoff')"
+chk "a doc without a reference carries no external_ref line" "0" \
+  "$(grep -c '^external_ref' "$XRB/unticketed-handoff.md")"
+
+printf '\nmigrating schema 1 to 2 changes structure only\n'
+XM="$(mkboard)"
+XMB="$XM/.agents/handoff"
+hb "$XM" new one-doc --title "One" > /dev/null
+hb "$XM" new zero-doc --title "Zero" > /dev/null
+git -C "$XM" add -A && git -C "$XM" commit -qm "board"
+# Age the board: one doc at schema 1, one at schema 0 (no stamp, no Current state).
+XT="$(mktemp)"
+awk '{ sub(/^schema: 2$/, "schema: 1"); print }' "$XMB/one-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/one-doc-handoff.md"
+awk '/^schema: /{next} /^environment: /{next} /^depends_on: /{next} /^## Current state/{skip=1; next} skip && /^## /{skip=0} !skip{print}' \
+  "$XMB/zero-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/zero-doc-handoff.md"
+
+printf '{ "schema": 1 }\n' > "$XMB/handoff.json"
+git -C "$XM" add -A && git -C "$XM" commit -qm "aged"
+XM_OUT="$(hb "$XM" migrate --yes)"
+chk_contains "migrate names the step" "$XM_OUT" "1 → 2"
+chk "a schema-1 doc is stamped 2" "2" "$(sed -n 's/^schema: //p' "$XMB/one-doc-handoff.md" | head -1)"
+chk "a schema-0 doc goes all the way to 2" "2" "$(sed -n 's/^schema: //p' "$XMB/zero-doc-handoff.md" | head -1)"
+chk "and still gains its Current state on the way" "yes" \
+  "$(grep -q '^## Current state' "$XMB/zero-doc-handoff.md" && echo yes || echo no)"
+chk "no reference is invented" "0" "$(grep -c '^external_ref' "$XMB/one-doc-handoff.md")"
+chk_contains "the migration is logged on the doc" "$(cat "$XMB/one-doc-handoff.md")" "migrated to schema 2"
+chk "the board is stamped 2" "2" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$XMB/handoff.json")"
+
+# A schema-1 CLI must refuse to write a schema-2 doc: it would silently drop external_ref (ADR 0003).
+XO="$(mktemp -d)"
+sed 's/^SCHEMA_VERSION=2$/SCHEMA_VERSION=1/' "$SRC/handoff" > "$XO/handoff"
+chk_contains "a schema-1 CLI refuses to claim a schema-2 doc" \
+  "$(cd "$XR" && HANDOFF_BOARD_PATH="$XRB" bash "$XO/handoff" claim ticketed "old tool" 2>&1)" "refusing to write"
+
+printf '\nmove transfers a handoff between boards, checked against the remotes (ADR 0011)\n'
+# A board's trust boundary is read from its git remote: same host and owner, or a target with no
+# remote, proceeds; anything else refuses until the target's host/owner is named. The bare remotes
+# stay local — url.insteadOf maps each hosted-looking URL onto its bare directory, so pushes land
+# while the configured URL still carries the host and owner the check reads.
+mkremote() { # url -> a shared board whose origin is configured as <url>
+  local b bare
+  b="$(mkshared)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '%s' "$b"
+}
+MV_ME="mv-self-$$"
+mvh() { # board subcommand... -> that board's CLI as this session
+  local b="$1"
+  shift
+  (cd "$b" && HANDOFF_SESSION_ID="$MV_ME" ./handoff "$@") 2>&1
+}
+MVA="$(mkremote "git@github.com:acme/board-a.git")"
+MVB="$(mkremote "https://github.com/acme/board-b.git")"
+MVC="$(mkremote "git@github.com:globex/board-c.git")"
+
+mvh "$MVA" new mv-work --title "Movable work" --audience acme-api > /dev/null
+mvh "$MVA" new mv-base --title "Base" --audience acme-api > /dev/null
+mvh "$MVA" new mv-dep --title "Dependent" --audience acme-api --after mv-base > /dev/null
+
+chk_contains "move refuses a handoff this session does not hold" \
+  "$(mvh "$MVA" move mv-work --to "$MVB")" "claim it first"
+
+mvh "$MVA" claim mv-work "moving it" > /dev/null
+MV_OUT="$(mvh "$MVA" move mv-work --to "$MVB")"
+chk_contains "same host and owner proceeds" "$MV_OUT" "Moved mv-work-handoff"
+chk "the doc lands on the target" "yes" "$([ -f "$MVB/mv-work-handoff.md" ] && echo yes || echo no)"
+chk "and arrives unclaimed" "no" "$([ -d "$MVB/.locks/mv-work-handoff" ] && echo yes || echo no)"
+chk_contains "the target records where it came from" "$(sed -n 's/^moved_from: //p' "$MVB/mv-work-handoff.md")" "github.com/acme/board-a"
+chk "the source no longer lists it as open work" "0" "$(mvh "$MVA" list | grep -c 'mv-work-handoff')"
+chk "the source keeps an archived pointer, not a copy" "yes" \
+  "$([ -f "$MVA/archive/mv-work-handoff.md" ] && grep -q '^moved_to: ' "$MVA/archive/mv-work-handoff.md" && echo yes || echo no)"
+chk "the pointer's body is one line" "1" \
+  "$(awk 'n >= 2 && NF { print } /^---$/ { n++ }' "$MVA/archive/mv-work-handoff.md" | wc -l | tr -d ' ')"
+chk "a same-owner move is not logged as crossing remotes" "0" "$(grep -c 'across remotes' "$MVB/mv-work-handoff.md")"
+chk "the source lease is gone" "no" "$([ -d "$MVA/.locks/mv-work-handoff" ] && echo yes || echo no)"
+chk "the target commit is pushed" "" "$(git -C "$MVB" status -sb | grep -o 'ahead')"
+chk "the source commit is pushed" "" "$(git -C "$MVA" status -sb | grep -o 'ahead')"
+
+mvh "$MVA" new mv-away --title "Away" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-away "moving" > /dev/null
+MV_X="$(mvh "$MVA" move mv-away --to "$MVC")"
+chk_contains "a different owner refuses" "$MV_X" "refusing"
+chk_contains "and names both remotes" "$MV_X" "github.com/globex"
+chk "and moves nothing" "no" "$([ -f "$MVC/mv-away-handoff.md" ] && echo yes || echo no)"
+chk_contains "a wrong --to-remote is still refused" \
+  "$(mvh "$MVA" move mv-away --to "$MVC" --to-remote github.com/acme)" "refusing"
+chk_contains "naming the target's host/owner proceeds" \
+  "$(mvh "$MVA" move mv-away --to "$MVC" --to-remote github.com/globex)" "Moved mv-away-handoff"
+chk "a named crossing is recorded on the moved doc" "1" "$(grep -c 'across remotes, target named as github.com/globex' "$MVC/mv-away-handoff.md")"
+
+mvh "$MVA" new mv-secret --title "Restricted" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$MVA" claim mv-secret "moving" > /dev/null
+chk_contains "a restricted doc never crosses a differing remote, even when named" \
+  "$(mvh "$MVA" move mv-secret --to "$MVC" --to-remote github.com/globex)" "restricted"
+chk "and stays put" "yes" "$([ -f "$MVA/mv-secret-handoff.md" ] && echo yes || echo no)"
+chk_contains "but moves within the same owner" \
+  "$(mvh "$MVA" move mv-secret --to "$MVB")" "Moved mv-secret-handoff"
+
+mvh "$MVA" claim mv-dep "moving" > /dev/null
+mvh "$MVA" move mv-dep --to "$MVB" > /dev/null
+chk "depends_on does not cross boards" "[]" "$(sed -n 's/^depends_on: //p' "$MVB/mv-dep-handoff.md")"
+chk_contains "it becomes an external blocker naming the dependency" \
+  "$(sed -n 's/^blocked_on: //p' "$MVB/mv-dep-handoff.md")" "mv-base-handoff"
+
+mvh "$MVB" new mv-clash --title "Already here" --audience acme-api > /dev/null
+mvh "$MVA" new mv-clash --title "Clash" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-clash "moving" > /dev/null
+chk_contains "an id already on the target refuses" "$(mvh "$MVA" move mv-clash --to "$MVB")" "--id"
+chk_contains "--id gives it a new id on the target" \
+  "$(mvh "$MVA" move mv-clash --to "$MVB" --id mv-clash-2)" "mv-clash-2-handoff"
+chk "under that id" "yes" "$([ -f "$MVB/mv-clash-2-handoff.md" ] && echo yes || echo no)"
+
+printf '\nx\n' >> "$MVA/mv-base-handoff.md"
+mvh "$MVA" claim mv-base "moving" > /dev/null
+printf 'key %s\n' "$AWSKEY" >> "$MVA/mv-base-handoff.md"
+chk_contains "a doc holding a credential is refused" \
+  "$(mvh "$MVA" move mv-base --to "$MVB")" "looks like it contains a credential"
+
+MVN="$(mkboard_nogit)"
+mvh "$MVA" new mv-local --title "Local" --audience acme-api > /dev/null
+mvh "$MVA" claim mv-local "moving" > /dev/null
+chk_contains "a target with no remote proceeds — it keeps material on one machine" \
+  "$(mvh "$MVA" move mv-local --to "$MVN/.agents/handoff")" "Moved mv-local-handoff"
+
+printf '\nhandoff.local.json outranks the board a dispatcher or a vendored CLI implies (review fix)\n'
+# The board's own dispatcher sets HANDOFF_BOARD_PATH to its directory, which is rung 1, and a CLI
+# sitting in a board answers from rung 2 — so a developer's handoff.local.json was never read on
+# the path every hook and every habit uses. Only an OPERATOR's explicit override may still beat it.
+RF="$(mkboard)"
+RF_MINE="$(cd "$(mktemp -d)" && pwd -P)"
+mkdir -p "$RF_MINE/scripts"
+cp "$SRC/config.sh" "$RF_MINE/scripts/config.sh"
+printf '{ "board": "%s" }\n' "$RF_MINE" > "$RF/.agents/handoff.local.json"
+RF_W="$(hb "$RF" which)"
+chk_contains "a CLI inside the team board still resolves the developer's local board" "$RF_W" "$RF_MINE"
+chk_contains "and says the local file decided it" "$RF_W" "handoff.local.json"
+
+# The dispatcher shape: the root file is the shim, the CLI is vendored under scripts/.
+RFD="$(mkboard)"
+RFDB="$RFD/.agents/handoff"
+cp "$SRC/dispatcher" "$RFDB/handoff"
+cp "$SRC/handoff" "$RFDB/scripts/handoff-cli"
+chmod +x "$RFDB/handoff"
+printf '{ "board": "%s" }\n' "$RF_MINE" > "$RFD/.agents/handoff.local.json"
+RFD_W="$(cd "$RFD" && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN ./.agents/handoff/handoff which 2>&1)"
+chk_contains "through the dispatcher, the local board wins too" "$RFD_W" "$RF_MINE"
+chk_contains "naming the local file as the source" "$RFD_W" "handoff.local.json"
+RFD_OP="$(cd "$RFD" && env -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN HANDOFF_BOARD_PATH="$RFDB" ./.agents/handoff/handoff which 2>&1)"
+chk_contains "an operator's explicit HANDOFF_BOARD_PATH still beats the local file" "$RFD_OP" "$RFDB"
+chk "and the local board is not what answered" "0" "$(printf '%s\n' "$RFD_OP" | grep -c "^board .*$RF_MINE")"
+printf '{ "board": "%s/gone" }\n' "$RF_MINE" > "$RFD/.agents/handoff.local.json"
+chk_contains "a local board that is absent is a hard error through the dispatcher as well" \
+  "$(cd "$RFD" && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN ./.agents/handoff/handoff which 2>&1)" "does not exist"
+
+printf '\na text-less checkpoint scans what it publishes (review fix)\n'
+CKB="$(mkshared)"
+CK_ME="ck-self-$$"
+HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" new ck-work --title "Check" --audience acme-api > /dev/null 2>&1
+HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" claim ck-work "working" > /dev/null 2>&1
+printf '\nPasted by hand: %s\n' "$AWSKEY" >> "$CKB/ck-work-handoff.md"
+CK_OUT="$(HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" checkpoint ck-work 2>&1)"
+chk_contains "a hand edit carrying a credential is refused" "$CK_OUT" "looks like it contains a credential"
+chk "and nothing is pushed" "no" \
+  "$(git -C "$CKB" show "origin/$(git -C "$CKB" rev-parse --abbrev-ref HEAD):ck-work-handoff.md" 2> /dev/null | grep -q 'Pasted by hand' && echo yes || echo no)"
+CK_OUT2="$(HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" checkpoint ck-work "clean text" 2>&1)"
+chk_contains "clean text does not launder a credential already in the doc" "$CK_OUT2" "looks like it contains a credential"
+
+printf '\nignore-rule appends never glue onto an unterminated last line (review fix)\n'
+GL="$(mkboard)"
+GLB="$GL/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GLB/handoff.json"
+printf '.locks/' > "$GLB/.gitignore"
+GL_HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+mkdir -p "$HOME/.agents"
+printf '{ "locations": { "%s": "%s" } }\n' "$LC_ROOT" "$LC_TARGET" > "$HOME/.agents/handoff.json"
+hb "$GL" locations --move > /dev/null
+chk "handoff_ignore_locations keeps .locks/ on its own line" "yes" \
+  "$(grep -qx '.locks/' "$GLB/.gitignore" && grep -qx '.locations.json' "$GLB/.gitignore" && echo yes || echo no)"
+export HOME="$GL_HOME_SAVE"
+GL2="$(mkboard)"
+GL2B="$GL2/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GL2B/handoff.json"
+printf '.locks/' > "$GL2B/.gitignore"
+(cd "$GL2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$GL2B" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$" > /dev/null)
+chk "the location scan keeps .locks/ on its own line too" "yes" \
+  "$(grep -qx '.locks/' "$GL2B/.gitignore" && grep -qx '.locations.json' "$GL2B/.gitignore" && echo yes || echo no)"
+GL3="$(mkboard)"
+GL3B="$GL3/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GL3B/handoff.json"
+printf '.locks/\n' > "$GL3B/.gitignore"
+(cd "$GL3" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$GL3B" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$" > /dev/null)
+chk "a terminated file gains no blank line" "$(printf '.locks/\n.locations.json')" "$(cat "$GL3B/.gitignore")"
+GL4="$(mktemp -d)"
+printf 'x\n' > "$GL4/f"
+(. "$SRC/config.sh" && handoff_append_line "$GL4/f" y)
+chk "handoff_append_line adds no blank line after a terminated file" "$(printf 'x\ny')" "$(cat "$GL4/f")"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

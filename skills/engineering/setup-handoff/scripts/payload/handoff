@@ -22,9 +22,16 @@ set -uo pipefail
 #   2. this file's directory — only when the file itself sits in a board. This is the vendored
 #                              install and every board that predates the split: invoking the CLI
 #                              inside a board has always meant that board, and it still does.
-#   3. the repo's own config — .agents/handoff.json `board`/`boardPath`, what a cross-repo install
-#                              records. This is how a user-level CLI finds a shared board.
-#   4. an in-repo board      — .agents/handoff/ walking up from the working directory.
+#   3. the repo's own config — .agents/handoff.local.json, then .agents/handoff.json, each by its
+#                              `board`/`boardPath`. The local file is one developer's choice and is
+#                              never committed; the other is the team's and is what a cross-repo
+#                              install records. This is how a user-level CLI finds a shared board.
+#   4. an in-repo board      — <repo>/.agents/handoff/, or ./.agents/handoff/ outside any repo.
+#
+# RUNG 4 NEVER WALKS UPWARD (ADR 0010). It used to climb to `/`, so a repo with no board config
+# that sat anywhere under a workspace holding a board resolved to THAT board — a different trust
+# boundary, reached silently. A board outside the repo is found once, at setup (which scans two
+# parent levels and asks), and written into config; runtime only reads what setup wrote.
 #
 # CONFIGURED-BUT-ABSENT IS A HARD ERROR, never a fallback. Rungs 1 and 3 are someone stating where
 # the board is; if it is not there, the honest answer is to say so. Silently sliding down to rung 4
@@ -36,13 +43,17 @@ _board_looks_real() { [ -f "$1/scripts/config.sh" ] || [ -f "$1/config.sh" ]; }
 # and this is the lookup that finds the board. Deliberately the narrowest possible reader: one key,
 # no precedence, no legacy shell format (a machine with a KEY=value config predates board/binary
 # separation and resolves by rung 2 anyway).
-_board_from_repo_config() { # repo-dir -> prints the configured board path, or nothing
-  local repo="$1" f
+#
+# Prints "file<TAB>board" for the first file, highest precedence first, that names a board. A file
+# that exists but names none falls through: a handoff.local.json holding only a `group` is a
+# per-user section choice, not a claim about where the board is.
+_board_from_repo_config() { # repo-dir -> prints "config-file<TAB>board path", or nothing
+  local repo="$1" f v
   [ -n "$repo" ] || return 0
-  for f in "$repo/.agents/handoff.json" "$repo/.agents/handoff.config.json"; do
+  for f in "$repo/.agents/handoff.local.json" "$repo/.agents/handoff.json" "$repo/.agents/handoff.config.json"; do
     [ -f "$f" ] || continue
     if command -v python3 > /dev/null 2>&1; then
-      python3 -c 'import json,sys
+      v="$(python3 -c 'import json,sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
@@ -50,11 +61,14 @@ except Exception:
 if isinstance(d, dict):
     v = d.get("board") or d.get("boardPath") or ""
     if isinstance(v, str) and v:
-        sys.stdout.write(v)' "$f" && return 0
+        sys.stdout.write(v)' "$f")"
     else
-      sed -n 's/.*"board\(Path\)\{0,1\}"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' "$f" | head -1
-      return 0
+      v="$(sed -n 's/.*"board\(Path\)\{0,1\}"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\2/p' "$f" | head -1)"
     fi
+    [ -n "$v" ] && {
+      printf '%s\t%s' "$f" "$v"
+      return 0
+    }
   done
 }
 
@@ -79,30 +93,43 @@ elif _board_looks_real "$_self_dir"; then
 else
   _cfg_board="$(_board_from_repo_config "$_repo_top")"
   if [ -n "$_cfg_board" ]; then
-    BOARD_SOURCE="$_repo_top/.agents/handoff.json"
-    DIR="$_cfg_board"
+    BOARD_SOURCE="${_cfg_board%%$'\t'*}"
+    DIR="${_cfg_board#*$'\t'}"
     case "$DIR" in /*) ;; *) DIR="$(cd "$_repo_top/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
     [ -d "$DIR" ] || {
-      echo "handoff: this repo's .agents/handoff.json points at $DIR, which does not exist." >&2
-      echo "         Refusing to fall back to another board — fix the config, or re-run setup-handoff." >&2
+      echo "handoff: this repo's $(basename "$BOARD_SOURCE") points at $DIR, which does not exist." >&2
+      echo "         Refusing to fall back to another board — fix $BOARD_SOURCE, or re-run setup-handoff." >&2
       exit 3
     }
-  else
-    _walk="${_repo_top:-$PWD}"
-    while :; do
-      if _board_looks_real "$_walk/.agents/handoff"; then
-        BOARD_SOURCE="in-repo .agents/handoff"
-        DIR="$(cd "$_walk/.agents/handoff" && pwd)"
-        break
-      fi
-      [ "$_walk" = "/" ] && break
-      _walk="$(dirname "$_walk")"
-    done
+  elif _board_looks_real "${_repo_top:-$PWD}/.agents/handoff"; then
+    BOARD_SOURCE="in-repo .agents/handoff"
+    DIR="$(cd "${_repo_top:-$PWD}/.agents/handoff" && pwd)"
   fi
 fi
+# ADR 0010 puts handoff.local.json above everything but an explicit override. Rungs 1 and 2 are
+# usually NOT explicit: a board's dispatcher exports its own directory as HANDOFF_BOARD_PATH on every
+# call, and a vendored CLI answers from where it sits. Both only say "the board this file belongs
+# to", which is the team's board — so without this, a developer's local choice was never read on the
+# path every hook and every habit uses. An operator's own export (any other source) still wins.
+case "$BOARD_SOURCE" in
+  "this board's dispatcher" | "this CLI's own directory")
+    _local_cfg="$(_board_from_repo_config "$_repo_top")"
+    if [ "${_local_cfg%%$'\t'*}" = "$_repo_top/.agents/handoff.local.json" ]; then
+      _implied="$BOARD_SOURCE"
+      BOARD_SOURCE="$_repo_top/.agents/handoff.local.json (over $_implied)"
+      DIR="${_local_cfg#*$'\t'}"
+      case "$DIR" in /*) ;; *) DIR="$(cd "$_repo_top/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
+      [ -d "$DIR" ] || {
+        echo "handoff: this repo's handoff.local.json points at $DIR, which does not exist." >&2
+        echo "         Refusing to fall back to $_implied — fix $_repo_top/.agents/handoff.local.json." >&2
+        exit 3
+      }
+    fi
+    ;;
+esac
 [ -n "$DIR" ] || {
-  echo "handoff: no board found." >&2
-  echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, this repo's .agents/handoff.json, then .agents/handoff/ upward from $PWD." >&2
+  echo "handoff: no board found for ${_repo_top:-$PWD}." >&2
+  echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, .agents/handoff.local.json and .agents/handoff.json here, then .agents/handoff/ here. Nothing above this folder is searched." >&2
   echo "         Fix: run the setup-handoff skill in this repo, or export HANDOFF_BOARD_PATH=<board>." >&2
   exit 3
 }
@@ -709,7 +736,7 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
 # offline-import path dies on an unknown format instead; that is right for a brief (one file, one
 # executor, a bad parse means wrong work) and wrong here, where one newer document would take
 # `list` down for every member of a shared board.
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 
 # Absent means schema 0 — every document written before the format was versioned. Not "unknown":
 # those docs have a known shape, it is simply the one that predates the stamp.
@@ -740,6 +767,7 @@ require_writable() { # path id
   v="$(doc_schema "$1")"
   [ "$v" -le "$SCHEMA_VERSION" ] && {
     offer_migration
+    offer_locations_move
     return 0
   }
   die "$2 is schema $v and this CLI understands $SCHEMA_VERSION — refusing to write it.
@@ -772,6 +800,7 @@ require_board_writable() { # what-this-command-would-do
   v="$(board_schema)"
   [ "$v" -le "$SCHEMA_VERSION" ] && {
     offer_migration
+    offer_locations_move
     return 0
   }
   die "this board is schema $v and this CLI understands $SCHEMA_VERSION — refusing to $1.
@@ -830,6 +859,57 @@ offer_migration() {
     echo "⚠️  The migration did not run (see above) — continuing without it." >&2
   fi
   return 0
+}
+
+# ADR 0010 — the repo-location cache moved from ~/.agents/handoff.json into <board>/.locations.json,
+# and an existing map moves only when someone says yes. Same shape as offer_migration above, for the
+# same reasons: never blocks, never prompts a hook or CI, asks once per command. It differs in one
+# way: this offer RECOMMENDS yes, because unlike a schema migration the move has no precondition
+# that can fail and nothing on the board changes but an ignored file. Declining changes nothing, so
+# the offer comes back on the next write. `handoff locations --move` does the same thing unprompted.
+_LOCATIONS_OFFERED=0
+offer_locations_move() {
+  [ "$_LOCATIONS_OFFERED" = 0 ] || return 0
+  _LOCATIONS_OFFERED=1
+  migrate_can_prompt || return 0
+  command -v handoff_legacy_locations > /dev/null 2>&1 || return 0
+  local n
+  n="$(handoff_legacy_locations "$DIR")"
+  case "$n" in '' | 0 | *[!0-9]*) return 0 ;; esac
+  echo "ℹ️  ~/.agents/handoff.json caches $n checkout location(s) for this board. That cache now lives in the board, as .locations.json (ignored by git)." >&2
+  printf 'Move them into the board? Recommended — only these entries leave the user file. [Y/n] ' >&2
+  local reply=""
+  read -r reply < /dev/tty || reply="n"
+  case "$reply" in
+    '' | y | Y | yes | YES) ;;
+    *)
+      echo "Not moving — continuing. They still resolve from ~, and this will be offered again." >&2
+      return 0
+      ;;
+  esac
+  cmd_locations --move >&2 || echo "⚠️  The move did not complete (see above) — continuing without it." >&2
+  return 0
+}
+
+cmd_locations() { # [--move]
+  local move=0 n
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --move) move=1 ;;
+      *) die "unknown flag: $1 (usage: handoff locations [--move])" ;;
+    esac
+    shift
+  done
+  command -v handoff_legacy_locations > /dev/null 2>&1 \
+    || die "this board's scripts/config.sh predates the location move — re-run setup-handoff first."
+  if [ "$move" = 0 ]; then
+    n="$(handoff_legacy_locations "$DIR")"
+    echo "$n legacy location(s) for this board in ~/.agents. Move them with: handoff locations --move"
+    return 0
+  fi
+  n="$(handoff_legacy_locations "$DIR" --move)" || die "could not move the legacy locations."
+  handoff_ignore_locations "$DIR"
+  echo "Moved $n location(s) into $DIR/.locations.json. The user file was kept; only those entries left it."
 }
 
 VALID_ROLES="steering spec reference brief-archive"
@@ -1214,6 +1294,13 @@ scan_secrets() { # stdin -> matched rule names; 0 = something matched
   return $hit
 }
 
+# The one override record, so every write path logs a bypassed scan the same way: which rules fired
+# (never the value) and the reason the caller gave. Output is byte-identical to the six inline copies
+# this replaced.
+log_secret_override() { # doc-path label hits reason
+  log_activity "$1" "$2 ($(printf '%s' "$3" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$4")"
+}
+
 # The one refusal message, so every write path says the same thing and none of them can drift into
 # printing the value. `where` names what was being written, `hits` the rules that fired.
 #
@@ -1330,7 +1417,7 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret=""
+  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref=""
   id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
@@ -1399,6 +1486,11 @@ cmd_new() {
         sensitivity="${2:-}"
         shift 2
         ;;
+      --ref)
+        require_value --ref "$#" "${2:-}"
+        ext_ref="$2"
+        shift 2
+        ;;
       --force-secret)
         # Reason REQUIRED, and recorded on the doc. An override with no stated reason is a silent
         # bypass wearing a flag, and the whole point of putting the scanner on the write path is
@@ -1414,6 +1506,7 @@ cmd_new() {
     esac
   done
   case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
+  [ -n "${ext_ref:-}" ] && { ext_ref="$(validate_external_ref "$ext_ref")" || exit 3; }
   [ "$sensitivity" = "restricted" ] && [ "$type" = "standalone" ] \
     && die "--sensitivity applies to work that can be delegated; a standalone/reference doc is never exported. Keep the material off the board instead."
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
@@ -1618,12 +1711,13 @@ cmd_new() {
   # placeholder left unsubstituted would put the literal string into the frontmatter.
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
   [ -n "$spec" ] && set_field "$target" spec "$spec"
+  [ -n "${ext_ref:-}" ] && set_field "$target" external_ref "$ext_ref"
   # Coordination and orchestrator docs carry it explicitly so the field is discoverable at the one
   # moment somebody is looking at the frontmatter. A standalone doc is never exported or delegated,
   # so the field would assert a handling rule that has nothing to apply to.
   [ "$type" = "standalone" ] || set_field "$target" sensitivity "$sensitivity"
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
-    log_activity "$target" "secret-scan OVERRIDDEN at creation ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$target" "secret-scan OVERRIDDEN at creation" "$hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
   fi
   # Same `if` form as cmd_claim's, for the same reason — here the status is currently swallowed by
@@ -1793,7 +1887,7 @@ import_result() {
 
   log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
   if [ -n "$force_secret" ] && [ -n "$in_hits" ]; then
-    log_activity "$f" "inbound secret-scan OVERRIDDEN on import ($(printf '%s' "$in_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "inbound secret-scan OVERRIDDEN on import" "$in_hits" "$force_secret"
     echo "⚠️  Inbound secret scan overridden — recorded on $id's activity log."
   fi
 
@@ -2058,20 +2152,36 @@ board_repo_entry() { # audience -> "reason|abs-path|attested-root"
     printf 'no-registry||'
     return
   }
-  python3 - "$DIR/handoff.json" "$DIR" "$aud" "$GROUP" << 'PY'
+  local legacy="" result
+  command -v handoff_legacy_location_files > /dev/null 2>&1 && legacy="$(handoff_legacy_location_files)"
+  # Captured through a function rather than a heredoc inside $(...): bash 3.2 (macOS /bin/bash)
+  # mis-parses quotes in a heredoc body nested in a command substitution.
+  result="$(_board_repo_entry_py "$aud" "$legacy")"
+  # The cache is one disk's truth, so it must never ride a `git add` into a board everybody clones.
+  # Setup writes this rule; a board installed before the cache moved gets it here, through the same
+  # helper `locations --move` uses.
+  [ -f "$DIR/.locations.json" ] && command -v handoff_ignore_locations > /dev/null 2>&1 \
+    && handoff_ignore_locations "$DIR" > /dev/null 2>&1
+  printf '%s' "$result"
+}
+
+_board_repo_entry_py() { # audience legacy-files -> "reason|abs-path|attested-root"
+  python3 - "$DIR/handoff.json" "$DIR" "$1" "$GROUP" "$2" << 'PY'
 import json, os, subprocess, sys
 
 reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 HOME = os.path.expanduser("~")
-# The per-machine layer. It sits beside ~/.agents/handoff-repos.json — the cascade's user layer —
-# because it answers the same kind of question ("where on THIS disk") and must never be committed
-# for the same reason. A gitignored file inside the board was rejected: a board is cloned by every
-# member, and a location map is true for exactly one of them.
-# The machine layer of the same cascade, under the same filename. It is the one layer that must
-# never be committed — a location map is true for exactly one disk — which is why it lives at $HOME
-# rather than as a gitignored file inside a board that everybody clones.
-LOCATIONS = os.path.join(HOME, ".agents", "handoff.json")
-LEGACY_LOCATIONS = os.path.join(HOME, ".agents", "handoff-locations.json")
+# The per-machine location cache lives IN the board (ADR 0010): a location belongs to one board on
+# one disk, so the board is its home. It is ignored by the board's own .gitignore beside .locks/, so
+# cloning the board never carries one machine's paths to another. It used to live in
+# ~/.agents/handoff.json — a namespace other tools share, and one this tooling no longer writes.
+LOCATIONS = os.path.join(board, ".locations.json")
+# The legacy user-layer maps are still READ, below the board's own cache, so a machine that has not
+# accepted the move keeps resolving. They are never written: moving entries out of them is the
+# prompted migration in config.sh (handoff_legacy_locations), never a side effect of a lookup. The
+# list itself comes from config.sh (handoff_legacy_location_files), so the reader and the mover
+# cannot disagree about which files count.
+USER_LOCATIONS = tuple(p for p in sys.argv[5].split("\n") if p)
 
 
 def out(s):
@@ -2094,7 +2204,7 @@ def root_commit(path):
 
 def load_locations():
     out = {}
-    for path in (LEGACY_LOCATIONS, LOCATIONS):  # current name last, so it wins
+    for path in USER_LOCATIONS + (LOCATIONS,):  # the board's own cache last, so it wins
         try:
             with open(path) as fh:
                 data = json.load(fh)
@@ -2107,10 +2217,9 @@ def load_locations():
 
 
 def remember(sha, path):
-    """Cache a discovered location. Best-effort: a machine that cannot write $HOME still resolves,
-    it just pays for the scan again next time."""
+    """Cache a discovered location in the board. Best-effort: a board this machine cannot write
+    still resolves, it just pays for the scan again next time."""
     try:
-        os.makedirs(os.path.dirname(LOCATIONS), exist_ok=True)
         try:
             with open(LOCATIONS) as fh:
                 data = json.load(fh)
@@ -2286,7 +2395,7 @@ brief_identity() { # doc-path -> "name|provider|origin|rootsha|note"
         # not have it anywhere the resolver looks. That is a per-machine problem with a per-machine
         # fix, and saying so is more useful than the generic "not declared" warning.
         target=""
-        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in \`~/.agents/handoff-locations.json\`, then re-export."
+        note="> **Warning** — this board identifies \`$aud\` by root commit \`$attested\`, but no checkout with that root commit was found on this machine, so the root-commit check above cannot pass. Clone it, or record where it lives in this board's \`.locations.json\` (a \`locations\` map of root commit to path), then re-export."
         ;;
       bad-registry)
         target=""
@@ -2427,7 +2536,7 @@ export_one() {               # id doc to outdir branch do_claim force-secret-rea
   rm -f "$staged"
 
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
-    log_activity "$f" "outbound secret-scan OVERRIDDEN on export ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "outbound secret-scan OVERRIDDEN on export" "$hits" "$force_secret"
     echo "⚠️  Outbound secret scan overridden — recorded on $id's activity log." >&2
   fi
 
@@ -2557,12 +2666,18 @@ cmd_list() {
   # ignored outright — and one in second position stayed invisible even when the first was valid.
   # `list` only reads, so the cost was a wrong VIEW rather than a damaged doc, but it is the same
   # rule as the four write commands and it is applied here for the same reason.
-  local VERBOSE=0 _a
-  for _a in "$@"; do
-    case "$_a" in
+  local VERBOSE=0 want_ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
       --verbose | -v) VERBOSE=1 ;;
-      *) reject_unknown_flag "$_a" ;;
+      --ref)
+        require_value --ref "$#" "${2:-}"
+        want_ref="$(fold_colons "$2")"
+        shift
+        ;;
+      *) reject_unknown_flag "$1" ;;
     esac
+    shift
   done
   # A grouped board with no section in scope lists NOTHING: every doc lives under its section, so
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
@@ -2585,6 +2700,9 @@ cmd_list() {
     local base
     base="$(basename "$f" .md)"
     case "$base" in INDEX | README | handoff-doc-template | handoff-standalone-template | handoff-orchestrator-template) continue ;; esac
+    # --ref narrows to one ticket's work. Every doc type is filtered alike: a bundle can map to an
+    # epic just as a coordination doc maps to a story.
+    [ -z "$want_ref" ] || [ "$(meta "$f" external_ref)" = "$want_ref" ] || continue
     if is_orchestrator "$f"; then
       local prog done total out
       prog="$(child_progress "$f")"
@@ -2882,6 +3000,285 @@ cmd_touch() {
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
+# ADR 0011 — a handoff has ONE board of record. `move` transfers it: the doc lands on the target
+# board (through the target's own `import`, so the target's layout, section and schema gates all
+# apply), and the source keeps an archived one-line pointer. Never a copy — two copies of one
+# handoff is the second writer ADR 0002 rules out.
+#
+# The trust boundary is read from the boards' git remotes, not declared: same host and owner, or a
+# target with no remote (material stays on this machine), proceeds. Anything else refuses until the
+# caller names the target's host/owner with --to-remote — naming it, not a bare yes, is the consent.
+# A `sensitivity: restricted` doc never crosses a differing remote, named or not: that is the same
+# outbound rule `export` enforces, and the outbound path is where an override would be the whole
+# control.
+board_owner_key() { # board-dir -> "host/owner" of its configured origin, or nothing
+  local b="$1" name url
+  name="$(handoff_board_remote "$b")"
+  [ -n "$name" ] || return 0
+  # The CONFIGURED url, never `remote get-url`: an insteadOf rewrite would report where git fetches
+  # from rather than which host and owner the board says it belongs to.
+  url="$(handoff_board_git "$b" config --get "remote.$name.url")"
+  [ -n "$url" ] || return 0
+  repo_origin_norm "$url" | cut -d/ -f1-2
+}
+
+cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/owner] [--force-secret REASON]
+  local id="${1:?usage: handoff move <id> --to <board-dir> [--group G] [--id NEW-ID] [--to-remote host/owner] [--force-secret REASON]}"
+  shift
+  local raw_id="$id" to="" tgroup="" new_id="" to_remote="" force_secret=""
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)
+        require_value --to "$#" "${2:-}"
+        to="$2"
+        shift 2
+        ;;
+      --group)
+        require_value --group "$#" "${2:-}"
+        tgroup="$2"
+        shift 2
+        ;;
+      --id)
+        require_value --id "$#" "${2:-}"
+        new_id="$2"
+        shift 2
+        ;;
+      --to-remote)
+        require_value --to-remote "$#" "${2:-}"
+        to_remote="$2"
+        shift 2
+        ;;
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -n "$to" ] || die "move needs --to <board-dir>"
+  to="$(cd "$to" 2> /dev/null && pwd)" || die "no such board directory: $to"
+  _board_looks_real "$to" || die "$to is not a handoff board (no scripts/config.sh) — install one with setup-handoff first."
+  [ "$(cd "$DIR" && pwd -P)" = "$(cd "$to" && pwd -P)" ] && die "$id is already on $to — move is between two boards."
+
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  require_writable "$f" "$id"
+  is_orchestrator "$f" && die "$id is an orchestrator — move its children; a bundle index belongs to the board its children are on."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is done — closed work stays on the board that closed it."
+  if ! is_standalone "$f"; then
+    lease_is_mine "$id" || die "moving $id transfers ownership, so this session has to hold its lease — claim it first: handoff claim $id"
+  fi
+
+  # --- the trust boundary --------------------------------------------------------------------
+  local src_key dst_key crossed=0
+  src_key="$(board_owner_key "$DIR")"
+  dst_key="$(board_owner_key "$to")"
+  if [ -n "$dst_key" ] && [ "$src_key" != "$dst_key" ]; then
+    crossed=1
+    is_restricted "$f" \
+      && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
+    if [ "$to_remote" != "$dst_key" ]; then
+      die "refusing to move $id across a trust boundary: the source board's remote is ${src_key:-absent} and the target's is $dst_key.
+       Moving it carries this material to another owner. If that is intended, name the target: --to-remote $dst_key"
+    fi
+  fi
+
+  # --- the write-path scanner, over the whole document ------------------------------------------
+  local hits=""
+  if hits="$(scan_secrets < "$f")"; then
+    [ -n "$force_secret" ] || die_on_secret "the move of $id" "$hits"
+  fi
+
+  # --- stage the target's copy ------------------------------------------------------------------
+  local stage_dir staged deps blocker src_label dst_label me
+  me="$(whoami_id)"
+  src_label="${src_key:+$(repo_origin_norm "$(handoff_board_git "$DIR" config --get "remote.$(handoff_board_remote "$DIR").url")")}"
+  src_label="${src_label:-$DIR}"
+  dst_label="${dst_key:+$(repo_origin_norm "$(handoff_board_git "$to" config --get "remote.$(handoff_board_remote "$to").url")")}"
+  dst_label="${dst_label:-$to}"
+  stage_dir="$(mktemp -d)" || die "mktemp failed"
+  staged="$stage_dir/$id.md"
+  cat "$f" > "$staged"
+  # depends_on is board ids, and board ids mean nothing on another board (ADR 0004). What they said
+  # survives as an external blocker naming where those docs still are.
+  deps="$(depends_of "$f" | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$deps" ]; then
+    blocker="$(meta "$f" blocked_on)"
+    blocker="${blocker:+$blocker; }external — depends on $deps on $src_label"
+    set_field "$staged" depends_on "[]"
+    set_field "$staged" blocked_on "$(fold_colons "$blocker")"
+  fi
+  set_field "$staged" moved_from "$(fold_colons "$src_label")"
+  local across=""
+  [ "$crossed" = 1 ] && across=" (across remotes, target named as $dst_key)"
+  log_activity "$staged" "moved here from $(fold_colons "$src_label") by $me${across}."
+  [ -n "$force_secret" ] && [ -n "$hits" ] \
+    && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
+
+  # The target's own import, run AS the target: its layout, its section, its schema gate. From the
+  # target directory so no repo config around the caller can re-route the section.
+  local self out dest
+  self="$_self_dir/$(basename "${BASH_SOURCE[0]}")"
+  out="$(cd "$to" && env HANDOFF_BOARD_PATH="$to" HANDOFF_BOARD_SOURCE="handoff move" \
+    HANDOFF_GROUP="$tgroup" HANDOFF_NONINTERACTIVE=1 \
+    bash "$self" import "$staged" --id "${new_id:-$id}" --type "$(doc_type "$f")" --title "$(meta "$f" title)" 2>&1)"
+  local rc=$?
+  rm -f "$staged"
+  rmdir "$stage_dir" 2> /dev/null
+  if [ $rc -ne 0 ]; then
+    case "$out" in
+      *"already exists"*) die "the target board already has ${new_id:-$id} — nothing moved. Pick another id there: --id <new-id>" ;;
+      *) die "the target board refused the import — nothing moved:
+$out" ;;
+    esac
+  fi
+  dest="$(printf '%s\n' "$out" | sed -n 's/^Imported .* → \(.*\) (type: .*$/\1/p' | head -1)"
+  [ -f "$dest" ] || die "the import reported success but its doc was not found — check $to before retrying:
+$out"
+  if handoff_leases_shared "$to"; then
+    handoff_board_git "$to" add --all -- "$dest" "$to/INDEX.md" "$(dirname "$dest")/INDEX.md"
+    if handoff_board_git "$to" commit --quiet -m "handoff: move in $(basename "$dest" .md) from $src_label"; then
+      handoff_board_git "$to" push --quiet "$(handoff_board_remote "$to")" HEAD \
+        || echo "⚠️  Moved and committed on the target, but its push did not land. Push $to."
+    fi
+  fi
+
+  # --- leave the pointer --------------------------------------------------------------------------
+  local t
+  t="$(mktemp)" || die "mktemp failed"
+  awk '{ print } /^---$/ { n++; if (n == 2) exit }' "$f" > "$t"
+  printf '\nMoved to %s as %s on %s.\n' "$dst_label" "$(basename "$dest" .md)" "$(today)" >> "$t"
+  cat "$t" > "$f"
+  rm -f "$t"
+  set_field "$f" moved_to "$(fold_colons "$dst_label") — $(basename "$dest" .md)"
+  set_field "$f" status done
+  set_field "$f" updated "$(today)"
+  clear_lock "$(lock_key "$id")"
+  archive_doc "$f" "$id" || warn_archive_failed "$id"
+  cmd_index > /dev/null
+  release_commit_push "handoff: move $id to $dst_label" "$(arch_file "$id")"
+
+  # Docs left here that depended on it now point at a pointer. depends_on cannot follow it across
+  # boards, so say which ones to rewrite rather than leave them reading as satisfied.
+  local other dependents=""
+  while IFS= read -r other; do
+    [ -n "$other" ] || continue
+    depends_of "$other" | grep -qx "$id" && dependents="${dependents:+$dependents, }$(basename "$other" .md)"
+  done < <(each_doc)
+  echo "Moved $id → $dest ($dst_label). An archived pointer stays here."
+  [ -n "$dependents" ] \
+    && echo "⚠️  Still on this board and depending on it: $dependents. Release each with --blocked-on \"external: …\" — depends_on does not cross boards."
+  return 0
+}
+
+# ADR 0011 — a board attaches AT MOST ONE external tracker, declared under `external` in the board's
+# own handoff.json, and a handoff points at a ticket in it with `external_ref`. Level 1 is reference
+# only: no network, no token, nothing but a string checked against the board's `refPattern`. Read
+# from the BOARD file alone — a tracker is board-global, and a member repo's config must not be able
+# to swap it for its own.
+external_setting() { # key -> the board's external.<key>, or nothing
+  [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+e = d.get("external") if isinstance(d, dict) else None
+v = e.get(sys.argv[2]) if isinstance(e, dict) else None
+print(v if isinstance(v, str) else "")' "$DIR/handoff.json" "$1" 2> /dev/null
+}
+
+validate_external_ref() { # ref -> prints the ref as stored; non-zero with a message when refused
+  local ref pat
+  ref="$(fold_colons "$1")"
+  pat="$(external_setting refPattern)"
+  if [ -z "$pat" ]; then
+    echo "handoff: this board attaches no external tracker (no external.refPattern in $DIR/handoff.json), so --ref has nothing to point into." >&2
+    return 1
+  fi
+  # -x: the WHOLE reference must match. A substring match would accept "see ABC-12 please".
+  if ! printf '%s\n' "$ref" | grep -Eqx -- "$pat"; then
+    echo "handoff: --ref '$ref' does not match this board's external.refPattern ($pat)." >&2
+    return 1
+  fi
+  printf '%s' "$ref"
+}
+
+# ADR 0011 — a progress checkpoint. Progress used to reach the team only at `release`, and `touch`
+# extends a lease without carrying any, so a long piece of work was invisible until it ended. This
+# rewrites `## Current state` (or, with no text, takes the doc as the holder already edited it),
+# commits and pushes like a release, and KEEPS the lease: the work is still yours.
+#
+# Only the live holder may checkpoint, proven by session id exactly as lease_is_mine proves it. The
+# edit gate already stops a non-holder editing the doc; a checkpoint that pushed someone else's
+# lease-protected doc would walk straight around it.
+cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
+  local id="${1:?usage: handoff checkpoint <id> [\"current state\"] [--force-secret REASON]}"
+  shift
+  local raw_id="$id" text="" force_secret=""
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force-secret)
+        require_value --force-secret "$#" "${2:-}"
+        force_secret="$2"
+        shift 2
+        ;;
+      *)
+        reject_unknown_flag "$1" "the Current state text is a trailing positional, not a flag"
+        text="${text:+$text }$1"
+        shift
+        ;;
+    esac
+  done
+  local f
+  f="$(doc_of "$id")" || no_such "$id"
+  require_writable "$f" "$id"
+  is_standalone "$f" && die "$id is a standalone handoff — there is no lease to keep; edit it and commit."
+  is_orchestrator "$f" && die "$id is an orchestrator — its state is derived from its children; checkpoint a child."
+  [ "$(meta "$f" status)" = "done" ] && die "$id is done — nothing to checkpoint"
+  local kind owner exp
+  IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$id")")"
+  [ "$kind" = "free" ] && die "$id is not claimed — claim it first: handoff claim $id"
+  lease_is_mine "$id" || die "this session does not hold the lease on $id (held by ${owner:-unknown}, $kind). Only the holder can checkpoint it."
+
+  # Build what will be published first, then scan ALL of it. A checkpoint pushes the whole doc, so
+  # scanning only the new text let a credential pasted into the doc by hand ride along — and a
+  # text-less checkpoint, which exists to publish hand edits, scanned nothing at all.
+  local t tf hits=""
+  t="$(mktemp)" || die "mktemp failed"
+  if [ -n "$text" ]; then
+    tf="$(mktemp)" || die "mktemp failed"
+    printf '%s\n' "$text" > "$tf"
+    # Body read from a file with getline, never passed through `awk -v` (see set_field): the text is
+    # free-form and must land byte-for-byte. A doc that predates the section gets one above Context.
+    awk -v tf="$tf" '
+      function body() { print ""; while ((getline line < tf) > 0) print line; close(tf); print "" }
+      /^## Current state$/ { print; body(); skip = 1; done = 1; next }
+      skip && /^## / { skip = 0 }
+      !done && /^## Context$/ { print "## Current state"; body(); done = 1 }
+      !skip { print }
+    ' "$f" > "$t"
+    rm -f "$tf"
+  else
+    cat "$f" > "$t"
+  fi
+  if hits="$(scan_secrets < "$t")" && [ -z "$force_secret" ]; then
+    rm -f "$t"
+    die_on_secret "the checkpoint of $id" "$hits"
+  fi
+  cat "$t" > "$f"
+  rm -f "$t"
+  set_field "$f" updated "$(today)"
+  if [ -n "$force_secret" ] && [ -n "$hits" ]; then
+    log_secret_override "$f" "checkpoint secret-scan OVERRIDDEN" "$hits" "$force_secret"
+  fi
+  log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
+  cmd_index > /dev/null
+  release_commit_push "handoff: checkpoint $id" "$f"
+  echo "Checkpointed $id — Current state published, lease kept."
+}
+
 # Every release path ends the same way: drop the lease, then regenerate the index. It is a helper
 # rather than three copies because the standalone and orchestrator branches `return` early and used
 # to skip the `clear_lock` at the function's end — stranding any lease held on a doc that was
@@ -2968,7 +3365,7 @@ cmd_release() {
     if [ -z "$force_secret" ]; then
       die_on_secret "the release of $id" "$rel_hits"
     fi
-    log_activity "$f" "release secret-scan OVERRIDDEN ($(printf '%s' "$rel_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "release secret-scan OVERRIDDEN" "$rel_hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on $id's activity log."
   fi
 
@@ -3314,6 +3711,14 @@ migrate_doc_0_to_1() { # path -> 0 when it changed the file
   return $((1 - changed))
 }
 
+# One document, schema 1 -> 2 (ADR 0011). Schema 2 adds `external_ref`, which is OPTIONAL: absent
+# means "no ticket", so there is nothing to write into a doc but the stamp. The bump exists so a
+# schema-1 CLI refuses to write a doc that may carry the field, instead of dropping it (ADR 0003).
+migrate_doc_1_to_2() { # path
+  set_field "$1" schema 2
+  log_activity "$1" "migrated to schema 2 (structure only — external_ref is optional and never inferred)"
+}
+
 cmd_migrate() {
   local yes=0 dry=0
   while [ $# -gt 0 ]; do
@@ -3419,15 +3824,22 @@ cmd_migrate() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ "$(doc_schema "$f")" -lt "$to" ] || continue
-    if migrate_doc_0_to_1 "$f"; then
-      migrated=$((migrated + 1))
-      echo "  migrated $(basename "$f" .md)"
-    else
-      # Already structurally current; it only lacked the stamp. Still counted and still logged, so
-      # the activity trail matches the commit.
-      migrated=$((migrated + 1))
-      echo "  stamped $(basename "$f" .md) (already structurally current)"
+    # Steps run in order, each from the schema the previous one left, so a schema-0 doc takes the
+    # same path to the current schema as a doc that was migrated one release at a time.
+    if [ "$(doc_schema "$f")" -lt 1 ]; then
+      if migrate_doc_0_to_1 "$f"; then
+        echo "  migrated $(basename "$f" .md) (0 → 1)"
+      else
+        # Already structurally current; it only lacked the stamp. Still logged, so the activity
+        # trail matches the commit.
+        echo "  stamped $(basename "$f" .md) (already structurally current)"
+      fi
     fi
+    if [ "$(doc_schema "$f")" -lt 2 ]; then
+      migrate_doc_1_to_2 "$f"
+      echo "  migrated $(basename "$f" .md) (1 → 2)"
+    fi
+    migrated=$((migrated + 1))
   done < <(each_doc)
 
   board_write_schema "$to"
@@ -3933,6 +4345,14 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_touch "$@"
       ;;
+    checkpoint)
+      shift
+      cmd_checkpoint "$@"
+      ;;
+    move)
+      shift
+      cmd_move "$@"
+      ;;
     release)
       shift
       cmd_release "$@"
@@ -3947,6 +4367,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       ;;
     index) cmd_index ;;
     --which | which) cmd_which ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | --which]" ;;
+    locations)
+      shift
+      cmd_locations "$@"
+      ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | move <id> --to <board> [--to-remote host/owner] | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
   esac
 fi

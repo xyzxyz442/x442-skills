@@ -185,6 +185,18 @@ more.
 `reference`, `brief-archive` — where `type` says what its lifecycle is. A coordination doc points
 at its spec with `spec:`, which the reader resolves as a path, then a URL, then a board id.
 
+**`external_ref` points at the ticket the work is planned under** (ADR 0011). When the board
+attaches a tracker — a sprint tool or an issue tracker, declared once under `external` in the
+board's `handoff.json` — record the ticket at filing time and find work by it later:
+
+```text
+handoff new ID --title "…" --ref ABC-123
+handoff list --ref ABC-123
+```
+
+The reference must match the board's `refPattern` in full, and a board with no tracker refuses
+`--ref`. It is a pointer, not a sync: nothing calls the tracker, and planning stays there.
+
 **Evidence is a field.** `release --status done --verified-by "…"` now persists what you wrote as
 `verified_by:`, not only as a sentence in the activity log. Write something the next reader can
 re-run: a command, a `file:line`, a commit. Evidence naming none of those is a claim about your
@@ -200,6 +212,38 @@ first thing the next session reads.
 adding a `Resolution (date)` or `Execution log` heading, what you want is `## Current state` — the
 boards that motivated this schema are full of exactly those improvised headings, and nobody can
 find anything in them.
+
+**Checkpoint long work instead of sitting silent until release** (ADR 0011). On a board with a
+remote, other machines see progress only when it is pushed, and a release is the last push:
+
+```text
+handoff checkpoint ID "Parser written and tested; wiring the CLI next."
+```
+
+It overwrites `## Current state` with that text (or, with no text, publishes the doc as you already
+edited it), secret-scans it, commits and pushes, and **keeps your lease**. Only the session holding
+the lease can checkpoint. Checkpoint at a natural stopping point — a passing test, a design
+decision, before a long build — not on every edit.
+
+## Moving a handoff to another board
+
+A handoff has **one board of record**. When work belongs on a different board — a draft on your
+own board that is ready for the team, or work filed in the wrong place — move it, never copy it
+(ADR 0011):
+
+```text
+handoff claim ID "moving it"
+handoff move ID --to ../workspace/.agents/handoff [--group SECTION] [--id NEW-ID]
+```
+
+The doc lands on the target unclaimed, and an archived one-line pointer stays behind. Its
+`depends_on` cannot cross boards, so it becomes an external blocker naming the ids it waited on.
+`move` runs the same secret scan as `export`.
+
+**The remote decides the trust boundary.** Same git host and owner, or a target with no remote,
+proceeds. A different owner is refused and both remotes are named. Move only if the user confirms
+the material belongs there, then name the target with `--to-remote HOST/OWNER`. A
+`sensitivity: restricted` handoff never crosses a differing remote, even when named.
 
 ## When the board refuses to let you write
 

@@ -42,6 +42,30 @@ _Avoid_: team, workspace, namespace
 Where a group's documents physically live on the board — a subfolder or an id prefix. A
 group's layout, not the group itself.
 
+**Trust boundary**:
+The line between organizations whose material must not mix — an employer, a client, a person's
+own projects. One board per trust boundary. Read from a board's git remote host and owner, not
+declared.
+_Avoid_: tenant, account
+
+**External tracker**:
+The one project tracker a board links to — a sprint tool or an issue tracker — where planning
+lives. Linked by reference; mirrored only where it is the team's issue backlog. Never the board.
+_Avoid_: board, backend, sync target
+
+A board a developer keeps for their own drafts is an ordinary board with no role of its own.
+_Avoid_: personal board, private board, scratch board
+
+**Local config**:
+One developer's board and section choices for one checkout, never committed. Outranks the
+repository's committed config. The user-level layer above both is read only when opted into.
+_Avoid_: personal config, user config
+
+**Move**:
+Transferring a handoff's board of record to another board. The source keeps an archived
+pointer; the handoff is never copied.
+_Avoid_: copy, sync
+
 **Handoff**:
 One unit of coordinated work, or one self-contained reference document, recorded as a single
 markdown file with frontmatter.
@@ -54,7 +78,8 @@ _Avoid_: lock, assignment, ownership
 
 **Claim**:
 Taking the lease. **Release** is giving it back with a status. Neither is the lease itself —
-one handoff has many claims over its life and one lease at a time.
+one handoff has many claims over its life and one lease at a time. A **checkpoint** publishes
+Current state while the lease is kept.
 
 **Gate**:
 The tool-side hook that refuses an edit to a handoff document the editing session does not
@@ -84,6 +109,18 @@ is generated; its roster is not.
 The rewritable section saying where a handoff stands right now. Distinguished from
 **Activity**, the append-only one-line-per-event log. A reader should never have to replay
 Activity to learn Current state.
+
+**Ruled out**:
+The optional, append-only section listing approaches that were tried and failed — each with why
+and the evidence. Distinguished from **Decisions**, which says what to do and is read before
+starting; Ruled out says what not to retry and is read when an approach looks tempting.
+_Avoid_: dead ends, tried, rejected approaches
+
+**Slice**:
+One child of an orchestrator, sized so it has its own runnable Verify, lands as one change on its
+own, and can be checked without another child's unfinished work. A vertical cut through the work,
+not a layer of it.
+_Avoid_: subtask, ticket, chunk
 
 **Evidence**:
 What a closing session recorded to show it verified against live code — a command and its

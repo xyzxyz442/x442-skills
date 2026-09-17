@@ -92,8 +92,8 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
             # what pinned a board to one disk: "../../../../acme-lib" resolves nowhere else. The
             # root commit already sat in every entry as the attestation; it is now the whole
             # answer, and location moved to an uncommitted per-machine map (see the CLI's
-            # board_repo_entry, which reads ~/.agents/handoff-locations.json and, failing that,
-            # discovers the checkout and caches it). Schema 1 files still READ — their path is
+            # board_repo_entry, which reads the board's own .locations.json and, failing that,
+            # discovers the checkout and caches it there, ADR 0010). Schema 1 files still READ — their path is
             # accepted as a hint that has to prove itself against this root commit.
             entries.append(
                 {

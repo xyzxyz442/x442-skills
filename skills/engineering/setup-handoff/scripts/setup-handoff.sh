@@ -19,6 +19,13 @@
 #   and committed forever. gemini and copilot have no uncommitted config location, so they are
 #   skipped with a notice rather than written to a file the flag promised not to touch.
 #
+#   --local-board <path> [--group G] records a board ONE developer keeps for this checkout in
+#   .agents/handoff.local.json (ADR 0011) and exits: no role, nothing committed, no rewiring.
+#
+#   --ignore exclude|gitignore writes the ignore rules setup would otherwise only SUGGEST (ADR 0010):
+#   handoff.local.json, a personal in-repo board, a board repo nested in this worktree, a board in a
+#   workspace repo. `exclude` is .git/info/exclude (this clone only); `gitignore` is committed.
+#
 #   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
 #       no per-tool wiring, no AGENTS.md edit, no git/AGENTS.md precondition. This is what
@@ -295,7 +302,7 @@ with open(dest, "w") as fh:
 PY
 }
 
-REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0
+REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0 IGNORE_TO="" LOCAL_BOARD=""
 LOCAL_WIRING=0
 # Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
 # works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
@@ -353,6 +360,17 @@ while [ $# -gt 0 ]; do
       LOCAL_WIRING=1
       shift
       ;;
+    --local-board)
+      require_value --local-board "$#" "${2:-}"
+      LOCAL_BOARD="${2:-}"
+      shift 2
+      ;;
+    --ignore)
+      require_value --ignore "$#" "${2:-}"
+      IGNORE_TO="${2:-}"
+      case "$IGNORE_TO" in exclude | gitignore) ;; *) die "--ignore takes exclude or gitignore, got: $IGNORE_TO" ;; esac
+      shift 2
+      ;;
     --force-downgrade)
       FORCE_DOWNGRADE=1
       shift
@@ -393,6 +411,44 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$LAYOUT" ] && { case "$LAYOUT" in subfolder | prefix) ;; *) die "bad --layout: $LAYOUT (use subfolder|prefix)" ;; esac }
 
+# --- what needs ignoring (ADR 0010) ------------------------------------------------------
+# Suggest, never write silently. Whether a board or a local config is private is the developer's
+# call, and .gitignore is committed — so a rule is written only where --ignore says: `exclude`
+# (.git/info/exclude, this clone only — preferred for a per-user choice) or `gitignore` (the team).
+# ignore-needs.sh is the one list verify-setup-handoff.sh reports from too.
+# Appends LINE on a line of its own: a file whose last line lacks a newline would fuse the two into
+# one rule that matches nothing. Mirrors handoff_append_line in the payload's config.sh, which this
+# installer does not source.
+append_line() { # file line
+  if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l | tr -d ' ')" = 0 ]; then
+    printf '\n' >> "$1"
+  fi
+  printf '%s\n' "$2" >> "$1"
+}
+
+apply_ignore_needs() { # repo board
+  local _nid _nrepo _nrel _nmsg _nfile
+  while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
+    [ -n "$_nid" ] || continue
+    if [ -z "$IGNORE_TO" ]; then
+      echo "setup-handoff: $_nmsg"
+      echo "  Nothing written. Re-run with --ignore exclude (only this clone) or --ignore gitignore (the whole team) to add '$_nrel' in $_nrepo."
+      continue
+    fi
+    if [ "$IGNORE_TO" = exclude ]; then
+      _nfile="$(git -C "$_nrepo" rev-parse --git-path info/exclude 2> /dev/null)"
+      case "$_nfile" in /*) ;; *) _nfile="$_nrepo/$_nfile" ;; esac
+      mkdir -p "$(dirname "$_nfile")"
+    else
+      _nfile="$_nrepo/.gitignore"
+    fi
+    if ! grep -qxF "$_nrel" "$_nfile" 2> /dev/null; then
+      append_line "$_nfile" "$_nrel"
+      echo "setup-handoff: ignored '$_nrel' in $_nfile (--ignore $IGNORE_TO)"
+    fi
+  done < <(bash "$SKILL_DIR/scripts/ignore-needs.sh" "$1" "$2" 2> /dev/null)
+}
+
 # Legacy config names are READ (see config.sh) but no longer WRITTEN. Once the consolidated file
 # exists, the old one is renamed aside rather than deleted: nothing here removes a file a user may
 # have hand-edited, and a `.superseded` suffix is both obvious and reversible. Readers ignore it.
@@ -418,10 +474,12 @@ board_write_gitignore() { # board-dir
   # remote-backed one, so the rule is derived from the remote rather than assumed. Rewritten on
   # every run, because a board that gains a remote later must stop ignoring its leases — the CLI
   # repairs the same file on the claim path for a board that gains one between installs.
-  [ -f "$gi" ] && grep -vxF '.locks/' "$gi" > "$t"
+  [ -f "$gi" ] && grep -vxF -e '.locks/' -e '.locations.json' "$gi" > "$t"
   if [ -z "$(git -C "$b" remote 2> /dev/null)" ]; then
     printf '.locks/\n' >> "$t"
   fi
+  # The repo-location cache (ADR 0010) is one disk's truth on every board, remote or not.
+  printf '.locations.json\n' >> "$t"
   if [ -s "$t" ] || [ -f "$gi" ]; then
     cmp -s "$t" "$gi" 2> /dev/null || cat "$t" > "$gi"
   fi
@@ -536,6 +594,39 @@ fi
 # --- preconditions --------------------------------------------------------------------
 REPO="$(cd "$REPO" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)" \
   || die "not a git working tree: refusing to install (run initial-project first)"
+
+# --- a developer's own board (ADR 0011) ---------------------------------------------------
+# There is no board role in config. A board someone keeps for themselves is an ordinary board, and
+# choosing it for this checkout is recorded in .agents/handoff.local.json — never in the committed
+# handoff.json, where it would become the whole team's board. A distinct mode: it records the
+# choice, suggests the ignore rules it needs, and exits without rewiring anything. The board must
+# already exist; creating one is --board-only's job, and guessing a location here would be exactly
+# the silent pick ADR 0010 rules out.
+if [ -n "$LOCAL_BOARD" ]; then
+  case "$LOCAL_BOARD" in /*) _lb_abs="$LOCAL_BOARD" ;; *) _lb_abs="$REPO/$LOCAL_BOARD" ;; esac
+  [ -f "$_lb_abs/scripts/config.sh" ] || [ -f "$_lb_abs/config.sh" ] \
+    || die "--local-board: $_lb_abs is not a handoff board. Create it first: setup-handoff.sh --board-only $_lb_abs"
+  python3 -c 'import json, os, sys
+path, board, group = sys.argv[1], sys.argv[2], sys.argv[3]
+cfg = {}
+if os.path.isfile(path):
+    try:
+        loaded = json.load(open(path))
+    except (ValueError, OSError):
+        sys.exit("setup-handoff: %s is not valid JSON — fix or remove it, then re-run" % path)
+    if isinstance(loaded, dict):
+        cfg = loaded
+cfg["board"] = board
+if group:
+    cfg["group"] = group
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as fh:
+    json.dump(dict(sorted(cfg.items())), fh, indent=2)
+    fh.write("\n")' "$REPO/.agents/handoff.local.json" "$LOCAL_BOARD" "$GROUP" || exit 1
+  echo "setup-handoff: recorded board '$LOCAL_BOARD'${GROUP:+ (section $GROUP)} for this checkout in .agents/handoff.local.json — nothing committed changed."
+  apply_ignore_needs "$REPO" "$_lb_abs"
+  exit 0
+fi
 [ -f "$REPO/AGENTS.md" ] || die "no AGENTS.md at repo root — run initial-project first; not fabricating it here"
 case "$TOPOLOGY" in single-repo | cross-repo) ;; *) die "bad --topology: $TOPOLOGY" ;; esac
 
@@ -691,7 +782,7 @@ if [ "$TOPOLOGY" != "cross-repo" ]; then
   GI="$REPO/.gitignore"
   LOCK_IGNORE="$HDPATH/.locks/"
   if ! grep -qxF "$LOCK_IGNORE" "$GI" 2> /dev/null; then
-    printf '%s\n' "$LOCK_IGNORE" >> "$GI"
+    append_line "$GI" "$LOCK_IGNORE"
   fi
 fi
 
@@ -801,5 +892,8 @@ with open(path, "w") as fh:
     json.dump(dict(sorted(cfg.items())), fh, indent=2)
     fh.write("\n")
 PYEOF
+
+# --- what needs ignoring (ADR 0010) ------------------------------------------------------
+apply_ignore_needs "$REPO" "$HDEST"
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

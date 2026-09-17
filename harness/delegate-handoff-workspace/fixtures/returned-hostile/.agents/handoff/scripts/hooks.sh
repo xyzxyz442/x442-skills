@@ -216,7 +216,7 @@ LOCKS="$(sec_dir)/.locks"
 # nobody listening, and taking a session down over a board upgrade is how a hook gets deleted.
 # Reported in both directions, because they need opposite actions — an older board wants
 # `handoff migrate`, a newer one wants the payload updated first.
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
 schema_note() { # -> one line, or nothing
   local board=0 ahead=0 f v
   if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
@@ -504,7 +504,24 @@ case "$KIND" in
     # board is not this repo's own, print where it actually is.
     board_note="${hd}/"
     [ "$DIR" = "${PROJECT_DIR:-$PWD}/.agents/handoff" ] || board_note="${hd}/ → ${DIR}"
+    # ADR 0011: a developer may point this checkout's CLI at a board of their own. The hooks stay
+    # wired to THIS board — its gate still guards its leases — so the split has to be visible, or
+    # `claim` acting on one board while this banner lists another reads as a bug.
+    LOCAL_NOTE=""
+    _lroot="${REPO_DIR:-${PROJECT_DIR:-}}"
+    if [ -n "$_lroot" ] && [ -f "$_lroot/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
+      LOCAL_NOTE="$(python3 -c 'import json,os,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+b = d.get("board") or d.get("boardPath") if isinstance(d, dict) else None
+if not isinstance(b, str) or not b: raise SystemExit(0)
+p = os.path.realpath(b if os.path.isabs(b) else os.path.join(sys.argv[2], b))
+if p != os.path.realpath(sys.argv[3]):
+    print(b)' "$_lroot/.agents/handoff.local.json" "$_lroot" "$DIR" 2> /dev/null)"
+    fi
     ctx="Handoffs for \`${REPO:-this repo}\` (from ${board_note}):"
+    [ -n "$LOCAL_NOTE" ] && ctx="${ctx}
+Note: this checkout's handoff CLI uses ${LOCAL_NOTE} (set in .agents/handoff.local.json); this banner and the edit gate follow ${hd}/."
     # The parenthetical is a promise about enforcement, so it tracks whether enforcement is
     # actually running. Telling an agent its edits are gated while the gate is off is worse than
     # saying nothing: it is the sentence that stops them from coordinating by hand.
@@ -525,6 +542,16 @@ Claim: \`${hd}/handoff claim <id> \"note\"\`. Release when you stop."
     [ -n "$SCHEMA_NOTE" ] && ctx="${ctx}
 
 Schema: ${SCHEMA_NOTE}"
+    # ADR 0010 — a legacy location cache under ~ is reported, never moved: the move is the CLI's
+    # prompt or an explicit `handoff locations --move`. One line, same rules as the schema note.
+    LOC_N=0
+    command -v handoff_legacy_locations > /dev/null 2>&1 && LOC_N="$(handoff_legacy_locations "$DIR" 2> /dev/null)"
+    case "$LOC_N" in
+      '' | 0 | *[!0-9]*) ;;
+      *) ctx="${ctx}
+
+Locations: ~/.agents caches ${LOC_N} checkout location(s) for this board. Run \`${hd}/handoff locations --move\` to move them into the board (recommended)." ;;
+    esac
     [ -n "$health" ] && ctx="${ctx}
 
 Board needs attention:

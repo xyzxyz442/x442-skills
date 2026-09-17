@@ -134,7 +134,7 @@ HD="$ROOT/.agents/handoff"
 # on a single repo it is the ONLY path that runs, and it used to miss.
 if [ ! -d "$HD" ]; then
   D="$(
-    python3 - "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
+    python3 - "$ROOT/.agents/handoff.local.json" "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
 import json, os, sys
 
 for path in sys.argv[1:]:
@@ -313,7 +313,7 @@ if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command 
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
        "board","boardPath","environments","layout","boardRemote","locations","repo",
-       "schema","_generated"}
+       "schema","_generated","external"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -348,6 +348,32 @@ if [ "$TOPO" = "cross-repo" ]; then
   fi
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok repo.gitignore.locks ".gitignore excludes .locks/" || warn repo.gitignore.locks ".gitignore missing a .locks/ entry — leases could get committed"
+fi
+# handoff.local.json holds one developer's choices only — board, group, and the userLayer opt-in.
+# Anything else in it is ignored by the CLI, so say so instead of letting it look like it applies.
+if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
+  LOCAL_EXTRA="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+if isinstance(d, dict):
+    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "userLayer"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
+  if [ -n "$LOCAL_EXTRA" ]; then
+    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group and userLayer are one developer's to choose; board-wide keys belong in the committed config"
+  else
+    ok repo.local_config.keys ".agents/handoff.local.json sets only per-developer keys"
+  fi
+fi
+# What could be committed by accident (ADR 0010). Warnings, never failures: each describes a risk,
+# not a broken install. The list comes from ignore-needs.sh, the same one setup suggests from.
+if [ -f "$SCRIPT_DIR/ignore-needs.sh" ]; then
+  IGNORE_NEEDS="$(bash "$SCRIPT_DIR/ignore-needs.sh" "$ROOT" "$HD" 2> /dev/null)"
+  while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
+    [ -n "$_nid" ] || continue
+    warn "$_nid" "$_nmsg Fix: re-run setup-handoff with --ignore exclude|gitignore, or add '$_nrel' by hand."
+  done <<< "$IGNORE_NEEDS"
+  if [ -f "$ROOT/.agents/handoff.local.json" ] && ! printf '%s' "$IGNORE_NEEDS" | grep -q '^repo.ignore.local_config'; then
+    ok repo.ignore.local_config ".agents/handoff.local.json is ignored"
+  fi
 fi
 # Content-aware, not presence-only: a block that exists but predates an asset change still reads
 # as installed while advertising commands the CLI no longer documents (agents-block-drift-handoff).
@@ -510,6 +536,33 @@ section "7. Document schema (advisory — ADR 0004)"
 SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_OLD_ARCH=0 SCHEMA_LIVE=0 SCHEMA_ARCH=0 SCHEMA_NEW=0 SENS_RESTRICTED=0
 fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 
+# ADR 0011 — at most one external tracker per board, reference-only at level 1. `kind` decides
+# what the tracker may later be used for (a sprint tool is never mirrored), so it is checked here
+# rather than guessed at. Read the pattern once; every doc's external_ref is checked against it.
+EXT_KIND="" EXT_PATTERN="" EXT_PRESENT=0
+if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+  IFS=$'\t' read -r EXT_PRESENT EXT_KIND EXT_PATTERN <<< "$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+e = d.get("external") if isinstance(d, dict) else None
+if not isinstance(e, dict): print("0\t\t"); raise SystemExit(0)
+k, p = e.get("kind"), e.get("refPattern")
+print("1\t%s\t%s" % (k if isinstance(k, str) else "", p if isinstance(p, str) else ""))' "$HD/handoff.json" 2> /dev/null)"
+fi
+if [ "${EXT_PRESENT:-0}" = 1 ]; then
+  case "$EXT_KIND" in
+    issues | sprints) ok board.external.kind "external tracker kind is $EXT_KIND" ;;
+    *) warn board.external.kind "handoff.json external.kind is \"$EXT_KIND\" — use issues (an issue tracker used as a backlog) or sprints (a sprint tool); the mirror is only ever offered for issues" ;;
+  esac
+  if [ -z "$EXT_PATTERN" ]; then
+    warn board.external.pattern "handoff.json declares an external tracker with no refPattern — handoff new --ref will refuse every reference"
+  elif printf '' | grep -Eq -- "$EXT_PATTERN" 2> /dev/null || [ $? -eq 1 ]; then
+    ok board.external.pattern "external.refPattern is a valid extended regex"
+  else
+    warn board.external.pattern "external.refPattern ($EXT_PATTERN) is not a valid extended regex"
+  fi
+fi
+
 # The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
 # rather than restated here: two copies of a credential-pattern list is two copies that drift, and
 # the one that drifts is always the one nobody runs interactively. The CLI cannot simply be sourced
@@ -541,6 +594,15 @@ while IFS= read -r doc; do
     "" | external* | decision* | 'external —'* | 'decision —'*) ;;
     *) warn doc.blocked_on.is_board_id "$dname: blocked_on names \"$bo\", which looks like a board id — that belongs in depends_on (blocked_on is for what the board cannot model)" ;;
   esac
+
+  xref="$(fm "$doc" external_ref)"
+  if [ -n "$xref" ]; then
+    if [ -z "$EXT_PATTERN" ]; then
+      warn doc.external_ref.no_tracker "$dname: external_ref is \"$xref\" but this board declares no external tracker"
+    elif ! printf '%s\n' "$xref" | grep -Eqx -- "$EXT_PATTERN" 2> /dev/null; then
+      warn doc.external_ref.pattern "$dname: external_ref \"$xref\" does not match external.refPattern ($EXT_PATTERN)"
+    fi
+  fi
 
   # Closure evidence that names no command, no file, and no commit is a claim about somebody's
   # memory. It is still recorded and still closes the doc; it just cannot be re-checked by the

@@ -25,16 +25,27 @@ wired hook command still point at `<board>/handoff`.
 
 **Which board it acts on** — first match wins:
 
-| Source                        | Where                                                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `$HANDOFF_BOARD_PATH`         | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
-| the CLI's own directory       | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
-| `<repo>/.agents/handoff.json` | its `board`, what a cross-repo install records (`boardPath` is a legacy alias, still read)                         |
-| `.agents/handoff/`            | walking up from the working directory                                                                              |
+| Source                              | Where                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `$HANDOFF_BOARD_PATH`               | explicit. `<board>/handoff` sets it to its own directory, so invoking a board's dispatcher always means that board |
+| the CLI's own directory             | when the CLI file itself sits in a board — the vendored install, and every board predating the split               |
+| `<repo>/.agents/handoff.local.json` | its `board` — one developer's choice, never committed                                                              |
+| `<repo>/.agents/handoff.json`       | its `board`, what a cross-repo install records (`boardPath` is a legacy alias, still read)                         |
+| `<repo>/.agents/handoff/`           | an in-repo board. Outside a repo, `./.agents/handoff/` only                                                        |
+
+**Nothing above the repo is searched** (ADR 0010). A board in a parent folder is found once, by
+setup, and written into config; a lookup that walked upward would resolve a board from whatever
+workspace happens to enclose the repo — another trust boundary, reached silently.
 
 `$HANDOFF_BOARD_PATH` is how you point a repo at a different board **without editing any committed
 file**. A board that is named but absent is a hard error, never a silent fallback to a different
 one — writing leases into the wrong board is not a failure anyone would notice.
+
+**The repo-location cache lives in the board**, as `.locations.json` — per machine, and listed in the
+board's `.gitignore`. It used to be the `locations` map in `~/.agents/handoff.json`; that map is still
+read until you move it. `./handoff locations` counts what is left there and `./handoff locations
+--move` moves this board's entries, leaving the user file and every other entry in place. A write
+from a terminal offers the same move.
 
 `./handoff --which` prints both answers and where each came from. Reach for it whenever the board
 behaves like a different board, or a fixed bug appears to still be present.
@@ -195,6 +206,12 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- `./handoff move <id> --to <board>` transfers a handoff to another board (ADR 0011): it lands
+  unclaimed through the target's own `import`, records `moved_from`, and leaves an archived
+  pointer carrying `moved_to`. Same git host and owner, or a target with no remote, proceeds;
+  a different owner needs `--to-remote host/owner`, and a restricted doc never crosses one.
+- `./handoff checkpoint <id> ["current state"]` publishes progress without releasing: it rewrites
+  `## Current state`, commits and pushes, and keeps the lease. Only the holding session may run it.
 
 ### On a board with a remote, the lock crosses machines
 
@@ -309,6 +326,7 @@ nested — every frontmatter reader here is a line-matcher.
 | `role`                                         | Standalone docs only: what the doc is **for**, where `type` is its lifecycle. `steering` (the decisions and their evidence) · `spec` (what is to be built) · `reference` (knowledge transfer) · `brief-archive` (a finished delegation, kept). Absent ⇒ `reference`.                                                                                                                                                                                                                                                   |
 | `sensitivity`                                  | `normal` (default) or `restricted` — a **handling flag, not an access boundary** (board membership is). `restricted` refuses `export` outright, prints a handling banner on `claim`, and is refused by a delegated agent's dispatcher. Absent reads as `normal`; `handoff migrate` never backfills it. Set at `new --sensitivity restricted` or by hand; refused on a `--standalone` doc (never exported, so the flag has nothing to apply to). See "Sensitivity and the secret scanner" below.                        |
 | `spec`                                         | _(optional)_ what this work is specified by. Resolved by the reader in order — a path, then a URL, then a board id. Not validated at creation: a handoff is routinely filed before its spec is written.                                                                                                                                                                                                                                                                                                                |
+| `external_ref`                                 | _(optional, schema 2)_ the ticket this work is planned under in the board's external tracker. Set at `new --ref`, which refuses a value that does not match the board's `external.refPattern` in full, and refuses on a board with no tracker. `list --ref` filters by it. A pointer only — nothing calls the tracker (ADR 0011).                                                                                                                                                                                      |
 | `blocked_on`                                   | The handoff id (or `external: …`) this one is waiting on. Validated at release: a blocker that names no doc, or the doc itself, is **refused** — an unclosable blocker deadlocks silently. `external: …` is accepted unvalidated, since it is for blockers off the board; it is stored colon-folded (`external — …`) to keep the frontmatter valid YAML. When the blocker closes `done` (including a retired standalone or a completed bundle), this handoff is surfaced as newly unblocked at the next session start. |
 | `updated` / `verified_at` / `verified_by`      | `verified_at` is a claim about the **live code**, not the doc. `release --status done` stamps it, requires `--verified-by`, and now **persists that evidence as `verified_by`** rather than only as prose in the activity log — evidence that lives in a log can be read but not queried, which is how boards end up with hundreds of verification dates and a handful of retrievable checks. Evidence naming no command, file reference, or commit is reported by `verify-setup-handoff.sh`.                          |
 | `verify`                                       | _(optional)_ a command that machine-checks "done". **Never auto-run** — see below. **Quote it** — it is the one field whose colons are not folded, so an unquoted command breaks the doc's YAML; readers strip one surrounding quote pair.                                                                                                                                                                                                                                                                             |
@@ -352,6 +370,7 @@ so it must never carry any one repo's identity.
 | `ttlHours`       | `4`                        | Hours a claim holds before it self-reaps.                                                                                                                                                                                                                                                              |
 | `allowVerifyCmd` | `false`                    | `true` lets `release --run-verify` execute a command from a local doc.                                                                                                                                                                                                                                 |
 | `environments`   | `["dev","staging","prod"]` | The board's environment ladder, lowest first — what `environment` is ordered by.                                                                                                                                                                                                                       |
+| `external`       | _(none)_                   | At most one external tracker (ADR 0011): `{"kind": "issues"\|"sprints", "system": "<name>", "refPattern": "<extended regex>"}`. `kind` decides what the tracker may later be used for — a sprint tool is never mirrored. Read from the board file only; a member repo cannot override it.              |
 | `schema`         | current on a fresh board   | The board's DOCUMENT schema, and the only migration trigger — distinct from the payload version, which moves on every CLI fix.                                                                                                                                                                         |
 | `_generated`     | absent                     | **Owned by the tooling — do not hand-edit.** The cross-repo sync writes `repos` (the projected registry) here and the installer writes `payloadVersion`. Fenced off under one key so a re-sync can never clobber your `ttlHours` and a hand-edit can never masquerade as a projection of the manifest. |
 

@@ -17,6 +17,7 @@ script-behavior}. Exits 0 iff nothing failed.
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,20 @@ SKILL = REPO / "skills/engineering/setup-handoff"
 SETUP = SKILL / "scripts/setup-handoff.sh"
 VERIFY = SKILL / "scripts/verify-setup-handoff.sh"
 DETECT = SKILL / "scripts/detect-handoff.sh"
+
+
+def _cli_schema() -> int:
+    """The document schema the shipped CLI writes. Read, never spelled: a spelled number breaks
+    every schema-aware case on the next bump."""
+    for line in (
+        (SKILL / "scripts/payload/handoff").read_text(encoding="utf-8").splitlines()
+    ):
+        if line.startswith("SCHEMA_VERSION="):
+            return int(line.split("=", 1)[1])
+    raise RuntimeError("SCHEMA_VERSION not found in the payload CLI")
+
+
+CLI_SCHEMA = _cli_schema()
 # setup-graph-hooks' installer, used by the custom-board-name case as the NEGATIVE half: it writes
 # `--kind` hook commands into the very config files check_tool reads, so it is the realistic thing
 # a widened pattern would wrongly claim as handoff wiring. Driving the real installer rather than a
@@ -251,7 +266,13 @@ def grade_schema_forward(target):
     _handoff(target, "new", "future", "--title", "Written by a newer CLI")
     _handoff(target, "new", "ordinary", "--title", "An ordinary doc")
     fut = doc / "future-handoff.md"
-    text = fut.read_text(encoding="utf-8").replace("schema: 1", "schema: 99", 1)
+    text = re.sub(
+        r"^schema: [0-9]+$",
+        "schema: 99",
+        fut.read_text(encoding="utf-8"),
+        count=1,
+        flags=re.M,
+    )
     # A key this CLI has never heard of, to prove nothing quietly eats it on the way through.
     fut.write_text(
         text.replace("status: open", "status: open\nquantum_flux: 7", 1),
@@ -270,7 +291,7 @@ def grade_schema_forward(target):
     e.append(
         gc.expectation(
             "with one warning naming BOTH versions",
-            "is schema 99" in out and "understands 1" in out,
+            "is schema 99" in out and f"understands {CLI_SCHEMA}" in out,
             f"warning: {'is schema 99' in out}",
         )
     )
@@ -362,7 +383,9 @@ def grade_schema_board_ahead(target):
     e.append(
         gc.expectation(
             "new is REFUSED, naming both versions",
-            r.returncode != 0 and "is schema 99" in out and "understands 1" in out,
+            r.returncode != 0
+            and "is schema 99" in out
+            and f"understands {CLI_SCHEMA}" in out,
             f"exit {r.returncode}: {out.strip()[-140:]}",
         )
     )
@@ -654,6 +677,401 @@ def grade_cli_unresolvable(target):
             "a rejected rung is reported as EMPTY, not merely 'looked at'",
             "EMPTY" in out,
             f"out: {out.strip()[:220]}",
+        )
+    )
+    return e
+
+
+def grade_local_board(target):
+    """ADR 0011 — a developer's own board is a choice recorded in handoff.local.json, never a role.
+
+    Setup records the board a developer names in `.agents/handoff.local.json` and touches nothing
+    committed; the CLI then resolves that board for this checkout only. The ignore rules the choice
+    needs are suggested, exactly as for any other install (ADR 0010).
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(
+        gc.expectation("team install succeeds", r.returncode == 0, r.stderr[-300:])
+    )
+    team_cfg = t / ".agents" / "handoff.json"
+    team_before = team_cfg.read_text(encoding="utf-8") if team_cfg.exists() else ""
+    local = t / ".agents" / "handoff.local.json"
+    local.write_text('{"userLayer": true}\n', encoding="utf-8")
+
+    r = _run(["bash", str(SETUP), str(t), "--local-board", ".agents/nope"], t)
+    e.append(
+        gc.expectation(
+            "naming a folder that is not a board refuses and names --board-only",
+            r.returncode != 0 and "--board-only" in (r.stdout + r.stderr),
+            (r.stdout + r.stderr)[-300:],
+        )
+    )
+
+    r = _run(["bash", str(SETUP), "--board-only", str(t / ".agents" / "mine")], t)
+    e.append(
+        gc.expectation("a personal board scaffolds", r.returncode == 0, r.stderr[-300:])
+    )
+    r = _run(
+        [
+            "bash",
+            str(SETUP),
+            str(t),
+            "--local-board",
+            ".agents/mine",
+            "--group",
+            "drafts",
+        ],
+        t,
+    )
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("--local-board succeeds", r.returncode == 0, out[-300:]))
+    data = json.loads(local.read_text(encoding="utf-8"))
+    e.append(
+        gc.expectation(
+            "handoff.local.json records the board and section",
+            data.get("board") == ".agents/mine" and data.get("group") == "drafts",
+            str(data),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "keys already in handoff.local.json survive",
+            data.get("userLayer") is True,
+            str(data),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "no board role is written",
+            set(data) <= {"board", "group", "userLayer"},
+            str(sorted(data)),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the committed handoff.json is untouched",
+            (team_cfg.read_text(encoding="utf-8") if team_cfg.exists() else "")
+            == team_before,
+            "compared byte for byte",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the ignore rules it needs are suggested, not written",
+            "--ignore" in out and "handoff.local.json" in out and ".agents/mine" in out,
+            out[-400:],
+        )
+    )
+
+    cli_dir = Path(tempfile.mkdtemp(prefix="unhoused-cli-"))
+    atexit.register(shutil.rmtree, cli_dir, True)
+    shutil.copy(SKILL / "scripts/payload/handoff", cli_dir / "handoff")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HANDOFF_BOARD")}
+    w = subprocess.run(
+        ["bash", str(cli_dir / "handoff"), "which"],
+        cwd=str(t),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    e.append(
+        gc.expectation(
+            "the CLI resolves the personal board from handoff.local.json",
+            "handoff.local.json" in w.stdout
+            and str((t / ".agents" / "mine").resolve()) in w.stdout,
+            (w.stdout + w.stderr)[-300:],
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "repo.ignore.local_config", "warn"))
+    e.append(gc.finding(f, "repo.ignore.personal_board", "warn"))
+    r = _run(
+        [
+            "bash",
+            str(SETUP),
+            str(t),
+            "--local-board",
+            ".agents/mine",
+            "--ignore",
+            "exclude",
+        ],
+        t,
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.ignore.local_config",
+            "pass",
+            label="with --ignore exclude the local config passes",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and the personal board is no longer reported",
+            "repo.ignore.personal_board" not in f,
+            str(sorted(f))[:300],
+        )
+    )
+
+    # The hooks stay wired to the team board, so the banner has to say the CLI is elsewhere.
+    # Filed with an explicit override: through the dispatcher alone, `new` now follows the local file.
+    _run(
+        ["bash", str(t / HD / "handoff"), "new", "team-work", "--title", "Team work"],
+        t,
+        {"HANDOFF_BOARD_PATH": str(t / HD)},
+    )
+    note = _hook(t, "sessionstart", {}, session="sess-LOCAL")
+    e.append(
+        gc.expectation(
+            "the session banner says this checkout's CLI uses the local board",
+            "handoff.local.json" in note and ".agents/mine" in note,
+            note[-300:],
+        )
+    )
+
+    # Only board, group and userLayer are one developer's to choose. Board-wide policy set locally
+    # is ignored, and verify names it rather than letting it pass silently.
+    data = json.loads(local.read_text(encoding="utf-8"))
+    data.update({"allowVerifyCmd": True, "ttlHours": 99})
+    local.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.local_config.keys",
+            "warn",
+            label="board-wide keys in handoff.local.json warn",
+        )
+    )
+    return e
+
+
+def grade_external_tracker(target):
+    """ADR 0011, level 1 — a board attaches at most one tracker, and verify audits the attachment.
+
+    The CLI refuses a bad reference at write time; the verifier is what catches the rest: a
+    tracker declared with an unknown kind or a broken pattern, and a reference that was typed into
+    the frontmatter by hand. All advisory, so all asserted by id.
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    cfg_path = t / HD / "handoff.json"
+
+    def set_external(ext):
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["external"] = ext
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+    set_external({"kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+"})
+    r = _handoff(t, "new", "ticketed", "--title", "Ticketed", "--ref", "ABC-12")
+    e.append(gc.expectation("new --ref succeeds", r.returncode == 0, r.stdout[-200:]))
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "board.external.kind", "pass"))
+    e.append(gc.finding(f, "board.external.pattern", "pass"))
+    e.append(
+        gc.finding(
+            f,
+            "board.config.unknown_keys",
+            "pass",
+            label="external is a known board key",
+        )
+    )
+
+    doc = t / HD / "ticketed-handoff.md"
+    doc.write_text(
+        doc.read_text(encoding="utf-8").replace(
+            "external_ref: ABC-12", "external_ref: abc12", 1
+        ),
+        encoding="utf-8",
+    )
+    set_external({"kind": "kanban", "refPattern": "[A-Z"})
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(f, "board.external.kind", "warn", label="an unknown kind warns")
+    )
+    e.append(
+        gc.finding(
+            f, "board.external.pattern", "warn", label="an invalid pattern warns"
+        )
+    )
+
+    set_external({"kind": "issues", "refPattern": "[A-Z]+-[0-9]+"})
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "doc.external_ref.pattern",
+            "warn",
+            label="a hand-typed reference that does not match warns",
+        )
+    )
+    return e
+
+
+IGNORE_NEEDS = SKILL / "scripts/ignore-needs.sh"
+
+
+def grade_ignore_detection(target):
+    """ADR 0010 — setup and verify detect what needs ignoring, and suggest rather than write.
+
+    Four places a board or per-user config gets committed by whoever runs `git add` next. Each is a
+    named `warn` in the verifier (a risk, not a broken install), and setup offers the fix and writes
+    nothing without `--ignore`. The layouts that need a SECOND repository are built in temp trees:
+    the isolated fixture copy has exactly one.
+    """
+    e = []
+    t = Path(target)
+
+    def git(*a, cwd):
+        subprocess.run(["git", *a], cwd=str(cwd), capture_output=True, check=False)
+
+    def needs(repo, board):
+        r = subprocess.run(
+            ["bash", str(IGNORE_NEEDS), str(repo), str(board)],
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout
+
+    # --- 1. handoff.local.json inside the repo, not ignored ---------------------------------
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    (t / ".agents" / "handoff.local.json").write_text(
+        '{"group": "mine"}\n', encoding="utf-8"
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "repo.ignore.local_config", "warn"))
+
+    gi_before = (
+        (t / ".gitignore").read_text(encoding="utf-8")
+        if (t / ".gitignore").exists()
+        else ""
+    )
+    exclude = t / ".git" / "info" / "exclude"
+    ex_before = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    r = _install(t)
+    e.append(
+        gc.expectation(
+            "setup suggests an ignore for handoff.local.json",
+            "handoff.local.json" in r.stdout and "--ignore" in r.stdout,
+            r.stdout[-400:],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and writes neither .gitignore nor .git/info/exclude without a choice",
+            (
+                (t / ".gitignore").read_text(encoding="utf-8")
+                if (t / ".gitignore").exists()
+                else ""
+            )
+            == gi_before
+            and (exclude.read_text(encoding="utf-8") if exclude.exists() else "")
+            == ex_before,
+            "both files unchanged",
+        )
+    )
+    # An exclude file whose last line has no newline: the appended rule must not fuse with it.
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("# local rules", encoding="utf-8")
+    r = _install(t, "--ignore", "exclude")
+    e.append(
+        gc.expectation(
+            "--ignore exclude writes .git/info/exclude, not .gitignore",
+            exclude.exists()
+            and ".agents/handoff.local.json" in exclude.read_text(encoding="utf-8")
+            and ".agents/handoff.local.json"
+            not in (t / ".gitignore").read_text(encoding="utf-8"),
+            r.stdout[-300:],
+        )
+    )
+    lines = exclude.read_text(encoding="utf-8").splitlines()
+    e.append(
+        gc.expectation(
+            "the rule lands on its own line after an unterminated one",
+            "# local rules" in lines and ".agents/handoff.local.json" in lines,
+            str(lines),
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.ignore.local_config",
+            "pass",
+            label="an excluded local config passes",
+        )
+    )
+
+    # --- 2. a board one developer keeps for themselves inside the repo ----------------------
+    top = Path(tempfile.mkdtemp(prefix="ignore-needs-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    solo = top / "solo"
+    (solo / ".agents" / "mine").mkdir(parents=True)
+    (solo / ".agents" / "mine" / "INDEX.md").write_text(
+        "# Handoffs\n", encoding="utf-8"
+    )
+    git("init", "-q", cwd=solo)
+    (solo / ".agents" / "handoff.local.json").write_text(
+        '{"board": ".agents/mine"}\n', encoding="utf-8"
+    )
+    out = needs(solo, solo / ".agents" / "mine")
+    e.append(
+        gc.expectation(
+            "a personal in-repo board named by handoff.local.json needs ignoring",
+            "repo.ignore.personal_board" in out,
+            out[-300:],
+        )
+    )
+
+    # --- 3. a board that is its own repository inside another repo's worktree ---------------
+    outer = top / "outer"
+    (outer / "boards" / "team").mkdir(parents=True)
+    git("init", "-q", cwd=outer)
+    git("init", "-q", cwd=outer / "boards" / "team")
+    out = needs(outer, outer / "boards" / "team")
+    e.append(
+        gc.expectation(
+            "a board repo nested in another repo's worktree needs ignoring there",
+            "repo.ignore.nested_board_repo" in out,
+            out[-300:],
+        )
+    )
+    (outer / ".gitignore").write_text("boards/team/\n", encoding="utf-8")
+    out = needs(outer, outer / "boards" / "team")
+    e.append(
+        gc.expectation(
+            "and is silent once the outer repo ignores it",
+            "repo.ignore.nested_board_repo" not in out,
+            out[-300:],
+        )
+    )
+
+    # --- 4. a board inside a workspace repository that is not its own repository ------------
+    ws = top / "ws"
+    (ws / ".agents" / "handoff").mkdir(parents=True)
+    (ws / "src" / "app").mkdir(parents=True)
+    git("init", "-q", cwd=ws)
+    git("init", "-q", cwd=ws / "src" / "app")
+    out = needs(ws / "src" / "app", ws / ".agents" / "handoff")
+    e.append(
+        gc.expectation(
+            "a board inside a workspace repo that is not its own repo asks: repo or ignore",
+            "board.git.inside_workspace_repo" in out,
+            out[-300:],
+        )
+    )
+    out = needs(solo, solo / ".agents" / "mine")
+    e.append(
+        gc.expectation(
+            "an ordinary in-repo board of the same repo is not reported as a workspace board",
+            "board.git.inside_workspace_repo" not in out,
+            out[-300:],
         )
     )
     return e
@@ -2863,14 +3281,15 @@ def grade_migration_offer(_target):
         e.append(
             gc.expectation(
                 "[accept] the offer runs the migration",
-                board_stamp(repo) == 1,
+                board_stamp(repo) == CLI_SCHEMA,
                 f"stamp: {board_stamp(repo)}, out: {out[:200]!r}",
             )
         )
         e.append(
             gc.expectation(
                 "[accept] the document was migrated too, not only the board stamp",
-                "schema: 1" in (Path(repo) / HD / "demo-handoff.md").read_text(),
+                f"schema: {CLI_SCHEMA}"
+                in (Path(repo) / HD / "demo-handoff.md").read_text(),
                 "doc frontmatter",
             )
         )
@@ -2926,7 +3345,7 @@ def grade_migration_offer(_target):
         e.append(
             gc.expectation(
                 "[hook] the session banner still reports the drift in one line",
-                "predate schema 1" in note and "migrate" in note,
+                f"predate schema {CLI_SCHEMA}" in note and "migrate" in note,
                 f"note: {note[-200:]!r}",
             )
         )
@@ -2940,6 +3359,150 @@ def grade_migration_offer(_target):
         return e
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+def _detect_split_board():
+    """A current board is recognised as current, and its sectioned docs are counted.
+
+    The classifiers predated the board/binary split: `<board>/handoff` is now a dispatcher shim and
+    the CLI lives in `scripts/handoff-cli` (or a user-level install), and a sectioned board keeps its
+    docs under `<section>/`. Both used to read as `version=legacy docs=0`, and setup offered to
+    migrate a board that needed nothing. Built from the shipped payload files, not from prose.
+    """
+    top = Path(tempfile.mkdtemp(prefix="detect-split-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    repo = top / "ws" / "repo-a"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    board = top / "ws" / ".agents" / "handoff"
+    (board / "scripts").mkdir(parents=True)
+    shutil.copy(SKILL / "scripts/payload/dispatcher", board / "handoff")
+    shutil.copy(SKILL / "scripts/payload/handoff", board / "scripts" / "handoff-cli")
+    (board / "handoff.json").write_text(
+        json.dumps(
+            {
+                "groups": ["acme"],
+                "groupLayout": "subfolder",
+                "_generated": {"payloadVersion": "setup-handoff 1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (board / "INDEX.md").write_text("# Handoffs\n", encoding="utf-8")
+    for rel in (
+        "acme/one-handoff.md",
+        "acme/two-handoff.md",
+        "acme/archive/old-handoff.md",
+        "acme/INDEX.md",
+        "templates/handoff-doc-template.md",
+        "briefs/one-handoff.brief.md",
+    ):
+        p = board / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("---\nid: x\nstatus: open\n---\n", encoding="utf-8")
+    out = subprocess.run(
+        ["bash", str(DETECT), str(repo)], capture_output=True, text=True
+    ).stdout
+
+    # No vendored CLI at all (--no-vendor-cli): the stamp alone still says which era the board is.
+    bare = top / "ws2" / ".agents" / "handoff"
+    bare.mkdir(parents=True)
+    shutil.copy(SKILL / "scripts/payload/dispatcher", bare / "handoff")
+    (bare / "handoff.json").write_text(
+        json.dumps({"_generated": {"payloadVersion": "setup-handoff 1"}}) + "\n",
+        encoding="utf-8",
+    )
+    repo2 = top / "ws2" / "repo-b"
+    repo2.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo2)], check=True)
+    out2 = subprocess.run(
+        ["bash", str(DETECT), str(repo2)], capture_output=True, text=True
+    ).stdout
+    return [
+        gc.expectation(
+            "a split-payload board with a vendored CLI classifies version=current",
+            "version=current" in out,
+            out[-300:],
+        ),
+        gc.expectation(
+            "its sectioned docs are counted, archive included, templates/briefs/indexes not",
+            "docs=3" in out,
+            out[-300:],
+        ),
+        gc.expectation(
+            "a dispatcher-only board with a payload stamp is current too",
+            "version=current" in out2,
+            out2[-300:],
+        ),
+    ]
+
+
+def _detect_parent_levels():
+    """ADR 0010 — detection scans the repo and two parent levels, and stops on ambiguity.
+
+    Built in a temp tree rather than a fixture, because the parents ARE the scenario: a fixture
+    copied into an isolated git root would carry none of them.
+    """
+
+    def board(d: Path) -> None:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "INDEX.md").write_text("# Handoffs\n", encoding="utf-8")
+
+    def detect(repo: Path, *extra: str) -> str:
+        return subprocess.run(
+            ["bash", str(DETECT), str(repo), *extra], capture_output=True, text=True
+        ).stdout
+
+    top = Path(tempfile.mkdtemp(prefix="detect-levels-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    repo = top / "ws0" / "ws" / "src" / "repo-a"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+
+    board(top / "ws0" / ".agents" / "handoff")  # level 3 — out of range by default
+    out3 = detect(repo)
+    deeper = detect(repo, "--parents", "3")
+
+    board(repo.parent / ".agents" / "handoff")  # ws/src — level 1
+    out1 = detect(repo)
+
+    board(top / "ws0" / "ws" / ".agents" / "handoff")  # ws — level 2
+    out2 = detect(repo)
+
+    return [
+        gc.expectation(
+            "a board only at level 3 is not a candidate",
+            "CANDIDATES 0" in out3 and "FOUND" not in out3,
+            out3[-300:],
+        ),
+        gc.expectation(
+            "--parents 3 is the deeper scan that finds it",
+            "level=3" in deeper and "CANDIDATES 1" in deeper,
+            deeper[-300:],
+        ),
+        gc.expectation(
+            "a board at ws/src is one parent candidate at level 1",
+            "scope=parent" in out1
+            and "level=1" in out1
+            and "CANDIDATES 1" in out1
+            and "AMBIGUOUS" not in out1,
+            out1[-300:],
+        ),
+        gc.expectation(
+            "a single outside candidate is proposed for confirmation, not migrated",
+            "Propose it and confirm" in out1 and "UPGRADE + MIGRATE" not in out1,
+            out1[-300:],
+        ),
+        gc.expectation(
+            "boards at ws/src and ws are two candidates, marked ambiguous",
+            "level=1" in out2
+            and "level=2" in out2
+            and "CANDIDATES 2" in out2
+            and "AMBIGUOUS" in out2,
+            out2[-300:],
+        ),
+    ]
 
 
 def grade(target, eval_id):
@@ -3094,34 +3657,40 @@ def _grade(target, eval_id):
         out = subprocess.run(
             ["bash", str(DETECT), str(target)], capture_output=True, text=True
         ).stdout
-        return [
-            gc.expectation(
-                "detects the legacy install location",
-                "FOUND .claude/handoff" in out,
-                out[:200],
-            ),
-            gc.expectation(
-                "classifies it as a legacy tool-path install",
-                "kind=legacy-toolpath" in out,
-                out[:200],
-            ),
-            gc.expectation(
-                "flags the defective (pre-session=) version",
-                "version=legacy" in out,
-                out[:200],
-            ),
-            gc.expectation("counts its docs", "docs=2" in out, out[:200]),
-            gc.expectation(
-                "suggests migrating to current/parent/specific",
-                "UPGRADE + MIGRATE" in out
-                and "parent-level" in out
-                and "specific location" in out,
-                out[:300],
-            ),
-            gc.expectation(
-                "reports one install detected", "Detected: 1 install" in out, out[-120:]
-            ),
-        ]
+        return (
+            [
+                gc.expectation(
+                    "detects the legacy install location",
+                    "FOUND .claude/handoff" in out,
+                    out[:200],
+                ),
+                gc.expectation(
+                    "classifies it as a legacy tool-path install",
+                    "kind=legacy-toolpath" in out,
+                    out[:200],
+                ),
+                gc.expectation(
+                    "flags the defective (pre-session=) version",
+                    "version=legacy" in out,
+                    out[:200],
+                ),
+                gc.expectation("counts its docs", "docs=2" in out, out[:200]),
+                gc.expectation(
+                    "suggests migrating to current/parent/specific",
+                    "UPGRADE + MIGRATE" in out
+                    and "parent-level" in out
+                    and "specific location" in out,
+                    out[:300],
+                ),
+                gc.expectation(
+                    "reports one install detected",
+                    "Detected: 1 install" in out,
+                    out[-120:],
+                ),
+            ]
+            + _detect_parent_levels()
+            + _detect_split_board()
+        )
 
     if eval_id == "custom-location":
         r = _install(target, "--primary", "claude", "--handoff-dir", ".claude/handoff")
@@ -3182,6 +3751,15 @@ def _grade(target, eval_id):
 
     if eval_id == "migration-offer":
         return grade_migration_offer(target)
+
+    if eval_id == "ignore-detection":
+        return grade_ignore_detection(target)
+
+    if eval_id == "external-tracker":
+        return grade_external_tracker(target)
+
+    if eval_id == "local-board":
+        return grade_local_board(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 

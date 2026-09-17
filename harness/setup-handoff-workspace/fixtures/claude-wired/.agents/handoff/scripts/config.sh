@@ -138,7 +138,7 @@ handoff_config_load() {
       echo "handoff: handoff.json needs python3, which is not installed" >&2
       return 3
     fi
-    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ]; }; then
+    if [ -n "$repo" ] && { [ -f "$repo/.agents/handoff.json" ] || [ -f "$repo/.agents/handoff.config.json" ] || [ -f "$repo/.agents/handoff.local.json" ]; }; then
       echo "handoff: $repo/.agents/handoff.json needs python3, which is not installed" >&2
       return 3
     fi
@@ -204,6 +204,7 @@ if repo:
     # board", which is the board's `repoName` (ADR 0006 — each layer names its subject from its
     # own file's point of view, so the two are NOT converged). `boardPath` was a second name for
     # `board`; both are accepted, and both mean the same thing — where this repo's board is.
+    #
     for src in (os.path.join(repo, ".agents", "handoff.config.json"),
                 os.path.join(repo, ".agents", "handoff.json")):
         data = read_json(src)
@@ -220,6 +221,20 @@ if repo:
             cfg["repoName"] = data["repo"]
         if "board" in data:
             cfg["board"] = data["board"]
+
+    # `handoff.local.json` is the same scope for ONE developer, applied last so it wins (ADR 0010) —
+    # but only for the choices that ARE one developer's: which board, which section. Board-wide
+    # policy (ttlHours, allowVerifyCmd, groups, layout, environments) and team identity (`repo`)
+    # stay with the committed files, so an uncommitted file can neither switch on verify-command
+    # execution nor make one machine's board behave differently from everyone else's. The verifier
+    # names any other key (repo.local_config.keys) rather than letting it pass silently.
+    local = read_json(os.path.join(repo, ".agents", "handoff.local.json"))
+    if "boardPath" in local:
+        cfg["board"] = local["boardPath"]
+    if "board" in local:
+        cfg["board"] = local["board"]
+    if "group" in local:
+        cfg["group"] = local["group"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
@@ -276,4 +291,117 @@ _handoff_config_legacy_nopython() {
   printf 'HC_ALLOW_VERIFY_CMD=%s\n' "$(printf %q "${allow:-0}")"
   printf 'HC_BOARD_PATH=%s\n' "''"
   printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
+}
+
+# handoff_legacy_locations BOARD_DIR [--move] -> prints how many legacy location entries belong to
+# this board; with --move, moves them into the board and prints how many moved.
+#
+# The repo-location cache used to be the `locations` map in ~/.agents/handoff.json (and, before
+# that, ~/.agents/handoff-locations.json). ADR 0010 moves it into `<board>/.locations.json`, and
+# moves an existing map only on a prompt — so this function counts and moves, and never decides to
+# move. The CLI asks a human; a hook prints one line; nothing moves silently.
+#
+# "Belongs to this board" means a root commit this board's registry declares. Everything else in the
+# user map — another board's repos, unrelated keys — stays exactly where it is, and the user file
+# itself is never deleted. An entry already in the board's cache wins over the user map.
+# handoff_legacy_location_files -> the user-layer files that may still hold a legacy `locations`
+# map, one per line, oldest name first so the newer one wins. The one list both the CLI's resolver
+# and the prompted move read.
+handoff_legacy_location_files() {
+  printf '%s\n' "$HOME/.agents/handoff-locations.json" "$HOME/.agents/handoff.json"
+}
+
+handoff_legacy_locations() {
+  local board="$1" mode="${2:-}"
+  command -v python3 > /dev/null 2>&1 || {
+    printf '0'
+    return 0
+  }
+  python3 - "$board" "$mode" "$(handoff_legacy_location_files)" << 'PY'
+import json, os, sys
+
+board, mode = sys.argv[1], sys.argv[2]
+USER_FILES = tuple(p for p in sys.argv[3].split("\n") if p)  # newer name last, so it wins
+BOARD_FILE = os.path.join(board, ".locations.json")
+
+
+def load(path):
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+roots = set()
+for path, key in ((os.path.join(board, "handoff.json"), "_generated"),
+                  (os.path.join(board, "repos.json"), None)):
+    data = load(path)
+    block = (data or {}).get(key) if key else data
+    repos = block.get("repos") if isinstance(block, dict) else None
+    if isinstance(repos, list):
+        roots.update(r["rootCommit"] for r in repos
+                     if isinstance(r, dict) and isinstance(r.get("rootCommit"), str))
+
+found = {}
+for path in USER_FILES:
+    locs = (load(path) or {}).get("locations")
+    if isinstance(locs, dict):
+        found.update({k: v for k, v in locs.items() if k in roots and isinstance(v, str)})
+
+if mode != "--move" or not found:
+    sys.stdout.write(str(len(found)))
+    raise SystemExit(0)
+
+try:
+    cache = load(BOARD_FILE) or {}
+    locs = cache.get("locations") if isinstance(cache.get("locations"), dict) else {}
+    for sha, path in found.items():
+        locs.setdefault(sha, path)
+    cache["locations"] = locs
+    write(BOARD_FILE, cache)
+    for path in USER_FILES:
+        data = load(path)
+        if not data or not isinstance(data.get("locations"), dict):
+            continue
+        kept = {k: v for k, v in data["locations"].items() if k not in found}
+        if len(kept) != len(data["locations"]):
+            data["locations"] = kept
+            write(path, data)
+except OSError as exc:
+    sys.stderr.write("handoff: could not move legacy locations: %s\n" % exc)
+    raise SystemExit(1)
+sys.stdout.write(str(len(found)))
+PY
+}
+
+# handoff_append_line FILE LINE -> appends LINE on a line of its own. A file whose last line has no
+# newline would otherwise fuse with it — `.locks/` + `.locations.json` becomes one rule matching
+# nothing, and both the lease ignore and the cache ignore silently stop working.
+handoff_append_line() {
+  local f="$1" line="$2"
+  if [ -s "$f" ] && [ "$(tail -c 1 "$f" | wc -l | tr -d ' ')" = 0 ]; then
+    printf '\n' >> "$f" || return 1
+  fi
+  printf '%s\n' "$line" >> "$f"
+}
+
+# handoff_ignore_locations BOARD_DIR -> makes sure the board's .gitignore lists .locations.json.
+# The cache is true for one disk, so unlike .locks/ there is no board on which committing it is
+# right, and no choice to ask anyone about. Prints a line only when it changed the file.
+handoff_ignore_locations() {
+  local gi="$1/.gitignore"
+  [ -d "$1" ] || return 0
+  grep -qxF '.locations.json' "$gi" 2> /dev/null && return 0
+  handoff_append_line "$gi" '.locations.json' || return 0
+  echo "Added '.locations.json' to $gi — the location cache is per machine and never committed." >&2
 }

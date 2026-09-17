@@ -129,23 +129,37 @@ Ask (`AskUserQuestion`, single-select), default **single-repo**:
 ### 5. Detect an existing install and offer to upgrade + migrate
 
 Always run the detector first — it scans repo-level (`.agents/handoff`, `.claude/handoff`,
-`.gemini/handoff`, `.github/handoff`, `.handoff`) and parent-level (`../.agents/handoff`,
-`../handoff`) locations and classifies each install:
+`.gemini/handoff`, `.github/handoff`, `.handoff`) locations and **two parent levels**
+(`../.agents/handoff`, `../../.agents/handoff`, and the `.claude/handoff` and `handoff` spellings
+at each) and classifies each install. Two levels cover both common layouts, `workspace/src/<repo>`
+and `workspace/<repo>`, and stop before a workspace that merely contains another one (ADR 0010):
 
 ```bash
-bash "$SKILL_DIR/scripts/detect-handoff.sh" "$REPO"
-# FOUND <path> | scope=repo|parent | kind=generic|legacy-toolpath|shared | version=current|legacy | docs=<n>
+bash "$SKILL_DIR/scripts/detect-handoff.sh" "$REPO" # --parents 3 for a deeper scan
+# FOUND <path> | scope=repo|parent | kind=generic|legacy-toolpath|shared | version=current|legacy | docs=<n> | level=<n>
+# CANDIDATES <n>   (+ AMBIGUOUS <n> when n >= 2)
 # ... + a Suggestion + `Detected: N install(s)`
 ```
 
-- **`Detected: 0`** → fresh install; skip to the apply step.
-- **A generic, current `.agents/handoff/`** already present → no migration needed (re-run is a
-  no-op).
-- **A legacy or tool-path install** (e.g. `.claude/handoff`, or `version=legacy`) → **ask the user
-  (`AskUserQuestion`)** whether to upgrade + migrate it, and to **where**:
+Detection never picks. Act on the candidate count:
+
+- **`CANDIDATES 0`** → **stop and ask (`AskUserQuestion`)**: a new in-repo board, a deeper scan
+  (`--parents 3`), or an explicit path to an existing board (`--topology cross-repo
+--handoff-dir <path>`).
+- **`CANDIDATES 1`, outside the repo** (`scope=parent`) → **propose it and confirm** before wiring
+  with `--topology cross-repo --handoff-dir <path>`. Never wire it on detection alone.
+- **`CANDIDATES 1`, a generic current `.agents/handoff/`** in the repo → no migration needed (re-run
+  is a no-op).
+- **`CANDIDATES 1`, a legacy or tool-path install** (e.g. `.claude/handoff`, or `version=legacy`)
+  → **ask the user (`AskUserQuestion`)** whether to upgrade + migrate it, and to **where**:
   - **current repo-level** — `--migrate <found>` (moves to `.agents/handoff/`, the default).
   - **parent-level shared** — `--topology cross-repo --migrate <found>` (for a board siblings share).
   - **specific location** — `--handoff-dir <path> --migrate <found>`.
+- **`AMBIGUOUS`** → **stop and ask** which board this repo uses, listing every FOUND path. Do not
+  proceed without an answer.
+
+Where the answer is written follows who it belongs to: a team decision goes to the committed
+`.agents/handoff.json`; one developer's choice goes to `.agents/handoff.local.json`.
 
 Migration `git mv`s the docs and `archive/` (history preserved), drops the machine-local
 `.locks/`, installs the fixed scripts, and re-points every wired config. It is the "enhancing"
@@ -157,7 +171,8 @@ path and is a no-op when the install is already generic and current.
 bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" \
   --tools <comma-list> --primary <tool|none> \
   [--topology single-repo|cross-repo] [--handoff-dir <path>] \
-  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli]
+  [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli] \
+  [--ignore exclude|gitignore]
 ```
 
 `--no-vendor-cli` skips the board's vendored CLI and writes the user-level copy instead — the
@@ -167,6 +182,35 @@ on a machine with no copy of this skill, and only the vendored copy guarantees t
 when the user says the board is never cloned cold (a throwaway or test-fixture board) and wants to
 avoid committing a ~180 KB byte-copy of the CLI. On a board that already vendors, it leaves the
 existing `scripts/handoff-cli` in place and says so; removing it is the user's call.
+
+**Ignore rules are suggested, never written silently** (ADR 0010). After installing, setup lists
+anything that could be committed by accident — a `.agents/handoff.local.json`, a board one
+developer keeps inside the repo, a board that is its own repository inside this worktree, a board
+inside a workspace repository that is not its own — and writes nothing. **Ask the user
+(`AskUserQuestion`)** where each rule belongs, then re-run with `--ignore exclude` (`.git/info/exclude`,
+this clone only — recommend it for a per-user choice, since `.gitignore` is committed and publishes
+one person's preference) or `--ignore gitignore` (the whole team). For a board inside a workspace
+repository, also offer making it a repository (`--board-only`) instead. `verify-setup-handoff.sh`
+reports each case as a warning until it is resolved.
+
+**A developer's own board is a choice, not a role** (ADR 0011). Nothing in config marks a board
+personal. When the user wants a board of their own for this repo — drafts, private notes, work not
+ready for the team — offer the layouts and let them pick; never assume one:
+
+- an ignored folder inside the repo (e.g. `.agents/mine`),
+- a folder beside the team board (e.g. `../.agents/mine`),
+- any path they name.
+
+Create it with `--board-only <path>` if it does not exist, then record it for this checkout only:
+
+```text
+bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" --local-board PATH [--group SECTION]
+```
+
+That writes `.agents/handoff.local.json` (merging any keys already there), never the committed
+`handoff.json`, and exits without rewiring hooks. It then suggests the ignore rules the choice needs
+— `handoff.local.json` itself, and the board if it sits in the repo — which follow the
+`--ignore` rule below. To move a draft onto the team board later, use `handoff move`.
 
 `--allow-verify-cmd` records the opt-in that lets `release --status done --run-verify` execute a
 doc's `verify:` command (off by default — see the safety note). Re-running with a different
@@ -294,8 +338,13 @@ depends on _where_ it sits, not on what it is called — the same shape `AGENTS.
 Nearest wins:
 
 ```text
-env  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
+env  >  <repo>/.agents/handoff.local.json  >  <repo>/.agents/handoff.json  >  <board>/handoff.json  >  built-in default
 ```
+
+`<repo>/.agents/handoff.local.json` is the same scope for **one developer** — a board or section
+someone keeps for themselves. It is never committed, and it carries only `board`, `group` and the
+`userLayer` opt-in: any other key is ignored, and the verifier names it (`repo.local_config.keys`). The CLI never searches above the repo for a
+board: a board outside it is detected at setup and written into config (ADR 0010).
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two
 never collide by accident, because env names keep the `HANDOFF_` prefix (`HANDOFF_TTL_HOURS`) while
