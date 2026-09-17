@@ -169,7 +169,9 @@ every session. One live board carries a bundle declaring 100 children of which 9
 it as `bundle.children.dangling`: such a bundle can never close, because `release --status done`
 refuses while anything is outstanding. Declaring a roster before authoring its docs is legitimate
 planning, so this is detect-only — and `children add --stub` is the cheap fix, filing each missing
-id as a real, claimable handoff rather than a thinner second kind of document:
+id as a real, claimable handoff rather than a thinner second kind of document (the verifier also
+warns `bundle.child.verify_empty` for an open child whose `## Verify` holds only the template
+comment — a child is sized to be checked on its own, so it has to say how):
 
 ```text
 ./handoff children add --stub <parent> <child> [child...]
@@ -261,6 +263,13 @@ grew activity logs forty entries deep with multi-paragraph revisions inside them
 `Resolution (date)`, `Execution log (date)` and `Recheck <date> — still unfixed` headings. All of
 that is people improvising the rewritable channel the template did not give them. One section that
 is always current, one that is always append-only, and neither has to do the other's job.
+
+`## Ruled out` holds what was tried and failed, one line each —
+`- <approach> — <why it failed> — <evidence>` — added by hand under the lease or with
+`release --ruled-out "..."`, which runs the write-path secret scan. It is append-only by
+convention, like Activity, but it is read at a different moment: before choosing an approach,
+where Activity would have to be replayed to find a dead end. It is **optional and not a schema
+change** (ADR 0012): a doc without it reads as nothing ruled out, and `migrate` never adds it.
 
 ## Two version numbers, and what each one does
 

@@ -225,6 +225,19 @@ adding a `Resolution (date)` or `Execution log` heading, what you want is `## Cu
 boards that motivated this schema are full of exactly those improvised headings, and nobody can
 find anything in them.
 
+**Record what failed in `## Ruled out`** (ADR 0012). When an approach is tried and abandoned, add
+one line so the next session does not walk it again:
+
+```text
+- <approach> — <why it failed> — <evidence>
+handoff release ID --status open --ruled-out "Inline cache — stale after archive — selftest run"
+```
+
+Write it by hand under the lease, or pass `--ruled-out` on `release`, which runs the same secret
+scan as the evidence. It is append-only: never rewrite or delete an entry. The section is optional
+— a doc without one reads as nothing ruled out, and `migrate` never adds it. Read it before you
+pick an approach, not after you have spent an hour on one it already lists.
+
 **Checkpoint long work instead of sitting silent until release** (ADR 0011). On a board with a
 remote, other machines see progress only when it is pushed, and a release is the last push:
 
@@ -358,6 +371,7 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.
 - Putting a handoff id in `blocked_on` → it belongs in `depends_on`, where the tool can see it.
 - Appending a `Resolution (date)` heading → that is what `## Current state` is for; rewrite it.
+- Abandoning an approach without a `## Ruled out` line → the next session tries it again.
 - Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
   and rightly: nobody checked anything.
 - Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;

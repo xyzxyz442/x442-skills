@@ -1025,6 +1025,89 @@ def grade_external_tracker(target):
     return e
 
 
+def grade_ruled_out(target):
+    """ADR 0012 — `## Ruled out` ships in the template without a schema change, and the verifier
+    warns on an open orchestrator child whose `## Verify` holds nothing but the template comment.
+
+    A bundle child is sized to be checked on its own; an empty Verify means nobody can, and the
+    bundle doc is the one place a reader sees them side by side. A doc outside any bundle is not
+    warned — a fresh `new` is empty by construction and has not been written yet.
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    for hid in ("child-empty", "child-filled", "child-closed", "loner"):
+        _handoff(t, "new", hid, "--title", hid)
+    _handoff(
+        t,
+        "new",
+        "pack",
+        "--orchestrator",
+        "--children",
+        "child-empty,child-filled,child-closed",
+        "--title",
+        "Pack",
+    )
+    filled = t / HD / "child-filled-handoff.md"
+    filled.write_text(
+        filled.read_text(encoding="utf-8").replace(
+            "## Verify\n", "## Verify\n\n- bash run-tests.sh exits 0\n", 1
+        ),
+        encoding="utf-8",
+    )
+    _handoff(t, "claim", "child-closed", "closing")
+    _handoff(
+        t,
+        "release",
+        "child-closed",
+        "--status",
+        "done",
+        "--verified-by",
+        "ran run-tests.sh",
+    )
+    e.append(
+        gc.contains(
+            t,
+            f"{HD}/loner-handoff.md",
+            "## Ruled out",
+            label="a new doc carries ## Ruled out",
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "bundle.child.verify_empty",
+            "warn",
+            label="an open bundle child with an empty Verify warns",
+        )
+    )
+    msgs = " ".join(x["message"] for x in f.get("bundle.child.verify_empty", []))
+    e.append(
+        gc.expectation(
+            "the warning names the empty child",
+            "child-empty-handoff" in msgs,
+            msgs[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and not the filled, closed, or unbundled ones",
+            not any(h in msgs for h in ("child-filled", "child-closed", "loner")),
+            msgs[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "no finding asks for a Ruled out section",
+            not any("ruled" in k.lower() for k in f),
+            str(sorted(k for k in f if "ruled" in k.lower())),
+        )
+    )
+    return e
+
+
 IGNORE_NEEDS = SKILL / "scripts/ignore-needs.sh"
 
 
@@ -3869,6 +3952,9 @@ def _grade(target, eval_id):
 
     if eval_id == "external-tracker":
         return grade_external_tracker(target)
+
+    if eval_id == "ruled-out":
+        return grade_ruled_out(target)
 
     if eval_id == "local-board":
         return grade_local_board(target)

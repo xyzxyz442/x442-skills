@@ -2259,7 +2259,7 @@ chk_contains "the short id resolves too" "$(hb "$SH" show SHOW-ME)" "title: Show
 SH_OUT="$(hb "$SH" show show-me --section Verify)"
 chk_contains "--section prints that section" "$SH_OUT" "run the show marker check"
 chk "--section prints nothing else" "" "$(printf '%s' "$SH_OUT" | grep -c '^## \|^title:' | grep -v '^0$')"
-SH_OUT="$(hb "$SH" show show-me --section 'Ruled out')"
+SH_OUT="$(hb "$SH" show show-me --section 'No such section')"
 SH_RC=$?
 chk "an absent section prints nothing" "" "$SH_OUT"
 chk "and exits 0" "0" "$SH_RC"
@@ -2288,6 +2288,59 @@ hb "$SH" release show-me --status done --verified-by "ran handoff.selftest.sh sh
 SH_PATH="$(hb "$SH" show show-me --path)"
 chk "--path follows the doc into the archive" "archive/show-me-handoff.md" "${SH_PATH##*/.agents/handoff/}"
 chk_contains "show finds an archived doc" "$(hb "$SH" show show-me --section Verify)" "run the show marker check"
+
+printf '\nRuled out is an optional, append-only section, not a schema change (ADR 0012)\n'
+RO="$(mkboard)"
+ROB="$RO/.agents/handoff"
+ROD="$ROB/ro-work-handoff.md"
+ro_section() { awk '$0 == "## Ruled out" { i = 1; next } i && /^## / { exit } i && /^- / { print }' "$1"; }
+hb "$RO" new ro-work --title "Ruled out work" > /dev/null
+chk "a new doc carries the section" "1" "$(grep -c '^## Ruled out$' "$ROD")"
+chk "and it starts empty" "" "$(ro_section "$ROD")"
+
+hb "$RO" claim ro-work "trying things" > /dev/null
+hb "$RO" release ro-work --status open --ruled-out "Inline cache — stale after archive — handoff.selftest.sh run" > /dev/null
+chk "release --ruled-out appends one line" "- Inline cache — stale after archive — handoff.selftest.sh run" "$(ro_section "$ROD")"
+hb "$RO" claim ro-work "again" > /dev/null
+hb "$RO" release ro-work --status blocked --blocked-on "external: vendor ticket" --ruled-out "Polling — rate limited — curl exit 22" > /dev/null
+chk "a second one appends after the first" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+chk "in order" "- Polling — rate limited — curl exit 22" "$(ro_section "$ROD" | tail -1)"
+chk "under one heading" "1" "$(grep -c '^## Ruled out$' "$ROD")"
+chk "and it stays before Suggested skills" "yes" \
+  "$(awk '/^## Ruled out$/ { r = NR } /^## Suggested skills$/ { s = NR } END { print (r && s && r < s) ? "yes" : "no" }' "$ROD")"
+
+hb "$RO" claim ro-work "secret" > /dev/null
+RO_BEFORE="$(cat "$ROD")"
+chk_contains "a secret in --ruled-out is refused" \
+  "$(hb "$RO" release ro-work --status open --ruled-out "used key $AWSKEY")" "looks like it contains a credential"
+chk "and nothing was appended" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+hb "$RO" release ro-work --status blocked --ruled-out "should not land" > /dev/null
+chk "a release refused for another reason appends nothing" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+chk_contains "--ruled-out needs a value" "$(hb "$RO" release ro-work --status open --ruled-out)" "--ruled-out needs a value"
+hb "$RO" release ro-work --status open > /dev/null
+
+# A doc written before the template gained the section: it is not a schema change, so the doc must
+# work exactly as before, and migrate must leave it alone.
+hb "$RO" new ro-old --title "Old doc" > /dev/null
+ROO="$ROB/ro-old-handoff.md"
+awk '$0 == "## Ruled out" { skip = 1; next } skip && /^## / { skip = 0 } !skip' "$ROO" > "$ROO.tmp" && cat "$ROO.tmp" > "$ROO" && rm -f "$ROO.tmp"
+hb "$RO" claim ro-old "old" > /dev/null
+chk_contains "an old doc without the section still releases" "$(hb "$RO" release ro-old --status open)" "Released ro-old-handoff"
+chk "without gaining one" "0" "$(grep -c '^## Ruled out$' "$ROO")"
+chk_contains "an old doc still lists" "$(hb "$RO" list)" "ro-old-handoff"
+hb "$RO" migrate --yes > /dev/null
+chk "migrate does not add it" "0" "$(grep -c '^## Ruled out$' "$ROO")"
+chk "the schema does not move" "2" "$(sed -n 's/^schema: //p' "$ROO" | head -1)"
+hb "$RO" claim ro-old "old" > /dev/null
+hb "$RO" release ro-old --status open --ruled-out "Shim — broke the gate — hooks.sh:40" > /dev/null
+chk "--ruled-out creates the section on an old doc" "- Shim — broke the gate — hooks.sh:40" "$(ro_section "$ROO")"
+chk "before Suggested skills" "yes" \
+  "$(awk '/^## Ruled out$/ { r = NR } /^## Suggested skills$/ { s = NR } END { print (r && s && r < s) ? "yes" : "no" }' "$ROO")"
+
+hb "$RO" new ro-ref --standalone --title "Ref" > /dev/null
+chk_contains "a standalone doc refuses --ruled-out" "$(hb "$RO" release ro-ref --status open --ruled-out "x — y — z")" "--ruled-out applies to coordination"
+hb "$RO" new ro-bundle --orchestrator --children ro-work --title "Bundle" > /dev/null
+chk_contains "an orchestrator refuses --ruled-out" "$(hb "$RO" release ro-bundle --status open --ruled-out "x — y — z")" "--ruled-out applies to coordination"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

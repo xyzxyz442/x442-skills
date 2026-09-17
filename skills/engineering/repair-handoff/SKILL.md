@@ -169,6 +169,9 @@ because each depends on the relationship between the board's parts rather than o
   never close, since `release --status done` refuses while anything is outstanding. The fix is to
   FILE them — `handoff children add --stub <parent> <child>` files each as a real, claimable doc —
   never to quietly prune the roster, which throws away somebody's plan.
+- **Bundle children nobody can verify** (`bundle.child.verify_empty`). An open child whose
+  `## Verify` holds only the template comment. Report it and name the child; do not write a Verify
+  yourself — only whoever owns the work knows how to check it.
 - **Open versus archive.** A doc with `status: done` still on the open board, or an archived doc
   still holding a lease.
 - **Section resolution (shared boards only).** Confirm the board pointer in the tool hook commands
