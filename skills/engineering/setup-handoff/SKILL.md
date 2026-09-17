@@ -342,7 +342,8 @@ env  >  <repo>/.agents/handoff.local.json  >  <repo>/.agents/handoff.json  >  <b
 ```
 
 `<repo>/.agents/handoff.local.json` is the same scope for **one developer** — a board or section
-someone keeps for themselves. It is never committed. The CLI never searches above the repo for a
+someone keeps for themselves. It is never committed, and it carries only `board`, `group` and the
+`userLayer` opt-in: any other key is ignored, and the verifier names it (`repo.local_config.keys`). The CLI never searches above the repo for a
 board: a board outside it is detected at setup and written into config (ADR 0010).
 
 Environment carries **overrides** for a single run; committed files carry normal operation. The two

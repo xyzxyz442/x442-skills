@@ -1294,6 +1294,13 @@ scan_secrets() { # stdin -> matched rule names; 0 = something matched
   return $hit
 }
 
+# The one override record, so every write path logs a bypassed scan the same way: which rules fired
+# (never the value) and the reason the caller gave. Output is byte-identical to the six inline copies
+# this replaced.
+log_secret_override() { # doc-path label hits reason
+  log_activity "$1" "$2 ($(printf '%s' "$3" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$4")"
+}
+
 # The one refusal message, so every write path says the same thing and none of them can drift into
 # printing the value. `where` names what was being written, `hits` the rules that fired.
 #
@@ -1710,7 +1717,7 @@ cmd_new() {
   # so the field would assert a handling rule that has nothing to apply to.
   [ "$type" = "standalone" ] || set_field "$target" sensitivity "$sensitivity"
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
-    log_activity "$target" "secret-scan OVERRIDDEN at creation ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$target" "secret-scan OVERRIDDEN at creation" "$hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
   fi
   # Same `if` form as cmd_claim's, for the same reason — here the status is currently swallowed by
@@ -1880,7 +1887,7 @@ import_result() {
 
   log_activity "$f" "result reported by $result_by_raw claiming $claimed — awaiting review"
   if [ -n "$force_secret" ] && [ -n "$in_hits" ]; then
-    log_activity "$f" "inbound secret-scan OVERRIDDEN on import ($(printf '%s' "$in_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "inbound secret-scan OVERRIDDEN on import" "$in_hits" "$force_secret"
     echo "⚠️  Inbound secret scan overridden — recorded on $id's activity log."
   fi
 
@@ -2145,7 +2152,21 @@ board_repo_entry() { # audience -> "reason|abs-path|attested-root"
     printf 'no-registry||'
     return
   }
-  python3 - "$DIR/handoff.json" "$DIR" "$aud" "$GROUP" << 'PY'
+  local legacy="" result
+  command -v handoff_legacy_location_files > /dev/null 2>&1 && legacy="$(handoff_legacy_location_files)"
+  # Captured through a function rather than a heredoc inside $(...): bash 3.2 (macOS /bin/bash)
+  # mis-parses quotes in a heredoc body nested in a command substitution.
+  result="$(_board_repo_entry_py "$aud" "$legacy")"
+  # The cache is one disk's truth, so it must never ride a `git add` into a board everybody clones.
+  # Setup writes this rule; a board installed before the cache moved gets it here, through the same
+  # helper `locations --move` uses.
+  [ -f "$DIR/.locations.json" ] && command -v handoff_ignore_locations > /dev/null 2>&1 \
+    && handoff_ignore_locations "$DIR" > /dev/null 2>&1
+  printf '%s' "$result"
+}
+
+_board_repo_entry_py() { # audience legacy-files -> "reason|abs-path|attested-root"
+  python3 - "$DIR/handoff.json" "$DIR" "$1" "$GROUP" "$2" << 'PY'
 import json, os, subprocess, sys
 
 reg, board, aud, group = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -2157,9 +2178,10 @@ HOME = os.path.expanduser("~")
 LOCATIONS = os.path.join(board, ".locations.json")
 # The legacy user-layer maps are still READ, below the board's own cache, so a machine that has not
 # accepted the move keeps resolving. They are never written: moving entries out of them is the
-# prompted migration in config.sh (handoff_legacy_locations), never a side effect of a lookup.
-USER_LOCATIONS = (os.path.join(HOME, ".agents", "handoff-locations.json"),
-                  os.path.join(HOME, ".agents", "handoff.json"))
+# prompted migration in config.sh (handoff_legacy_locations), never a side effect of a lookup. The
+# list itself comes from config.sh (handoff_legacy_location_files), so the reader and the mover
+# cannot disagree about which files count.
+USER_LOCATIONS = tuple(p for p in sys.argv[5].split("\n") if p)
 
 
 def out(s):
@@ -2214,25 +2236,6 @@ def remember(sha, path):
             json.dump(data, fh, indent=2, sort_keys=True)
             fh.write("\n")
         os.replace(tmp, LOCATIONS)
-        # The cache is one disk's truth, so it must never ride a `git add` into a board everybody
-        # clones. Setup writes this rule; a board installed before the cache moved gets it here.
-        gi = os.path.join(board, ".gitignore")
-        try:
-            with open(gi) as fh:
-                listed = ".locations.json" in fh.read().splitlines()
-        except OSError:
-            listed = False
-        if not listed:
-            try:
-                with open(gi, "rb") as fh:
-                    data = fh.read()
-                unterminated = bool(data) and not data.endswith(b"\n")
-            except OSError:
-                unterminated = False
-            with open(gi, "a") as fh:
-                # An appended rule must start on its own line, or it fuses with the last one
-                # (".locks/.locations.json") and neither rule matches anything.
-                fh.write(("\n" if unterminated else "") + ".locations.json\n")
     except OSError:
         pass
 
@@ -2533,7 +2536,7 @@ export_one() {               # id doc to outdir branch do_claim force-secret-rea
   rm -f "$staged"
 
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
-    log_activity "$f" "outbound secret-scan OVERRIDDEN on export ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "outbound secret-scan OVERRIDDEN on export" "$hits" "$force_secret"
     echo "⚠️  Outbound secret scan overridden — recorded on $id's activity log." >&2
   fi
 
@@ -3112,7 +3115,7 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   [ "$crossed" = 1 ] && across=" (across remotes, target named as $dst_key)"
   log_activity "$staged" "moved here from $(fold_colons "$src_label") by $me${across}."
   [ -n "$force_secret" ] && [ -n "$hits" ] \
-    && log_activity "$staged" "move secret-scan OVERRIDDEN ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
 
   # The target's own import, run AS the target: its layout, its section, its schema gate. From the
   # target directory so no repo config around the caller can re-route the section.
@@ -3166,7 +3169,7 @@ $out"
   done < <(each_doc)
   echo "Moved $id → $dest ($dst_label). An archived pointer stays here."
   [ -n "$dependents" ] \
-    && echo "⚠️  Still on this board and depending on it: $dependents. Rewrite each as blocked_on \"external: …\" — depends_on does not cross boards."
+    && echo "⚠️  Still on this board and depending on it: $dependents. Release each with --blocked-on \"external: …\" — depends_on does not cross boards."
   return 0
 }
 
@@ -3268,7 +3271,7 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
   rm -f "$t"
   set_field "$f" updated "$(today)"
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
-    log_activity "$f" "checkpoint secret-scan OVERRIDDEN ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "checkpoint secret-scan OVERRIDDEN" "$hits" "$force_secret"
   fi
   log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
   cmd_index > /dev/null
@@ -3362,7 +3365,7 @@ cmd_release() {
     if [ -z "$force_secret" ]; then
       die_on_secret "the release of $id" "$rel_hits"
     fi
-    log_activity "$f" "release secret-scan OVERRIDDEN ($(printf '%s' "$rel_hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"
+    log_secret_override "$f" "release secret-scan OVERRIDDEN" "$rel_hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on $id's activity log."
   fi
 

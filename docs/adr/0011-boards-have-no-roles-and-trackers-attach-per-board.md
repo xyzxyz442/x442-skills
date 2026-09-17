@@ -29,8 +29,11 @@ reference first. This narrows ADR 0002's allowance that an issue tracker may mir
   folder in the repo, a folder beside the team board, any path named — and records the choice
   in `handoff.local.json` (ADR 0010).
 - **One board of record per handoff.** `handoff move <id> --to <board>` transfers ownership: the
-  doc lands on the target with a new id in the target section, and a one-line pointer stays
-  behind. It runs the same secret scan and sensitivity refusal as `export`.
+  doc lands in the target section keeping its id — an id carries no section, and a stable id keeps
+  every earlier mention of it valid — and takes a new one only when the target already holds that
+  id. A one-line pointer stays behind. It runs the same secret scan as `export`. A
+  `sensitivity: restricted` handoff never moves to a board under a different remote, named or not;
+  within one host and owner it moves, since the material does not leave the trust boundary.
 - **The trust boundary comes from the remote.** `move` compares the target board's git remote
   host and owner with the source's. Same host and owner, or a target with no remote, proceeds.
   Anything else refuses unless named explicitly, and says which two remotes differ.

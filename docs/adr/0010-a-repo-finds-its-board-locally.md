@@ -43,7 +43,9 @@ reading it implicitly still works and warns. This amends ADR 0002's per-machine 
   candidates, a deeper scan or a named folder, an explicit path, or a new board. Detection never
   picks silently.
 - **Where the answer is written follows who it belongs to.** A team decision goes to
-  `.agents/handoff.json`; a single developer's choice goes to `.agents/handoff.local.json`.
+  `.agents/handoff.json`; a single developer's choice goes to `.agents/handoff.local.json`, which
+  carries only per-developer keys — the board, the section, and the user-layer opt-in. Board-wide
+  policy and team identity stay in the committed files.
 - **The user layer is allowed, not recommended.** `~/.agents/handoff.json` stays a valid cascade
   layer, read when `handoff.local.json` or an environment variable names it.
 - **Implicit reads are deprecated over one release.** For one release the user layer is still
@@ -89,10 +91,12 @@ reading it implicitly still works and warns. This amends ADR 0002's per-machine 
 
 - `detect-handoff.sh` gains a second parent level and an ambiguity report; the setup skill gains
   the stop-and-ask branch.
-- The CLI's resolver reads `handoff.local.json` and emits the one-release deprecation warning
-  when it falls through to the user layer.
+- The CLI's resolver reads `handoff.local.json`, above every board a dispatcher or vendored CLI
+  merely implies. The cascade resolver in `register-cross-repo-handoff` — the only reader of the
+  user layer — emits the one-release deprecation warning when it reads that layer implicitly.
 - `register-cross-repo-handoff` keeps the user layer in its cascade, documented as opt-in.
 - The location scan writes `<board>/.locations.json`; setup adds it to the board's `.gitignore`
-  beside `.locks/`; the CLI gains the migration offer for a legacy `locations` map.
+  beside `.locks/`, and the CLI repairs that rule whenever it writes the cache, as it already does
+  for `.locks/`; the CLI gains the migration offer for a legacy `locations` map.
 - The verifier gains checks for each ignore case above, reported as warnings — they describe a
   risk, not a broken install.

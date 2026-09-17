@@ -64,7 +64,7 @@ _Avoid_: personal config, user config
 **Move**:
 Transferring a handoff's board of record to another board. The source keeps an archived
 pointer; the handoff is never copied.
-_Avoid_: copy, sync, transfer
+_Avoid_: copy, sync
 
 **Handoff**:
 One unit of coordinated work, or one self-contained reference document, recorded as a single

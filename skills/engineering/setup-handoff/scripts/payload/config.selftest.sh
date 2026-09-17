@@ -48,6 +48,16 @@ eval "$(handoff_config_load "$T/board" "$T/repo_local")"
 chk "local group beats the committed one" mine "$HC_GROUP"
 chk "local board beats the committed one" ../workspace/my-board "$HC_BOARD_PATH"
 chk "keys the local file omits still come from handoff.json" myrepo "$HC_REPO_NAME"
+# Only board, group (and userLayer, which the cascade reads) are one developer's to set. Board-wide
+# policy in a local file — a TTL, the verify-command opt-in, the section layout — is ignored.
+printf '{"group":"mine","board":"../workspace/my-board","ttlHours":99,"allowVerifyCmd":true,"repo":"someone-else","groupLayout":"prefix"}\n' > "$T/repo_local/.agents/handoff.local.json"
+mkdir -p "$T/board_default"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a local ttlHours is ignored" 4 "$HC_TTL_HOURS"
+chk "a local allowVerifyCmd is ignored" 0 "$HC_ALLOW_VERIFY_CMD"
+chk "a local repo identity is ignored" myrepo "$HC_REPO_NAME"
+chk "a local groupLayout is ignored" "" "$HC_GROUP_LAYOUT"
+chk "the local group still applies" mine "$HC_GROUP"
 
 mkdir -p "$T/board_null"
 printf '{"ttlHours": null}\n' > "$T/board_null/config.json"

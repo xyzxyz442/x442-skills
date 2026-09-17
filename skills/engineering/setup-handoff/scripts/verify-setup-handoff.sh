@@ -349,6 +349,20 @@ if [ "$TOPO" = "cross-repo" ]; then
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok repo.gitignore.locks ".gitignore excludes .locks/" || warn repo.gitignore.locks ".gitignore missing a .locks/ entry — leases could get committed"
 fi
+# handoff.local.json holds one developer's choices only — board, group, and the userLayer opt-in.
+# Anything else in it is ignored by the CLI, so say so instead of letting it look like it applies.
+if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
+  LOCAL_EXTRA="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+if isinstance(d, dict):
+    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "userLayer"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
+  if [ -n "$LOCAL_EXTRA" ]; then
+    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group and userLayer are one developer's to choose; board-wide keys belong in the committed config"
+  else
+    ok repo.local_config.keys ".agents/handoff.local.json sets only per-developer keys"
+  fi
+fi
 # What could be committed by accident (ADR 0010). Warnings, never failures: each describes a risk,
 # not a broken install. The list comes from ignore-needs.sh, the same one setup suggests from.
 if [ -f "$SCRIPT_DIR/ignore-needs.sh" ]; then
@@ -522,14 +536,6 @@ section "7. Document schema (advisory — ADR 0004)"
 SCHEMA_DOCS=0 SCHEMA_STALE=0 SCHEMA_OLD=0 SCHEMA_OLD_ARCH=0 SCHEMA_LIVE=0 SCHEMA_ARCH=0 SCHEMA_NEW=0 SENS_RESTRICTED=0
 fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 
-# The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
-# rather than restated here: two copies of a credential-pattern list is two copies that drift, and
-# the one that drifts is always the one nobody runs interactively. The CLI cannot simply be sourced
-# — the board's own copy may be an older payload that has no scanner at all, which is precisely the
-# board this sweep is for — so its rules table is read as data.
-#
-# The sweep catches what the write path cannot: a secret pasted into a doc by hand, or committed
-# before this payload was installed. It never prints what it matched, only which rule fired.
 # ADR 0011 — at most one external tracker per board, reference-only at level 1. `kind` decides
 # what the tracker may later be used for (a sprint tool is never mirrored), so it is checked here
 # rather than guessed at. Read the pattern once; every doc's external_ref is checked against it.
@@ -557,6 +563,14 @@ if [ "${EXT_PRESENT:-0}" = 1 ]; then
   fi
 fi
 
+# The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
+# rather than restated here: two copies of a credential-pattern list is two copies that drift, and
+# the one that drifts is always the one nobody runs interactively. The CLI cannot simply be sourced
+# — the board's own copy may be an older payload that has no scanner at all, which is precisely the
+# board this sweep is for — so its rules table is read as data.
+#
+# The sweep catches what the write path cannot: a secret pasted into a doc by hand, or committed
+# before this payload was installed. It never prints what it matched, only which rule fired.
 SECRET_RULES="$(awk "/cat << 'RULES'/{f=1;next} f&&/^RULES\$/{exit} f" "$SCRIPT_DIR/payload/handoff" 2> /dev/null)"
 NOW_S="$(date +%s)"
 while IFS= read -r doc; do

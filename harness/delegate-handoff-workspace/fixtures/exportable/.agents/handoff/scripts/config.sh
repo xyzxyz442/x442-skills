@@ -205,12 +205,8 @@ if repo:
     # own file's point of view, so the two are NOT converged). `boardPath` was a second name for
     # `board`; both are accepted, and both mean the same thing — where this repo's board is.
     #
-    # `handoff.local.json` is the same scope for ONE developer, applied last so it wins (ADR 0010):
-    # a board or section someone keeps for themselves, never committed. The CLI's board lookup reads
-    # the same files in the same order, so the gate and the CLI cannot disagree about the board.
     for src in (os.path.join(repo, ".agents", "handoff.config.json"),
-                os.path.join(repo, ".agents", "handoff.json"),
-                os.path.join(repo, ".agents", "handoff.local.json")):
+                os.path.join(repo, ".agents", "handoff.json")):
         data = read_json(src)
         for key, val in data.items():
             if key in ("repo", "board"):
@@ -225,6 +221,20 @@ if repo:
             cfg["repoName"] = data["repo"]
         if "board" in data:
             cfg["board"] = data["board"]
+
+    # `handoff.local.json` is the same scope for ONE developer, applied last so it wins (ADR 0010) —
+    # but only for the choices that ARE one developer's: which board, which section. Board-wide
+    # policy (ttlHours, allowVerifyCmd, groups, layout, environments) and team identity (`repo`)
+    # stay with the committed files, so an uncommitted file can neither switch on verify-command
+    # execution nor make one machine's board behave differently from everyone else's. The verifier
+    # names any other key (repo.local_config.keys) rather than letting it pass silently.
+    local = read_json(os.path.join(repo, ".agents", "handoff.local.json"))
+    if "boardPath" in local:
+        cfg["board"] = local["boardPath"]
+    if "board" in local:
+        cfg["board"] = local["board"]
+    if "group" in local:
+        cfg["group"] = local["group"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
@@ -294,19 +304,24 @@ _handoff_config_legacy_nopython() {
 # "Belongs to this board" means a root commit this board's registry declares. Everything else in the
 # user map — another board's repos, unrelated keys — stays exactly where it is, and the user file
 # itself is never deleted. An entry already in the board's cache wins over the user map.
+# handoff_legacy_location_files -> the user-layer files that may still hold a legacy `locations`
+# map, one per line, oldest name first so the newer one wins. The one list both the CLI's resolver
+# and the prompted move read.
+handoff_legacy_location_files() {
+  printf '%s\n' "$HOME/.agents/handoff-locations.json" "$HOME/.agents/handoff.json"
+}
+
 handoff_legacy_locations() {
   local board="$1" mode="${2:-}"
   command -v python3 > /dev/null 2>&1 || {
     printf '0'
     return 0
   }
-  python3 - "$board" "$mode" << 'PY'
+  python3 - "$board" "$mode" "$(handoff_legacy_location_files)" << 'PY'
 import json, os, sys
 
 board, mode = sys.argv[1], sys.argv[2]
-home = os.path.expanduser("~")
-USER_FILES = (os.path.join(home, ".agents", "handoff-locations.json"),
-              os.path.join(home, ".agents", "handoff.json"))  # newer name last, so it wins
+USER_FILES = tuple(p for p in sys.argv[3].split("\n") if p)  # newer name last, so it wins
 BOARD_FILE = os.path.join(board, ".locations.json")
 
 

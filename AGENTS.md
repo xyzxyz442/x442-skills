@@ -98,7 +98,7 @@ so the default install stays safe to run on any checkout.
 ## House rules
 
 - **Formatting**: defer to [.editorconfig](.editorconfig) — UTF-8, LF, 2-space indent, final newline. Markdown files keep trailing whitespace (line-break semantics).
-- **No emojis** in skill content unless a skill is explicitly about emoji usage.
+- **No emojis** in skill content — `SKILL.md`, references, and docs — unless a skill is explicitly about emoji usage. Runtime output printed by a shipped script is not skill content.
 - **No destructive shell commands** in examples. Use `trash` instead of `rm`; never demonstrate `rm -rf`, `git push --force`, or `git reset --hard` without an explicit safety rail.
 - **Cite sources** when a skill encodes external API behavior or a vendor convention — link to the upstream doc so future-you can verify it still holds.
 - **Voice**: imperative, second person ("Do X", "Avoid Y"). No marketing language.

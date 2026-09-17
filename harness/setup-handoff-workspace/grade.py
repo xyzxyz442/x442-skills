@@ -815,6 +815,37 @@ def grade_local_board(target):
             str(sorted(f))[:300],
         )
     )
+
+    # The hooks stay wired to the team board, so the banner has to say the CLI is elsewhere.
+    # Filed with an explicit override: through the dispatcher alone, `new` now follows the local file.
+    _run(
+        ["bash", str(t / HD / "handoff"), "new", "team-work", "--title", "Team work"],
+        t,
+        {"HANDOFF_BOARD_PATH": str(t / HD)},
+    )
+    note = _hook(t, "sessionstart", {}, session="sess-LOCAL")
+    e.append(
+        gc.expectation(
+            "the session banner says this checkout's CLI uses the local board",
+            "handoff.local.json" in note and ".agents/mine" in note,
+            note[-300:],
+        )
+    )
+
+    # Only board, group and userLayer are one developer's to choose. Board-wide policy set locally
+    # is ignored, and verify names it rather than letting it pass silently.
+    data = json.loads(local.read_text(encoding="utf-8"))
+    data.update({"allowVerifyCmd": True, "ttlHours": 99})
+    local.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.local_config.keys",
+            "warn",
+            label="board-wide keys in handoff.local.json warn",
+        )
+    )
     return e
 
 
