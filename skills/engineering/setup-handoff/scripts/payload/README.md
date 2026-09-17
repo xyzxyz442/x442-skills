@@ -96,6 +96,7 @@ the fold. Ids and children are unaffected: they are slugified, which strips colo
 ```bash
 cd .agents/handoff
 ./handoff list                                  # what exists, what's open, who holds what
+./handoff show rbac-gap --section Verify        # read one doc by id (live or archived), never by path
 ./handoff new rbac-gap --title "Close RBAC gap" # file a new handoff (or write the .md by hand)
 ./handoff claim rbac-gap "adding policies to the payment module"
 #   ... do the work, updating the doc as you go ...

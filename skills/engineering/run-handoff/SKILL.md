@@ -33,6 +33,18 @@ Each row shows status, who acts next (`audience`, cross-repo only), severity, an
 (`🔒 held` / `⚠️ stale` / `—` free). In Claude Code the session-start hook already injected this;
 still run `list` before claiming so you act on current state.
 
+Read one handoff by its id, not its path:
+
+```text
+handoff show <id>                     # the whole doc, found live or in the archive
+handoff show <id> --section Verify    # one section; an absent section prints nothing
+handoff show <id> --path              # where the doc is right now
+```
+
+A path goes stale when a doc is archived or moved to another board; an id does not. `show` is
+read-only and offline, needs no lease, and looks only in your section. A restricted doc prints the
+same handling banner as `claim`. Resolve `--path` when you need it, and never write it into a doc.
+
 ## 2. Claim your unit
 
 ```text

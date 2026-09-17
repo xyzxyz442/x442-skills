@@ -4800,6 +4800,49 @@ cmd_index() {
   echo "Wrote $(sec_index)"
 }
 
+cmd_show() { # <id> [--section NAME] [--path]
+  # Find a doc by id, never by path (ADR 0012): a path goes stale when the doc is archived or moved
+  # between boards, an id does not. Read-only and offline — no lease, no sync, no index, no
+  # migration offer — so a hook can call it on any board. doc_of searches the caller's section,
+  # active then archive, which is what makes it group-aware.
+  local usage="usage: handoff show <id> [--section NAME] [--path]"
+  local raw="" section="" want_path=0 id f
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --section)
+        require_value --section "$#" "${2:-}"
+        section="$2"
+        shift
+        ;;
+      --path) want_path=1 ;;
+      --*) reject_unknown_flag "$1" ;;
+      *)
+        [ -z "$raw" ] || die "$usage"
+        raw="$1"
+        ;;
+    esac
+    shift
+  done
+  [ -n "$raw" ] || die "$usage"
+  [ -n "$section" ] && [ "$want_path" = 1 ] && die "--section and --path are separate reads — pick one"
+  id="$(resolve_id "$raw")" || die "unusable id: '$raw' (needs at least one letter or digit)"
+  f="$(doc_of "$id")" || no_such "$id"
+  warn_schema_forward "$f" # read forward (ADR 0003): a newer doc is shown, with one warning
+
+  # --path output is for a caller to consume, so the banner goes to stderr and stdout stays one line.
+  if [ "$want_path" = 1 ]; then
+    if is_restricted "$f"; then restricted_banner "$id" >&2; fi
+    printf '%s\n' "$f"
+    return 0
+  fi
+  if is_restricted "$f"; then restricted_banner "$id"; fi
+  if [ -n "$section" ]; then
+    doc_section "$f" "$section" # an absent section prints nothing and still exits 0
+  else
+    cat "$f"
+  fi
+}
+
 cmd_which() {
   # The one command that answers "why is this thing acting on THAT board with THAT binary". Both
   # halves are resolved independently and both can surprise you — a stale user-level CLI, an
@@ -4876,12 +4919,16 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_children "$@"
       ;;
+    show)
+      shift
+      cmd_show "$@"
+      ;;
     index) cmd_index ;;
     --which | which) cmd_which ;;
     locations)
       shift
       cmd_locations "$@"
       ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | move <id> --to <board> [--to-remote host/owner] | mirror [--dry-run] | export <id> --to-issue | import --result --from-issue <id> | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | show <id> [--section NAME] [--path] | claim <id> [note] | touch <id> | move <id> --to <board> [--to-remote host/owner] | mirror [--dry-run] | export <id> --to-issue | import --result --from-issue <id> | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
   esac
 fi

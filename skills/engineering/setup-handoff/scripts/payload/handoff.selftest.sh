@@ -2243,6 +2243,52 @@ printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC
 chk "the GitHub adapter reads visibility and lowercases it" "public" \
   "$(printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" visibility | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')"
 
+printf '\nhandoff show reads a doc by id, never by path (ADR 0012)\n'
+SH="$(mkboard)"
+SHB="$SH/.agents/handoff"
+hb "$SH" new show-me --title "Show me" --severity low > /dev/null
+insert_into_verify "$SHB/show-me-handoff.md" "run the show marker check"
+hb "$SH" new show-secret --title "Show secret" --sensitivity restricted > /dev/null
+board_sum() { (cd "$SHB" && find . -type f -exec shasum {} + | sort); }
+SH_BEFORE="$(board_sum)"
+
+SH_OUT="$(hb "$SH" show show-me)"
+chk_contains "show prints the doc" "$SH_OUT" "title: Show me"
+chk_contains "and its body" "$SH_OUT" "run the show marker check"
+chk_contains "the short id resolves too" "$(hb "$SH" show SHOW-ME)" "title: Show me"
+SH_OUT="$(hb "$SH" show show-me --section Verify)"
+chk_contains "--section prints that section" "$SH_OUT" "run the show marker check"
+chk "--section prints nothing else" "" "$(printf '%s' "$SH_OUT" | grep -c '^## \|^title:' | grep -v '^0$')"
+SH_OUT="$(hb "$SH" show show-me --section 'Ruled out')"
+SH_RC=$?
+chk "an absent section prints nothing" "" "$SH_OUT"
+chk "and exits 0" "0" "$SH_RC"
+SH_PATH="$(hb "$SH" show show-me --path)"
+chk "--path prints the active doc's path" "show-me-handoff.md" "${SH_PATH##*/.agents/handoff/}"
+chk "and that path exists" "yes" "$([ -f "$SH_PATH" ] && echo yes || echo no)"
+chk_contains "a restricted doc prints the handling banner" "$(hb "$SH" show show-secret)" "RESTRICTED"
+chk_contains "on --section too" "$(hb "$SH" show show-secret --section Verify)" "RESTRICTED"
+chk "--path stays one clean line, banner off stdout" "1" \
+  "$( (cd "$SH" && ./.agents/handoff/handoff show show-secret --path 2> /dev/null) | wc -l | tr -d ' ')"
+chk_contains "an unknown id is refused" "$(hb "$SH" show no-such-thing)" "no such handoff"
+chk "and exits non-zero" "1" "$(hb "$SH" show no-such-thing > /dev/null && echo 0 || echo 1)"
+chk_contains "--section needs a value" "$(hb "$SH" show show-me --section)" "--section needs a value"
+chk_contains "an unknown flag is refused" "$(hb "$SH" show show-me --bogus)" "unknown flag: --bogus"
+chk_contains "no id is a usage error" "$(hb "$SH" show)" "usage: handoff show"
+chk "no form of show writes to the board" "$SH_BEFORE" "$(board_sum)"
+
+sed -i.bak 's/^schema: [0-9]*$/schema: 99/' "$SHB/show-me-handoff.md" && rm -f "$SHB/show-me-handoff.md.bak"
+SH_OUT="$(hb "$SH" show show-me --section Verify)"
+chk_contains "a newer-schema doc is still shown" "$SH_OUT" "run the show marker check"
+chk_contains "with the read-forward warning" "$SH_OUT" "this CLI understands"
+sed -i.bak 's/^schema: 99$/schema: 2/' "$SHB/show-me-handoff.md" && rm -f "$SHB/show-me-handoff.md.bak"
+
+hb "$SH" claim show-me "closing it" > /dev/null
+hb "$SH" release show-me --status done --verified-by "ran handoff.selftest.sh show block" > /dev/null
+SH_PATH="$(hb "$SH" show show-me --path)"
+chk "--path follows the doc into the archive" "archive/show-me-handoff.md" "${SH_PATH##*/.agents/handoff/}"
+chk_contains "show finds an archived doc" "$(hb "$SH" show show-me --section Verify)" "run the show marker check"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing
