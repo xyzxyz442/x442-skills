@@ -58,22 +58,43 @@ looks_like_install() { # dir -> 0 if it holds a handoff board
   return 1
 }
 
-classify_version() { # dir -> current|legacy|unknown  (current == the script WRITES session= into the lease)
-  local d="$1"
-  [ -f "$d/handoff" ] || {
-    echo unknown
+classify_version() { # dir -> current|legacy|unknown  (current == the board's CLI writes session= into the lease)
+  local d="$1" f
+  # A payload stamp is only ever written by an installer that postdates the session= fix, so it is
+  # the cheapest proof of era — and the only one on a board installed with --no-vendor-cli, which
+  # carries no CLI to read at all.
+  if [ -f "$d/handoff.json" ] && grep -q '"payloadVersion"' "$d/handoff.json" 2> /dev/null; then
+    echo current
     return
-  }
-  # match the actual lease write (echo "session=...), not a comment that merely mentions it
-  grep -q '"session=' "$d/handoff" 2> /dev/null && echo current || echo legacy
+  fi
+  # Otherwise read the CLI itself. Since the board/binary split `<board>/handoff` is a dispatcher
+  # shim that never writes a lease, so the vendored copy is the one to read; a pre-split board has
+  # only the root file, which there IS the CLI.
+  for f in "$d/scripts/handoff-cli" "$d/handoff"; do
+    [ -f "$f" ] || continue
+    # match the actual lease write (echo "session=...), not a comment that merely mentions it
+    grep -q '"session=' "$f" 2> /dev/null && {
+      echo current
+      return
+    }
+  done
+  [ -f "$d/handoff" ] && echo legacy || echo unknown
 }
 
 count_docs() { # dir -> number of handoff docs (open + archived, excluding README/INDEX)
-  local d="$1" n=0 f
-  for f in "$d"/*.md "$d"/archive/*.md; do
-    [ -f "$f" ] || continue
-    case "$(basename "$f")" in README.md | INDEX.md) continue ;; esac
-    n=$((n + 1))
+  local d="$1" n=0 f sub
+  # The board root plus every section folder beside it. A sectioned board keeps no docs at the
+  # root at all, so counting only the root reported docs=0 for a board with real history.
+  # Machinery folders are skipped by name: templates are not docs, and a brief is a rendering of one.
+  for sub in "$d" "$d"/*/; do
+    sub="${sub%/}"
+    [ -d "$sub" ] || continue
+    case "$(basename "$sub")" in archive | templates | briefs | scripts | .locks) [ "$sub" = "$d" ] || continue ;; esac
+    for f in "$sub"/*.md "$sub"/archive/*.md; do
+      [ -f "$f" ] || continue
+      case "$(basename "$f")" in README.md | INDEX.md) continue ;; esac
+      n=$((n + 1))
+    done
   done
   echo "$n"
 }

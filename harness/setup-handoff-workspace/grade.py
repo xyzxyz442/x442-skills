@@ -3183,6 +3183,83 @@ def grade_migration_offer(_target):
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _detect_split_board():
+    """A current board is recognised as current, and its sectioned docs are counted.
+
+    The classifiers predated the board/binary split: `<board>/handoff` is now a dispatcher shim and
+    the CLI lives in `scripts/handoff-cli` (or a user-level install), and a sectioned board keeps its
+    docs under `<section>/`. Both used to read as `version=legacy docs=0`, and setup offered to
+    migrate a board that needed nothing. Built from the shipped payload files, not from prose.
+    """
+    top = Path(tempfile.mkdtemp(prefix="detect-split-")).resolve()
+    atexit.register(shutil.rmtree, top, True)
+    repo = top / "ws" / "repo-a"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    board = top / "ws" / ".agents" / "handoff"
+    (board / "scripts").mkdir(parents=True)
+    shutil.copy(SKILL / "scripts/payload/dispatcher", board / "handoff")
+    shutil.copy(SKILL / "scripts/payload/handoff", board / "scripts" / "handoff-cli")
+    (board / "handoff.json").write_text(
+        json.dumps(
+            {
+                "groups": ["acme"],
+                "groupLayout": "subfolder",
+                "_generated": {"payloadVersion": "setup-handoff 1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (board / "INDEX.md").write_text("# Handoffs\n", encoding="utf-8")
+    for rel in (
+        "acme/one-handoff.md",
+        "acme/two-handoff.md",
+        "acme/archive/old-handoff.md",
+        "acme/INDEX.md",
+        "templates/handoff-doc-template.md",
+        "briefs/one-handoff.brief.md",
+    ):
+        p = board / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("---\nid: x\nstatus: open\n---\n", encoding="utf-8")
+    out = subprocess.run(
+        ["bash", str(DETECT), str(repo)], capture_output=True, text=True
+    ).stdout
+
+    # No vendored CLI at all (--no-vendor-cli): the stamp alone still says which era the board is.
+    bare = top / "ws2" / ".agents" / "handoff"
+    bare.mkdir(parents=True)
+    shutil.copy(SKILL / "scripts/payload/dispatcher", bare / "handoff")
+    (bare / "handoff.json").write_text(
+        json.dumps({"_generated": {"payloadVersion": "setup-handoff 1"}}) + "\n",
+        encoding="utf-8",
+    )
+    repo2 = top / "ws2" / "repo-b"
+    repo2.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo2)], check=True)
+    out2 = subprocess.run(
+        ["bash", str(DETECT), str(repo2)], capture_output=True, text=True
+    ).stdout
+    return [
+        gc.expectation(
+            "a split-payload board with a vendored CLI classifies version=current",
+            "version=current" in out,
+            out[-300:],
+        ),
+        gc.expectation(
+            "its sectioned docs are counted, archive included, templates/briefs/indexes not",
+            "docs=3" in out,
+            out[-300:],
+        ),
+        gc.expectation(
+            "a dispatcher-only board with a payload stamp is current too",
+            "version=current" in out2,
+            out2[-300:],
+        ),
+    ]
+
+
 def _detect_parent_levels():
     """ADR 0010 — detection scans the repo and two parent levels, and stops on ambiguity.
 
@@ -3402,34 +3479,40 @@ def _grade(target, eval_id):
         out = subprocess.run(
             ["bash", str(DETECT), str(target)], capture_output=True, text=True
         ).stdout
-        return [
-            gc.expectation(
-                "detects the legacy install location",
-                "FOUND .claude/handoff" in out,
-                out[:200],
-            ),
-            gc.expectation(
-                "classifies it as a legacy tool-path install",
-                "kind=legacy-toolpath" in out,
-                out[:200],
-            ),
-            gc.expectation(
-                "flags the defective (pre-session=) version",
-                "version=legacy" in out,
-                out[:200],
-            ),
-            gc.expectation("counts its docs", "docs=2" in out, out[:200]),
-            gc.expectation(
-                "suggests migrating to current/parent/specific",
-                "UPGRADE + MIGRATE" in out
-                and "parent-level" in out
-                and "specific location" in out,
-                out[:300],
-            ),
-            gc.expectation(
-                "reports one install detected", "Detected: 1 install" in out, out[-120:]
-            ),
-        ] + _detect_parent_levels()
+        return (
+            [
+                gc.expectation(
+                    "detects the legacy install location",
+                    "FOUND .claude/handoff" in out,
+                    out[:200],
+                ),
+                gc.expectation(
+                    "classifies it as a legacy tool-path install",
+                    "kind=legacy-toolpath" in out,
+                    out[:200],
+                ),
+                gc.expectation(
+                    "flags the defective (pre-session=) version",
+                    "version=legacy" in out,
+                    out[:200],
+                ),
+                gc.expectation("counts its docs", "docs=2" in out, out[:200]),
+                gc.expectation(
+                    "suggests migrating to current/parent/specific",
+                    "UPGRADE + MIGRATE" in out
+                    and "parent-level" in out
+                    and "specific location" in out,
+                    out[:300],
+                ),
+                gc.expectation(
+                    "reports one install detected",
+                    "Detected: 1 install" in out,
+                    out[-120:],
+                ),
+            ]
+            + _detect_parent_levels()
+            + _detect_split_board()
+        )
 
     if eval_id == "custom-location":
         r = _install(target, "--primary", "claude", "--handoff-dir", ".claude/handoff")
