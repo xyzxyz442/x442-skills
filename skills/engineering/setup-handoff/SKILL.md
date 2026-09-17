@@ -193,6 +193,25 @@ one person's preference) or `--ignore gitignore` (the whole team). For a board i
 repository, also offer making it a repository (`--board-only`) instead. `verify-setup-handoff.sh`
 reports each case as a warning until it is resolved.
 
+**A developer's own board is a choice, not a role** (ADR 0011). Nothing in config marks a board
+personal. When the user wants a board of their own for this repo — drafts, private notes, work not
+ready for the team — offer the layouts and let them pick; never assume one:
+
+- an ignored folder inside the repo (e.g. `.agents/mine`),
+- a folder beside the team board (e.g. `../.agents/mine`),
+- any path they name.
+
+Create it with `--board-only <path>` if it does not exist, then record it for this checkout only:
+
+```text
+bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" --local-board PATH [--group SECTION]
+```
+
+That writes `.agents/handoff.local.json` (merging any keys already there), never the committed
+`handoff.json`, and exits without rewiring hooks. It then suggests the ignore rules the choice needs
+— `handoff.local.json` itself, and the board if it sits in the repo — which follow the
+`--ignore` rule below. To move a draft onto the team board later, use `handoff move`.
+
 `--allow-verify-cmd` records the opt-in that lets `release --status done --run-verify` execute a
 doc's `verify:` command (off by default — see the safety note). Re-running with a different
 `--primary` moves hard enforcement idempotently (strips the old deny/stop hooks).

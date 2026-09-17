@@ -19,6 +19,9 @@
 #   and committed forever. gemini and copilot have no uncommitted config location, so they are
 #   skipped with a notice rather than written to a file the flag promised not to touch.
 #
+#   --local-board <path> [--group G] records a board ONE developer keeps for this checkout in
+#   .agents/handoff.local.json (ADR 0011) and exits: no role, nothing committed, no rewiring.
+#
 #   --ignore exclude|gitignore writes the ignore rules setup would otherwise only SUGGEST (ADR 0010):
 #   handoff.local.json, a personal in-repo board, a board repo nested in this worktree, a board in a
 #   workspace repo. `exclude` is .git/info/exclude (this clone only); `gitignore` is committed.
@@ -299,7 +302,7 @@ with open(dest, "w") as fh:
 PY
 }
 
-REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0 IGNORE_TO=""
+REPO="" TOOLS="" PRIMARY="none" TOPOLOGY="single-repo" BOARD_ARG="" MIGRATE="" ALLOW_VERIFY=0 IGNORE_TO="" LOCAL_BOARD=""
 LOCAL_WIRING=0
 # Vendor a full copy of the CLI onto the board (default) so a cold clone with nothing but bash
 # works. --no-vendor-cli is for boards that are never cloned cold — chiefly this repo's own test
@@ -357,6 +360,11 @@ while [ $# -gt 0 ]; do
       LOCAL_WIRING=1
       shift
       ;;
+    --local-board)
+      require_value --local-board "$#" "${2:-}"
+      LOCAL_BOARD="${2:-}"
+      shift 2
+      ;;
     --ignore)
       require_value --ignore "$#" "${2:-}"
       IGNORE_TO="${2:-}"
@@ -402,6 +410,34 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$LAYOUT" ] && { case "$LAYOUT" in subfolder | prefix) ;; *) die "bad --layout: $LAYOUT (use subfolder|prefix)" ;; esac }
+
+# --- what needs ignoring (ADR 0010) ------------------------------------------------------
+# Suggest, never write silently. Whether a board or a local config is private is the developer's
+# call, and .gitignore is committed — so a rule is written only where --ignore says: `exclude`
+# (.git/info/exclude, this clone only — preferred for a per-user choice) or `gitignore` (the team).
+# ignore-needs.sh is the one list verify-setup-handoff.sh reports from too.
+apply_ignore_needs() { # repo board
+  local _nid _nrepo _nrel _nmsg _nfile
+  while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
+    [ -n "$_nid" ] || continue
+    if [ -z "$IGNORE_TO" ]; then
+      echo "setup-handoff: $_nmsg"
+      echo "  Nothing written. Re-run with --ignore exclude (only this clone) or --ignore gitignore (the whole team) to add '$_nrel' in $_nrepo."
+      continue
+    fi
+    if [ "$IGNORE_TO" = exclude ]; then
+      _nfile="$(git -C "$_nrepo" rev-parse --git-path info/exclude 2> /dev/null)"
+      case "$_nfile" in /*) ;; *) _nfile="$_nrepo/$_nfile" ;; esac
+      mkdir -p "$(dirname "$_nfile")"
+    else
+      _nfile="$_nrepo/.gitignore"
+    fi
+    if ! grep -qxF "$_nrel" "$_nfile" 2> /dev/null; then
+      printf '%s\n' "$_nrel" >> "$_nfile"
+      echo "setup-handoff: ignored '$_nrel' in $_nfile (--ignore $IGNORE_TO)"
+    fi
+  done < <(bash "$SKILL_DIR/scripts/ignore-needs.sh" "$1" "$2" 2> /dev/null)
+}
 
 # Legacy config names are READ (see config.sh) but no longer WRITTEN. Once the consolidated file
 # exists, the old one is renamed aside rather than deleted: nothing here removes a file a user may
@@ -548,6 +584,39 @@ fi
 # --- preconditions --------------------------------------------------------------------
 REPO="$(cd "$REPO" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)" \
   || die "not a git working tree: refusing to install (run initial-project first)"
+
+# --- a developer's own board (ADR 0011) ---------------------------------------------------
+# There is no board role in config. A board someone keeps for themselves is an ordinary board, and
+# choosing it for this checkout is recorded in .agents/handoff.local.json — never in the committed
+# handoff.json, where it would become the whole team's board. A distinct mode: it records the
+# choice, suggests the ignore rules it needs, and exits without rewiring anything. The board must
+# already exist; creating one is --board-only's job, and guessing a location here would be exactly
+# the silent pick ADR 0010 rules out.
+if [ -n "$LOCAL_BOARD" ]; then
+  case "$LOCAL_BOARD" in /*) _lb_abs="$LOCAL_BOARD" ;; *) _lb_abs="$REPO/$LOCAL_BOARD" ;; esac
+  [ -f "$_lb_abs/scripts/config.sh" ] || [ -f "$_lb_abs/config.sh" ] \
+    || die "--local-board: $_lb_abs is not a handoff board. Create it first: setup-handoff.sh --board-only $_lb_abs"
+  python3 -c 'import json, os, sys
+path, board, group = sys.argv[1], sys.argv[2], sys.argv[3]
+cfg = {}
+if os.path.isfile(path):
+    try:
+        loaded = json.load(open(path))
+    except (ValueError, OSError):
+        sys.exit("setup-handoff: %s is not valid JSON — fix or remove it, then re-run" % path)
+    if isinstance(loaded, dict):
+        cfg = loaded
+cfg["board"] = board
+if group:
+    cfg["group"] = group
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as fh:
+    json.dump(dict(sorted(cfg.items())), fh, indent=2)
+    fh.write("\n")' "$REPO/.agents/handoff.local.json" "$LOCAL_BOARD" "$GROUP" || exit 1
+  echo "setup-handoff: recorded board '$LOCAL_BOARD'${GROUP:+ (section $GROUP)} for this checkout in .agents/handoff.local.json — nothing committed changed."
+  apply_ignore_needs "$REPO" "$_lb_abs"
+  exit 0
+fi
 [ -f "$REPO/AGENTS.md" ] || die "no AGENTS.md at repo root — run initial-project first; not fabricating it here"
 case "$TOPOLOGY" in single-repo | cross-repo) ;; *) die "bad --topology: $TOPOLOGY" ;; esac
 
@@ -815,28 +884,6 @@ with open(path, "w") as fh:
 PYEOF
 
 # --- what needs ignoring (ADR 0010) ------------------------------------------------------
-# Suggest, never write silently. Whether a board or a local config is private is the developer's
-# call, and .gitignore is committed — so a rule is written only where --ignore says: `exclude`
-# (.git/info/exclude, this clone only — preferred for a per-user choice) or `gitignore` (the team).
-# ignore-needs.sh is the one list verify-setup-handoff.sh reports from too.
-while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
-  [ -n "$_nid" ] || continue
-  if [ -z "$IGNORE_TO" ]; then
-    echo "setup-handoff: $_nmsg"
-    echo "  Nothing written. Re-run with --ignore exclude (only this clone) or --ignore gitignore (the whole team) to add '$_nrel' in $_nrepo."
-    continue
-  fi
-  if [ "$IGNORE_TO" = exclude ]; then
-    _nfile="$(git -C "$_nrepo" rev-parse --git-path info/exclude 2> /dev/null)"
-    case "$_nfile" in /*) ;; *) _nfile="$_nrepo/$_nfile" ;; esac
-    mkdir -p "$(dirname "$_nfile")"
-  else
-    _nfile="$_nrepo/.gitignore"
-  fi
-  if ! grep -qxF "$_nrel" "$_nfile" 2> /dev/null; then
-    printf '%s\n' "$_nrel" >> "$_nfile"
-    echo "setup-handoff: ignored '$_nrel' in $_nfile (--ignore $IGNORE_TO)"
-  fi
-done < <(bash "$SKILL_DIR/scripts/ignore-needs.sh" "$REPO" "$HDEST" 2> /dev/null)
+apply_ignore_needs "$REPO" "$HDEST"
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

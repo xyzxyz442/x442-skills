@@ -682,6 +682,142 @@ def grade_cli_unresolvable(target):
     return e
 
 
+def grade_local_board(target):
+    """ADR 0011 — a developer's own board is a choice recorded in handoff.local.json, never a role.
+
+    Setup records the board a developer names in `.agents/handoff.local.json` and touches nothing
+    committed; the CLI then resolves that board for this checkout only. The ignore rules the choice
+    needs are suggested, exactly as for any other install (ADR 0010).
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(
+        gc.expectation("team install succeeds", r.returncode == 0, r.stderr[-300:])
+    )
+    team_cfg = t / ".agents" / "handoff.json"
+    team_before = team_cfg.read_text(encoding="utf-8") if team_cfg.exists() else ""
+    local = t / ".agents" / "handoff.local.json"
+    local.write_text('{"userLayer": true}\n', encoding="utf-8")
+
+    r = _run(["bash", str(SETUP), str(t), "--local-board", ".agents/nope"], t)
+    e.append(
+        gc.expectation(
+            "naming a folder that is not a board refuses and names --board-only",
+            r.returncode != 0 and "--board-only" in (r.stdout + r.stderr),
+            (r.stdout + r.stderr)[-300:],
+        )
+    )
+
+    r = _run(["bash", str(SETUP), "--board-only", str(t / ".agents" / "mine")], t)
+    e.append(
+        gc.expectation("a personal board scaffolds", r.returncode == 0, r.stderr[-300:])
+    )
+    r = _run(
+        [
+            "bash",
+            str(SETUP),
+            str(t),
+            "--local-board",
+            ".agents/mine",
+            "--group",
+            "drafts",
+        ],
+        t,
+    )
+    out = r.stdout + r.stderr
+    e.append(gc.expectation("--local-board succeeds", r.returncode == 0, out[-300:]))
+    data = json.loads(local.read_text(encoding="utf-8"))
+    e.append(
+        gc.expectation(
+            "handoff.local.json records the board and section",
+            data.get("board") == ".agents/mine" and data.get("group") == "drafts",
+            str(data),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "keys already in handoff.local.json survive",
+            data.get("userLayer") is True,
+            str(data),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "no board role is written",
+            set(data) <= {"board", "group", "userLayer"},
+            str(sorted(data)),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the committed handoff.json is untouched",
+            (team_cfg.read_text(encoding="utf-8") if team_cfg.exists() else "")
+            == team_before,
+            "compared byte for byte",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the ignore rules it needs are suggested, not written",
+            "--ignore" in out and "handoff.local.json" in out and ".agents/mine" in out,
+            out[-400:],
+        )
+    )
+
+    cli_dir = Path(tempfile.mkdtemp(prefix="unhoused-cli-"))
+    atexit.register(shutil.rmtree, cli_dir, True)
+    shutil.copy(SKILL / "scripts/payload/handoff", cli_dir / "handoff")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HANDOFF_BOARD")}
+    w = subprocess.run(
+        ["bash", str(cli_dir / "handoff"), "which"],
+        cwd=str(t),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    e.append(
+        gc.expectation(
+            "the CLI resolves the personal board from handoff.local.json",
+            "handoff.local.json" in w.stdout
+            and str((t / ".agents" / "mine").resolve()) in w.stdout,
+            (w.stdout + w.stderr)[-300:],
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(gc.finding(f, "repo.ignore.local_config", "warn"))
+    e.append(gc.finding(f, "repo.ignore.personal_board", "warn"))
+    r = _run(
+        [
+            "bash",
+            str(SETUP),
+            str(t),
+            "--local-board",
+            ".agents/mine",
+            "--ignore",
+            "exclude",
+        ],
+        t,
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "repo.ignore.local_config",
+            "pass",
+            label="with --ignore exclude the local config passes",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and the personal board is no longer reported",
+            "repo.ignore.personal_board" not in f,
+            str(sorted(f))[:300],
+        )
+    )
+    return e
+
+
 def grade_external_tracker(target):
     """ADR 0011, level 1 — a board attaches at most one tracker, and verify audits the attachment.
 
@@ -3579,6 +3715,9 @@ def _grade(target, eval_id):
 
     if eval_id == "external-tracker":
         return grade_external_tracker(target)
+
+    if eval_id == "local-board":
+        return grade_local_board(target)
 
     return [gc.run_verify_script(VERIFY, target)]
 
