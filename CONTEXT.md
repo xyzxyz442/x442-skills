@@ -56,6 +56,16 @@ _Avoid_: board, backend, sync target
 A board a developer keeps for their own drafts is an ordinary board with no role of its own.
 _Avoid_: personal board, private board, scratch board
 
+**Local config**:
+One developer's board and section choices for one checkout, never committed. Outranks the
+repository's committed config. The user-level layer above both is read only when opted into.
+_Avoid_: personal config, user config
+
+**Move**:
+Transferring a handoff's board of record to another board. The source keeps an archived
+pointer; the handoff is never copied.
+_Avoid_: copy, sync, transfer
+
 **Handoff**:
 One unit of coordinated work, or one self-contained reference document, recorded as a single
 markdown file with frontmatter.
@@ -68,7 +78,8 @@ _Avoid_: lock, assignment, ownership
 
 **Claim**:
 Taking the lease. **Release** is giving it back with a status. Neither is the lease itself —
-one handoff has many claims over its life and one lease at a time.
+one handoff has many claims over its life and one lease at a time. A **checkpoint** publishes
+Current state while the lease is kept.
 
 **Gate**:
 The tool-side hook that refuses an edit to a handoff document the editing session does not

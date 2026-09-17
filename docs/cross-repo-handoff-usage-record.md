@@ -54,7 +54,7 @@ sync is the only writer.
 ## 1. The manifest actually used
 
 The cascade is `~/.agents/handoff-repos.json` → `<workspace>/.handoff-repos.json` →
-`<subdir>/.handoff-repos.json`, nearest wins — the same shape as `AGENTS.md`. Only the workspace
+`<subdir>/.handoff-repos.json`, nearest wins — the same shape as `AGENTS.md`. (Since ADR 0010 the user layer — now `~/.agents/handoff.json` — is opt-in: it is read only when `HANDOFF_USER_LAYER=1` or `handoff.local.json` names it. This record predates that change and is left as it was transcribed.) Only the workspace
 layer exists here, at `workspace/src/.handoff-repos.json`:
 
 ```json
@@ -173,7 +173,7 @@ board script that lives outside the repo.
 ```mermaid
 flowchart TD
     subgraph cascade["Manifest cascade (nearest wins)"]
-        U["user<br/>~/.agents/handoff-repos.json"]
+        U["user — opt-in since ADR 0010<br/>~/.agents/handoff-repos.json"]
         W["workspace<br/>workspace/src/.handoff-repos.json<br/>(the one used here)"]
         S["subdir<br/>&lt;dir&gt;/.handoff-repos.json"]
     end
