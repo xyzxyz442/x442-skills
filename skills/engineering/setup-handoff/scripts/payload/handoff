@@ -1419,7 +1419,7 @@ warn_archive_failed() { # id
 
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
-  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref=""
+  local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref="" share=""
   id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
@@ -1493,6 +1493,11 @@ cmd_new() {
         ext_ref="$2"
         shift 2
         ;;
+      --share)
+        require_value --share "$#" "${2:-}"
+        share="$2"
+        shift 2
+        ;;
       --force-secret)
         # Reason REQUIRED, and recorded on the doc. An override with no stated reason is a silent
         # bypass wearing a flag, and the whole point of putting the scanner on the write path is
@@ -1509,6 +1514,13 @@ cmd_new() {
   done
   case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
   [ -n "${ext_ref:-}" ] && { ext_ref="$(validate_external_ref "$ext_ref")" || exit 3; }
+  # ADR 0013: `share` is audience, not handling. One value exists; restricted always wins; a
+  # standalone doc is never published, so marking it would assert something nothing honours.
+  if [ -n "$share" ]; then
+    [ "$share" = public ] || die "bad --share: $share (the only value is public; leave it off to keep a doc unshared)"
+    [ "$sensitivity" = restricted ] && die "--share public on a restricted doc is a contradiction — restricted never leaves the board. Pick one."
+    [ "$type" = standalone ] && die "--share applies to work a tracker can publish; a standalone doc is never mirrored or delegated."
+  fi
   [ "$sensitivity" = "restricted" ] && [ "$type" = "standalone" ] \
     && die "--sensitivity applies to work that can be delegated; a standalone/reference doc is never exported. Keep the material off the board instead."
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
@@ -1714,6 +1726,7 @@ cmd_new() {
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
   [ -n "$spec" ] && set_field "$target" spec "$spec"
   [ -n "${ext_ref:-}" ] && set_field "$target" external_ref "$ext_ref"
+  [ -n "$share" ] && set_field "$target" share "$share"
   # Coordination and orchestrator docs carry it explicitly so the field is discoverable at the one
   # moment somebody is looking at the frontmatter. A standalone doc is never exported or delegated,
   # so the field would assert a handling rule that has nothing to apply to.
@@ -3284,6 +3297,34 @@ require_tracker() { # purpose(mirror|delegate) -> prints the target repo
   printf '%s' "$repo"
 }
 
+# ADR 0013 — a public repository is published to only by double opt-in: the BOARD (external.allowPublic
+# in its committed handoff.json, never a local file or the environment) and each DOCUMENT
+# (`share: public`). Visibility is asked on every run and never cached; a tracker that cannot say,
+# or a failed call, counts as public. `internal` is behind an organisation's login and counts as
+# private, like `private`.
+tracker_is_public() { # repo -> 0 when the audience may be the public
+  local adapter vis
+  adapter="$(tracker_adapter)" || exit 3
+  vis="$(printf '{"repo": "%s"}' "$1" | bash "$adapter" visibility 2> /dev/null \
+    | python3 -c 'import json, sys
+try: print(str(json.load(sys.stdin).get("visibility", "")).lower())
+except Exception: print("")' 2> /dev/null)"
+  case "$vis" in private | internal) return 1 ;; *) return 0 ;; esac
+}
+
+board_allows_public() { # -> 0 when the board's own handoff.json sets external.allowPublic to true
+  python3 -c 'import json, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(1)
+e = d.get("external") if isinstance(d, dict) else None
+raise SystemExit(0 if isinstance(e, dict) and e.get("allowPublic") is True else 1)' "$DIR/handoff.json" 2> /dev/null
+}
+
+public_refusal() { # repo what -> the refusal sentence
+  printf '%s is public (or its visibility could not be confirmed), and this board does not allow publishing there — %s would make it readable by anyone, permanently. To publish on purpose, set external.allowPublic: true in %s and mark each doc with share: public (ADR 0013).' \
+    "$1" "$2" "$DIR/handoff.json"
+}
+
 # `export <id> --to-issue` (ADR 0011, level 2). The brief is rendered exactly as `export` renders it —
 # same restricted refusal, same outbound secret scan, same claim — and then opened as an issue, so
 # someone with no board access can pick it up. The issue number becomes the doc's external_ref.
@@ -3294,6 +3335,11 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
   repo="$(require_tracker delegate)" || exit 3
   tracker_adapter > /dev/null || exit 3
+  # The publication gate, before the brief is rendered or the lease taken — a refusal leaves nothing.
+  if tracker_is_public "$repo"; then
+    board_allows_public || die "$(public_refusal "$repo" "opening $id as an issue")"
+    [ "$(meta "$f" share)" = public ]       || die "$repo is public and $id is not marked share: public — only docs marked for public sharing are delegated there. Nothing was sent."
+  fi
   # Decide how the issue number will be written BEFORE anything is created, so a pattern that
   # cannot hold it refuses here instead of leaving an orphaned issue behind.
   if printf '#1\n' | grep -Eqx -- "$(external_setting refPattern)" 2> /dev/null; then
@@ -3392,6 +3438,22 @@ cmd_mirror() {
   # could not see the issue it had just opened and made a second one (found in a live run). Issues
   # are matched by their hidden marker alone, which is part of the issue's own body.
   existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || exit 3
+  local public=0
+  if tracker_is_public "$repo"; then
+    if ! board_allows_public; then
+      # Refuse the WHOLE run, before any create, update or close — and list what is already out
+      # there, because closing an issue hides nothing and a person has to decide what to do with it.
+      local already
+      already="$(printf '%s' "$existing" | python3 -c 'import json, re, sys
+rows = ["#%d (%s) %s" % (i["number"], i.get("state", ""), i.get("title", ""))
+        for i in json.load(sys.stdin) if re.search(r"<!-- handoff:.*? -->", i.get("body", ""))]
+print(chr(10).join("         " + r for r in rows))')"
+      die "$(public_refusal "$repo" "mirroring this board")${already:+
+       Issues this mirror has already put there, for review (nothing was closed or deleted):
+$already}"
+    fi
+    public=1
+  fi
   desired="$(mktemp)" || die "mktemp failed"
   gone="$(mktemp)" || die "mktemp failed"
 
@@ -3414,13 +3476,18 @@ cmd_mirror() {
       printf '%s\tno longer shared\n' "$base" >> "$gone"
       continue
     fi
+    if [ "$public" = 1 ] && [ "$(meta "$f" share)" != public ]; then
+      printf 'skip %s — not marked share: public\n' "$base"
+      printf '%s\tno longer shared publicly — this issue stays visible\n' "$base" >> "$gone"
+      continue
+    fi
     if [ -n "$(meta "$f" external_ref)" ]; then
       printf 'skip %s — linked elsewhere (%s)\n' "$base" "$(meta "$f" external_ref)"
       printf '%s\tlinked to its own ticket\n' "$base" >> "$gone"
       continue
     fi
     local rendered
-    rendered="$(mirror_render "$f")"
+    rendered="$(mirror_render "$f" "$public")"
     if hits="$(printf '%s' "$rendered" | scan_secrets)"; then
       printf 'refuse %s — looks like it contains a credential (%s); nothing of it was sent\n' "$base" "$(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')"
       refused=1
@@ -3480,22 +3547,22 @@ mirror_restricted_child() { # orchestrator-path -> the first restricted child id
 # One document -> one JSON object: its marker, and the exact create/update request. Only the parts a
 # teammate needs travel: Current state, Context and Verify for work, the Bundle prose and a child
 # checklist for a bundle. Template guidance comments are stripped; the footer says who owns the text.
-mirror_render() { # doc-path -> JSON line
-  local f="$1" kids="" c cf
+mirror_render() { # doc-path public(0|1) -> JSON line
+  local f="$1" public="${2:-0}" kids="" c cf
   if is_orchestrator "$f"; then
     while IFS= read -r c; do
       [ -n "$c" ] || continue
       if cf="$(doc_of "$c" 2> /dev/null)"; then
-        kids="${kids}$(meta "$cf" status)"$'\t'"$(meta "$cf" title)"$'\t'"$c"$'\n'
+        kids="${kids}$(meta "$cf" status)"$'\t'"$(meta "$cf" title)"$'\t'"$c"$'\t'"$(meta "$cf" share)"$'\n'
       else
-        kids="${kids}missing"$'\t'$'\t'"$c"$'\n'
+        kids="${kids}missing"$'\t'$'\t'"$c"$'\t'$'\n'
       fi
     done <<< "$(children_of "$f")"
   fi
-  python3 - "$f" "${GROUP:-}" "$kids" "$(doc_type "$f")" "$(doc_env "$f")" << 'PY'
+  python3 - "$f" "${GROUP:-}" "$kids" "$(doc_type "$f")" "$(doc_env "$f")" "$public" << 'PY'
 import json, re, sys
 
-path, group, kids, dtype, env = sys.argv[1:6]
+path, group, kids, dtype, env, public = sys.argv[1:7]
 text = open(path).read()
 fm, _, body = text.partition("\n---\n") if text.startswith("---\n") else ("", "", text)
 meta = {}
@@ -3519,13 +3586,20 @@ parts = []
 if dtype == "orchestrator":
     if section("Bundle"):
         parts.append("## Bundle\n\n" + section("Bundle"))
-    rows = []
+    rows, hidden = [], 0
     for row in kids.splitlines():
-        status, title, cid = (row.split("\t") + ["", "", ""])[:3]
+        status, title, cid, share = (row.split("\t") + ["", "", "", ""])[:4]
+        # On a public repository a child that is not itself marked public is COUNTED, never named:
+        # its id is a slug of its title, so even the id would leak what nobody chose to publish.
+        if public == "1" and share != "public":
+            hidden += 1
+            continue
         if status == "missing":
             rows.append("- [ ] %s (not filed yet)" % cid)
         else:
             rows.append("- [%s] %s (`%s`)" % ("x" if status == "done" else " ", title or cid, cid))
+    if hidden:
+        rows.append("- and %d more item%s not shared publicly" % (hidden, "" if hidden == 1 else "s"))
     parts.append("## Children\n\n" + "\n".join(rows))
 else:
     for name in ("Current state", "Context", "Verify"):

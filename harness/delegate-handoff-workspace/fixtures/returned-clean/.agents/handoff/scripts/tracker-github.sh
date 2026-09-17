@@ -11,12 +11,14 @@
 #   update    {"repo", "number", "title", "body", "labels", "state"?}  -> {}
 #   close     {"repo", "number", "comment"}                      -> {}
 #   comments  {"repo", "number"}                                 -> [{"author", "body", "created_at"}]
+#   visibility {"repo"}                                          -> {"visibility": "public"|"private"|"internal"}
+#     A failure exits non-zero; the CLI treats that — and anything unrecognised — as public (ADR 0013).
 #
 # Labels the mirror manages carry a known prefix (handoff-, status:, severity:, env:, section:,
 # type:). On update only those are reconciled; a label a person added by hand is left alone.
 # Source: https://cli.github.com/manual/gh_issue
 set -uo pipefail
-op="${1:?usage: tracker-github.sh list|create|update|close|comments}"
+op="${1:?usage: tracker-github.sh list|create|update|close|comments|visibility}"
 command -v gh > /dev/null 2>&1 || {
   echo "tracker-github: the gh CLI is not installed — https://cli.github.com, then gh auth login" >&2
   exit 2
@@ -122,6 +124,10 @@ print("\n".join(l["name"] for l in json.load(sys.stdin).get("labels", [])))')"
   close)
     quiet_gh issue close "$number" --repo "$repo" ${comment:+--comment "$comment"} > /dev/null || exit 1
     printf '{}'
+    ;;
+  visibility)
+    quiet_gh repo view "$repo" --json visibility | python3 -c 'import json, sys
+json.dump({"visibility": str(json.load(sys.stdin).get("visibility", "")).lower()}, sys.stdout)' || exit 1
     ;;
   comments)
     gh issue view "$number" --repo "$repo" --json comments | python3 -c 'import json, sys

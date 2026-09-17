@@ -522,17 +522,17 @@ fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 # ADR 0011 — at most one external tracker per board, reference-only at level 1. `kind` decides
 # what the tracker may later be used for (a sprint tool is never mirrored), so it is checked here
 # rather than guessed at. Read the pattern once; every doc's external_ref is checked against it.
-EXT_KIND="" EXT_PATTERN="" EXT_PRESENT=0 EXT_REPO="" EXT_SYSTEM=""
+EXT_KIND="" EXT_PATTERN="" EXT_PRESENT=0 EXT_REPO="" EXT_SYSTEM="" EXT_PUBLIC=0 SHARED_PUBLIC=""
 if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
   # Unit-separated, not tab-separated: `read` collapses consecutive tabs, so an empty field would
   # shift every field after it.
-  IFS=$'\x1f' read -r EXT_PRESENT EXT_KIND EXT_PATTERN EXT_REPO EXT_SYSTEM <<< "$(python3 -c 'import json,sys
+  IFS=$'\x1f' read -r EXT_PRESENT EXT_KIND EXT_PATTERN EXT_REPO EXT_SYSTEM EXT_PUBLIC <<< "$(python3 -c 'import json,sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 e = d.get("external") if isinstance(d, dict) else None
 if not isinstance(e, dict): print("0"); raise SystemExit(0)
 s = lambda k: e.get(k) if isinstance(e.get(k), str) else ""
-print("\x1f".join(["1", s("kind"), s("refPattern"), s("repo"), s("system")]))' "$HD/handoff.json" 2> /dev/null)"
+print("\x1f".join(["1", s("kind"), s("refPattern"), s("repo"), s("system"), "1" if e.get("allowPublic") is True else "0"]))' "$HD/handoff.json" 2> /dev/null)"
 fi
 if [ "${EXT_PRESENT:-0}" = 1 ]; then
   case "$EXT_KIND" in
@@ -589,6 +589,17 @@ while IFS= read -r doc; do
     *) warn doc.blocked_on.is_board_id "$dname: blocked_on names \"$bo\", which looks like a board id — that belongs in depends_on (blocked_on is for what the board cannot model)" ;;
   esac
 
+  # ADR 0013 — `share` is audience. One value exists, and restricted always wins over it.
+  dshare="$(fm "$doc" share)"
+  if [ -n "$dshare" ] && [ "$darch" = 0 ]; then
+    if [ "$dshare" != public ]; then
+      warn doc.share.invalid "$dname: share is \"$dshare\" — the only value is public; anything else reads as not shared"
+    elif [ "$(fm "$doc" sensitivity)" = restricted ]; then
+      warn doc.share.conflict "$dname: share: public on a restricted doc — restricted wins and it is never published; remove one of them"
+    else
+      SHARED_PUBLIC="${SHARED_PUBLIC:+$SHARED_PUBLIC, }${dname%.md}"
+    fi
+  fi
   xref="$(fm "$doc" external_ref)"
   if [ -n "$xref" ]; then
     if [ -z "$EXT_PATTERN" ]; then
@@ -752,6 +763,11 @@ else
   # alone on purpose, because rewriting a closed doc's frontmatter appends an activity-log entry
   # and an empty '## Current state' to a document nobody will read again. This line exists so that
   # fact is stated rather than looking like an undercount.
+  # Offline on purpose: visibility is only known at run time. A board that opted in to publishing is
+  # said out loud on every verify, so it never looks like a board that did not.
+  if [ "${EXT_PUBLIC:-0}" = 1 ]; then
+    warn board.external.public "this board allows publishing to a public tracker (external.allowPublic) — docs marked share: public: ${SHARED_PUBLIC:-none}"
+  fi
   [ "$SCHEMA_OLD_ARCH" -gt 0 ] \
     && ok board.schema.archive "$SCHEMA_OLD_ARCH of $SCHEMA_ARCH archived doc(s) predate schema $CLI_SCHEMA — left alone by design; './handoff migrate' walks the live section only, and a closed doc's shape is history. Not counted in doc.schema.behind."
   if [ "$SCHEMA_NEW" -gt 0 ]; then

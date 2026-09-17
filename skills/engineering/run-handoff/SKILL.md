@@ -242,6 +242,14 @@ docs, bundles with a restricted child, standalone docs, and docs already linked 
 by name and the run exits non-zero. When a doc closes, moves, or becomes restricted, its issue is
 closed with a one-line reason. A board whose tracker is a sprint tool is never mirrored.
 
+**A public repository needs two opt-ins** (ADR 0013). The mirror asks the tracker for the
+repository's visibility on every run, and treats "could not tell" as public. On a public repository
+it refuses — sending nothing, and listing any issues it already put there — unless the board's
+committed `handoff.json` sets `external.allowPublic: true`. Even then only docs marked
+`share: public` (`handoff new … --share public`) go out; a public bundle's checklist counts the
+children nobody marked instead of naming them. Removing the mark closes the issue, but the issue
+stays readable: publishing cannot be undone, so ask the user before marking anything public.
+
 To hand one piece of work to someone through an issue instead, see
 [`delegate-handoff`](../delegate-handoff/SKILL.md) (`export --to-issue`).
 

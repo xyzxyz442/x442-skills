@@ -10,6 +10,7 @@
 #   update    {"repo", "number", "title", "body", "labels", "state"}  -> {}
 #   close     {"repo", "number", "comment"}              -> {}
 #   comments  {"repo", "number"}                         -> [{"author", "body", "created_at"}]
+#   visibility {"repo"}                                  -> {"visibility": $FAKE_TRACKER_VISIBILITY, default "private"}
 #
 # Test hooks: $FAKE_TRACKER_FAIL=<op> makes that operation exit 1. Every call is appended to the
 # state's "calls" list as [op, request] so a test can count creates and updates.
@@ -69,6 +70,8 @@ elif op == "close":
     i["state"] = "closed"
     if req.get("comment"):
         i["comments"].append({"author": "handoff-mirror", "body": req["comment"], "created_at": "2026-01-01T00:00:00Z"})
+elif op == "visibility":
+    out = {"visibility": os.environ.get("FAKE_TRACKER_VISIBILITY", "private")}
 elif op == "comments":
     out = issue(req["number"]).get("comments", [])
 else:
