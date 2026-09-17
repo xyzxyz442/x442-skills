@@ -2342,6 +2342,26 @@ chk_contains "a standalone doc refuses --ruled-out" "$(hb "$RO" release ro-ref -
 hb "$RO" new ro-bundle --orchestrator --children ro-work --title "Bundle" > /dev/null
 chk_contains "an orchestrator refuses --ruled-out" "$(hb "$RO" release ro-bundle --status open --ruled-out "x — y — z")" "--ruled-out applies to coordination"
 
+printf '\na depends_on list of several ids stays several ids (depends-on-multi-id-handoff)\n'
+# norm_id prints no trailing newline, so every id after the first was glued onto it: a doc waiting
+# on three landed prerequisites claimed with "a-handoffb-handoffc-handoff (not filed on this board
+# yet)". Every existing check used a single id, where the missing newline is invisible.
+DM="$(mkboard)"
+DMB="$DM/.agents/handoff"
+for d in dm-a dm-b dm-c; do hb "$DM" new "$d" --title "$d" > /dev/null; done
+hb "$DM" new dm-after --title "After" --after dm-a,dm-b,dm-c > /dev/null
+chk "depends_of yields one id per line" "dm-a-handoff dm-b-handoff dm-c-handoff" \
+  "$(depends_of "$DMB/dm-after-handoff.md" | tr '\n' ' ' | sed 's/ $//')"
+printf -- '---\nid: dm-block\ndepends_on:\n  - dm-a\n  - dm-b\n---\n' > "$DMB/dm-block-handoff.md"
+chk "a block-style list does too" "dm-a-handoff dm-b-handoff" \
+  "$(depends_of "$DMB/dm-block-handoff.md" | tr '\n' ' ' | sed 's/ $//')"
+for d in dm-a dm-b dm-c; do
+  hb "$DM" claim "$d" "x" > /dev/null
+  hb "$DM" release "$d" --status done --verified-by "ran handoff.selftest.sh" > /dev/null
+done
+chk "claim does not warn once every prerequisite landed" "" \
+  "$(hb "$DM" claim dm-after "go" | grep 'prerequisites')"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing

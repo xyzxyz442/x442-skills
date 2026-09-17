@@ -737,12 +737,14 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
   # dependency at all.
   printf '%s\n' "$inline" | tr ',' '\n' | while IFS= read -r one; do
     one="$(printf '%s' "$one" | tr -d '[:space:]')"
-    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+    # norm_id prints no newline; without the echo every id after the first is glued onto it.
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null && echo
   done
   rest="$(sed -n '/^depends_on:/,/^[a-z_]*:/p' "$f" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')"
   printf '%s\n' "$rest" | while IFS= read -r one; do
     one="$(printf '%s' "$one" | tr -d '[:space:]')"
-    [ -n "$one" ] && norm_id "$one" 2> /dev/null
+    # norm_id prints no newline; without the echo every id after the first is glued onto it.
+    [ -n "$one" ] && norm_id "$one" 2> /dev/null && echo
   done
 }
 
