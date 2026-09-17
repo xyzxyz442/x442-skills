@@ -106,6 +106,27 @@ else
     DIR="$(cd "${_repo_top:-$PWD}/.agents/handoff" && pwd)"
   fi
 fi
+# ADR 0010 puts handoff.local.json above everything but an explicit override. Rungs 1 and 2 are
+# usually NOT explicit: a board's dispatcher exports its own directory as HANDOFF_BOARD_PATH on every
+# call, and a vendored CLI answers from where it sits. Both only say "the board this file belongs
+# to", which is the team's board — so without this, a developer's local choice was never read on the
+# path every hook and every habit uses. An operator's own export (any other source) still wins.
+case "$BOARD_SOURCE" in
+  "this board's dispatcher" | "this CLI's own directory")
+    _local_cfg="$(_board_from_repo_config "$_repo_top")"
+    if [ "${_local_cfg%%$'\t'*}" = "$_repo_top/.agents/handoff.local.json" ]; then
+      _implied="$BOARD_SOURCE"
+      BOARD_SOURCE="$_repo_top/.agents/handoff.local.json (over $_implied)"
+      DIR="${_local_cfg#*$'\t'}"
+      case "$DIR" in /*) ;; *) DIR="$(cd "$_repo_top/$DIR" 2> /dev/null && pwd || printf '%s' "$DIR")" ;; esac
+      [ -d "$DIR" ] || {
+        echo "handoff: this repo's handoff.local.json points at $DIR, which does not exist." >&2
+        echo "         Refusing to fall back to $_implied — fix $_repo_top/.agents/handoff.local.json." >&2
+        exit 3
+      }
+    fi
+    ;;
+esac
 [ -n "$DIR" ] || {
   echo "handoff: no board found for ${_repo_top:-$PWD}." >&2
   echo "         Looked for: \$HANDOFF_BOARD_PATH, a board around this CLI, .agents/handoff.local.json and .agents/handoff.json here, then .agents/handoff/ here. Nothing above this folder is searched." >&2
@@ -2202,8 +2223,16 @@ def remember(sha, path):
         except OSError:
             listed = False
         if not listed:
+            try:
+                with open(gi, "rb") as fh:
+                    data = fh.read()
+                unterminated = bool(data) and not data.endswith(b"\n")
+            except OSError:
+                unterminated = False
             with open(gi, "a") as fh:
-                fh.write(".locations.json\n")
+                # An appended rule must start on its own line, or it fuses with the last one
+                # (".locks/.locations.json") and neither rule matches anything.
+                fh.write(("\n" if unterminated else "") + ".locations.json\n")
     except OSError:
         pass
 
@@ -3093,7 +3122,8 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
     HANDOFF_GROUP="$tgroup" HANDOFF_NONINTERACTIVE=1 \
     bash "$self" import "$staged" --id "${new_id:-$id}" --type "$(doc_type "$f")" --title "$(meta "$f" title)" 2>&1)"
   local rc=$?
-  rm -rf "$stage_dir"
+  rm -f "$staged"
+  rmdir "$stage_dir" 2> /dev/null
   if [ $rc -ne 0 ]; then
     case "$out" in
       *"already exists"*) die "the target board already has ${new_id:-$id} — nothing moved. Pick another id there: --id <new-id>" ;;
@@ -3209,14 +3239,12 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
   [ "$kind" = "free" ] && die "$id is not claimed — claim it first: handoff claim $id"
   lease_is_mine "$id" || die "this session does not hold the lease on $id (held by ${owner:-unknown}, $kind). Only the holder can checkpoint it."
 
-  local hits=""
-  if [ -n "$text" ] && hits="$(printf '%s\n' "$text" | scan_secrets)"; then
-    [ -n "$force_secret" ] || die_on_secret "the checkpoint of $id" "$hits"
-  fi
-
+  # Build what will be published first, then scan ALL of it. A checkpoint pushes the whole doc, so
+  # scanning only the new text let a credential pasted into the doc by hand ride along — and a
+  # text-less checkpoint, which exists to publish hand edits, scanned nothing at all.
+  local t tf hits=""
+  t="$(mktemp)" || die "mktemp failed"
   if [ -n "$text" ]; then
-    local t tf
-    t="$(mktemp)" || die "mktemp failed"
     tf="$(mktemp)" || die "mktemp failed"
     printf '%s\n' "$text" > "$tf"
     # Body read from a file with getline, never passed through `awk -v` (see set_field): the text is
@@ -3227,9 +3255,17 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
       skip && /^## / { skip = 0 }
       !done && /^## Context$/ { print "## Current state"; body(); done = 1 }
       !skip { print }
-    ' "$f" > "$t" && cat "$t" > "$f"
-    rm -f "$t" "$tf"
+    ' "$f" > "$t"
+    rm -f "$tf"
+  else
+    cat "$f" > "$t"
   fi
+  if hits="$(scan_secrets < "$t")" && [ -z "$force_secret" ]; then
+    rm -f "$t"
+    die_on_secret "the checkpoint of $id" "$hits"
+  fi
+  cat "$t" > "$f"
+  rm -f "$t"
   set_field "$f" updated "$(today)"
   if [ -n "$force_secret" ] && [ -n "$hits" ]; then
     log_activity "$f" "checkpoint secret-scan OVERRIDDEN ($(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')) — $(fold_colons "$force_secret")"

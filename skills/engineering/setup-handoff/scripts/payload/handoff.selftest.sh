@@ -19,7 +19,7 @@ ASSETS="$(cd "$HERE/../../assets" && pwd)"
 SRC="$(mktemp -d)"
 TPL="$SRC/templates"
 mkdir -p "$TPL"
-cp "$HERE/handoff" "$HERE/config.sh" "$SRC/"
+cp "$HERE/handoff" "$HERE/config.sh" "$HERE/dispatcher" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
 chmod +x "$SRC/handoff"
 P=0
@@ -1866,6 +1866,80 @@ mvh "$MVA" new mv-local --title "Local" --audience acme-api > /dev/null
 mvh "$MVA" claim mv-local "moving" > /dev/null
 chk_contains "a target with no remote proceeds — it keeps material on one machine" \
   "$(mvh "$MVA" move mv-local --to "$MVN/.agents/handoff")" "Moved mv-local-handoff"
+
+printf '\nhandoff.local.json outranks the board a dispatcher or a vendored CLI implies (review fix)\n'
+# The board's own dispatcher sets HANDOFF_BOARD_PATH to its directory, which is rung 1, and a CLI
+# sitting in a board answers from rung 2 — so a developer's handoff.local.json was never read on
+# the path every hook and every habit uses. Only an OPERATOR's explicit override may still beat it.
+RF="$(mkboard)"
+RF_MINE="$(cd "$(mktemp -d)" && pwd -P)"
+mkdir -p "$RF_MINE/scripts"
+cp "$SRC/config.sh" "$RF_MINE/scripts/config.sh"
+printf '{ "board": "%s" }\n' "$RF_MINE" > "$RF/.agents/handoff.local.json"
+RF_W="$(hb "$RF" which)"
+chk_contains "a CLI inside the team board still resolves the developer's local board" "$RF_W" "$RF_MINE"
+chk_contains "and says the local file decided it" "$RF_W" "handoff.local.json"
+
+# The dispatcher shape: the root file is the shim, the CLI is vendored under scripts/.
+RFD="$(mkboard)"
+RFDB="$RFD/.agents/handoff"
+cp "$SRC/dispatcher" "$RFDB/handoff"
+cp "$SRC/handoff" "$RFDB/scripts/handoff-cli"
+chmod +x "$RFDB/handoff"
+printf '{ "board": "%s" }\n' "$RF_MINE" > "$RFD/.agents/handoff.local.json"
+RFD_W="$(cd "$RFD" && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN ./.agents/handoff/handoff which 2>&1)"
+chk_contains "through the dispatcher, the local board wins too" "$RFD_W" "$RF_MINE"
+chk_contains "naming the local file as the source" "$RFD_W" "handoff.local.json"
+RFD_OP="$(cd "$RFD" && env -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN HANDOFF_BOARD_PATH="$RFDB" ./.agents/handoff/handoff which 2>&1)"
+chk_contains "an operator's explicit HANDOFF_BOARD_PATH still beats the local file" "$RFD_OP" "$RFDB"
+chk "and the local board is not what answered" "0" "$(printf '%s\n' "$RFD_OP" | grep -c "^board .*$RF_MINE")"
+printf '{ "board": "%s/gone" }\n' "$RF_MINE" > "$RFD/.agents/handoff.local.json"
+chk_contains "a local board that is absent is a hard error through the dispatcher as well" \
+  "$(cd "$RFD" && env -u HANDOFF_BOARD_PATH -u HANDOFF_BOARD_SOURCE -u HANDOFF_BIN ./.agents/handoff/handoff which 2>&1)" "does not exist"
+
+printf '\na text-less checkpoint scans what it publishes (review fix)\n'
+CKB="$(mkshared)"
+CK_ME="ck-self-$$"
+HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" new ck-work --title "Check" --audience acme-api > /dev/null 2>&1
+HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" claim ck-work "working" > /dev/null 2>&1
+printf '\nPasted by hand: %s\n' "$AWSKEY" >> "$CKB/ck-work-handoff.md"
+CK_OUT="$(HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" checkpoint ck-work 2>&1)"
+chk_contains "a hand edit carrying a credential is refused" "$CK_OUT" "looks like it contains a credential"
+chk "and nothing is pushed" "no" \
+  "$(git -C "$CKB" show "origin/$(git -C "$CKB" rev-parse --abbrev-ref HEAD):ck-work-handoff.md" 2> /dev/null | grep -q 'Pasted by hand' && echo yes || echo no)"
+CK_OUT2="$(HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" checkpoint ck-work "clean text" 2>&1)"
+chk_contains "clean text does not launder a credential already in the doc" "$CK_OUT2" "looks like it contains a credential"
+
+printf '\nignore-rule appends never glue onto an unterminated last line (review fix)\n'
+GL="$(mkboard)"
+GLB="$GL/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GLB/handoff.json"
+printf '.locks/' > "$GLB/.gitignore"
+GL_HOME_SAVE="$HOME"
+export HOME="$(mktemp -d)"
+mkdir -p "$HOME/.agents"
+printf '{ "locations": { "%s": "%s" } }\n' "$LC_ROOT" "$LC_TARGET" > "$HOME/.agents/handoff.json"
+hb "$GL" locations --move > /dev/null
+chk "handoff_ignore_locations keeps .locks/ on its own line" "yes" \
+  "$(grep -qx '.locks/' "$GLB/.gitignore" && grep -qx '.locations.json' "$GLB/.gitignore" && echo yes || echo no)"
+export HOME="$GL_HOME_SAVE"
+GL2="$(mkboard)"
+GL2B="$GL2/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GL2B/handoff.json"
+printf '.locks/' > "$GL2B/.gitignore"
+(cd "$GL2" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$GL2B" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$" > /dev/null)
+chk "the location scan keeps .locks/ on its own line too" "yes" \
+  "$(grep -qx '.locks/' "$GL2B/.gitignore" && grep -qx '.locations.json' "$GL2B/.gitignore" && echo yes || echo no)"
+GL3="$(mkboard)"
+GL3B="$GL3/.agents/handoff"
+cp "$LC/.agents/handoff/handoff.json" "$GL3B/handoff.json"
+printf '.locks/\n' > "$GL3B/.gitignore"
+(cd "$GL3" && HANDOFF_NO_MAIN=1 . ./.agents/handoff/handoff && DIR="$GL3B" WORKSPACE_ROOT="$(dirname "$LC_TARGET")" board_repo_entry "acme-lib-$$" > /dev/null)
+chk "a terminated file gains no blank line" "$(printf '.locks/\n.locations.json')" "$(cat "$GL3B/.gitignore")"
+GL4="$(mktemp -d)"
+printf 'x\n' > "$GL4/f"
+(. "$SRC/config.sh" && handoff_append_line "$GL4/f" y)
+chk "handoff_append_line adds no blank line after a terminated file" "$(printf 'x\ny')" "$(cat "$GL4/f")"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

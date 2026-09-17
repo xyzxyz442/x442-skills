@@ -369,6 +369,17 @@ sys.stdout.write(str(len(found)))
 PY
 }
 
+# handoff_append_line FILE LINE -> appends LINE on a line of its own. A file whose last line has no
+# newline would otherwise fuse with it — `.locks/` + `.locations.json` becomes one rule matching
+# nothing, and both the lease ignore and the cache ignore silently stop working.
+handoff_append_line() {
+  local f="$1" line="$2"
+  if [ -s "$f" ] && [ "$(tail -c 1 "$f" | wc -l | tr -d ' ')" = 0 ]; then
+    printf '\n' >> "$f" || return 1
+  fi
+  printf '%s\n' "$line" >> "$f"
+}
+
 # handoff_ignore_locations BOARD_DIR -> makes sure the board's .gitignore lists .locations.json.
 # The cache is true for one disk, so unlike .locks/ there is no board on which committing it is
 # right, and no choice to ask anyone about. Prints a line only when it changed the file.
@@ -376,6 +387,6 @@ handoff_ignore_locations() {
   local gi="$1/.gitignore"
   [ -d "$1" ] || return 0
   grep -qxF '.locations.json' "$gi" 2> /dev/null && return 0
-  printf '.locations.json\n' >> "$gi" 2> /dev/null || return 0
+  handoff_append_line "$gi" '.locations.json' || return 0
   echo "Added '.locations.json' to $gi — the location cache is per machine and never committed." >&2
 }

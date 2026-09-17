@@ -416,6 +416,16 @@ done
 # call, and .gitignore is committed — so a rule is written only where --ignore says: `exclude`
 # (.git/info/exclude, this clone only — preferred for a per-user choice) or `gitignore` (the team).
 # ignore-needs.sh is the one list verify-setup-handoff.sh reports from too.
+# Appends LINE on a line of its own: a file whose last line lacks a newline would fuse the two into
+# one rule that matches nothing. Mirrors handoff_append_line in the payload's config.sh, which this
+# installer does not source.
+append_line() { # file line
+  if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l | tr -d ' ')" = 0 ]; then
+    printf '\n' >> "$1"
+  fi
+  printf '%s\n' "$2" >> "$1"
+}
+
 apply_ignore_needs() { # repo board
   local _nid _nrepo _nrel _nmsg _nfile
   while IFS=$'\t' read -r _nid _nrepo _nrel _nmsg; do
@@ -433,7 +443,7 @@ apply_ignore_needs() { # repo board
       _nfile="$_nrepo/.gitignore"
     fi
     if ! grep -qxF "$_nrel" "$_nfile" 2> /dev/null; then
-      printf '%s\n' "$_nrel" >> "$_nfile"
+      append_line "$_nfile" "$_nrel"
       echo "setup-handoff: ignored '$_nrel' in $_nfile (--ignore $IGNORE_TO)"
     fi
   done < <(bash "$SKILL_DIR/scripts/ignore-needs.sh" "$1" "$2" 2> /dev/null)
@@ -772,7 +782,7 @@ if [ "$TOPOLOGY" != "cross-repo" ]; then
   GI="$REPO/.gitignore"
   LOCK_IGNORE="$HDPATH/.locks/"
   if ! grep -qxF "$LOCK_IGNORE" "$GI" 2> /dev/null; then
-    printf '%s\n' "$LOCK_IGNORE" >> "$GI"
+    append_line "$GI" "$LOCK_IGNORE"
   fi
 fi
 

@@ -945,6 +945,9 @@ def grade_ignore_detection(target):
             "both files unchanged",
         )
     )
+    # An exclude file whose last line has no newline: the appended rule must not fuse with it.
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("# local rules", encoding="utf-8")
     r = _install(t, "--ignore", "exclude")
     e.append(
         gc.expectation(
@@ -954,6 +957,14 @@ def grade_ignore_detection(target):
             and ".agents/handoff.local.json"
             not in (t / ".gitignore").read_text(encoding="utf-8"),
             r.stdout[-300:],
+        )
+    )
+    lines = exclude.read_text(encoding="utf-8").splitlines()
+    e.append(
+        gc.expectation(
+            "the rule lands on its own line after an unterminated one",
+            "# local rules" in lines and ".agents/handoff.local.json" in lines,
+            str(lines),
         )
     )
     f = gc.verify_findings(VERIFY, t)
