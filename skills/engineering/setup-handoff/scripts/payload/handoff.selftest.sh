@@ -2111,6 +2111,7 @@ case "$1 $2" in
   "issue create") echo "https://github.com/acme/backlog/issues/7" ;;
   "issue list") echo '[{"number":7,"state":"OPEN","title":"T","body":"B <!-- handoff:x-handoff -->","labels":[{"name":"handoff-mirror"},{"name":"status:open"}]}]' ;;
   "issue view") echo '{"comments":[{"author":{"login":"carol"},"body":"hi","createdAt":"2026-01-01T00:00:00Z"}]}' ;;
+  "repo view") echo '{"visibility":"PUBLIC"}' ;;
 esac
 exit 0
 SH
@@ -2132,6 +2133,84 @@ GH_COM="$(printf '{"repo":"acme/backlog","number":7}' | GH_LOG="$GH_LOG" PATH="$
 chk "comments normalize the author login" "carol" \
   "$(printf '%s' "$GH_COM" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["author"])')"
 chk "no token appears in any gh invocation" "0" "$(grep -ci 'token' "$GH_LOG")"
+
+printf '\na public tracker repository needs the board and the document to opt in (ADR 0013)\n'
+PB="$(mkboard)"
+PBB="$PB/.agents/handoff"
+MI_STATE="$(mktemp -d)/tracker.json"
+pb_ext() { # json fragment appended to the external block
+  printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/open"%s } }\n' "$1" > "$PBB/handoff.json"
+}
+pbh() { # visibility subcommand... -> the board CLI against a tracker reporting that visibility
+  local v="$1"
+  shift
+  (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY="$v" ./.agents/handoff/handoff "$@") 2>&1
+}
+pb_ext ''
+pbh private new p-shared --title "Shared work" --share public > /dev/null
+pbh private new p-internal --title "Internal work" > /dev/null
+pbh private new p-deleg --title "Delegable work" --share public > /dev/null
+pbh private new p-kid-pub --title "Public kid" --share public > /dev/null
+pbh private new p-kid-priv --title "Confidential kid title" > /dev/null
+pbh private new p-bundle --orchestrator --children p-kid-pub,p-kid-priv --title "Public bundle" --share public > /dev/null
+chk "new --share public records it" "public" "$(sed -n 's/^share: //p' "$PBB/p-shared-handoff.md")"
+chk "an unmarked doc carries no share line" "0" "$(grep -c '^share:' "$PBB/p-internal-handoff.md")"
+chk_contains "share on a restricted doc is refused — restricted always wins" \
+  "$(pbh private new p-bad --title "x" --share public --sensitivity restricted)" "restricted"
+chk_contains "an unknown share value is refused" "$(pbh private new p-bad2 --title "x" --share everyone)" "--share"
+chk_contains "a standalone doc cannot be shared — it is never published" \
+  "$(pbh private new p-bad3 --standalone --title "x" --share public)" "standalone"
+
+PB_OUT="$(pbh public mirror)"
+PB_RC="$(
+  pbh public mirror > /dev/null
+  echo $?
+)"
+chk_contains "a public repository without allowPublic is refused" "$PB_OUT" "public"
+chk "and nothing is sent" "0" "$(fq 'calls("create") + calls("update") + calls("close")')"
+chk "and the run exits non-zero" "1" "$([ "$PB_RC" != 0 ] && echo 1 || echo 0)"
+chk_contains "visibility the tracker cannot report is treated as public" "$(pbh unknown mirror)" "public"
+chk_contains "so is a failed visibility call" \
+  "$(cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_FAIL=visibility ./.agents/handoff/handoff mirror 2>&1)" "public"
+chk_contains "export --to-issue is refused the same way" "$(pbh public export p-deleg --to-issue)" "public"
+chk "and leaves the doc undelegated" "0" "$(grep -c '^delegated_to:' "$PBB/p-deleg-handoff.md")"
+printf '{ "external": { "allowPublic": true } }\n' > "$PB/.agents/handoff.local.json"
+chk_contains "allowPublic in handoff.local.json does not count" "$(pbh public mirror)" "public"
+chk "and still nothing is sent" "0" "$(fq 'calls("create") + calls("update") + calls("close")')"
+
+pb_ext ', "allowPublic": true'
+pbh public mirror > /dev/null
+chk "with allowPublic, only docs marked share public go out" "4" "$(fq 'len(db["issues"])')"
+chk "an unmarked doc is not published" "0" "$(fq 'len(by("p-internal-handoff -->"))')"
+chk_contains "--dry-run says why it was skipped" "$(pbh public mirror --dry-run)" "not marked share: public"
+chk "the public bundle names its public child" "True" "$(fq '"Public kid" in by("p-bundle-handoff -->")[0]["body"]')"
+chk "and never an unshared child's title" "False" "$(fq '"Confidential kid title" in by("p-bundle-handoff -->")[0]["body"]')"
+chk "but counts it" "True" "$(fq '"and 1 more item not shared publicly" in by("p-bundle-handoff -->")[0]["body"]')"
+chk_contains "export --to-issue refuses an unmarked doc on a public repo" "$(pbh public export p-internal --to-issue)" "share: public"
+chk_contains "and delegates a marked one" "$(pbh public export p-deleg --to-issue)" "Opened issue"
+
+PB_T="$(mktemp)"
+awk '!/^share: public$/' "$PBB/p-kid-pub-handoff.md" > "$PB_T" && cat "$PB_T" > "$PBB/p-kid-pub-handoff.md"
+pbh public mirror > /dev/null
+chk "removing the mark closes its issue" "closed" "$(fq 'by("p-kid-pub-handoff -->")[0]["state"]')"
+chk "saying the issue stays visible" "True" "$(fq '"stays visible" in by("p-kid-pub-handoff -->")[0]["comments"][-1]["body"]')"
+
+pbh private mirror > /dev/null
+pb_ext ''
+PB_CALLS="$(fq 'calls("create") + calls("update") + calls("close")')"
+PB_TURNED="$(pbh public mirror)"
+chk_contains "a repository that turned public refuses the whole run" "$PB_TURNED" "public"
+chk_contains "and lists the issues already mirrored there for review" "$PB_TURNED" "#1"
+chk "without changing any of them" "$PB_CALLS" "$(fq 'calls("create") + calls("update") + calls("close")')"
+chk "internal visibility counts as private" "0" "$(
+  pbh internal mirror > /dev/null
+  echo $?
+)"
+
+printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" visibility > /dev/null 2>&1
+chk "the GitHub adapter reads visibility and lowercases it" "public" \
+  "$(printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" visibility | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

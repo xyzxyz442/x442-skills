@@ -120,7 +120,9 @@ handoff export ID --to-issue
 It renders the same brief — same restricted refusal, same outbound secret scan, same claim — and
 opens it as an issue in `external.repo`, recording the issue as the doc's `external_ref` and
 `delegated_to: issue #N`. It refuses a bundle (delegate its children one at a time) and a doc that
-is already linked to a ticket. The executor answers with **one comment** holding a
+is already linked to a ticket. On a **public** repository it refuses unless the board allows it
+(`external.allowPublic`) and the doc is marked `share: public` (ADR 0013) — the brief would be
+readable by anyone, permanently. The executor answers with **one comment** holding a
 `result_status:` line and the filled Result block; the import in step 5 reads it from there.
 
 ## 3. What to send

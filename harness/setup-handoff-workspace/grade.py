@@ -954,6 +954,74 @@ def grade_external_tracker(target):
             label="a hand-typed reference that does not match warns",
         )
     )
+
+    # ADR 0013 — the verifier names a board that publishes publicly, and a share it cannot honour.
+    set_external(
+        {
+            "kind": "issues",
+            "system": "github",
+            "refPattern": "#[0-9]+",
+            "repo": "acme/open",
+            "allowPublic": True,
+        }
+    )
+    _handoff(t, "new", "open-work", "--title", "Open work", "--share", "public")
+    _handoff(t, "new", "odd-share", "--title", "Odd share")
+    _handoff(
+        t, "new", "locked-share", "--title", "Locked", "--sensitivity", "restricted"
+    )
+    for name, line in (
+        ("odd-share", "share: everyone"),
+        ("locked-share", "share: public"),
+    ):
+        doc = t / HD / f"{name}-handoff.md"
+        doc.write_text(
+            doc.read_text(encoding="utf-8").replace(
+                "status: open", "status: open\n" + line, 1
+            ),
+            encoding="utf-8",
+        )
+    _install(t)
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "board.external.public",
+            "warn",
+            label="a board allowing a public tracker is named on every verify",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and the warning lists the docs marked public",
+            any(
+                "open-work-handoff" in x["message"]
+                for x in f.get("board.external.public", [])
+            ),
+            str([x["message"] for x in f.get("board.external.public", [])])[:300],
+        )
+    )
+    e.append(
+        gc.finding(f, "doc.share.invalid", "warn", label="an unknown share value warns")
+    )
+    e.append(
+        gc.finding(
+            f,
+            "doc.share.conflict",
+            "warn",
+            label="share: public on a restricted doc warns",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "allowPublic survives a re-install",
+            json.loads(cfg_path.read_text(encoding="utf-8"))
+            .get("external", {})
+            .get("allowPublic")
+            is True,
+            "external.allowPublic",
+        )
+    )
     return e
 
 
