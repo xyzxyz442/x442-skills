@@ -44,7 +44,9 @@ _board_looks_real() { [ -f "$1/scripts/config.sh" ] || [ -f "$1/config.sh" ]; }
 # no precedence, no legacy shell format (a machine with a KEY=value config predates board/binary
 # separation and resolves by rung 2 anyway).
 #
-# Prints "file<TAB>board" for the first file, highest precedence first, that names a board. A file
+# Prints "file<TAB>board" for the first file, highest precedence first, that names a board.
+# A bootstrap twin of config.sh's handoff_config_board: this runs before any board — and so any
+# config.sh — has been found, so it cannot source the shared reader. Keep the two in step. A file
 # that exists but names none falls through: a handoff.local.json holding only a `group` is a
 # per-user section choice, not a claim about where the board is.
 _board_from_repo_config() { # repo-dir -> prints "config-file<TAB>board path", or nothing
@@ -3008,10 +3010,10 @@ cmd_touch() {
 # The trust boundary is read from the boards' git remotes, not declared: same host and owner, or a
 # target with no remote (material stays on this machine), proceeds. Anything else refuses until the
 # caller names the target's host/owner with --to-remote — naming it, not a bare yes, is the consent.
-# A `sensitivity: restricted` doc never crosses a differing remote, named or not: that is the same
-# outbound rule `export` enforces, and the outbound path is where an override would be the whole
-# control.
-board_owner_key() { # board-dir -> "host/owner" of its configured origin, or nothing
+# A `sensitivity: restricted` doc never crosses a differing remote, named or not — on an outbound
+# path an override would be the whole control. Within one host and owner it moves, since the
+# material does not leave the trust boundary (ADR 0011).
+board_origin_norm() { # board-dir -> host/owner/repo of its configured origin, or nothing
   local b="$1" name url
   name="$(handoff_board_remote "$b")"
   [ -n "$name" ] || return 0
@@ -3019,7 +3021,105 @@ board_owner_key() { # board-dir -> "host/owner" of its configured origin, or not
   # from rather than which host and owner the board says it belongs to.
   url="$(handoff_board_git "$b" config --get "remote.$name.url")"
   [ -n "$url" ] || return 0
-  repo_origin_norm "$url" | cut -d/ -f1-2
+  repo_origin_norm "$url"
+}
+
+board_owner_key() { # board-dir -> "host/owner" of its configured origin, or nothing
+  board_origin_norm "$1" | cut -d/ -f1-2
+}
+
+# The trust boundary. Returns 0 when source and target share a host and owner (or the target has
+# no remote), 1 when they differ and the caller named the target's owner. Dies otherwise — and
+# always for a restricted doc, which never crosses, named or not.
+move_check_trust() { # doc id target-board to-remote
+  local f="$1" id="$2" to="$3" to_remote="$4" src_key dst_key
+  src_key="$(board_owner_key "$DIR")"
+  dst_key="$(board_owner_key "$to")"
+  [ -n "$dst_key" ] && [ "$src_key" != "$dst_key" ] || return 0
+  is_restricted "$f" \
+    && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
+  [ "$to_remote" = "$dst_key" ] \
+    || die "refusing to move $id across a trust boundary: the source board's remote is ${src_key:-absent} and the target's is $dst_key.
+       Moving it carries this material to another owner. If that is intended, name the target: --to-remote $dst_key"
+  return 1
+}
+
+# Write the copy the target will import: the doc, with board-local edges turned into an external
+# blocker (depends_on names board ids, which mean nothing on another board — ADR 0004), where it
+# came from, and one Activity line saying so.
+move_stage_copy() { # doc staged-path src-label activity-note
+  local f="$1" staged="$2" src_label="$3" note="$4" deps blocker
+  cat "$f" > "$staged"
+  deps="$(depends_of "$f" | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$deps" ]; then
+    blocker="$(meta "$f" blocked_on)"
+    blocker="${blocker:+$blocker; }external — depends on $deps on $src_label"
+    set_field "$staged" depends_on "[]"
+    set_field "$staged" blocked_on "$(fold_colons "$blocker")"
+  fi
+  set_field "$staged" moved_from "$(fold_colons "$src_label")"
+  log_activity "$staged" "$note"
+}
+
+# The target's own import, run AS the target: its layout, its section, its schema gate. From the
+# target directory so no repo config around the caller can re-route the section. Prints the path
+# the doc landed at; dies (non-zero) when the target refuses, having moved nothing.
+move_import_into() { # staged-path target-board group new-id type title
+  local staged="$1" to="$2" tgroup="$3" new_id="$4" type="$5" title="$6" self out rc dest
+  self="$_self_dir/$(basename "${BASH_SOURCE[0]}")"
+  out="$(cd "$to" && env HANDOFF_BOARD_PATH="$to" HANDOFF_BOARD_SOURCE="handoff move" \
+    HANDOFF_GROUP="$tgroup" HANDOFF_NONINTERACTIVE=1 \
+    bash "$self" import "$staged" --id "$new_id" --type "$type" --title "$title" 2>&1)"
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    case "$out" in
+      *"already exists"*) die "the target board already has $new_id — nothing moved. Pick another id there: --id <new-id>" ;;
+      *) die "the target board refused the import — nothing moved:
+$out" ;;
+    esac
+  fi
+  dest="$(printf '%s\n' "$out" | sed -n 's/^Imported .* → \(.*\) (type: .*$/\1/p' | head -1)"
+  [ -f "$dest" ] || die "the import reported success but its doc was not found — check $to before retrying:
+$out"
+  printf '%s' "$dest"
+}
+
+move_publish_target() { # target-board dest src-label
+  local to="$1" dest="$2" src_label="$3"
+  handoff_leases_shared "$to" || return 0
+  handoff_board_git "$to" add --all -- "$dest" "$to/INDEX.md" "$(dirname "$dest")/INDEX.md"
+  if handoff_board_git "$to" commit --quiet -m "handoff: move in $(basename "$dest" .md) from $src_label"; then
+    handoff_board_git "$to" push --quiet "$(handoff_board_remote "$to")" HEAD \
+      || echo "⚠️  Moved and committed on the target, but its push did not land. Push $to."
+  fi
+}
+
+# The source keeps its frontmatter and a one-line body pointing at the new home, closed and
+# archived, with its lease released. Never a copy: two copies of one handoff is the second writer
+# ADR 0002 rules out.
+move_leave_pointer() { # doc id dest dst-label
+  local f="$1" id="$2" dest="$3" dst_label="$4" t
+  t="$(mktemp)" || die "mktemp failed"
+  awk '{ print } /^---$/ { n++; if (n == 2) exit }' "$f" > "$t"
+  printf '\nMoved to %s as %s on %s.\n' "$dst_label" "$(basename "$dest" .md)" "$(today)" >> "$t"
+  cat "$t" > "$f"
+  rm -f "$t"
+  set_field "$f" moved_to "$(fold_colons "$dst_label") — $(basename "$dest" .md)"
+  set_field "$f" status done
+  set_field "$f" updated "$(today)"
+  clear_lock "$(lock_key "$id")"
+  archive_doc "$f" "$id" || warn_archive_failed "$id"
+}
+
+# Docs left here that depended on it now point at a pointer. depends_on cannot follow it across
+# boards, so name the ones to rewrite rather than leave them reading as satisfied.
+move_dependents_of() { # id -> "a-handoff, b-handoff", or nothing
+  local id="$1" other dependents=""
+  while IFS= read -r other; do
+    [ -n "$other" ] || continue
+    depends_of "$other" | grep -qx "$id" && dependents="${dependents:+$dependents, }$(basename "$other" .md)"
+  done < <(each_doc)
+  printf '%s' "$dependents"
 }
 
 cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/owner] [--force-secret REASON]
@@ -3071,102 +3171,37 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
     lease_is_mine "$id" || die "moving $id transfers ownership, so this session has to hold its lease — claim it first: handoff claim $id"
   fi
 
-  # --- the trust boundary --------------------------------------------------------------------
-  local src_key dst_key crossed=0
-  src_key="$(board_owner_key "$DIR")"
-  dst_key="$(board_owner_key "$to")"
-  if [ -n "$dst_key" ] && [ "$src_key" != "$dst_key" ]; then
-    crossed=1
-    is_restricted "$f" \
-      && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
-    if [ "$to_remote" != "$dst_key" ]; then
-      die "refusing to move $id across a trust boundary: the source board's remote is ${src_key:-absent} and the target's is $dst_key.
-       Moving it carries this material to another owner. If that is intended, name the target: --to-remote $dst_key"
-    fi
-  fi
+  local across=""
+  move_check_trust "$f" "$id" "$to" "$to_remote" || across=" (across remotes, target named as $(board_owner_key "$to"))"
 
-  # --- the write-path scanner, over the whole document ------------------------------------------
   local hits=""
   if hits="$(scan_secrets < "$f")"; then
     [ -n "$force_secret" ] || die_on_secret "the move of $id" "$hits"
   fi
 
-  # --- stage the target's copy ------------------------------------------------------------------
-  local stage_dir staged deps blocker src_label dst_label me
-  me="$(whoami_id)"
-  src_label="${src_key:+$(repo_origin_norm "$(handoff_board_git "$DIR" config --get "remote.$(handoff_board_remote "$DIR").url")")}"
+  local src_label dst_label stage_dir staged dest
+  src_label="$(board_origin_norm "$DIR")"
   src_label="${src_label:-$DIR}"
-  dst_label="${dst_key:+$(repo_origin_norm "$(handoff_board_git "$to" config --get "remote.$(handoff_board_remote "$to").url")")}"
+  dst_label="$(board_origin_norm "$to")"
   dst_label="${dst_label:-$to}"
   stage_dir="$(mktemp -d)" || die "mktemp failed"
   staged="$stage_dir/$id.md"
-  cat "$f" > "$staged"
-  # depends_on is board ids, and board ids mean nothing on another board (ADR 0004). What they said
-  # survives as an external blocker naming where those docs still are.
-  deps="$(depends_of "$f" | tr '\n' ' ' | sed 's/ $//')"
-  if [ -n "$deps" ]; then
-    blocker="$(meta "$f" blocked_on)"
-    blocker="${blocker:+$blocker; }external — depends on $deps on $src_label"
-    set_field "$staged" depends_on "[]"
-    set_field "$staged" blocked_on "$(fold_colons "$blocker")"
-  fi
-  set_field "$staged" moved_from "$(fold_colons "$src_label")"
-  local across=""
-  [ "$crossed" = 1 ] && across=" (across remotes, target named as $dst_key)"
-  log_activity "$staged" "moved here from $(fold_colons "$src_label") by $me${across}."
+  move_stage_copy "$f" "$staged" "$src_label" "moved here from $(fold_colons "$src_label") by $(whoami_id)${across}."
   [ -n "$force_secret" ] && [ -n "$hits" ] \
     && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
-
-  # The target's own import, run AS the target: its layout, its section, its schema gate. From the
-  # target directory so no repo config around the caller can re-route the section.
-  local self out dest
-  self="$_self_dir/$(basename "${BASH_SOURCE[0]}")"
-  out="$(cd "$to" && env HANDOFF_BOARD_PATH="$to" HANDOFF_BOARD_SOURCE="handoff move" \
-    HANDOFF_GROUP="$tgroup" HANDOFF_NONINTERACTIVE=1 \
-    bash "$self" import "$staged" --id "${new_id:-$id}" --type "$(doc_type "$f")" --title "$(meta "$f" title)" 2>&1)"
+  dest="$(move_import_into "$staged" "$to" "$tgroup" "${new_id:-$id}" "$(doc_type "$f")" "$(meta "$f" title)")"
   local rc=$?
   rm -f "$staged"
   rmdir "$stage_dir" 2> /dev/null
-  if [ $rc -ne 0 ]; then
-    case "$out" in
-      *"already exists"*) die "the target board already has ${new_id:-$id} — nothing moved. Pick another id there: --id <new-id>" ;;
-      *) die "the target board refused the import — nothing moved:
-$out" ;;
-    esac
-  fi
-  dest="$(printf '%s\n' "$out" | sed -n 's/^Imported .* → \(.*\) (type: .*$/\1/p' | head -1)"
-  [ -f "$dest" ] || die "the import reported success but its doc was not found — check $to before retrying:
-$out"
-  if handoff_leases_shared "$to"; then
-    handoff_board_git "$to" add --all -- "$dest" "$to/INDEX.md" "$(dirname "$dest")/INDEX.md"
-    if handoff_board_git "$to" commit --quiet -m "handoff: move in $(basename "$dest" .md) from $src_label"; then
-      handoff_board_git "$to" push --quiet "$(handoff_board_remote "$to")" HEAD \
-        || echo "⚠️  Moved and committed on the target, but its push did not land. Push $to."
-    fi
-  fi
+  [ $rc -eq 0 ] || exit $rc
+  move_publish_target "$to" "$dest" "$src_label"
 
-  # --- leave the pointer --------------------------------------------------------------------------
-  local t
-  t="$(mktemp)" || die "mktemp failed"
-  awk '{ print } /^---$/ { n++; if (n == 2) exit }' "$f" > "$t"
-  printf '\nMoved to %s as %s on %s.\n' "$dst_label" "$(basename "$dest" .md)" "$(today)" >> "$t"
-  cat "$t" > "$f"
-  rm -f "$t"
-  set_field "$f" moved_to "$(fold_colons "$dst_label") — $(basename "$dest" .md)"
-  set_field "$f" status done
-  set_field "$f" updated "$(today)"
-  clear_lock "$(lock_key "$id")"
-  archive_doc "$f" "$id" || warn_archive_failed "$id"
+  move_leave_pointer "$f" "$id" "$dest" "$dst_label"
   cmd_index > /dev/null
   release_commit_push "handoff: move $id to $dst_label" "$(arch_file "$id")"
 
-  # Docs left here that depended on it now point at a pointer. depends_on cannot follow it across
-  # boards, so say which ones to rewrite rather than leave them reading as satisfied.
-  local other dependents=""
-  while IFS= read -r other; do
-    [ -n "$other" ] || continue
-    depends_of "$other" | grep -qx "$id" && dependents="${dependents:+$dependents, }$(basename "$other" .md)"
-  done < <(each_doc)
+  local dependents
+  dependents="$(move_dependents_of "$id")"
   echo "Moved $id → $dest ($dst_label). An archived pointer stays here."
   [ -n "$dependents" ] \
     && echo "⚠️  Still on this board and depending on it: $dependents. Release each with --blocked-on \"external: …\" — depends_on does not cross boards."

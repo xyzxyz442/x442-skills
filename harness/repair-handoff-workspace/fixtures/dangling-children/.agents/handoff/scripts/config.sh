@@ -120,6 +120,29 @@ handoff_lease_expiry() { # board-dir owner-file fallback-expires default-ttl-hou
   printf '%s' "$((ct + ttl * 3600))"
 }
 
+# handoff_config_board FILE... -> the `board` (or legacy `boardPath`) named by the first readable
+# JSON file that names one, or nothing. Files are passed highest precedence first, so a caller asks
+# its own question: the verifier passes handoff.local.json, handoff.json and handoff.config.json;
+# ignore-needs passes only handoff.local.json. The ONE reader of that key for everything that can
+# source this file. The CLI keeps a bootstrap copy (_board_from_repo_config) because it has to find
+# the board before it can reach the board's config.sh; hooks.sh, the verifier and ignore-needs.sh
+# all read through here.
+handoff_config_board() {
+  command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json, sys
+for path in sys.argv[1:]:
+    try:
+        d = json.load(open(path))
+    except Exception:
+        continue
+    if not isinstance(d, dict):
+        continue
+    v = d.get("board") or d.get("boardPath")
+    if isinstance(v, str) and v:
+        sys.stdout.write(v)
+        break' "$@" 2> /dev/null
+}
+
 # handoff_config_load BOARD_DIR [REPO_DIR] -> prints shell assignments; non-zero on bad config.
 #
 # ONE filename, `handoff.json`, at every layer. It used to be six files with five names — a board

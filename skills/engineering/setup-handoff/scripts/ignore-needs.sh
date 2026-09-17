@@ -19,6 +19,7 @@ set -uo pipefail
 REPO="${1:?usage: ignore-needs.sh <repo-root> [board-dir]}"
 BOARD="${2:-}"
 REPO="$(cd "$REPO" 2> /dev/null && pwd -P)" || exit 0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 phys() { (cd "$1" 2> /dev/null && pwd -P); }
 toplevel() { git -C "$1" rev-parse --show-toplevel 2> /dev/null | while IFS= read -r t; do phys "$t"; done; }
@@ -39,13 +40,7 @@ if [ -f "$LOCAL" ]; then
   fi
 
   # The board a developer named for themselves. Only a board INSIDE the repo can be committed here.
-  PERSONAL="$(python3 -c 'import json,sys
-try:
-    d = json.load(open(sys.argv[1]))
-except Exception:
-    raise SystemExit(0)
-v = d.get("board") or d.get("boardPath") if isinstance(d, dict) else ""
-print(v if isinstance(v, str) else "")' "$LOCAL" 2> /dev/null)"
+  PERSONAL="$(bash -c '. "$1" && handoff_config_board "$2"' _ "$SCRIPT_DIR/payload/config.sh" "$LOCAL" 2> /dev/null)"
   if [ -n "$PERSONAL" ]; then
     case "$PERSONAL" in /*) ;; *) PERSONAL="$REPO/$PERSONAL" ;; esac
     P="$(phys "$PERSONAL")"

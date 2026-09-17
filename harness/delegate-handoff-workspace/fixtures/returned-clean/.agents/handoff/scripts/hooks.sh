@@ -509,15 +509,12 @@ case "$KIND" in
     # `claim` acting on one board while this banner lists another reads as a bug.
     LOCAL_NOTE=""
     _lroot="${REPO_DIR:-${PROJECT_DIR:-}}"
-    if [ -n "$_lroot" ] && [ -f "$_lroot/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
-      LOCAL_NOTE="$(python3 -c 'import json,os,sys
-try: d = json.load(open(sys.argv[1]))
-except Exception: raise SystemExit(0)
-b = d.get("board") or d.get("boardPath") if isinstance(d, dict) else None
-if not isinstance(b, str) or not b: raise SystemExit(0)
-p = os.path.realpath(b if os.path.isabs(b) else os.path.join(sys.argv[2], b))
-if p != os.path.realpath(sys.argv[3]):
-    print(b)' "$_lroot/.agents/handoff.local.json" "$_lroot" "$DIR" 2> /dev/null)"
+    if [ -n "$_lroot" ] && [ -f "$_lroot/.agents/handoff.local.json" ] && command -v handoff_config_board > /dev/null 2>&1; then
+      _lboard="$(handoff_config_board "$_lroot/.agents/handoff.local.json")"
+      if [ -n "$_lboard" ]; then
+        case "$_lboard" in /*) _labs="$_lboard" ;; *) _labs="$_lroot/$_lboard" ;; esac
+        [ "$(cd "$_labs" 2> /dev/null && pwd -P)" = "$(cd "$DIR" && pwd -P)" ] || LOCAL_NOTE="$_lboard"
+      fi
     fi
     ctx="Handoffs for \`${REPO:-this repo}\` (from ${board_note}):"
     [ -n "$LOCAL_NOTE" ] && ctx="${ctx}

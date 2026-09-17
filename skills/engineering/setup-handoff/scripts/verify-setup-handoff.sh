@@ -133,27 +133,10 @@ HD="$ROOT/.agents/handoff"
 # had to stop anchoring on the board's directory name: for `--handoff-dir <anything-but-handoff>`
 # on a single repo it is the ONLY path that runs, and it used to miss.
 if [ ! -d "$HD" ]; then
-  D="$(
-    python3 - "$ROOT/.agents/handoff.local.json" "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null << 'PYEOF'
-import json, os, sys
-
-for path in sys.argv[1:]:
-    if not os.path.isfile(path):
-        continue
-    try:
-        with open(path) as fh:
-            cfg = json.load(fh)
-    except (ValueError, OSError):
-        continue
-    if not isinstance(cfg, dict):
-        continue
-    # `board` is canonical; `boardPath` is the legacy spelling and means the same thing.
-    board = cfg.get("board") or cfg.get("boardPath")
-    if board:
-        print(board)
-        break
-PYEOF
-  )"
+  # The shared reader, run from this skill's own payload in a subshell so nothing it defines leaks
+  # into the checks below (which source the BOARD's config.sh, possibly an older one).
+  D="$(bash -c '. "$1" && shift && handoff_config_board "$@"' _ "$SCRIPT_DIR/payload/config.sh" \
+    "$ROOT/.agents/handoff.local.json" "$ROOT/.agents/handoff.json" "$ROOT/.agents/handoff.config.json" 2> /dev/null)"
   if [ -n "$D" ]; then
     case "$D" in /*) HD="$D" ;; *) HD="$ROOT/$D" ;; esac
   fi
