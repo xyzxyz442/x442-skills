@@ -53,6 +53,19 @@ The one project tracker a board links to — a sprint tool or an issue tracker �
 lives. Linked by reference; mirrored only where it is the team's issue backlog. Never the board.
 _Avoid_: board, backend, sync target
 
+**Sub-issue link**:
+A **bundle**'s parent/child relationship expressed in the tracker's own native form, so a
+progress bar appears where the checklist was inert text. Projected from an orchestrator's
+roster only, and only onto issues the mirror itself made. Distinguished from the **checklist**,
+which states the same relationship portably and remains alongside it.
+_Avoid_: nesting, linked issue, epic
+
+**Tracker drift**:
+A divergence between an issue's state and its handoff's, once they disagree — the issue closed
+while the handoff is still open. It is reported, never reconciled — status changes only on the
+board, with evidence — and is recorded in a generated file, not on the document.
+_Avoid_: out of sync, conflict, stale mirror
+
 A board a developer keeps for their own drafts is an ordinary board with no role of its own.
 _Avoid_: personal board, private board, scratch board
 
