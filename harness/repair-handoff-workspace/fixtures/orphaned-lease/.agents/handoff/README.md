@@ -96,6 +96,7 @@ the fold. Ids and children are unaffected: they are slugified, which strips colo
 ```bash
 cd .agents/handoff
 ./handoff list                                  # what exists, what's open, who holds what
+./handoff show rbac-gap --section Verify        # read one doc by id (live or archived), never by path
 ./handoff new rbac-gap --title "Close RBAC gap" # file a new handoff (or write the .md by hand)
 ./handoff claim rbac-gap "adding policies to the payment module"
 #   ... do the work, updating the doc as you go ...
@@ -168,7 +169,9 @@ every session. One live board carries a bundle declaring 100 children of which 9
 it as `bundle.children.dangling`: such a bundle can never close, because `release --status done`
 refuses while anything is outstanding. Declaring a roster before authoring its docs is legitimate
 planning, so this is detect-only — and `children add --stub` is the cheap fix, filing each missing
-id as a real, claimable handoff rather than a thinner second kind of document:
+id as a real, claimable handoff rather than a thinner second kind of document (the verifier also
+warns `bundle.child.verify_empty` for an open child whose `## Verify` holds only the template
+comment — a child is sized to be checked on its own, so it has to say how):
 
 ```text
 ./handoff children add --stub <parent> <child> [child...]
@@ -206,6 +209,10 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- After a Claude Code compaction, the session-start hook re-injects the held handoffs' Current
+  state, Verify, Decisions, and Ruled out, capped at `HANDOFF_COMPACT_DOC_CHARS` (2000) per doc and
+  `HANDOFF_COMPACT_TOTAL_CHARS` (6000) in total, naming ids and never doc paths (ADR 0012). Other
+  tools have no hook that can do this; re-read with `./handoff show <id>`.
 - `./handoff mirror [--dry-run]` projects this section's open work one way into the board's issue
   tracker (`external.kind: issues`, `external.system`, `external.repo`), through
   `scripts/tracker-<system>.sh` — the GitHub adapter uses `gh`, so no credential lives on the board.
@@ -260,6 +267,13 @@ grew activity logs forty entries deep with multi-paragraph revisions inside them
 `Resolution (date)`, `Execution log (date)` and `Recheck <date> — still unfixed` headings. All of
 that is people improvising the rewritable channel the template did not give them. One section that
 is always current, one that is always append-only, and neither has to do the other's job.
+
+`## Ruled out` holds what was tried and failed, one line each —
+`- <approach> — <why it failed> — <evidence>` — added by hand under the lease or with
+`release --ruled-out "..."`, which runs the write-path secret scan. It is append-only by
+convention, like Activity, but it is read at a different moment: before choosing an approach,
+where Activity would have to be replayed to find a dead end. It is **optional and not a schema
+change** (ADR 0012): a doc without it reads as nothing ruled out, and `migrate` never adds it.
 
 ## Two version numbers, and what each one does
 

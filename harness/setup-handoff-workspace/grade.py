@@ -1025,6 +1025,289 @@ def grade_external_tracker(target):
     return e
 
 
+def grade_ruled_out(target):
+    """ADR 0012 — `## Ruled out` ships in the template without a schema change, and the verifier
+    warns on an open orchestrator child whose `## Verify` holds nothing but the template comment.
+
+    A bundle child is sized to be checked on its own; an empty Verify means nobody can, and the
+    bundle doc is the one place a reader sees them side by side. A doc outside any bundle is not
+    warned — a fresh `new` is empty by construction and has not been written yet.
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    for hid in ("child-empty", "child-filled", "child-closed", "loner"):
+        _handoff(t, "new", hid, "--title", hid)
+    _handoff(
+        t,
+        "new",
+        "pack",
+        "--orchestrator",
+        "--children",
+        "child-empty,child-filled,child-closed",
+        "--title",
+        "Pack",
+    )
+    filled = t / HD / "child-filled-handoff.md"
+    filled.write_text(
+        filled.read_text(encoding="utf-8").replace(
+            "## Verify\n", "## Verify\n\n- bash run-tests.sh exits 0\n", 1
+        ),
+        encoding="utf-8",
+    )
+    _handoff(t, "claim", "child-closed", "closing")
+    _handoff(
+        t,
+        "release",
+        "child-closed",
+        "--status",
+        "done",
+        "--verified-by",
+        "ran run-tests.sh",
+    )
+    e.append(
+        gc.contains(
+            t,
+            f"{HD}/loner-handoff.md",
+            "## Ruled out",
+            label="a new doc carries ## Ruled out",
+        )
+    )
+    f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "bundle.child.verify_empty",
+            "warn",
+            label="an open bundle child with an empty Verify warns",
+        )
+    )
+    msgs = " ".join(x["message"] for x in f.get("bundle.child.verify_empty", []))
+    e.append(
+        gc.expectation(
+            "the warning names the empty child",
+            "child-empty-handoff" in msgs,
+            msgs[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and not the filled, closed, or unbundled ones",
+            not any(h in msgs for h in ("child-filled", "child-closed", "loner")),
+            msgs[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "no finding asks for a Ruled out section",
+            not any("ruled" in k.lower() for k in f),
+            str(sorted(k for k in f if "ruled" in k.lower())),
+        )
+    )
+    return e
+
+
+def _ctx_of(hook_out):
+    """The additionalContext a sessionstart hook emitted, or "" when it emitted nothing."""
+    try:
+        return json.loads(hook_out)["hookSpecificOutput"]["additionalContext"]
+    except (ValueError, KeyError, TypeError):
+        return ""
+
+
+def _write_body(doc, sections):
+    """Replace a doc's body (everything after the frontmatter) with the given ## sections."""
+    text = doc.read_text(encoding="utf-8")
+    end = text.index("\n---\n", 4) + 5
+    body = "".join(f"\n## {name}\n\n{content}\n" for name, content in sections)
+    doc.write_text(text[:end] + body, encoding="utf-8")
+
+
+def grade_compact_context(target):
+    """ADR 0012 — after compaction, SessionStart(compact) re-injects the working set of every lease
+    the session holds: Current state, Verify, Decisions, Ruled out, capped per doc and in total,
+    naming ids and never doc paths. It reports lease expiry and never extends it; any other session
+    start is unchanged.
+    """
+    e = []
+    t = Path(target)
+    r = _install(t)
+    e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    board = t / HD
+    me, other = "sess-CMP", "sess-OTHER"
+
+    _handoff(t, "new", "held", "--title", "Held work")
+    _write_body(
+        board / "held-handoff.md",
+        [
+            ("Current state", "MARK-STATE parser written"),
+            ("Context", "MARK-CONTEXT never injected"),
+            ("Where", "MARK-WHERE never injected"),
+            ("Verify", "<!-- template comment -->\nMARK-VERIFY run the suite"),
+            ("Decisions", "MARK-DECISIONS keep bash"),
+            ("Ruled out", "- MARK-RULED jq — not installed — which jq exit 1"),
+            ("Activity", "- MARK-ACTIVITY never injected"),
+        ],
+    )
+    _handoff(t, "claim", "held", session=me)
+    _handoff(t, "new", "theirs", "--title", "Their work")
+    _write_body(board / "theirs-handoff.md", [("Current state", "MARK-THEIRS")])
+    _handoff(t, "claim", "theirs", session=other)
+    _handoff(t, "new", "unheld", "--title", "Free work")
+    _write_body(board / "unheld-handoff.md", [("Current state", "MARK-UNHELD")])
+
+    startup = _hook(t, "sessionstart", {"source": "startup"}, session=me)
+    plain = _hook(t, "sessionstart", {}, session=me)
+    ctx = _ctx_of(_hook(t, "sessionstart", {"source": "compact"}, session=me))
+    order = [
+        ctx.find(m)
+        for m in ("MARK-STATE", "MARK-VERIFY", "MARK-DECISIONS", "MARK-RULED")
+    ]
+    e.append(
+        gc.expectation(
+            "compact re-injects Current state, Verify, Decisions, Ruled out in that order",
+            all(i >= 0 for i in order) and order == sorted(order),
+            str(order),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and nothing else from the doc",
+            not any(
+                m in ctx
+                for m in (
+                    "MARK-CONTEXT",
+                    "MARK-WHERE",
+                    "MARK-ACTIVITY",
+                    "template comment",
+                )
+            ),
+            ctx[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "only for leases this session holds",
+            "MARK-THEIRS" not in ctx and "MARK-UNHELD" not in ctx,
+            ctx[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the compact context still carries the ordinary board banner",
+            "Open (" in ctx,
+            ctx[:200],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "the banner tells the holder its own lease is its own, not someone else's",
+            "held by this session" in ctx and "HELD by" in ctx,
+            [
+                ln
+                for ln in ctx.splitlines()
+                if "held-handoff" in ln or "theirs-handoff" in ln
+            ][:3].__str__()[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "a startup session start is unchanged",
+            "MARK-STATE" not in _ctx_of(startup) and startup == plain,
+            _ctx_of(startup)[:200],
+        )
+    )
+
+    owner = board / ".locks/held-handoff/owner"
+    soon = int(__import__("time").time()) + 600
+    lines = [
+        ln for ln in owner.read_text().splitlines() if not ln.startswith("expires=")
+    ]
+    owner.write_text("\n".join(lines + [f"expires={soon}"]) + "\n")
+    ctx = _ctx_of(_hook(t, "sessionstart", {"source": "compact"}, session=me))
+    e.append(
+        gc.expectation(
+            "a lease near expiry is reported in one line",
+            any(
+                "expires in" in ln and "handoff touch held-handoff" in ln
+                for ln in ctx.splitlines()
+            ),
+            ctx[:300],
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and never extended",
+            f"expires={soon}" in owner.read_text(),
+            owner.read_text()[-80:],
+        )
+    )
+
+    big = "\n".join(
+        f"- MARK-BIG verify step {i:03d} with some padding text" for i in range(120)
+    )
+    _handoff(t, "new", "big", "--title", "Big work")
+    _write_body(
+        board / "big-handoff.md",
+        [
+            ("Current state", "MARK-BIGSTATE"),
+            ("Verify", big),
+            ("Decisions", "MARK-BIGDEC"),
+        ],
+    )
+    _handoff(t, "claim", "big", session=me)
+    for n in range(5):
+        hid = f"many{n}"
+        _handoff(t, "new", hid, "--title", f"Many {n}")
+        _write_body(
+            board / f"{hid}-handoff.md",
+            [("Current state", f"MARK-MANY{n} " + "x" * 1500)],
+        )
+        _handoff(t, "claim", hid, session=me)
+    ctx = _ctx_of(_hook(t, "sessionstart", {"source": "compact"}, session=me))
+    e.append(
+        gc.expectation(
+            "an oversized doc is cut with a pointer to handoff show by id and section",
+            "(truncated — run:" in ctx and "handoff show big-handoff --section" in ctx,
+            ctx[:300],
+        )
+    )
+    held_part = ctx.split("Open (")[0]
+    e.append(
+        gc.expectation(
+            "the re-injected context stays near the total cap",
+            len(held_part) < 7000,
+            f"{len(held_part)} chars",
+        )
+    )
+    unexpanded = [n for n in range(5) if f"MARK-MANY{n}" not in ctx]
+    e.append(
+        gc.expectation(
+            "leases past the total cap appear as id and handoff show only",
+            bool(unexpanded)
+            and all(f"handoff show many{n}-handoff" in ctx for n in unexpanded),
+            f"unexpanded: {unexpanded}",
+        )
+    )
+    e.append(
+        gc.expectation(
+            "no output names a handoff doc path",
+            not re.search(r"-handoff\.md", ctx),
+            (re.search(r".{40}-handoff\.md", ctx) or [""])[0],
+        )
+    )
+    raw = _hook(t, "sessionstart", {"source": "compact"}, session=me)
+    e.append(
+        gc.expectation(
+            "the hook never blocks",
+            "permissionDecision" not in raw and '"decision"' not in raw,
+            raw[:120],
+        )
+    )
+    return e
+
+
 IGNORE_NEEDS = SKILL / "scripts/ignore-needs.sh"
 
 
@@ -3869,6 +4152,12 @@ def _grade(target, eval_id):
 
     if eval_id == "external-tracker":
         return grade_external_tracker(target)
+
+    if eval_id == "compact-context":
+        return grade_compact_context(target)
+
+    if eval_id == "ruled-out":
+        return grade_ruled_out(target)
 
     if eval_id == "local-board":
         return grade_local_board(target)

@@ -2243,6 +2243,125 @@ printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC
 chk "the GitHub adapter reads visibility and lowercases it" "public" \
   "$(printf '{"repo":"acme/backlog"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" visibility | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')"
 
+printf '\nhandoff show reads a doc by id, never by path (ADR 0012)\n'
+SH="$(mkboard)"
+SHB="$SH/.agents/handoff"
+hb "$SH" new show-me --title "Show me" --severity low > /dev/null
+insert_into_verify "$SHB/show-me-handoff.md" "run the show marker check"
+hb "$SH" new show-secret --title "Show secret" --sensitivity restricted > /dev/null
+board_sum() { (cd "$SHB" && find . -type f -exec shasum {} + | sort); }
+SH_BEFORE="$(board_sum)"
+
+SH_OUT="$(hb "$SH" show show-me)"
+chk_contains "show prints the doc" "$SH_OUT" "title: Show me"
+chk_contains "and its body" "$SH_OUT" "run the show marker check"
+chk_contains "the short id resolves too" "$(hb "$SH" show SHOW-ME)" "title: Show me"
+SH_OUT="$(hb "$SH" show show-me --section Verify)"
+chk_contains "--section prints that section" "$SH_OUT" "run the show marker check"
+chk "--section prints nothing else" "" "$(printf '%s' "$SH_OUT" | grep -c '^## \|^title:' | grep -v '^0$')"
+SH_OUT="$(hb "$SH" show show-me --section 'No such section')"
+SH_RC=$?
+chk "an absent section prints nothing" "" "$SH_OUT"
+chk "and exits 0" "0" "$SH_RC"
+SH_PATH="$(hb "$SH" show show-me --path)"
+chk "--path prints the active doc's path" "show-me-handoff.md" "${SH_PATH##*/.agents/handoff/}"
+chk "and that path exists" "yes" "$([ -f "$SH_PATH" ] && echo yes || echo no)"
+chk_contains "a restricted doc prints the handling banner" "$(hb "$SH" show show-secret)" "RESTRICTED"
+chk_contains "on --section too" "$(hb "$SH" show show-secret --section Verify)" "RESTRICTED"
+chk "--path stays one clean line, banner off stdout" "1" \
+  "$( (cd "$SH" && ./.agents/handoff/handoff show show-secret --path 2> /dev/null) | wc -l | tr -d ' ')"
+chk_contains "an unknown id is refused" "$(hb "$SH" show no-such-thing)" "no such handoff"
+chk "and exits non-zero" "1" "$(hb "$SH" show no-such-thing > /dev/null && echo 0 || echo 1)"
+chk_contains "--section needs a value" "$(hb "$SH" show show-me --section)" "--section needs a value"
+chk_contains "an unknown flag is refused" "$(hb "$SH" show show-me --bogus)" "unknown flag: --bogus"
+chk_contains "no id is a usage error" "$(hb "$SH" show)" "usage: handoff show"
+chk "no form of show writes to the board" "$SH_BEFORE" "$(board_sum)"
+
+sed -i.bak 's/^schema: [0-9]*$/schema: 99/' "$SHB/show-me-handoff.md" && rm -f "$SHB/show-me-handoff.md.bak"
+SH_OUT="$(hb "$SH" show show-me --section Verify)"
+chk_contains "a newer-schema doc is still shown" "$SH_OUT" "run the show marker check"
+chk_contains "with the read-forward warning" "$SH_OUT" "this CLI understands"
+sed -i.bak 's/^schema: 99$/schema: 2/' "$SHB/show-me-handoff.md" && rm -f "$SHB/show-me-handoff.md.bak"
+
+hb "$SH" claim show-me "closing it" > /dev/null
+hb "$SH" release show-me --status done --verified-by "ran handoff.selftest.sh show block" > /dev/null
+SH_PATH="$(hb "$SH" show show-me --path)"
+chk "--path follows the doc into the archive" "archive/show-me-handoff.md" "${SH_PATH##*/.agents/handoff/}"
+chk_contains "show finds an archived doc" "$(hb "$SH" show show-me --section Verify)" "run the show marker check"
+
+printf '\nRuled out is an optional, append-only section, not a schema change (ADR 0012)\n'
+RO="$(mkboard)"
+ROB="$RO/.agents/handoff"
+ROD="$ROB/ro-work-handoff.md"
+ro_section() { awk '$0 == "## Ruled out" { i = 1; next } i && /^## / { exit } i && /^- / { print }' "$1"; }
+hb "$RO" new ro-work --title "Ruled out work" > /dev/null
+chk "a new doc carries the section" "1" "$(grep -c '^## Ruled out$' "$ROD")"
+chk "and it starts empty" "" "$(ro_section "$ROD")"
+
+hb "$RO" claim ro-work "trying things" > /dev/null
+hb "$RO" release ro-work --status open --ruled-out "Inline cache — stale after archive — handoff.selftest.sh run" > /dev/null
+chk "release --ruled-out appends one line" "- Inline cache — stale after archive — handoff.selftest.sh run" "$(ro_section "$ROD")"
+hb "$RO" claim ro-work "again" > /dev/null
+hb "$RO" release ro-work --status blocked --blocked-on "external: vendor ticket" --ruled-out "Polling — rate limited — curl exit 22" > /dev/null
+chk "a second one appends after the first" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+chk "in order" "- Polling — rate limited — curl exit 22" "$(ro_section "$ROD" | tail -1)"
+chk "under one heading" "1" "$(grep -c '^## Ruled out$' "$ROD")"
+chk "and it stays before Suggested skills" "yes" \
+  "$(awk '/^## Ruled out$/ { r = NR } /^## Suggested skills$/ { s = NR } END { print (r && s && r < s) ? "yes" : "no" }' "$ROD")"
+
+hb "$RO" claim ro-work "secret" > /dev/null
+RO_BEFORE="$(cat "$ROD")"
+chk_contains "a secret in --ruled-out is refused" \
+  "$(hb "$RO" release ro-work --status open --ruled-out "used key $AWSKEY")" "looks like it contains a credential"
+chk "and nothing was appended" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+hb "$RO" release ro-work --status blocked --ruled-out "should not land" > /dev/null
+chk "a release refused for another reason appends nothing" "2" "$(ro_section "$ROD" | wc -l | tr -d ' ')"
+chk_contains "--ruled-out needs a value" "$(hb "$RO" release ro-work --status open --ruled-out)" "--ruled-out needs a value"
+hb "$RO" release ro-work --status open > /dev/null
+
+# A doc written before the template gained the section: it is not a schema change, so the doc must
+# work exactly as before, and migrate must leave it alone.
+hb "$RO" new ro-old --title "Old doc" > /dev/null
+ROO="$ROB/ro-old-handoff.md"
+awk '$0 == "## Ruled out" { skip = 1; next } skip && /^## / { skip = 0 } !skip' "$ROO" > "$ROO.tmp" && cat "$ROO.tmp" > "$ROO" && rm -f "$ROO.tmp"
+hb "$RO" claim ro-old "old" > /dev/null
+chk_contains "an old doc without the section still releases" "$(hb "$RO" release ro-old --status open)" "Released ro-old-handoff"
+chk "without gaining one" "0" "$(grep -c '^## Ruled out$' "$ROO")"
+chk_contains "an old doc still lists" "$(hb "$RO" list)" "ro-old-handoff"
+hb "$RO" migrate --yes > /dev/null
+chk "migrate does not add it" "0" "$(grep -c '^## Ruled out$' "$ROO")"
+chk "the schema does not move" "2" "$(sed -n 's/^schema: //p' "$ROO" | head -1)"
+hb "$RO" claim ro-old "old" > /dev/null
+hb "$RO" release ro-old --status open --ruled-out "Shim — broke the gate — hooks.sh:40" > /dev/null
+chk "--ruled-out creates the section on an old doc" "- Shim — broke the gate — hooks.sh:40" "$(ro_section "$ROO")"
+chk "before Suggested skills" "yes" \
+  "$(awk '/^## Ruled out$/ { r = NR } /^## Suggested skills$/ { s = NR } END { print (r && s && r < s) ? "yes" : "no" }' "$ROO")"
+
+hb "$RO" new ro-ref --standalone --title "Ref" > /dev/null
+chk_contains "a standalone doc refuses --ruled-out" "$(hb "$RO" release ro-ref --status open --ruled-out "x — y — z")" "--ruled-out applies to coordination"
+hb "$RO" new ro-bundle --orchestrator --children ro-work --title "Bundle" > /dev/null
+chk_contains "an orchestrator refuses --ruled-out" "$(hb "$RO" release ro-bundle --status open --ruled-out "x — y — z")" "--ruled-out applies to coordination"
+
+printf '\na depends_on list of several ids stays several ids (depends-on-multi-id-handoff)\n'
+# norm_id prints no trailing newline, so every id after the first was glued onto it: a doc waiting
+# on three landed prerequisites claimed with "a-handoffb-handoffc-handoff (not filed on this board
+# yet)". Every existing check used a single id, where the missing newline is invisible.
+DM="$(mkboard)"
+DMB="$DM/.agents/handoff"
+for d in dm-a dm-b dm-c; do hb "$DM" new "$d" --title "$d" > /dev/null; done
+hb "$DM" new dm-after --title "After" --after dm-a,dm-b,dm-c > /dev/null
+chk "depends_of yields one id per line" "dm-a-handoff dm-b-handoff dm-c-handoff" \
+  "$(depends_of "$DMB/dm-after-handoff.md" | tr '\n' ' ' | sed 's/ $//')"
+printf -- '---\nid: dm-block\ndepends_on:\n  - dm-a\n  - dm-b\n---\n' > "$DMB/dm-block-handoff.md"
+chk "a block-style list does too" "dm-a-handoff dm-b-handoff" \
+  "$(depends_of "$DMB/dm-block-handoff.md" | tr '\n' ' ' | sed 's/ $//')"
+for d in dm-a dm-b dm-c; do
+  hb "$DM" claim "$d" "x" > /dev/null
+  hb "$DM" release "$d" --status done --verified-by "ran handoff.selftest.sh" > /dev/null
+done
+chk "claim does not warn once every prerequisite landed" "" \
+  "$(hb "$DM" claim dm-after "go" | grep 'prerequisites')"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing

@@ -33,6 +33,25 @@ Each row shows status, who acts next (`audience`, cross-repo only), severity, an
 (`🔒 held` / `⚠️ stale` / `—` free). In Claude Code the session-start hook already injected this;
 still run `list` before claiming so you act on current state.
 
+Read one handoff by its id, not its path:
+
+```text
+handoff show <id>                     # the whole doc, found live or in the archive
+handoff show <id> --section Verify    # one section; an absent section prints nothing
+handoff show <id> --path              # where the doc is right now
+```
+
+A path goes stale when a doc is archived or moved to another board; an id does not. `show` is
+read-only and offline, needs no lease, and looks only in your section. A restricted doc prints the
+same handling banner as `claim`. Resolve `--path` when you need it, and never write it into a doc.
+
+**After your context is compacted, re-read what you hold before you continue.** On Claude Code the
+session-start hook does it for you: it re-injects each held handoff's Current state, Verify,
+Decisions, and Ruled out, and anything it cut ends with the `handoff show` command that prints the
+rest. On Gemini CLI and Copilot CLI nothing does — when you notice a compaction (a summary where
+your earlier turns were), run `handoff show <id> --section Verify` and the same for `Decisions` and
+`"Ruled out"` for every handoff you hold before touching the work again.
+
 ## 2. Claim your unit
 
 ```text
@@ -87,6 +106,13 @@ title from, is folded to `—`. The one blocker convention that reads as a colon
 "external: vendor ticket"` — is still the spelling to type, but it is stored as
 `blocked_on: external — vendor ticket`; both spellings are accepted.
 
+**Solo session continuity is not a handoff.** Carrying your own work into tomorrow's session —
+where you stopped, what to try next, a scratch to-do list — needs no lease, no board, and no
+verifier. Keep it off the board, in whatever notes or session-continuity tool you already use. File
+a handoff when the work crosses a boundary: another session or agent will pick it up, another repo
+has to act, or the work must survive you. A board full of private reminders is a board nobody can
+read for the work that actually needs coordinating.
+
 **Every bug you find becomes a handoff — including one you fix on the spot.** Wrong behavior, a
 silent failure, a gap that will bite the next agent: file it, with the reproduction you actually
 ran. If you are not fixing it, the handoff is how it survives the session. If you _are_ fixing it,
@@ -117,6 +143,35 @@ several units, or the open work against one subsystem — file an **orchestrator
 
 ```text
 handoff new <id> --orchestrator --children a,b,c --title "..."
+```
+
+**Size every child as a slice, and confirm the slices before you file.** A child is a **slice**
+when all three hold:
+
+1. It has its own runnable Verify — a command or check that passes when this child is done.
+2. It lands as one change on its own, without waiting on a sibling to land in the same change.
+3. It can be checked without another child's unfinished work.
+
+A slice is a vertical cut through the work, not a layer of it: "API, then UI, then tests" is three
+layers, none of which can be verified alone. The idea is borrowed from the common practice of
+splitting a feature into vertical-slice tickets; there is no numeric size cap, only the three tests.
+
+Before running `handoff new --orchestrator`, **present the child list and its `depends_on` edges to
+the user and wait for them to confirm.** This step is required. The CLI does not prompt — it runs in
+agent shells with no terminal — so the confirmation is yours to ask for. A roster filed without it
+is a plan nobody agreed to, and every child it creates has to be re-sliced or pruned later.
+
+A wide refactor that cannot land in one change still slices, as **expand–contract**: add the new
+shape beside the old one, move callers across in batches, then remove the old shape. Each step
+keeps the code working, so each is its own slice. Record the order in the bundle's `## Sequencing`:
+
+```text
+## Sequencing
+
+- rename-expand — add the new `tenant_id` column and dual-write it; old readers keep working.
+- rename-migrate-1 — move the billing readers to `tenant_id` (depends_on rename-expand).
+- rename-migrate-2 — move the reporting readers to `tenant_id` (depends_on rename-expand).
+- rename-contract — drop the old column once no reader uses it (depends_on both migrate slices).
 ```
 
 It holds no work of its own, so it is never claimed; claim one of its children instead. `list` shows
@@ -212,6 +267,19 @@ first thing the next session reads.
 adding a `Resolution (date)` or `Execution log` heading, what you want is `## Current state` — the
 boards that motivated this schema are full of exactly those improvised headings, and nobody can
 find anything in them.
+
+**Record what failed in `## Ruled out`** (ADR 0012). When an approach is tried and abandoned, add
+one line so the next session does not walk it again:
+
+```text
+- <approach> — <why it failed> — <evidence>
+handoff release ID --status open --ruled-out "Inline cache — stale after archive — selftest run"
+```
+
+Write it by hand under the lease, or pass `--ruled-out` on `release`, which runs the same secret
+scan as the evidence. It is append-only: never rewrite or delete an entry. The section is optional
+— a doc without one reads as nothing ruled out, and `migrate` never adds it. Read it before you
+pick an approach, not after you have spent an hour on one it already lists.
 
 **Checkpoint long work instead of sitting silent until release** (ADR 0011). On a board with a
 remote, other machines see progress only when it is pushed, and a release is the last push:
@@ -338,6 +406,8 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
 - Writing a compaction brief that restates the diff → the next agent can read the diff; what it
   cannot recover is why you chose that approach and what you already ruled out.
+- Filing a bundle without confirming its slices with the user → a roster nobody agreed to, re-sliced
+  after the work has started.
 - Writing child status into an orchestrator by hand, or hand-editing its `children:` list →
   the `## Children` table is generated and your edit is overwritten on the next `index`; use
   `handoff children add|rm` to change the roster.
@@ -346,6 +416,7 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Sitting on a lease after you stop → blocks others; release `open`/`blocked`/`done`.
 - Putting a handoff id in `blocked_on` → it belongs in `depends_on`, where the tool can see it.
 - Appending a `Resolution (date)` heading → that is what `## Current state` is for; rewrite it.
+- Abandoning an approach without a `## Ruled out` line → the next session tries it again.
 - Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
   and rightly: nobody checked anything.
 - Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;

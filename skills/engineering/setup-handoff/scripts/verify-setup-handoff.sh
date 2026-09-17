@@ -727,6 +727,35 @@ while IFS= read -r doc; do
     else
       ok bundle.children.dangling "$dname: every child on its roster is a real doc"
     fi
+
+    # ADR 0012 — a bundle child is sized to be checked on its own, so one whose Verify holds nothing
+    # but the template comment is a slice nobody can confirm. Open children only: a closed one
+    # already carries its evidence, and a doc outside any bundle is not warned, because a fresh
+    # `new` is empty by construction. Advisory, named on the bundle so the gap is seen side by side.
+    empty_verify=""
+    for k in $kids; do
+      kdoc="$(dirname "$doc")/$k.md"
+      [ -f "$kdoc" ] || continue
+      [ "$(fm "$kdoc" status)" = open ] || continue
+      kbody="$(awk '
+        $0 == "## Verify" { inside = 1; next }
+        inside && /^## / { exit }
+        !inside { next }
+        { line = $0
+          while (1) {
+            if (incomment) { e = index(line, "-->"); if (!e) { line = ""; break } line = substr(line, e + 3); incomment = 0 }
+            b = index(line, "<!--"); if (!b) break
+            printf "%s", substr(line, 1, b - 1); line = substr(line, b + 4); incomment = 1
+          }
+          print line }
+      ' "$kdoc" | tr -d '[:space:]')"
+      [ -n "$kbody" ] || empty_verify="${empty_verify:+$empty_verify, }$k"
+    done
+    if [ -n "$empty_verify" ]; then
+      warn bundle.child.verify_empty "$dname: open child(ren) with an empty ## Verify ($empty_verify) — each child should say how to confirm it on its own before anyone starts it"
+    else
+      ok bundle.child.verify_empty "$dname: every open child says how to verify it"
+    fi
   fi
 
   # Size. A document nobody will read coordinates nobody; the boards that motivated this carried

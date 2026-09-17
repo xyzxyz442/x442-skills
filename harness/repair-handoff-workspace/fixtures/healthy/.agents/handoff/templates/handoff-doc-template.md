@@ -50,6 +50,13 @@ note: PLACEHOLDER_NOTE
 
 <!-- Anything settled that the next agent must not relitigate. -->
 
+## Ruled out
+
+<!-- APPEND-ONLY. Approaches that were tried and failed, one line each, so the next session does
+     not walk them again: `- <approach> — <why it failed> — <evidence>`. Add a line by hand under
+     the lease, or with `release --ruled-out "..."`. Never rewrite or delete an entry. Leave it
+     empty when nothing has failed. -->
+
 ## Suggested skills
 
 <!-- Skills the next agent should invoke to pick this up (e.g. a systematic-debugging
