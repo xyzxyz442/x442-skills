@@ -3388,7 +3388,10 @@ cmd_mirror() {
   local repo existing plan f base desired="" gone="" refused=0 hits
   repo="$(require_tracker mirror)" || exit 3
   tracker_adapter > /dev/null || exit 3
-  existing="$(tracker_call list "{\"repo\": \"$repo\", \"label\": \"handoff-mirror\"}")" || exit 3
+  # No label filter: on GitHub a label-filtered listing lags a create, so a run right after another
+  # could not see the issue it had just opened and made a second one (found in a live run). Issues
+  # are matched by their hidden marker alone, which is part of the issue's own body.
+  existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || exit 3
   desired="$(mktemp)" || die "mktemp failed"
   gone="$(mktemp)" || die "mktemp failed"
 
@@ -3561,12 +3564,19 @@ repo, group = sys.argv[4], sys.argv[5]
 prefix = group + "/" if group else ""
 
 by_marker = {}
-for i in existing:
-    m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
-    if m:
-        by_marker[m.group(1)] = i
-
 out = []
+for i in sorted(existing, key=lambda i: i["number"]):
+    m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
+    if not m:
+        continue
+    kept = by_marker.get(m.group(1))
+    if kept is None:
+        by_marker[m.group(1)] = i  # the lowest-numbered issue for a marker is the one that stays
+    elif i.get("state") == "open":
+        out.append(("close", str(i["number"]), m.group(1), {
+            "repo": repo, "number": i["number"],
+            "comment": "Closed by the handoff mirror: duplicate of #%d." % kept["number"]}))
+
 wanted = set()
 for d in desired:
     wanted.add(d["marker"])

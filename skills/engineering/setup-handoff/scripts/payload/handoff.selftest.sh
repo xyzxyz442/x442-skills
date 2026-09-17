@@ -2026,6 +2026,25 @@ chk "template guidance comments are not sent" "False" "$(fq '"REWRITABLE" in by(
 chk "the bundle body lists its children as a checklist" "True" "$(fq '"- [ ] Open work" in by("m-bundle-handoff -->")[0]["body"]')"
 chk "the mirror never writes to the board" "$MI_SUM_BEFORE" "$(cat "$MIB"/*-handoff.md | shasum)"
 
+# Found live against GitHub: a label-filtered listing lags a create, so a second run right after the
+# first could not see the new issue and opened a duplicate. The mirror lists WITHOUT a label filter
+# and matches by marker alone, and a run heals any duplicates it finds.
+chk "the mirror never asks the tracker to filter by label" "0" \
+  "$(fq 'len([c for c in db["calls"] if c[0] == "list" and c[1].get("label")])')"
+python3 - "$MI_STATE" << 'PY'
+import json, sys
+p = sys.argv[1]
+db = json.load(open(p))
+orig = [i for i in db["issues"] if "<!-- handoff:m-kid-handoff -->" in i["body"]][0]
+dup = dict(orig, number=max(i["number"] for i in db["issues"]) + 1, comments=[])
+db["issues"].append(dup)
+json.dump(db, open(p, "w"))
+PY
+mih "$MI" mirror > /dev/null
+chk "a duplicate issue for one marker is closed" "1" \
+  "$(fq 'len([i for i in by("m-kid-handoff -->") if i["state"] == "closed"])')"
+chk "pointing at the one that is kept, the lowest-numbered" "True" \
+  "$(fq '(lambda k: "duplicate of #%d" % min(i["number"] for i in k) in max(k, key=lambda i: i["number"])["comments"][-1]["body"])(by("m-kid-handoff -->"))')"
 MI_CALLS="$(fq 'calls("create") + calls("update")')"
 mih "$MI" mirror > /dev/null
 chk "re-running with nothing changed creates and updates nothing" "$MI_CALLS" "$(fq 'calls("create") + calls("update")')"
@@ -2103,6 +2122,9 @@ chk "create returns the issue number parsed from gh's URL" "7" \
 chk_contains "create targets the configured repo" "$(cat "$GH_LOG")" "issue create --repo acme/backlog --title T"
 chk_contains "and sends the body as a file, not an argument" "$(cat "$GH_LOG")" "--body-file"
 chk_contains "and applies each label" "$(cat "$GH_LOG")" "--label status:open"
+: > "$GH_LOG"
+printf '{"repo":"acme/backlog","label":"handoff-mirror"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" list > /dev/null
+chk "list never filters by label on the server, which lags a create" "0" "$(grep -c -- '--label' "$GH_LOG")"
 GH_LIST="$(printf '{"repo":"acme/backlog","label":"handoff-mirror"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" list)"
 chk "list normalizes state and label names" "open status:open" \
   "$(printf '%s' "$GH_LIST" | python3 -c 'import json,sys; i=json.load(sys.stdin)[0]; print(i["state"], i["labels"][1])')"

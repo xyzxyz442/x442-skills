@@ -6,7 +6,7 @@
 # CLI, so authentication is whatever `gh auth` already holds — no token is read, passed, or stored
 # by the board. Install `gh` and run `gh auth login` once; nothing else is configured here.
 #
-#   list      {"repo", "label"}                                  -> [{"number","state","title","body","labels"}]
+#   list      {"repo", "label"?}                                 -> [{"number","state","title","body","labels"}]
 #   create    {"repo", "title", "body", "labels"}                -> {"number", "url"}
 #   update    {"repo", "number", "title", "body", "labels", "state"?}  -> {}
 #   close     {"repo", "number", "comment"}                      -> {}
@@ -49,6 +49,18 @@ body_file() { # -> path of a temp file holding the request body
   printf '%s' "$f"
 }
 
+# gh reports success ("✓ Closed issue …") on stderr, which would leak into every mirror run's output.
+# Keep stderr only when the command fails, so real errors still reach the operator.
+quiet_gh() { # gh-args... -> gh's stdout; its stderr only on failure
+  local err rc
+  err="$(mktemp)" || return 1
+  gh "$@" 2> "$err"
+  rc=$?
+  [ $rc -eq 0 ] || cat "$err" >&2
+  rm -f "$err"
+  return $rc
+}
+
 ensure_labels() { # labels... -> creates any that do not exist yet (idempotent)
   local l
   for l in "$@"; do
@@ -58,19 +70,22 @@ ensure_labels() { # labels... -> creates any that do not exist yet (idempotent)
 
 case "$op" in
   list)
-    gh issue list --repo "$repo" --label "$label" --state all --limit 1000 \
+    # Never `--label` on the server: GitHub's label-filtered listing lags a create by seconds, and a
+    # caller that cannot see an issue it just made will make another. Filter here instead.
+    gh issue list --repo "$repo" --state all --limit 1000 \
       --json number,state,title,body,labels \
       | python3 -c 'import json, sys
+want = sys.argv[1]
 out = [{"number": i["number"], "state": i["state"].lower(), "title": i["title"], "body": i["body"],
         "labels": [l["name"] for l in i.get("labels", [])]} for i in json.load(sys.stdin)]
-json.dump(out, sys.stdout)'
+json.dump([i for i in out if not want or want in i["labels"]], sys.stdout)' "$label"
     ;;
   create)
     bf="$(body_file)"
     ensure_labels "${labels[@]}"
     args=(issue create --repo "$repo" --title "$title" --body-file "$bf")
     for l in "${labels[@]}"; do args+=(--label "$l"); done
-    url="$(gh "${args[@]}")" || {
+    url="$(quiet_gh "${args[@]}")" || {
       rm -f "$bf"
       exit 1
     }
@@ -93,18 +108,19 @@ print("\n".join(l["name"] for l in json.load(sys.stdin).get("labels", [])))')"
     while IFS= read -r l; do
       [ -n "$l" ] || continue
       case "$l" in handoff-* | status:* | severity:* | env:* | section:* | type:*) ;; *) continue ;; esac
-      printf '%s\n' "${labels[@]}" | grep -qxF "$l" || args+=(--remove-label "$l")
+      # Here-string, not a pipe: under pipefail `printf | grep -q` fails whenever grep exits first.
+      grep -qxF "$l" <<< "$(printf '%s\n' "${labels[@]}")" || args+=(--remove-label "$l")
     done <<< "$current"
-    gh "${args[@]}" > /dev/null || {
+    quiet_gh "${args[@]}" > /dev/null || {
       rm -f "$bf"
       exit 1
     }
     rm -f "$bf"
-    [ "$want_state" = open ] && { gh issue reopen "$number" --repo "$repo" > /dev/null || exit 1; }
+    [ "$want_state" = open ] && { quiet_gh issue reopen "$number" --repo "$repo" > /dev/null || exit 1; }
     printf '{}'
     ;;
   close)
-    gh issue close "$number" --repo "$repo" ${comment:+--comment "$comment"} > /dev/null || exit 1
+    quiet_gh issue close "$number" --repo "$repo" ${comment:+--comment "$comment"} > /dev/null || exit 1
     printf '{}'
     ;;
   comments)

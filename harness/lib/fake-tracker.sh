@@ -50,7 +50,7 @@ if op == "list":
     out = [
         {k: i[k] for k in ("number", "state", "title", "body", "labels")}
         for i in db["issues"]
-        if i.get("repo") == req.get("repo") and req.get("label") in i.get("labels", [])
+        if i.get("repo") == req.get("repo") and (not req.get("label") or req["label"] in i.get("labels", []))
     ]
 elif op == "create":
     n = max([i["number"] for i in db["issues"]] + [0]) + 1
