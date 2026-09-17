@@ -152,8 +152,8 @@ redaction is _detected_ from the content itself and decides what survives when i
 restricted document is refused outright and never reaches a redactor.
 
 **Share**:
-Whether a document's audience may be the public — declared per document as `share: public`, and
-honoured only when its board also allows a public tracker. Distinguished from **sensitivity**,
+Whether a document's audience may be the public — declared on the document itself, and honoured
+only when its board also allows a public tracker. Distinguished from **sensitivity**,
 which decides how carefully the tooling handles a document at all: a restricted document is never
 shared, and a normal one is not shared publicly unless someone marks it.
 _Avoid_: public, visibility, published

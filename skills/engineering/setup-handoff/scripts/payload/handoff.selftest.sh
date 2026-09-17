@@ -2049,6 +2049,23 @@ MI_CALLS="$(fq 'calls("create") + calls("update")')"
 mih "$MI" mirror > /dev/null
 chk "re-running with nothing changed creates and updates nothing" "$MI_CALLS" "$(fq 'calls("create") + calls("update")')"
 
+# The CLI owns which label prefixes the mirror manages and tells the adapter on every update, so an
+# adapter never hardcodes them and a label a person added in the tracker survives the run.
+python3 - "$MI_STATE" << 'PY'
+import json, sys
+p = sys.argv[1]
+db = json.load(open(p))
+i = min((i for i in db["issues"] if "<!-- handoff:m-kid-handoff -->" in i["body"]), key=lambda i: i["number"])
+i["title"] = "edited in the tracker"
+i["labels"].append("keep-me")
+json.dump(db, open(p, "w"))
+PY
+mih "$MI" mirror > /dev/null
+chk "an update names the managed label prefixes" "True" \
+  "$(fq '"status:" in [c for c in db["calls"] if c[0] == "update"][-1][1].get("managed", [])')"
+chk "a label a person added in the tracker survives the update" "True" \
+  "$(fq '"keep-me" in min(by("m-kid-handoff -->"), key=lambda i: i["number"])["labels"]')"
+
 mih "$MI" claim m-open "finishing" > /dev/null
 mih "$MI" release m-open --status done --verified-by "ran the selftest" > /dev/null
 mih "$MI" mirror > /dev/null
@@ -2110,7 +2127,12 @@ printf '%s\n' "$*" >> "$GH_LOG"
 case "$1 $2" in
   "issue create") echo "https://github.com/acme/backlog/issues/7" ;;
   "issue list") echo '[{"number":7,"state":"OPEN","title":"T","body":"B <!-- handoff:x-handoff -->","labels":[{"name":"handoff-mirror"},{"name":"status:open"}]}]' ;;
-  "issue view") echo '{"comments":[{"author":{"login":"carol"},"body":"hi","createdAt":"2026-01-01T00:00:00Z"}]}' ;;
+  "issue view")
+    case "$*" in
+      *"--json labels"*) echo '{"labels":[{"name":"status:open"},{"name":"keep-me"}]}' ;;
+      *) echo '{"comments":[{"author":{"login":"carol"},"body":"hi","createdAt":"2026-01-01T00:00:00Z"}]}' ;;
+    esac
+    ;;
   "repo view") echo '{"visibility":"PUBLIC"}' ;;
 esac
 exit 0
@@ -2133,6 +2155,15 @@ GH_COM="$(printf '{"repo":"acme/backlog","number":7}' | GH_LOG="$GH_LOG" PATH="$
 chk "comments normalize the author login" "carol" \
   "$(printf '%s' "$GH_COM" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["author"])')"
 chk "no token appears in any gh invocation" "0" "$(grep -ci 'token' "$GH_LOG")"
+: > "$GH_LOG"
+printf '{"repo":"acme/backlog","number":7,"title":"T","body":"B","labels":["status:blocked"],"managed":["status:"]}' \
+  | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" update > /dev/null
+chk_contains "update removes a stale label under a managed prefix" "$(cat "$GH_LOG")" "--remove-label status:open"
+chk "and leaves a label a person added by hand" "0" "$(grep -c -- '--remove-label keep-me' "$GH_LOG")"
+: > "$GH_LOG"
+printf '{"repo":"acme/backlog","number":7,"title":"T","body":"B","labels":["status:blocked"]}' \
+  | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" update > /dev/null
+chk "an update naming no managed prefixes removes no label" "0" "$(grep -c -- '--remove-label' "$GH_LOG")"
 
 printf '\na public tracker repository needs the board and the document to opt in (ADR 0013)\n'
 PB="$(mkboard)"

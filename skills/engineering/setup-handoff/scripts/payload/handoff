@@ -3216,6 +3216,8 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   move_stage_copy "$f" "$staged" "$src_label" "moved here from $(fold_colons "$src_label") by $(whoami_id)${across}."
   [ -n "$force_secret" ] && [ -n "$hits" ] \
     && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
+  # move_import_into runs in a command substitution, so its `die` exits only that subshell. The rc
+  # check below is what stops the move — keep it when touching this block.
   dest="$(move_import_into "$staged" "$to" "$tgroup" "${new_id:-$id}" "$(doc_type "$f")" "$(meta "$f" title)")"
   local rc=$?
   rm -f "$staged"
@@ -3329,7 +3331,7 @@ public_refusal() { # repo what -> the refusal sentence
 # same restricted refusal, same outbound secret scan, same claim — and then opened as an issue, so
 # someone with no board access can pick it up. The issue number becomes the doc's external_ref.
 export_to_issue() { # id doc outdir branch do_claim force-secret
-  local id="$1" f="$2" repo existing ref_style n reply number brief body title
+  local id="$1" f="$2" repo existing ref_style reply number brief body title
   is_orchestrator "$f" && die "$id is a bundle — delegate its children one issue at a time; a bundle is not one piece of work."
   existing="$(meta "$f" external_ref)"
   [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
@@ -3404,6 +3406,8 @@ for c in json.load(sys.stdin):
 if found:
     print("author=%s at=%s status=%s block=%s" % tuple(shlex.quote(v) for v in found))')"
   [ -n "$picked" ] || die "no result has been posted on issue #$number yet — a result comment carries a result_status line and the result block."
+  # Tracker text arrives as shlex-quoted assignments, so a comment can never become shell syntax.
+  # Keep every value inside shlex.quote above; an unquoted one would make this eval an injection.
   eval "$picked"
 
   # Written into the brief this board rendered, then read back by the ordinary import — so the one
@@ -3636,6 +3640,9 @@ for line in open(sys.argv[3]):
     gone[doc] = reason
 repo, group = sys.argv[4], sys.argv[5]
 prefix = group + "/" if group else ""
+# The label prefixes mirror_render writes. Only these are compared, and the adapter is told to
+# reconcile only these, so a label a person added by hand survives every run.
+MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:"]
 
 by_marker = {}
 out = []
@@ -3661,12 +3668,12 @@ for d in desired:
         continue
     same = (have.get("state") == "open" and have.get("title") == d["title"]
             and have.get("body", "").strip() == d["body"].strip()
-            and sorted(l for l in have.get("labels", []) if l.startswith(("handoff-", "status:", "severity:", "env:", "section:", "type:")))
+            and sorted(l for l in have.get("labels", []) if l.startswith(tuple(MANAGED)))
             == sorted(d["labels"]))
     if same:
         out.append(("same", str(have["number"]), d["marker"], {}))
         continue
-    req = dict(req, number=have["number"])
+    req = dict(req, number=have["number"], managed=MANAGED)
     if have.get("state") != "open":
         req["state"] = "open"
     out.append(("update", str(have["number"]), d["marker"], req))
