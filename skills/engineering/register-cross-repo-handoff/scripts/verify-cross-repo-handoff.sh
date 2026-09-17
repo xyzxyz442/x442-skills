@@ -275,7 +275,19 @@ while IFS=$'\t' read -r group board alias repo exists has_agents; do
     fail member.agents_md "$group/$alias — no AGENTS.md"
     continue
   fi
-  if grep -q 'cross-repo-handoff:begin' "$repo/AGENTS.md" 2> /dev/null; then
+  # A member wired with setup-handoff --local-wiring keeps everything out of its own commits: hooks
+  # in .claude/settings.local.json, no AGENTS.md block, and `localWiring: true` recorded in its
+  # .agents/handoff.json so an absent block reads as deliberate. verify-setup-handoff.sh honours the
+  # flag; this check must too, or it tells the operator to "re-run the sync" — which would commit
+  # exactly the paths the flag exists to keep out of that repo.
+  local_wiring=0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if isinstance(d, dict) and d.get("localWiring") is True else 1)' "$repo/.agents/handoff.json" 2> /dev/null && local_wiring=1
+  if [ "$local_wiring" = 1 ] && ! grep -q 'cross-repo-handoff:begin' "$repo/AGENTS.md" 2> /dev/null; then
+    pass member.agents_block "$group/$alias has no AGENTS.md block by design (localWiring) — the board README carries the protocol"
+  elif grep -q 'cross-repo-handoff:begin' "$repo/AGENTS.md" 2> /dev/null; then
     # the block must name this repo's own group
     if sed -n '/cross-repo-handoff:begin/,/cross-repo-handoff:end/p' "$repo/AGENTS.md" | grep -q "\`$group\` section"; then
       pass member.agents_block "$group/$alias AGENTS.md block present + scoped to $group"
@@ -290,14 +302,15 @@ while IFS=$'\t' read -r group board alias repo exists has_agents; do
   # the member's own .agents/handoff.json so a rename cannot leave a stale literal buried in
   # a tool config. Grepping the old literal made every correctly-wired member read as broken.
   cfg="$repo/.claude/settings.json"
+  [ "$local_wiring" = 1 ] && cfg="$repo/.claude/settings.local.json"
   if [ -f "$cfg" ]; then
     if grep -q '/scripts/hooks.sh' "$cfg"; then
       pass member.claude_hook "$group/$alias claude hooks invoke the board"
     else
-      fail member.claude_hook "$group/$alias claude settings.json has no handoff hook — re-run the sync"
+      fail member.claude_hook "$group/$alias claude $(basename "$cfg") has no handoff hook — re-run the sync"
     fi
   else
-    warn member.claude_hook "$group/$alias has no .claude/settings.json (claude not wired — advisory only if another tool is primary)"
+    warn member.claude_hook "$group/$alias has no .claude/$(basename "$cfg") (claude not wired — advisory only if another tool is primary)"
   fi
   if hc="$(board_config "$board" "$repo")" && [ -n "$hc" ]; then
     eval "$hc"

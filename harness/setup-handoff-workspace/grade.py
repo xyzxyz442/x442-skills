@@ -860,6 +860,13 @@ def grade_external_tracker(target):
     t = Path(target)
     r = _install(t)
     e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    e.append(
+        gc.expectation(
+            "setup installs the GitHub tracker adapter onto the board",
+            (t / HD / "scripts" / "tracker-github.sh").is_file(),
+            "scripts/tracker-github.sh",
+        )
+    )
     cfg_path = t / HD / "handoff.json"
 
     def set_external(ext):
@@ -868,11 +875,40 @@ def grade_external_tracker(target):
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
     set_external({"kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+"})
+    # Board policy survives a re-install. Found in a live run: re-running setup rewrote handoff.json
+    # keeping only the keys it knew, so the tracker declaration (and the environment ladder) vanished.
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["environments"] = ["dev", "uat", "prod"]
+    cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    _install(t)
+    after = json.loads(cfg_path.read_text(encoding="utf-8"))
+    e.append(
+        gc.expectation(
+            "re-running setup keeps the external tracker declaration",
+            after.get("external", {}).get("system") == "jira",
+            str(after.get("external")),
+        )
+    )
+    e.append(
+        gc.expectation(
+            "and the board's environment ladder",
+            after.get("environments") == ["dev", "uat", "prod"],
+            str(after.get("environments")),
+        )
+    )
     r = _handoff(t, "new", "ticketed", "--title", "Ticketed", "--ref", "ABC-12")
     e.append(gc.expectation("new --ref succeeds", r.returncode == 0, r.stdout[-200:]))
     f = gc.verify_findings(VERIFY, t)
     e.append(gc.finding(f, "board.external.kind", "pass"))
     e.append(gc.finding(f, "board.external.pattern", "pass"))
+    e.append(
+        gc.finding(
+            f,
+            "board.external.adapter",
+            "warn",
+            label="a tracker system with no shipped adapter (jira) warns",
+        )
+    )
     e.append(
         gc.finding(
             f,
@@ -902,6 +938,14 @@ def grade_external_tracker(target):
 
     set_external({"kind": "issues", "refPattern": "[A-Z]+-[0-9]+"})
     f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "board.external.repo",
+            "warn",
+            label="an issue tracker with no external.repo warns",
+        )
+    )
     e.append(
         gc.finding(
             f,

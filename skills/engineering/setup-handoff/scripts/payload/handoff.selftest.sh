@@ -20,6 +20,9 @@ SRC="$(mktemp -d)"
 TPL="$SRC/templates"
 mkdir -p "$TPL"
 cp "$HERE/handoff" "$HERE/config.sh" "$HERE/dispatcher" "$SRC/"
+cp "$HERE/tracker-github.sh" "$SRC/"
+# The fake tracker adapter lives in the harness, beside the graders that share it (ADR 0011).
+cp "$HERE/../../../../../harness/lib/fake-tracker.sh" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
 chmod +x "$SRC/handoff"
 P=0
@@ -1144,8 +1147,11 @@ chk_contains "the count is always there, whatever the roster does" "$RB_LIST" "0
 RB_V="$(hb "$RB" list --verbose)"
 chk "--verbose restores the whole roster" "8" \
   "$(printf '%s' "$RB_V" | grep -o 'c-[a-z]*-handoff (MISSING)' | wc -l | tr -d ' ')"
+# Captured first: `printf | grep -q` under pipefail fails whenever grep exits before printf finishes
+# writing, so the old one-liner flaked on a broken pipe rather than on the behaviour it checks.
+RB_BARE="$(hb "$RB" list)"
 chk "a bare list still works after the flag was added" "yes" \
-  "$(printf '%s' "$(hb "$RB" list)" | grep -q '^ID ' && echo yes || echo no)"
+  "$(grep -q '^ID ' <<< "$RB_BARE" && echo yes || echo no)"
 
 # The generated summary line inside the bundle doc is truncated too: the table right below it
 # carries every child, so a full roster there is the same information twice.
@@ -1940,6 +1946,192 @@ GL4="$(mktemp -d)"
 printf 'x\n' > "$GL4/f"
 (. "$SRC/config.sh" && handoff_append_line "$GL4/f" y)
 chk "handoff_append_line adds no blank line after a terminated file" "$(printf 'x\ny')" "$(cat "$GL4/f")"
+
+printf '\nhandoff mirror projects open work one way into an issue tracker (ADR 0011)\n'
+# Every tracker call goes through the fake adapter (harness/lib/fake-tracker.sh), whose JSON state
+# file is both the "tracker" and the call log — nothing here touches the network.
+MI="$(mkboard)"
+MIB="$MI/.agents/handoff"
+MI_STATE="$(mktemp -d)/tracker.json"
+MI_SESS="mi-self-$$"
+mih() { # board-repo subcommand... -> that board's CLI with the fake tracker wired in
+  local r="$1"
+  shift
+  (cd "$r" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$MI_STATE" ./.agents/handoff/handoff "$@") 2>&1
+}
+fq() { # python-expression over `db` (the fake tracker state) -> printed value
+  # eval() is deliberate and safe here: every expression is a literal written in this test file,
+  # evaluated over a state file this test created. Nothing external reaches it.
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {"issues": [], "calls": []}
+db.setdefault("issues", []); db.setdefault("calls", [])
+def by(marker): return [i for i in db["issues"] if marker in i["body"]]
+def calls(op): return len([c for c in db["calls"] if c[0] == op])
+print(eval(sys.argv[2]))' "$MI_STATE" "$1"
+}
+mi_ext() { # external-json -> write it into the board config
+  printf '{ "external": %s }\n' "$1" > "$MIB/handoff.json"
+}
+
+mi_ext '{ "kind": "sprints", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" }'
+chk_contains "mirror refuses a board whose tracker is a sprint tool" "$(mih "$MI" mirror)" "sprint"
+mi_ext '{ "kind": "issues", "system": "github", "refPattern": "#[0-9]+" }'
+chk_contains "mirror refuses an issue tracker with no external.repo" "$(mih "$MI" mirror)" "external.repo"
+mi_ext '{ "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" }'
+
+mih "$MI" new m-open --title "Open work" --severity high > /dev/null
+mih "$MI" new m-blocked --title "Blocked work" > /dev/null
+mih "$MI" claim m-blocked "x" > /dev/null
+mih "$MI" release m-blocked --status blocked --blocked-on "external: vendor" > /dev/null
+mih "$MI" new m-secret --title "Restricted work" --sensitivity restricted > /dev/null
+mih "$MI" new m-ref --standalone --title "Reference" > /dev/null
+mih "$MI" new m-kid --title "Kid" > /dev/null
+mih "$MI" new m-bundle --orchestrator --children m-open,m-kid --title "Bundle" > /dev/null
+mih "$MI" new m-bundle-r --orchestrator --children m-secret --title "Bundle with a restricted child" > /dev/null
+mih "$MI" new m-linked --title "Linked by hand" --ref "#77" > /dev/null
+mih "$MI" new m-leak --title "Leaky" > /dev/null
+# Inside Context, which the mirror sends. A credential in a part it never sends (Activity, say) is
+# not a leak through this path, and refusing on it would only teach people to ignore the refusal.
+MI_LT="$(mktemp)"
+awk -v k="$AWSKEY" '{ print } /^## Context/ { print ""; print "Deploy key " k }' "$MIB/m-leak-handoff.md" > "$MI_LT" && cat "$MI_LT" > "$MIB/m-leak-handoff.md"
+MI_SUM_BEFORE="$(cat "$MIB"/*-handoff.md | shasum)"
+
+MI_DRY="$(mih "$MI" mirror --dry-run)"
+chk_contains "--dry-run names what it would create" "$MI_DRY" "create m-open-handoff"
+chk_contains "and what it skips as restricted" "$MI_DRY" "skip m-secret-handoff"
+chk_contains "and a doc linked elsewhere" "$MI_DRY" "linked elsewhere"
+chk "and calls no write operation" "0" "$(fq 'calls("create") + calls("update") + calls("close")')"
+
+MI_OUT="$(mih "$MI" mirror)"
+MI_RC="$(
+  mih "$MI" mirror > /dev/null
+  echo $?
+)"
+chk "open coordination docs and a clean bundle become issues" "4" "$(fq 'len(db["issues"])')"
+chk "each issue carries the hidden marker" "1" "$(fq 'len(by("<!-- handoff:m-open-handoff -->"))')"
+chk "restricted docs never leave the board" "0" "$(fq 'len([i for i in db["issues"] if "Restricted work" in i["title"]])')"
+chk "a bundle with a restricted child is skipped whole" "0" "$(fq 'len(by("m-bundle-r-handoff"))')"
+chk "standalone docs are never mirrored" "0" "$(fq 'len(by("m-ref-handoff"))')"
+chk "a doc linked elsewhere gets no second issue" "0" "$(fq 'len(by("m-linked-handoff"))')"
+chk_contains "a credential in a doc refuses that doc and names it" "$MI_OUT" "m-leak-handoff"
+chk "and nothing of it is sent" "0" "$(fq 'len(by("m-leak-handoff"))')"
+chk "a refused doc makes the run exit non-zero" "1" "$([ "$MI_RC" != 0 ] && echo 1 || echo 0)"
+chk "labels carry status and severity" "True" \
+  "$(fq 'set(["handoff-mirror", "status:open", "severity:high"]) <= set(by("m-open-handoff -->")[0]["labels"])')"
+chk "a blocked doc is labelled blocked" "True" "$(fq '"status:blocked" in by("m-blocked-handoff -->")[0]["labels"]')"
+chk "the body says edits are overwritten" "True" "$(fq '"overwritten" in by("m-open-handoff -->")[0]["body"]')"
+chk "template guidance comments are not sent" "False" "$(fq '"REWRITABLE" in by("m-open-handoff -->")[0]["body"]')"
+chk "the bundle body lists its children as a checklist" "True" "$(fq '"- [ ] Open work" in by("m-bundle-handoff -->")[0]["body"]')"
+chk "the mirror never writes to the board" "$MI_SUM_BEFORE" "$(cat "$MIB"/*-handoff.md | shasum)"
+
+# Found live against GitHub: a label-filtered listing lags a create, so a second run right after the
+# first could not see the new issue and opened a duplicate. The mirror lists WITHOUT a label filter
+# and matches by marker alone, and a run heals any duplicates it finds.
+chk "the mirror never asks the tracker to filter by label" "0" \
+  "$(fq 'len([c for c in db["calls"] if c[0] == "list" and c[1].get("label")])')"
+python3 - "$MI_STATE" << 'PY'
+import json, sys
+p = sys.argv[1]
+db = json.load(open(p))
+orig = [i for i in db["issues"] if "<!-- handoff:m-kid-handoff -->" in i["body"]][0]
+dup = dict(orig, number=max(i["number"] for i in db["issues"]) + 1, comments=[])
+db["issues"].append(dup)
+json.dump(db, open(p, "w"))
+PY
+mih "$MI" mirror > /dev/null
+chk "a duplicate issue for one marker is closed" "1" \
+  "$(fq 'len([i for i in by("m-kid-handoff -->") if i["state"] == "closed"])')"
+chk "pointing at the one that is kept, the lowest-numbered" "True" \
+  "$(fq '(lambda k: "duplicate of #%d" % min(i["number"] for i in k) in max(k, key=lambda i: i["number"])["comments"][-1]["body"])(by("m-kid-handoff -->"))')"
+MI_CALLS="$(fq 'calls("create") + calls("update")')"
+mih "$MI" mirror > /dev/null
+chk "re-running with nothing changed creates and updates nothing" "$MI_CALLS" "$(fq 'calls("create") + calls("update")')"
+
+mih "$MI" claim m-open "finishing" > /dev/null
+mih "$MI" release m-open --status done --verified-by "ran the selftest" > /dev/null
+mih "$MI" mirror > /dev/null
+chk "a doc closed as done closes its issue" "closed" "$(fq 'by("m-open-handoff -->")[0]["state"]')"
+chk "with a comment saying why" "True" "$(fq '"done" in by("m-open-handoff -->")[0]["comments"][-1]["body"]')"
+chk "the bundle's checklist ticks the closed child" "True" "$(fq '"- [x] Open work" in by("m-bundle-handoff -->")[0]["body"]')"
+
+MI_T="$(mktemp)"
+awk '{ sub(/^sensitivity: normal$/, "sensitivity: restricted"); print }' "$MIB/m-blocked-handoff.md" > "$MI_T" && cat "$MI_T" > "$MIB/m-blocked-handoff.md"
+mih "$MI" mirror > /dev/null
+chk "a doc that becomes restricted has its issue closed" "closed" "$(fq 'by("m-blocked-handoff -->")[0]["state"]')"
+chk "with a reason that gives nothing away" "True" \
+  "$(fq '"no longer shared" in by("m-blocked-handoff -->")[0]["comments"][-1]["body"] and "Blocked work" not in by("m-blocked-handoff -->")[0]["comments"][-1]["body"]')"
+
+printf '\nexport --to-issue delegates through the tracker, and the reply comes back for review (ADR 0011)\n'
+DL="$(mkboard)"
+DLB="$DL/.agents/handoff"
+MI_STATE="$(mktemp -d)/tracker.json"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$DLB/handoff.json"
+mih "$DL" new d-work --title "Delegated work" > /dev/null
+DL_OUT="$(mih "$DL" export d-work --to-issue)"
+chk_contains "export --to-issue opens an issue" "$DL_OUT" "#1"
+chk "the issue carries the rendered brief" "True" "$(fq '"brief:" in db["issues"][0]["body"] and "handoff-delegation" in db["issues"][0]["labels"]')"
+chk "the doc records the issue as its external_ref" "#1" "$(sed -n 's/^external_ref: //p' "$DLB/d-work-handoff.md")"
+chk "and who it went to" "issue #1" "$(sed -n 's/^delegated_to: //p' "$DLB/d-work-handoff.md")"
+chk_contains "a doc already linked is not delegated twice" "$(mih "$DL" export d-work --to-issue)" "already linked"
+mih "$DL" new d-kid --title "Kid" > /dev/null
+mih "$DL" new d-bundle --orchestrator --children d-kid --title "Bundle" > /dev/null
+chk_contains "a bundle is not delegated as one issue" "$(mih "$DL" export d-bundle --to-issue)" "bundle"
+mih "$DL" new d-secret --title "Secret" --sensitivity restricted > /dev/null
+chk_contains "a restricted doc is never delegated" "$(mih "$DL" export d-secret --to-issue)" "restricted"
+
+chk_contains "importing before anyone replied refuses" "$(mih "$DL" import --result --from-issue d-work)" "no result"
+python3 - "$MI_STATE" << 'PY'
+import json, sys
+p = sys.argv[1]
+db = json.load(open(p))
+block = "<!-- handoff:result:begin -->\n\n### Summary\n\n%s\n\n### Commits and PR\n\nabc1234\n\n<!-- handoff:result:end -->"
+db["issues"][0]["comments"] += [
+    {"author": "dave", "body": "result_status: partial\n\n" + (block % "Half of it."), "created_at": "2026-01-01T00:00:00Z"},
+    {"author": "someone", "body": "Looks good to me!", "created_at": "2026-01-02T00:00:00Z"},
+    {"author": "carol", "body": "result_status: done\n\n" + (block % "All of it."), "created_at": "2026-01-03T00:00:00Z"},
+]
+json.dump(db, open(p, "w"))
+PY
+DL_IMP="$(mih "$DL" import --result --from-issue d-work)"
+chk "the latest comment carrying a result is the one imported" "done" "$(sed -n 's/^result_claimed: //p' "$DLB/d-work-handoff.md")"
+chk "the commenter is recorded as who reported it" "carol" "$(sed -n 's/^result_from: //p' "$DLB/d-work-handoff.md")"
+chk "it lands as a claim awaiting review" "pending" "$(sed -n 's/^review: //p' "$DLB/d-work-handoff.md")"
+chk "and never changes status" "open" "$(sed -n 's/^status: //p' "$DLB/d-work-handoff.md")"
+chk_contains "the result text itself is spliced in" "$(cat "$DLB/d-work-handoff.md")" "All of it."
+
+printf '\nthe GitHub adapter speaks gh, and passes no credential\n'
+GHB="$(mktemp -d)"
+GH_LOG="$GHB/gh.log"
+cat > "$GHB/gh" << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "issue create") echo "https://github.com/acme/backlog/issues/7" ;;
+  "issue list") echo '[{"number":7,"state":"OPEN","title":"T","body":"B <!-- handoff:x-handoff -->","labels":[{"name":"handoff-mirror"},{"name":"status:open"}]}]' ;;
+  "issue view") echo '{"comments":[{"author":{"login":"carol"},"body":"hi","createdAt":"2026-01-01T00:00:00Z"}]}' ;;
+esac
+exit 0
+SH
+chmod +x "$GHB/gh"
+GH_CREATE="$(printf '{"repo":"acme/backlog","title":"T","body":"B","labels":["handoff-mirror","status:open"]}' \
+  | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" create)"
+chk "create returns the issue number parsed from gh's URL" "7" \
+  "$(printf '%s' "$GH_CREATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["number"])')"
+chk_contains "create targets the configured repo" "$(cat "$GH_LOG")" "issue create --repo acme/backlog --title T"
+chk_contains "and sends the body as a file, not an argument" "$(cat "$GH_LOG")" "--body-file"
+chk_contains "and applies each label" "$(cat "$GH_LOG")" "--label status:open"
+: > "$GH_LOG"
+printf '{"repo":"acme/backlog","label":"handoff-mirror"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" list > /dev/null
+chk "list never filters by label on the server, which lags a create" "0" "$(grep -c -- '--label' "$GH_LOG")"
+GH_LIST="$(printf '{"repo":"acme/backlog","label":"handoff-mirror"}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" list)"
+chk "list normalizes state and label names" "open status:open" \
+  "$(printf '%s' "$GH_LIST" | python3 -c 'import json,sys; i=json.load(sys.stdin)[0]; print(i["state"], i["labels"][1])')"
+GH_COM="$(printf '{"repo":"acme/backlog","number":7}' | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" comments)"
+chk "comments normalize the author login" "carol" \
+  "$(printf '%s' "$GH_COM" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["author"])')"
+chk "no token appears in any gh invocation" "0" "$(grep -ci 'token' "$GH_LOG")"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

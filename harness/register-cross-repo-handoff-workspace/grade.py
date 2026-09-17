@@ -27,6 +27,7 @@ verifier-wrap assertion runs against <fixture-dir> in place. Exits 0 iff nothing
 """
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -373,10 +374,93 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def _grade_local_wiring_member(fixture: Path) -> list:
+    """A member wired with setup-handoff --local-wiring is healthy, and the fleet verifier says so.
+
+    --local-wiring puts Claude's hooks in .claude/settings.local.json and skips the AGENTS.md block,
+    recording `localWiring: true` in the member's .agents/handoff.json. The per-repo verifier honours
+    that flag; the fleet verifier used to fail such a member twice and tell the operator to "re-run
+    the sync" — which would commit exactly the paths the flag exists to keep out of the repo.
+    """
+    tag = "[local-wiring]"
+    sandbox = Path(tempfile.mkdtemp(prefix="x442-xrh-localwiring-"))
+    try:
+        work = sandbox / "work"
+        shutil.copytree(fixture, work, symlinks=True)
+        for name in MEMBERS:
+            gc.git_init_commit(work / name, f"{name} baseline")
+        env = _sandbox_home(sandbox)
+        subprocess.run(
+            [
+                "bash",
+                str(SYNC),
+                "--scope",
+                str(work),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        local, plain = work / MEMBERS[0], work / MEMBERS[1]
+        # Convert the first member to the shape --local-wiring produces.
+        cfg_path = local / ".agents" / "handoff.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["localWiring"] = True
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        (local / ".claude" / "settings.json").rename(
+            local / ".claude" / "settings.local.json"
+        )
+        # Strip the managed block from both members; only the flagged one may pass without it.
+        for repo in (local, plain):
+            agents = repo / "AGENTS.md"
+            text = agents.read_text(encoding="utf-8")
+            text = re.sub(
+                r"<!-- cross-repo-handoff:begin.*?<!-- cross-repo-handoff:end -->\n?",
+                "",
+                text,
+                flags=re.S,
+            )
+            agents.write_text(text, encoding="utf-8")
+
+        findings = gc.verify_findings(VERIFY, work, env=env)
+
+        def levels(fid: str, member: str) -> set:
+            return {
+                f["level"]
+                for f in findings.get(fid, [])
+                if f"/{member}" in f.get("message", "")
+            }
+
+        return [
+            gc.expectation(
+                f"{tag} a --local-wiring member with no AGENTS.md block passes member.agents_block",
+                levels("member.agents_block", MEMBERS[0]) == {"pass"},
+                str(levels("member.agents_block", MEMBERS[0])),
+            ),
+            gc.expectation(
+                f"{tag} its hooks in settings.local.json pass member.claude_hook",
+                levels("member.claude_hook", MEMBERS[0]) == {"pass"},
+                str(levels("member.claude_hook", MEMBERS[0])),
+            ),
+            gc.expectation(
+                f"{tag} a member without the flag and without the block still fails",
+                "fail" in levels("member.agents_block", MEMBERS[1]),
+                str(levels("member.agents_block", MEMBERS[1])),
+            ),
+        ]
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def grade_fleet(fixture: Path) -> list:
     exps = []
     for layout in ("subfolder", "prefix"):
         exps.extend(_grade_fleet_layout(fixture, layout))
+    exps.extend(_grade_local_wiring_member(fixture))
     return exps
 
 

@@ -108,6 +108,21 @@ recorded on the doc's Activity log next to the rules that fired. This closes the
 exist: the CLI checked a returned brief for a pasted credential but spliced document sections
 verbatim into an outbound one with no check at all.
 
+### Delegating through an issue
+
+When the executor works from the team's issue tracker rather than a file you hand them, and the
+board declares one (`external` in its `handoff.json`, with `kind`, `system` and `repo`):
+
+```text
+handoff export ID --to-issue
+```
+
+It renders the same brief — same restricted refusal, same outbound secret scan, same claim — and
+opens it as an issue in `external.repo`, recording the issue as the doc's `external_ref` and
+`delegated_to: issue #N`. It refuses a bundle (delegate its children one at a time) and a doc that
+is already linked to a ticket. The executor answers with **one comment** holding a
+`result_status:` line and the filled Result block; the import in step 5 reads it from there.
+
 ## 3. What to send
 
 Export writes `.agents/handoff/briefs/<id>.brief.md`. **Commit it** before telling the executor —
@@ -147,7 +162,12 @@ Two signals worth weighing before you trust the report at all:
 
 ```text
 handoff import --result <path/to/id.brief.md> [--force-repo]
+handoff import --result --from-issue ID [--force-repo]      # delegated with --to-issue
 ```
+
+`--from-issue` takes the most recent comment on the issue that carries a result, records its author
+as who reported it, and runs the same import — every check below applies unchanged, and it still
+never sets `status`.
 
 This splices the Result block into the board doc under `## Result (reported)`, stamps
 `result_from`, `result_at`, `result_claimed`, and sets `review: pending`. Re-importing the same

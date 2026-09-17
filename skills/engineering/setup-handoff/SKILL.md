@@ -371,7 +371,7 @@ have hand-edited.
 
 Three behaviours worth knowing before you re-run the installer:
 
-- **`ttlHours` survives a re-install.** Lease policy is a committed team decision; an install must
+- **`ttlHours`, `environments` and `external` survive a re-install.** Lease policy is a committed team decision; an install must
   not quietly revert it. The installer owns wiring facts (`topology`, `groups`, `groupLayout`,
   `repoName`) and rewrites those every time; it leaves policy alone.
 - **`allowVerifyCmd` does not survive.** It follows `--allow-verify-cmd` on each run, because it

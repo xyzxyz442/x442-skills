@@ -270,6 +270,17 @@ cfg = {
     "allowVerifyCmd": os.environ.get("ALLOW") == "1",
 }
 
+# More board POLICY, preserved for the same reason as ttlHours: it is a committed team decision no
+# flag of this installer expresses, so a re-install has no business reverting it. Both used to be
+# dropped on every run — the environment ladder, and the external tracker declaration (ADR 0011),
+# which took `handoff mirror` and `new --ref` down with it until someone noticed and re-typed it.
+envs = existing.get("environments")
+if isinstance(envs, list) and envs and all(isinstance(v, str) for v in envs):
+    cfg["environments"] = envs
+ext = existing.get("external")
+if isinstance(ext, dict):
+    cfg["external"] = ext
+
 # The DOCUMENT schema, which is the only thing that triggers a migration — distinct from the
 # payload version beside it, which moves on every CLI bugfix (ADR 0003). Preserved when already
 # set: an installer must never claim a board's documents were migrated when they were not. A board
@@ -576,6 +587,7 @@ if [ -n "$BOARD_ONLY" ]; then
   mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive" "$HDEST/briefs"
   install_cli "$HDEST"
   install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
+  install_file "$PAYLOAD/tracker-github.sh" "$HDEST/scripts/tracker-github.sh" # ADR 0011 adapter
   install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
   install_file "$PAYLOAD/README.md" "$HDEST/README.md"
   install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
@@ -752,6 +764,7 @@ fi
 mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"
 install_cli "$HDEST"
 install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
+install_file "$PAYLOAD/tracker-github.sh" "$HDEST/scripts/tracker-github.sh" # ADR 0011 adapter
 install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
 install_file "$PAYLOAD/README.md" "$HDEST/README.md"
 install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"

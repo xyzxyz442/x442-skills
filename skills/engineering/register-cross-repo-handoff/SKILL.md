@@ -97,6 +97,9 @@ Start from [`assets/handoff.example.json`](assets/handoff.example.json):
 4. **Verify**: `scripts/verify-cross-repo-handoff.sh --scope <workspace>` — read-only. Confirms each
    board is scaffolded with the expected group facts, each member is wired to its section, and the
    AGENTS.md blocks match the manifest. Exit 0 = healthy, exit 1 = broken (drift, missing wiring).
+   A member wired by hand with `setup-handoff --local-wiring` (recorded as `localWiring: true` in its
+   `.agents/handoff.json`) passes with no AGENTS.md block and its hooks in
+   `.claude/settings.local.json`. The sync itself never uses that flag.
 5. **Report** the boards, groups, and members wired, and how to work the board
    (`HANDOFF_GROUP=<group> handoff list` from a member shows only that repo's section — a hand-run
    command needs the group; the hooks already carry it).
