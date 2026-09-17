@@ -45,9 +45,13 @@ reference first. This narrows ADR 0002's allowance that an issue tracker may mir
      network. The default.
   2. **Delegation** — `export` may open the brief as an issue; a reply returns through
      `import --result` as a claim awaiting review, never as a status.
-  3. **Mirror** — CI on the board repository projects open, non-restricted, secret-scanned work
-     one way into the tracker. Offered only for an issue tracker the team already uses as its
-     backlog.
+  3. **Mirror** — `handoff mirror`, run by hand or from the board repository's CI, projects open,
+     non-restricted, secret-scanned work one way into the tracker. Offered only for an issue
+     tracker the team already uses as its backlog.
+
+  Levels 2 and 3 reach a tracker only through an adapter (`scripts/tracker-<system>.sh`), which
+  holds no credential of the board's; the GitHub adapter uses `gh` and its own login.
+
 - **A board that references a sprint tool is never mirrored anywhere.** Its tracker is the
   planning surface; a mirror would be a second backlog.
 - **A progress checkpoint** rewrites a held handoff's Current state and pushes without releasing

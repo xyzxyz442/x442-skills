@@ -522,15 +522,17 @@ fm() { sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1; }
 # ADR 0011 — at most one external tracker per board, reference-only at level 1. `kind` decides
 # what the tracker may later be used for (a sprint tool is never mirrored), so it is checked here
 # rather than guessed at. Read the pattern once; every doc's external_ref is checked against it.
-EXT_KIND="" EXT_PATTERN="" EXT_PRESENT=0
+EXT_KIND="" EXT_PATTERN="" EXT_PRESENT=0 EXT_REPO="" EXT_SYSTEM=""
 if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
-  IFS=$'\t' read -r EXT_PRESENT EXT_KIND EXT_PATTERN <<< "$(python3 -c 'import json,sys
+  # Unit-separated, not tab-separated: `read` collapses consecutive tabs, so an empty field would
+  # shift every field after it.
+  IFS=$'\x1f' read -r EXT_PRESENT EXT_KIND EXT_PATTERN EXT_REPO EXT_SYSTEM <<< "$(python3 -c 'import json,sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 e = d.get("external") if isinstance(d, dict) else None
-if not isinstance(e, dict): print("0\t\t"); raise SystemExit(0)
-k, p = e.get("kind"), e.get("refPattern")
-print("1\t%s\t%s" % (k if isinstance(k, str) else "", p if isinstance(p, str) else ""))' "$HD/handoff.json" 2> /dev/null)"
+if not isinstance(e, dict): print("0"); raise SystemExit(0)
+s = lambda k: e.get(k) if isinstance(e.get(k), str) else ""
+print("\x1f".join(["1", s("kind"), s("refPattern"), s("repo"), s("system")]))' "$HD/handoff.json" 2> /dev/null)"
 fi
 if [ "${EXT_PRESENT:-0}" = 1 ]; then
   case "$EXT_KIND" in
@@ -543,6 +545,15 @@ if [ "${EXT_PRESENT:-0}" = 1 ]; then
     ok board.external.pattern "external.refPattern is a valid extended regex"
   else
     warn board.external.pattern "external.refPattern ($EXT_PATTERN) is not a valid extended regex"
+  fi
+  # Levels 2 and 3 (delegation, mirror) need a repository to put issues in and an adapter to reach it.
+  if [ "$EXT_KIND" = issues ]; then
+    [ -n "$EXT_REPO" ] && ok board.external.repo "issues go to $EXT_REPO" \
+      || warn board.external.repo "external.kind is issues but external.repo is unset — handoff mirror and export --to-issue will refuse until it names owner/name"
+  fi
+  if [ -n "$EXT_SYSTEM" ]; then
+    [ -f "$HD/scripts/tracker-$EXT_SYSTEM.sh" ] && ok board.external.adapter "tracker adapter scripts/tracker-$EXT_SYSTEM.sh is installed" \
+      || warn board.external.adapter "no adapter for external.system '$EXT_SYSTEM' at scripts/tracker-$EXT_SYSTEM.sh — re-run setup-handoff, or check the system name"
   fi
 fi
 

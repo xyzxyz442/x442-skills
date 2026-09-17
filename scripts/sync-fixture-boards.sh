@@ -83,6 +83,19 @@ for board in $(find "$ROOT/harness" -type d -name handoff -path '*/fixtures/*' |
   echo "${board#"$ROOT"/}"
   sync_one "$PAYLOAD/dispatcher" "$board/handoff"
   sync_one "$PAYLOAD/hooks.sh" "$board/scripts/hooks.sh"
+  # The tracker adapter (ADR 0011) is new to the payload, so a fixture board that predates it has no
+  # copy for sync_one to refresh. Seed it on any board already carrying scripts/hooks.sh — otherwise
+  # the installer adds it on the first re-run and every idempotency eval reads that as drift.
+  if [ -f "$board/scripts/hooks.sh" ] && [ ! -f "$board/scripts/tracker-github.sh" ]; then
+    changed=$((changed + 1))
+    if [ "$CHECK" = "1" ]; then
+      echo "  drift: ${board#"$ROOT"/}/scripts/tracker-github.sh (missing)"
+    else
+      cp "$PAYLOAD/tracker-github.sh" "$board/scripts/tracker-github.sh"
+      echo "  seeded: ${board#"$ROOT"/}/scripts/tracker-github.sh"
+    fi
+  fi
+  sync_one "$PAYLOAD/tracker-github.sh" "$board/scripts/tracker-github.sh"
   sync_one "$PAYLOAD/config.sh" "$board/scripts/config.sh"
   sync_one "$PAYLOAD/README.md" "$board/README.md"
   for t in handoff-doc-template handoff-standalone-template handoff-orchestrator-template handoff-brief-template; do

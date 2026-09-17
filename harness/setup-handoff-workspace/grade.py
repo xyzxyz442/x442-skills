@@ -860,6 +860,13 @@ def grade_external_tracker(target):
     t = Path(target)
     r = _install(t)
     e.append(gc.expectation("installer succeeds", r.returncode == 0, r.stderr[-300:]))
+    e.append(
+        gc.expectation(
+            "setup installs the GitHub tracker adapter onto the board",
+            (t / HD / "scripts" / "tracker-github.sh").is_file(),
+            "scripts/tracker-github.sh",
+        )
+    )
     cfg_path = t / HD / "handoff.json"
 
     def set_external(ext):
@@ -873,6 +880,14 @@ def grade_external_tracker(target):
     f = gc.verify_findings(VERIFY, t)
     e.append(gc.finding(f, "board.external.kind", "pass"))
     e.append(gc.finding(f, "board.external.pattern", "pass"))
+    e.append(
+        gc.finding(
+            f,
+            "board.external.adapter",
+            "warn",
+            label="a tracker system with no shipped adapter (jira) warns",
+        )
+    )
     e.append(
         gc.finding(
             f,
@@ -902,6 +917,14 @@ def grade_external_tracker(target):
 
     set_external({"kind": "issues", "refPattern": "[A-Z]+-[0-9]+"})
     f = gc.verify_findings(VERIFY, t)
+    e.append(
+        gc.finding(
+            f,
+            "board.external.repo",
+            "warn",
+            label="an issue tracker with no external.repo warns",
+        )
+    )
     e.append(
         gc.finding(
             f,

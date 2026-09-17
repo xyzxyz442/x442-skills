@@ -1946,6 +1946,11 @@ cmd_import() {
   # Two commands under one verb, with INVERTED preconditions: plain `import` refuses an id that is
   # already on the board, `--result` refuses one that is not. Routed here rather than as its own
   # subcommand to keep the export/import pair symmetric for the caller.
+  if [ "${1:-}" = "--result" ] && [ "${2:-}" = "--from-issue" ]; then
+    shift 2
+    import_result_from_issue "$@"
+    return
+  fi
   if [ "${1:-}" = "--result" ]; then
     shift
     import_result "$@"
@@ -2055,10 +2060,14 @@ cmd_import() {
 cmd_export() {
   local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] [--force-secret REASON]}"
   shift
-  local raw_id="$id" to="" outdir="" branch="" do_claim=1 force_secret=""
+  local raw_id="$id" to="" outdir="" branch="" do_claim=1 force_secret="" to_issue=0
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --to-issue)
+        to_issue=1
+        shift
+        ;;
       --to)
         require_value --to "$#" "${2:-}"
         to="$(fold_colons "$2")"
@@ -2101,6 +2110,11 @@ cmd_export() {
   # override on the outbound path is the whole control.
   is_restricted "$f" \
     && die "$id is sensitivity: restricted — it cannot be exported as a brief or handed to an external executor. Do the work in a session with board access. (This is a handling rule; board membership is the access boundary.)"
+
+  if [ "$to_issue" = 1 ]; then
+    export_to_issue "$id" "$f" "$outdir" "$branch" "$do_claim" "$force_secret"
+    return
+  fi
 
   if is_orchestrator "$f"; then
     # export_one hardcodes an empty branch per child (each gets its own default fix/<child-id>),
@@ -3221,6 +3235,373 @@ except Exception: raise SystemExit(0)
 e = d.get("external") if isinstance(d, dict) else None
 v = e.get(sys.argv[2]) if isinstance(e, dict) else None
 print(v if isinstance(v, str) else "")' "$DIR/handoff.json" "$1" 2> /dev/null
+}
+
+# --- the external tracker, levels 2 and 3 (ADR 0011) -------------------------------------------------
+# Every tracker is reached through an ADAPTER: `scripts/tracker-<system>.sh`, one operation as $1, a
+# JSON request on stdin, a JSON reply on stdout. The CLI never talks to a tracker's API itself and
+# never holds a credential — the GitHub adapter uses `gh`, which carries its own auth. Tests and
+# other trackers swap one in with $HANDOFF_TRACKER_ADAPTER.
+tracker_adapter() { # -> path of the adapter script; dies naming what is missing
+  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ]; then
+    [ -f "$HANDOFF_TRACKER_ADAPTER" ] || die "HANDOFF_TRACKER_ADAPTER points at $HANDOFF_TRACKER_ADAPTER, which does not exist."
+    printf '%s' "$HANDOFF_TRACKER_ADAPTER"
+    return
+  fi
+  local system f
+  system="$(external_setting system)"
+  [ -n "$system" ] || die "this board's external tracker names no system (external.system in $DIR/handoff.json), so there is no adapter to use."
+  case "$system" in *[!a-z0-9-]*) die "external.system '$system' is not an adapter name (lowercase letters, digits, dashes)." ;; esac
+  for f in "$DIR/scripts/tracker-$system.sh" "$_self_dir/tracker-$system.sh" "$_self_dir/scripts/tracker-$system.sh"; do
+    [ -f "$f" ] && {
+      printf '%s' "$f"
+      return
+    }
+  done
+  die "no adapter for tracker system '$system' — expected $DIR/scripts/tracker-$system.sh. Re-run setup-handoff to install the adapters it ships."
+}
+
+tracker_call() { # op request-json -> reply json on stdout; dies when the adapter fails
+  local adapter reply
+  adapter="$(tracker_adapter)" || exit 3
+  reply="$(printf '%s' "$2" | bash "$adapter" "$1")" || die "the tracker adapter failed on '$1' — nothing further was sent. See its message above."
+  printf '%s' "$reply"
+}
+
+# The configuration every tracker operation needs, checked in one place. `kind` decides the rest:
+# a sprint tool is never mirrored (it IS the planning surface; a mirror would be a second backlog),
+# and an issue tracker needs to know which repository the issues belong in.
+require_tracker() { # purpose(mirror|delegate) -> prints the target repo
+  local kind repo
+  [ -f "$DIR/handoff.json" ] || die "this board declares no external tracker (no external block in handoff.json)."
+  kind="$(external_setting kind)"
+  [ -n "$kind" ] || die "this board declares no external tracker (external.kind is unset in $DIR/handoff.json)."
+  if [ "$1" = mirror ] && [ "$kind" = sprints ]; then
+    die "this board's tracker is a sprint tool (external.kind: sprints). A sprint tool is the planning surface, and a mirror into it would be a second backlog — it is never mirrored (ADR 0011)."
+  fi
+  repo="$(external_setting repo)"
+  [ -n "$repo" ] || die "external.repo is unset in $DIR/handoff.json — name the repository the issues belong in (owner/name)."
+  printf '%s' "$repo"
+}
+
+# `export <id> --to-issue` (ADR 0011, level 2). The brief is rendered exactly as `export` renders it —
+# same restricted refusal, same outbound secret scan, same claim — and then opened as an issue, so
+# someone with no board access can pick it up. The issue number becomes the doc's external_ref.
+export_to_issue() { # id doc outdir branch do_claim force-secret
+  local id="$1" f="$2" repo existing ref_style n reply number brief body title
+  is_orchestrator "$f" && die "$id is a bundle — delegate its children one issue at a time; a bundle is not one piece of work."
+  existing="$(meta "$f" external_ref)"
+  [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
+  repo="$(require_tracker delegate)" || exit 3
+  tracker_adapter > /dev/null || exit 3
+  # Decide how the issue number will be written BEFORE anything is created, so a pattern that
+  # cannot hold it refuses here instead of leaving an orphaned issue behind.
+  if printf '#1\n' | grep -Eqx -- "$(external_setting refPattern)" 2> /dev/null; then
+    ref_style="#"
+  elif printf '1\n' | grep -Eqx -- "$(external_setting refPattern)" 2> /dev/null; then
+    ref_style=""
+  else
+    die "external.refPattern ($(external_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
+  fi
+
+  export_one "$id" "$f" "issue" "$3" "$4" "$5" "$6" > /dev/null || exit 3
+  brief="$(meta "$f" brief)"
+  case "$brief" in /*) ;; *) brief="${REPO_DIR:+$REPO_DIR/}$brief" ;; esac
+  [ -f "$brief" ] || die "the brief for $id was not written — nothing was sent."
+  body="$(cat "$brief")
+---
+**Returning this result:** post ONE comment containing a line \`result_status: done\` (or \`partial\` / \`blocked\`) and the filled-in Result block, between the \`handoff:result:begin\` and \`handoff:result:end\` markers above. The board imports the most recent such comment for review; it never marks the work done on your word alone."
+  title="$(meta "$f" title)"
+  reply="$(tracker_call create "$(python3 -c 'import json, sys
+print(json.dumps({"repo": sys.argv[1], "title": sys.argv[2], "body": sys.argv[3], "labels": ["handoff-delegation"]}))' "$repo" "$title" "$body")")" || exit 3
+  number="$(printf '%s' "$reply" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("number", ""))')"
+  [ -n "$number" ] || die "the tracker did not return an issue number — check $repo before retrying."
+  set_field "$f" external_ref "${ref_style}${number}"
+  set_field "$f" delegated_to "issue #$number"
+  log_activity "$f" "delegated as issue #$number in $repo by $(whoami_id)."
+  cmd_index > /dev/null
+  echo "Opened issue #$number in $repo for $id. The reply comes back with: handoff import --result --from-issue $id"
+}
+
+# `import --result --from-issue <id>` — the return half. The executor answers in a COMMENT; the most
+# recent comment carrying a result block is spliced into the brief this board rendered, with the
+# commenter as result_by, and the existing `import --result` does the rest. Every refusal it makes
+# (repo identity, empty result, secret scan, never delegated) applies unchanged, and it still never
+# writes `status`.
+import_result_from_issue() { # id [--force-repo] [--force-secret REASON]
+  local id="${1:?usage: handoff import --result --from-issue <id> [--force-repo] [--force-secret REASON]}"
+  shift
+  local raw_id="$id" f ref number repo brief comments picked status author at block bf
+  id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
+  f="$(doc_of "$id")" || no_such "$id"
+  case "$(meta "$f" delegated_to)" in
+    "issue #"*) ;;
+    *) die "$id was not delegated to an issue (delegated_to: $(meta "$f" delegated_to)) — use handoff import --result <brief-file>." ;;
+  esac
+  ref="$(meta "$f" external_ref)"
+  number="${ref#\#}"
+  case "$number" in '' | *[!0-9]*) die "$id's external_ref ($ref) is not an issue number." ;; esac
+  repo="$(require_tracker delegate)" || exit 3
+  brief="$(meta "$f" brief)"
+  case "$brief" in /*) ;; *) brief="${REPO_DIR:+$REPO_DIR/}$brief" ;; esac
+  [ -f "$brief" ] || die "the brief $brief is missing, so there is nothing to splice the result into."
+
+  comments="$(tracker_call comments "{\"repo\": \"$repo\", \"number\": $number}")" || exit 3
+  picked="$(printf '%s' "$comments" | python3 -c 'import json, re, shlex, sys
+found = None
+for c in json.load(sys.stdin):
+    body = c.get("body", "")
+    m = re.search(r"<!-- handoff:result:begin -->(.*?)<!-- handoff:result:end -->", body, re.S)
+    s = re.search(r"^result_status:\s*(\S+)\s*$", body, re.M)
+    if m and s:
+        found = (c.get("author", ""), c.get("created_at", ""), s.group(1), m.group(1).strip("\n"))
+if found:
+    print("author=%s at=%s status=%s block=%s" % tuple(shlex.quote(v) for v in found))')"
+  [ -n "$picked" ] || die "no result has been posted on issue #$number yet — a result comment carries a result_status line and the result block."
+  eval "$picked"
+
+  # Written into the brief this board rendered, then read back by the ordinary import — so the one
+  # file import_result trusts (the doc's own brief:) is the file that carries the result.
+  set_field "$brief" result_status "$(fold_colons "$status")"
+  set_field "$brief" result_by "$(fold_colons "$author")"
+  set_field "$brief" result_at "$(fold_colons "$at")"
+  splice_result "$brief" "$block"
+  import_result "$brief" "$@"
+}
+
+# `handoff mirror [--dry-run]` (ADR 0011, level 3). A ONE-WAY projection of this section's open work
+# into the board's issue tracker, so teammates without board access can follow it. It never writes to
+# the board: issues are found by a hidden marker, not by a stored number, and edits made in the
+# tracker are overwritten on the next run.
+cmd_mirror() {
+  local dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      *) die "unknown flag: $1 (usage: handoff mirror [--dry-run])" ;;
+    esac
+    shift
+  done
+  if board_is_grouped && [ -z "$GROUP" ]; then
+    die "this board is sectioned ($BOARD_GROUPS); mirror one section at a time: HANDOFF_GROUP=<section> handoff mirror"
+  fi
+  local repo existing plan f base desired="" gone="" refused=0 hits
+  repo="$(require_tracker mirror)" || exit 3
+  tracker_adapter > /dev/null || exit 3
+  existing="$(tracker_call list "{\"repo\": \"$repo\", \"label\": \"handoff-mirror\"}")" || exit 3
+  desired="$(mktemp)" || die "mktemp failed"
+  gone="$(mktemp)" || die "mktemp failed"
+
+  # Decide per document, in the shell where the board's own rules live (sensitivity, types, the
+  # secret scanner). A rendered body is scanned before it can be planned.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base="$(basename "$f" .md)"
+    if is_standalone "$f"; then
+      printf 'skip %s — standalone\n' "$base"
+      continue
+    fi
+    if is_restricted "$f"; then
+      printf 'skip %s — restricted\n' "$base"
+      printf '%s\tno longer shared\n' "$base" >> "$gone"
+      continue
+    fi
+    if is_orchestrator "$f" && [ -n "$(mirror_restricted_child "$f")" ]; then
+      printf 'skip %s — restricted child\n' "$base"
+      printf '%s\tno longer shared\n' "$base" >> "$gone"
+      continue
+    fi
+    if [ -n "$(meta "$f" external_ref)" ]; then
+      printf 'skip %s — linked elsewhere (%s)\n' "$base" "$(meta "$f" external_ref)"
+      printf '%s\tlinked to its own ticket\n' "$base" >> "$gone"
+      continue
+    fi
+    local rendered
+    rendered="$(mirror_render "$f")"
+    if hits="$(printf '%s' "$rendered" | scan_secrets)"; then
+      printf 'refuse %s — looks like it contains a credential (%s); nothing of it was sent\n' "$base" "$(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')"
+      refused=1
+      printf '%s\t\n' "$base" >> "$gone" # held: neither updated nor closed while it carries a secret
+      continue
+    fi
+    printf '%s\n' "$rendered" >> "$desired"
+  done < <(each_doc)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base="$(basename "$f" .md)"
+    if [ -n "$(meta "$f" moved_to)" ]; then
+      printf '%s\tmoved to another board\n' "$base" >> "$gone"
+    else
+      printf '%s\tclosed on the board as done\n' "$base" >> "$gone"
+    fi
+  done < <(each_archive)
+
+  plan="$(mirror_plan "$existing" "$desired" "$gone")"
+  rm -f "$desired" "$gone"
+  local action number marker payload
+  while IFS=$'\t' read -r action number marker payload; do
+    [ -n "$action" ] || continue
+    [ "$action" = same ] && continue
+    [ "$number" = - ] && number=""
+    if [ "$dry" = 1 ]; then
+      printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
+      continue
+    fi
+    case "$action" in
+      create) tracker_call create "$payload" > /dev/null || exit 3 ;;
+      update) tracker_call update "$payload" > /dev/null || exit 3 ;;
+      close) tracker_call close "$payload" > /dev/null || exit 3 ;;
+    esac
+    printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
+  done <<< "$plan"
+  [ "$dry" = 1 ] && echo "(dry run — nothing was sent)"
+  [ "$refused" = 0 ] || {
+    echo "handoff mirror: one or more documents were refused (see above) — redact them and re-run." >&2
+    return 1
+  }
+  return 0
+}
+
+mirror_restricted_child() { # orchestrator-path -> the first restricted child id, or nothing
+  local c cf
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    cf="$(doc_of "$c" 2> /dev/null)" || continue
+    is_restricted "$cf" && {
+      printf '%s' "$c"
+      return
+    }
+  done <<< "$(children_of "$1")"
+}
+
+# One document -> one JSON object: its marker, and the exact create/update request. Only the parts a
+# teammate needs travel: Current state, Context and Verify for work, the Bundle prose and a child
+# checklist for a bundle. Template guidance comments are stripped; the footer says who owns the text.
+mirror_render() { # doc-path -> JSON line
+  local f="$1" kids="" c cf
+  if is_orchestrator "$f"; then
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      if cf="$(doc_of "$c" 2> /dev/null)"; then
+        kids="${kids}$(meta "$cf" status)"$'\t'"$(meta "$cf" title)"$'\t'"$c"$'\n'
+      else
+        kids="${kids}missing"$'\t'$'\t'"$c"$'\n'
+      fi
+    done <<< "$(children_of "$f")"
+  fi
+  python3 - "$f" "${GROUP:-}" "$kids" "$(doc_type "$f")" "$(doc_env "$f")" << 'PY'
+import json, re, sys
+
+path, group, kids, dtype, env = sys.argv[1:6]
+text = open(path).read()
+fm, _, body = text.partition("\n---\n") if text.startswith("---\n") else ("", "", text)
+meta = {}
+for line in fm.splitlines()[1:]:
+    k, sep, v = line.partition(":")
+    if sep:
+        meta[k.strip()] = v.strip().strip('"')
+
+
+def section(name):
+    m = re.search(r"^## %s\s*$(.*?)(?=^## |\Z)" % re.escape(name), body, re.M | re.S)
+    if not m:
+        return ""
+    s = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S)
+    return re.sub(r"\n{3,}", "\n\n", s).strip()
+
+
+doc_id = meta.get("id") or path.rsplit("/", 1)[-1][:-3]
+marker = "%s%s" % (group + "/" if group else "", doc_id)
+parts = []
+if dtype == "orchestrator":
+    if section("Bundle"):
+        parts.append("## Bundle\n\n" + section("Bundle"))
+    rows = []
+    for row in kids.splitlines():
+        status, title, cid = (row.split("\t") + ["", "", ""])[:3]
+        if status == "missing":
+            rows.append("- [ ] %s (not filed yet)" % cid)
+        else:
+            rows.append("- [%s] %s (`%s`)" % ("x" if status == "done" else " ", title or cid, cid))
+    parts.append("## Children\n\n" + "\n".join(rows))
+else:
+    for name in ("Current state", "Context", "Verify"):
+        if section(name):
+            parts.append("## %s\n\n%s" % (name, section(name)))
+parts.append("---\n_Managed by the handoff mirror from `%s` — edits made here are overwritten on the next run._\n\n<!-- handoff:%s -->" % (marker, marker))
+labels = ["handoff-mirror", "status:%s" % meta.get("status", "open")]
+if dtype == "orchestrator":
+    labels.append("type:bundle")
+else:
+    if meta.get("severity"):
+        labels.append("severity:%s" % meta["severity"])
+    labels.append("env:%s" % env)
+if group:
+    labels.append("section:%s" % group)
+print(json.dumps({"marker": marker, "id": doc_id, "title": meta.get("title", doc_id),
+                  "body": "\n\n".join(parts) + "\n", "labels": labels}))
+PY
+}
+
+# Reconcile what the tracker holds against what the board wants. Pure: reads JSON, prints actions
+# "action<TAB>number<TAB>marker<TAB>request-json". The shell executes them (or prints them on
+# --dry-run). An issue is matched ONLY by its hidden marker — the delegation issues and anything a
+# person filed carry none, so the mirror cannot touch them.
+mirror_plan() { # existing-json desired-file gone-file
+  python3 - "$1" "$2" "$3" "$(external_setting repo)" "${GROUP:-}" << 'PY'
+import json, re, sys
+
+existing = json.loads(sys.argv[1] or "[]")
+desired = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+gone = {}
+for line in open(sys.argv[3]):
+    doc, _, reason = line.rstrip("\n").partition("\t")
+    gone[doc] = reason
+repo, group = sys.argv[4], sys.argv[5]
+prefix = group + "/" if group else ""
+
+by_marker = {}
+for i in existing:
+    m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
+    if m:
+        by_marker[m.group(1)] = i
+
+out = []
+wanted = set()
+for d in desired:
+    wanted.add(d["marker"])
+    req = {"repo": repo, "title": d["title"], "body": d["body"], "labels": d["labels"]}
+    have = by_marker.get(d["marker"])
+    if have is None:
+        out.append(("create", "", d["marker"], req))
+        continue
+    same = (have.get("state") == "open" and have.get("title") == d["title"]
+            and have.get("body", "").strip() == d["body"].strip()
+            and sorted(l for l in have.get("labels", []) if l.startswith(("handoff-", "status:", "severity:", "env:", "section:", "type:")))
+            == sorted(d["labels"]))
+    if same:
+        out.append(("same", str(have["number"]), d["marker"], {}))
+        continue
+    req = dict(req, number=have["number"])
+    if have.get("state") != "open":
+        req["state"] = "open"
+    out.append(("update", str(have["number"]), d["marker"], req))
+
+for marker, i in sorted(by_marker.items()):
+    if marker in wanted or not marker.startswith(prefix) or (group == "" and "/" in marker):
+        continue
+    if i.get("state") != "open":
+        continue
+    doc = marker[len(prefix):]
+    reason = gone.get(doc, "no longer on the board")
+    if doc in gone and gone[doc] == "":
+        continue  # held while it carries a secret: not updated, not closed
+    out.append(("close", str(i["number"]), marker, {"repo": repo, "number": i["number"],
+                                                     "comment": "Closed by the handoff mirror: %s." % reason}))
+for action, number, marker, req in out:
+    # "-" for no number: `read` collapses consecutive tabs, so an empty field would shift the rest.
+    print("%s\t%s\t%s\t%s" % (action, number or "-", marker, json.dumps(req)))
+PY
 }
 
 validate_external_ref() { # ref -> prints the ref as stored; non-zero with a message when refused
@@ -4388,6 +4769,10 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_move "$@"
       ;;
+    mirror)
+      shift
+      cmd_mirror "$@"
+      ;;
     release)
       shift
       cmd_release "$@"
@@ -4406,6 +4791,6 @@ if [ -z "${HANDOFF_NO_MAIN:-}" ]; then
       shift
       cmd_locations "$@"
       ;;
-    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | move <id> --to <board> [--to-remote host/owner] | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
+    *) die "usage: handoff [list | new <id> [--type coordination|standalone|--standalone] [--sensitivity normal|restricted] [opts] | import <file> [--id ID] [--title T] [--type ...] | export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] | claim <id> [note] | touch <id> | move <id> --to <board> [--to-remote host/owner] | mirror [--dry-run] | export <id> --to-issue | import --result --from-issue <id> | checkpoint <id> [\"current state\"] | release <id> --status open|blocked|done [--verified-by ...] [--blocked-on ...] [--run-verify] | children <parent> | children add [--stub]|rm <parent> <child> | migrate [--yes] [--dry-run] | reap [--force] | index | locations [--move] | --which]" ;;
   esac
 fi

@@ -206,6 +206,11 @@ content verbatim.
   the start of every session, and an active session's leases are **auto-touched** on every edit,
   so a crashed session self-heals and a working one never expires mid-flight. `./handoff reap`
   and `./handoff touch <id>` remain as manual escape hatches.
+- `./handoff mirror [--dry-run]` projects this section's open work one way into the board's issue
+  tracker (`external.kind: issues`, `external.system`, `external.repo`), through
+  `scripts/tracker-<system>.sh` — the GitHub adapter uses `gh`, so no credential lives on the board.
+  `./handoff export <id> --to-issue` and `./handoff import --result --from-issue <id>` delegate one
+  handoff through an issue and bring the reply back for review (ADR 0011).
 - `./handoff move <id> --to <board>` transfers a handoff to another board (ADR 0011): it lands
   unclaimed through the target's own `import`, records `moved_from`, and leaves an archived
   pointer carrying `moved_to`. Same git host and owner, or a target with no remote, proceeds;

@@ -225,6 +225,26 @@ edited it), secret-scans it, commits and pushes, and **keeps your lease**. Only 
 the lease can checkpoint. Checkpoint at a natural stopping point — a passing test, a design
 decision, before a long build — not on every edit.
 
+## Sharing work through the team's issue tracker
+
+A board that declares an issue tracker (`external` with `kind: issues`, `system`, `repo`) can show
+its open work to teammates who never open the board:
+
+```text
+HANDOFF_GROUP=SECTION handoff mirror --dry-run    # what it would create, update, close, skip
+HANDOFF_GROUP=SECTION handoff mirror
+```
+
+It is **one way**: issues carry a hidden marker, the board is never written, and an edit made in the
+tracker is overwritten on the next run. Open coordination docs and bundles go out; `restricted`
+docs, bundles with a restricted child, standalone docs, and docs already linked to a ticket
+(`external_ref`) never do. A doc whose rendered text looks like it carries a credential is refused
+by name and the run exits non-zero. When a doc closes, moves, or becomes restricted, its issue is
+closed with a one-line reason. A board whose tracker is a sprint tool is never mirrored.
+
+To hand one piece of work to someone through an issue instead, see
+[`delegate-handoff`](../delegate-handoff/SKILL.md) (`export --to-issue`).
+
 ## Moving a handoff to another board
 
 A handoff has **one board of record**. When work belongs on a different board — a draft on your

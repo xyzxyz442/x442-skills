@@ -576,6 +576,7 @@ if [ -n "$BOARD_ONLY" ]; then
   mkdir -p "$HDEST/scripts" "$HDEST/templates" "$HDEST/archive" "$HDEST/briefs"
   install_cli "$HDEST"
   install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
+  install_file "$PAYLOAD/tracker-github.sh" "$HDEST/scripts/tracker-github.sh" # ADR 0011 adapter
   install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
   install_file "$PAYLOAD/README.md" "$HDEST/README.md"
   install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
@@ -752,6 +753,7 @@ fi
 mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"
 install_cli "$HDEST"
 install_file "$PAYLOAD/hooks.sh" "$HDEST/scripts/hooks.sh"
+install_file "$PAYLOAD/tracker-github.sh" "$HDEST/scripts/tracker-github.sh" # ADR 0011 adapter
 install_file "$PAYLOAD/config.sh" "$HDEST/scripts/config.sh"
 install_file "$PAYLOAD/README.md" "$HDEST/README.md"
 install_file "$ASSETS/handoff-doc-template.md" "$HDEST/templates/handoff-doc-template.md"
