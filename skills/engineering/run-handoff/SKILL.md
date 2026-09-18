@@ -323,6 +323,20 @@ reconciled. A child that already has a different parent is **left with it**, and
 rather than re-parenting it. And a child closed as `done` **stays linked** while the bundle is open,
 so the parent's progress reads as finished work rather than vanished work.
 
+**Drift is reported, never reconciled** (ADR 0014). An issue closed in the tracker while its handoff
+is still open here does not make that handoff `done` — status changes on the board, with evidence,
+and nothing else does it. So the mirror neither reopens the issue nor sends it anything: it names
+the divergence in its output, writes a generated `TRACKER-DRIFT.md` beside the section's `INDEX.md`,
+and still exits zero. `handoff list` and the session banner then mark the affected handoff, so you
+meet the divergence before you pick the work up rather than after.
+
+That report carries no timestamp and exists only while something diverges — it is rewritten when the
+set of diverging handoffs changes and removed the moment both sides agree, so a mirror running
+unattended commits nothing in between. Never hand-edit it; clear the drift instead, by closing the
+handoff with evidence or by reopening the issue if it was closed by mistake. `handoff list
+--tracker` asks the tracker for the same answer live, at the cost of a round trip, and still writes
+nothing.
+
 **A public repository needs two opt-ins** (ADR 0013). The mirror asks the tracker for the
 repository's visibility on every run, and treats "could not tell" as public. On a public repository
 it refuses — sending nothing, and listing any issues it already put there — unless the board's
@@ -417,7 +431,10 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Editing a doc or its code without claiming → the hook denies it; claim first.
 - Closing `done` on trust ("the doc said it was fixed") → the exact failure trackers rot into; the
   tool refuses without `--verified-by`.
-- Hand-editing `INDEX.md` → it is regenerated; your edit is lost and misleading.
+- Hand-editing `INDEX.md` or `TRACKER-DRIFT.md` → both are regenerated; your edit is lost and
+  misleading.
+- Closing a handoff `done` because its issue was closed in the tracker → that is drift, not
+  evidence; check the live code, or reopen the issue.
 - Writing a compaction brief that restates the diff → the next agent can read the diff; what it
   cannot recover is why you chose that approach and what you already ruled out.
 - Filing a bundle without confirming its slices with the user → a roster nobody agreed to, re-sliced

@@ -7,8 +7,10 @@
 #
 #   list      {"repo", "label"}                          -> [{"number","state","title","body","labels","children"}]
 #   create    {"repo", "title", "body", "labels"}        -> {"number", "url"}
-#   update    {"repo", "number", "title", "body", "labels", "managed", "state", "children", "owned"}
+#   update    {"repo", "number", "title", "body", "labels", "managed", "children", "owned"}
 #                                                        -> {} or {"linked", "skipped"}
+#     No reopen: a closed issue whose handoff is still open is drift, reported and never
+#     reconciled (ADR 0014), so nothing ever asks an adapter to change an issue's state.
 #   close     {"repo", "number", "comment"}              -> {}
 #   comments  {"repo", "number"}                         -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                  -> {"visibility": $FAKE_TRACKER_VISIBILITY, default "private"}
@@ -78,7 +80,7 @@ elif op == "create":
     out = {"number": n, "url": "https://tracker.invalid/%s/issues/%d" % (req["repo"], n)}
 elif op == "update":
     i = issue(req["number"])
-    for k in ("title", "body", "state"):
+    for k in ("title", "body"):
         if k in req:
             i[k] = req[k]
     if "labels" in req:

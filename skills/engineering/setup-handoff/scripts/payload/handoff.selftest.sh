@@ -20,7 +20,9 @@ SRC="$(mktemp -d)"
 TPL="$SRC/templates"
 mkdir -p "$TPL"
 cp "$HERE/handoff" "$HERE/config.sh" "$HERE/dispatcher" "$SRC/"
-cp "$HERE/tracker-github.sh" "$SRC/"
+# hooks.sh is frozen here too: the session banner is asserted on (tracker drift, ADR 0014), and a
+# test that read the live file would drift out of step with the CLI copy beside it.
+cp "$HERE/tracker-github.sh" "$HERE/hooks.sh" "$SRC/"
 # The fake tracker adapter lives in the harness, beside the graders that share it (ADR 0011).
 cp "$HERE/../../../../../harness/lib/fake-tracker.sh" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
@@ -2184,6 +2186,98 @@ mih "$MI" mirror > /dev/null
 chk "a doc that becomes restricted has its issue closed" "closed" "$(fq 'by("m-blocked-handoff -->")[0]["state"]')"
 chk "with a reason that gives nothing away" "True" \
   "$(fq '"no longer shared" in by("m-blocked-handoff -->")[0]["comments"][-1]["body"] and "Blocked work" not in by("m-blocked-handoff -->")[0]["comments"][-1]["body"]')"
+
+# --- tracker drift (ADR 0014, Decision 9) ---------------------------------------------------------
+# A close made in the TRACKER never becomes `done` here: status changes on the board, with evidence
+# (ADR 0011). The mirror reports the divergence, reopens nothing, sends the issue nothing, and still
+# exits zero — a visibility feature that failed the run would be worse than the drift it found.
+MI_DRIFT="$MIB/TRACKER-DRIFT.md"
+chk "no drift means no report file at all" "0" "$([ -f "$MI_DRIFT" ] && echo 1 || echo 0)"
+mi_close_issue() { # marker -> close that issue in the tracker, behind the mirror's back
+  python3 - "$MI_STATE" "$1" << 'PYD'
+import json, sys
+p, marker = sys.argv[1], sys.argv[2]
+db = json.load(open(p))
+for i in db["issues"]:
+    if marker in i["body"]:
+        i["state"] = "closed"
+json.dump(db, open(p, "w"))
+PYD
+}
+mi_open_issue() { # marker -> reopen it, the way a person would after a mistaken close
+  python3 - "$MI_STATE" "$1" << 'PYD'
+import json, sys
+p, marker = sys.argv[1], sys.argv[2]
+db = json.load(open(p))
+for i in db["issues"]:
+    if marker in i["body"]:
+        i["state"] = "open"
+json.dump(db, open(p, "w"))
+PYD
+}
+MI_RC_BEFORE="$(
+  mih "$MI" mirror > /dev/null
+  echo $?
+)"
+mi_close_issue "<!-- handoff:m-kid-handoff -->"
+MI_UPD_BEFORE="$(fq 'calls("update")')"
+MI_DRIFT_OUT="$(mih "$MI" mirror)"
+MI_DRIFT_RC="$(
+  mih "$MI" mirror > /dev/null
+  echo $?
+)"
+chk_contains "a closed issue whose handoff is still open is reported as drift" "$MI_DRIFT_OUT" "drift m-kid-handoff"
+chk_contains "naming which side says what" "$MI_DRIFT_OUT" "closed on the tracker, open on the board"
+chk "the issue is never reopened" "closed" "$(fq 'by("m-kid-handoff -->")[0]["state"]')"
+chk "and nothing at all is sent to it" "$MI_UPD_BEFORE" "$(fq 'calls("update")')"
+chk "drift alone does not change the run's outcome" "$MI_RC_BEFORE" "$MI_DRIFT_RC"
+chk "a report file appears" "1" "$([ -f "$MI_DRIFT" ] && echo 1 || echo 0)"
+chk_contains "naming the handoff, its issue, and both sides" "$(cat "$MI_DRIFT")" "| m-kid-handoff | #"
+chk_contains "and saying status changes on the board, with evidence" "$(cat "$MI_DRIFT")" "never reconciled"
+# No timestamp, deliberately: the mirror is built to run unattended, and a report whose bytes moved
+# on every run would make a scheduled job commit noise for a divergence that had not changed.
+MI_DRIFT_SUM="$(shasum < "$MI_DRIFT")"
+mih "$MI" mirror > /dev/null
+chk "an unchanged divergence rewrites the report byte for byte identically" "$MI_DRIFT_SUM" "$(shasum < "$MI_DRIFT")"
+chk_contains "handoff list marks the drifting row" "$(mih "$MI" list)" "tracker #"
+chk_contains "and says the tracker calls it closed" "$(mih "$MI" list)" "tracker #$(fq 'by("m-kid-handoff -->")[0]["number"]') closed"
+# The report is read, not computed: `list` stays offline and makes no tracker call of its own.
+MI_LIST_CALLS="$(fq 'len(db["calls"])')"
+mih "$MI" list > /dev/null
+chk "reading it costs no tracker call" "$MI_LIST_CALLS" "$(fq 'len(db["calls"])')"
+chk_contains "list --tracker checks live instead, and says so" "$(mih "$MI" list --tracker)" "Checked the tracker live"
+chk "which does call the tracker" "True" "$(fq "len(db['calls']) > $MI_LIST_CALLS")"
+# A dry run reports the divergence and writes nothing, here as everywhere else.
+rm -f "$MI_DRIFT"
+chk_contains "--dry-run reports drift too" "$(mih "$MI" mirror --dry-run)" "drift m-kid-handoff"
+chk "but writes no report" "0" "$([ -f "$MI_DRIFT" ] && echo 1 || echo 0)"
+mih "$MI" mirror > /dev/null
+# The session banner is where an agent decides what to pick up, so drift has to reach it there too.
+cp "$SRC/hooks.sh" "$MIB/scripts/hooks.sh"
+MI_HOOK="$(cd "$MI" && printf '{}' | HANDOFF_SESSION_ID="$MI_SESS" bash "$MIB/scripts/hooks.sh" \
+  --kind sessionstart --tool claude --project-dir "$MI" 2>&1)"
+chk_contains "the session banner surfaces drift on the affected handoff" "$MI_HOOK" "tracker drift"
+chk_contains "and says where status actually changes" "$MI_HOOK" "status changes on the board"
+# A parent whose own issue is closed is sent nothing — and a link is something sent.
+mi_close_issue "<!-- handoff:m-bundle-handoff -->"
+mih "$MI" children add m-bundle m-linked > /dev/null
+MI_LINKS_BEFORE="$(fq 'len([c for c in db["calls"] if c[0] == "update" and "children" in c[1]])')"
+mih "$MI" mirror > /dev/null
+chk "a drifted bundle is sent no link update either" "$MI_LINKS_BEFORE" \
+  "$(fq 'len([c for c in db["calls"] if c[0] == "update" and "children" in c[1]])')"
+chk "and both drifting handoffs are in the report" "2" \
+  "$(grep -c '^| m-' "$MI_DRIFT")"
+mih "$MI" children rm m-bundle m-linked > /dev/null
+# Drift CLEARS when the two sides agree again, and the report goes away with it: absence is the
+# normal state, so nothing is left behind claiming a divergence that is over.
+mi_open_issue "<!-- handoff:m-kid-handoff -->"
+mi_open_issue "<!-- handoff:m-bundle-handoff -->"
+MI_CLEARED="$(mih "$MI" mirror)"
+chk "the report is removed once nothing diverges" "0" "$([ -f "$MI_DRIFT" ] && echo 1 || echo 0)"
+chk_contains "and the run says so" "$MI_CLEARED" "nothing diverges from the tracker any more"
+chk_contains "list stops marking the row" "$(mih "$MI" list)" "m-kid-handoff"
+chk "with no drift marker left on it" "0" \
+  "$(mih "$MI" list | grep -c 'tracker #' || true)"
 
 printf '\nexport --to-issue delegates through the tracker, and the reply comes back for review (ADR 0011)\n'
 DL="$(mkboard)"

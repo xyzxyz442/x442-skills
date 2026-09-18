@@ -8,8 +8,10 @@
 #
 #   list      {"repo", "label"?}                    -> [{"number","state","title","body","labels","children"}]
 #   create    {"repo", "title", "body", "labels"}                -> {"number", "url"}
-#   update    {"repo", "number", "title"?, "body"?, "labels"?, "managed", "state"?, "children"?, "owned"?}
+#   update    {"repo", "number", "title"?, "body"?, "labels"?, "managed", "children"?, "owned"?}
 #                                                                -> {} or {"linked", "skipped"}
+#     There is no reopen: an issue closed in the tracker while its handoff is still open is drift,
+#     which the mirror reports and never reconciles (ADR 0014).
 #   close     {"repo", "number", "comment"}                      -> {}
 #   comments  {"repo", "number"}                                 -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                          -> {"visibility": "public"|"private"|"internal"}
@@ -55,7 +57,6 @@ print("number=%s" % shlex.quote(str(r.get("number", ""))))
 print("title=%s" % shlex.quote(str(r.get("title", ""))))
 print("label=%s" % shlex.quote(str(r.get("label", ""))))
 print("comment=%s" % shlex.quote(str(r.get("comment", ""))))
-print("want_state=%s" % shlex.quote(str(r.get("state", ""))))
 print("labels=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("labels", [])))
 print("managed=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("managed", [])))
 print("children=(%s)" % " ".join(str(int(n)) for n in r.get("children", [])))
@@ -225,7 +226,6 @@ print("\n".join(l["name"] for l in json.load(sys.stdin).get("labels", [])))')"
       }
       rm -f "$bf"
     fi
-    [ "$want_state" = open ] && { quiet_gh issue reopen "$number" --repo "$repo" > /dev/null || exit 1; }
     if [ "$has_children" = 1 ]; then
       reconcile_links
     else

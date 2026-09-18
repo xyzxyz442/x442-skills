@@ -381,6 +381,23 @@ sec_index() { # [group] -> sub-index path (roll-up lives at $DIR/INDEX.md when g
   esac
   printf '%s' "$DIR/INDEX.md"
 }
+# Where a section records its tracker drift (ADR 0014). Same shape as the sub-index, and it lives
+# beside it for the same reason: a section's generated state belongs with that section's documents.
+# `*-handoff.md` is what each_doc globs, so this name can never be read back as a document.
+drift_file() { # [group] -> TRACKER-DRIFT.md path for that section
+  local g="${1-$GROUP}"
+  case "$LAYOUT" in
+    subfolder) [ -n "$g" ] && {
+      printf '%s' "$DIR/$g/TRACKER-DRIFT.md"
+      return
+    } ;;
+    prefix) [ -n "$g" ] && {
+      printf '%s' "$DIR/TRACKER-DRIFT-$g.md"
+      return
+    } ;;
+  esac
+  printf '%s' "$DIR/TRACKER-DRIFT.md"
+}
 # Emit the active (or archived) doc paths for a section, one per line, so callers iterate with
 # `while read … done < <(each_doc)` — process substitution keeps the loop body in the current shell
 # (accumulators persist) and stays safe with spaces in $DIR, unlike a command-substituted glob.
@@ -2725,10 +2742,11 @@ cmd_list() {
   # ignored outright — and one in second position stayed invisible even when the first was valid.
   # `list` only reads, so the cost was a wrong VIEW rather than a damaged doc, but it is the same
   # rule as the four write commands and it is applied here for the same reason.
-  local VERBOSE=0 want_ref=""
+  local VERBOSE=0 want_ref="" want_tracker=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --verbose | -v) VERBOSE=1 ;;
+      --tracker) want_tracker=1 ;;
       --ref)
         require_value --ref "$#" "${2:-}"
         want_ref="$(fold_colons "$2")"
@@ -2748,6 +2766,20 @@ cmd_list() {
     echo "handoff: this board is sectioned ($BOARD_GROUPS) and no HANDOFF_GROUP is set," >&2
     echo "         so nothing below is scoped to you. Re-run as: HANDOFF_GROUP=<section> handoff list" >&2
   fi
+  # Tracker drift (ADR 0014) is READ, not computed: the last mirror run left a generated report, and
+  # `list` stays offline. `--tracker` is the opt-in live check — it asks the tracker now, at the cost
+  # of a round trip, and still writes nothing.
+  local drift=""
+  if [ "$want_tracker" = 1 ]; then
+    drift="$(drift_live)" || return 1
+    if [ -n "$drift" ]; then
+      echo "Checked the tracker live: $(printf '%s\n' "$drift" | grep -c .) handoff(s) diverge from it." >&2
+    else
+      echo "Checked the tracker live: nothing diverges from it." >&2
+    fi
+  else
+    drift="$(drift_rows)"
+  fi
   # ENV is on the session banner deliberately. "Which stage is this?" is the question that decides
   # how carefully to move, and it was previously answerable only by opening the doc.
   printf '%-44s %-9s %-14s %-8s %-8s %s\n' ID STATUS AUDIENCE ENV SEVERITY LOCK
@@ -2762,6 +2794,9 @@ cmd_list() {
     # --ref narrows to one ticket's work. Every doc type is filtered alike: a bundle can map to an
     # epic just as a coordination doc maps to a story.
     [ -z "$want_ref" ] || [ "$(meta "$f" external_ref)" = "$want_ref" ] || continue
+    # A bundle is mirrored like any other doc, so a bundle's issue can drift too.
+    local dnote
+    dnote="$(drift_note "$drift" "$f" "$base")"
     if is_orchestrator "$f"; then
       local prog done total out
       prog="$(child_progress "$f")"
@@ -2769,7 +2804,7 @@ cmd_list() {
       total="$(printf '%s' "$prog" | cut -d'|' -f2)"
       out="${prog#*|*|}"
       [ "$VERBOSE" = 1 ] || out="$(truncate_roster "$out")"
-      orchestrators="${orchestrators}$(printf '%-44s %-9s %s' "$base" "$done/$total done" "${out:-— all children done}")"$'\n'
+      orchestrators="${orchestrators}$(printf '%-44s %-9s %s' "$base" "$done/$total done" "${out:-— all children done}$dnote")"$'\n'
       continue
     fi
     if is_standalone "$f"; then
@@ -2792,6 +2827,7 @@ cmd_list() {
     review_flag="$(meta "$f" review)"
     [ -n "$deleg" ] && [ "$(meta "$f" review)" != "done" ] && extra="$extra  → $deleg"
     [ "$review_flag" = "pending" ] && extra="$extra  ⇤ review"
+    extra="$extra$dnote"
     printf '%-44s %-9s %-14s %-8s %-8s %s\n' \
       "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(doc_env "$f")" "$(meta "$f" severity)" "$lock$extra"
   done < <(each_doc | while IFS= read -r one; do [ -n "$one" ] && printf '%s\t%s\n' "$(env_rank "$(doc_env "$one")")" "$one"; done | sort -k1,1n -k2,2 | cut -f2-)
@@ -2844,7 +2880,9 @@ board_generated_dirty() { # -> board-relative paths, one per line
   # `status --porcelain` rather than `diff`, because a freshly generated INDEX.md on a board whose
   # first claim has not landed yet is UNTRACKED, and `diff` cannot see an untracked file. That was
   # the whole failure mode: the index would never enter history, and every fast-forward afterwards
-  # would be fighting a file git had never been told about.
+  # would be fighting a file git had never been told about. Every spelling of a generated file is
+  # listed, flat and both grouped layouts: a prefix board's sub-index is INDEX-<group>.md, and while
+  # that one was missing its own regeneration was the uncommitted file the next claim tripped over.
   while IFS= read -r line; do
     rel="${line:3}"
     rel="${rel##* -> }" # a rename (a `done` release archives its doc through git mv)
@@ -2852,7 +2890,7 @@ board_generated_dirty() { # -> board-relative paths, one per line
     rel="${rel#\"}"
     [ -n "$rel" ] || continue
     case "$rel" in
-      INDEX.md | */INDEX.md)
+      INDEX.md | INDEX-*.md | */INDEX.md | TRACKER-DRIFT.md | TRACKER-DRIFT-*.md | */TRACKER-DRIFT.md)
         printf '%s\n' "$rel"
         continue
         ;;
@@ -3449,52 +3487,15 @@ if found:
   import_result "$brief" "$@"
 }
 
-# `handoff mirror [--dry-run]` (ADR 0011, level 3). A ONE-WAY projection of this section's open work
-# into the board's issue tracker, so teammates without board access can follow it. It never writes to
-# the board: issues are found by a hidden marker, not by a stored number, and edits made in the
-# tracker are overwritten on the next run.
-cmd_mirror() {
-  local dry=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --dry-run) dry=1 ;;
-      *) die "unknown flag: $1 (usage: handoff mirror [--dry-run])" ;;
-    esac
-    shift
-  done
-  if board_is_grouped && [ -z "$GROUP" ]; then
-    die "this board is sectioned ($BOARD_GROUPS); mirror one section at a time: HANDOFF_GROUP=<section> handoff mirror"
-  fi
-  local repo existing plan f base desired="" gone="" refused=0 hits
-  repo="$(require_tracker mirror)" || exit 3
-  tracker_adapter > /dev/null || exit 3
-  # No label filter: on GitHub a label-filtered listing lags a create, so a run right after another
-  # could not see the issue it had just opened and made a second one (found in a live run). Issues
-  # are matched by their hidden marker alone, which is part of the issue's own body.
-  existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || exit 3
-  local public=0
-  if tracker_is_public "$repo"; then
-    if ! board_allows_public; then
-      # Refuse the WHOLE run, before any create, update or close — and list what is already out
-      # there, because closing an issue hides nothing and a person has to decide what to do with it.
-      local already
-      already="$(printf '%s' "$existing" | python3 -c 'import json, re, sys
-rows = ["#%d (%s) %s" % (i["number"], i.get("state", ""), i.get("title", ""))
-        for i in json.load(sys.stdin) if re.search(r"<!-- handoff:.*? -->", i.get("body", ""))]
-print(chr(10).join("         " + r for r in rows))')"
-      die "$(public_refusal "$repo" "mirroring this board")${already:+
-       Issues this mirror has already put there, for review (nothing was closed or deleted):
-$already}"
-    fi
-    public=1
-  fi
-  desired="$(mktemp)" || die "mktemp failed"
-  gone="$(mktemp)" || die "mktemp failed"
-  local ownrefs
-  ownrefs="$(mktemp)" || die "mktemp failed"
-
-  # Decide per document, in the shell where the board's own rules live (sensitivity, types, the
-  # secret scanner). A rendered body is scanned before it can be planned.
+# Classify every document for one mirror run: what travels (appended to `desired` as a rendered
+# request), what must be closed out there (`gone`, with the reason a reader will see), and which
+# issue numbers this board opened itself (`ownrefs`). Split out of cmd_mirror because
+# `list --tracker` has to reach exactly this verdict and must not reach a different one — the
+# sensitivity rules, the ADR 0013 share gate and the secret scan all live here, in the shell where
+# the board's own rules are. Progress goes to stdout, so a caller that wants only the verdict
+# discards it.
+mirror_survey() { # desired-file gone-file ownrefs-file public(0|1) -> non-zero when a doc was refused
+  local desired="$1" gone="$2" ownrefs="$3" public="$4" f base rendered hits refused=0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     base="$(basename "$f" .md)"
@@ -3525,7 +3526,6 @@ $already}"
       printf '%s\n' "$(meta "$f" external_ref)" | tr -cd '0-9\n' >> "$ownrefs"
       continue
     fi
-    local rendered
     rendered="$(mirror_render "$f" "$public")"
     if hits="$(printf '%s' "$rendered" | scan_secrets)"; then
       printf 'refuse %s — looks like it contains a credential (%s); nothing of it was sent\n' "$base" "$(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')"
@@ -3544,24 +3544,181 @@ $already}"
       printf '%s\tclosed on the board as done\n' "$base" >> "$gone"
     fi
   done < <(each_archive)
+  return "$refused"
+}
+
+# The drift report is GENERATED, like INDEX.md, and carries NO timestamp on purpose. The mirror is
+# built to run unattended, and a file whose bytes changed on every run would make a scheduled job
+# commit noise forever. It is written only when the set of diverging handoffs actually changes, and
+# it is REMOVED the moment nothing diverges — so "no file" is the normal, quiet state, and its mere
+# presence is the signal `list` and the session banner read.
+write_drift_report() { # rows-file: marker<TAB>number<TAB>board-status<TAB>tracker-state
+  local out new marker number status state
+  out="$(drift_file)"
+  if [ ! -s "$1" ]; then
+    [ -f "$out" ] || return 0
+    rm -f "$out"
+    printf 'Removed %s — nothing diverges from the tracker any more.\n' "$out"
+    return 0
+  fi
+  new="$(mktemp)" || die "mktemp failed"
+  {
+    echo "<!-- GENERATED by ./handoff mirror — do not edit by hand. -->"
+    if grouped; then echo "# Tracker drift — $GROUP"; else echo "# Tracker drift"; fi
+    echo
+    echo "Issues that disagree with this board. Drift is **reported, never reconciled** (ADR 0014):"
+    echo "a close made in the tracker never becomes \`done\` here — status changes on the board, with"
+    echo "evidence (ADR 0011) — and the mirror neither reopens these issues nor sends them anything."
+    echo
+    echo "Resolve it on the board — \`handoff release <id> --status done --verified-by \"…\"\` once you"
+    echo "have checked the live code — or reopen the issue in the tracker if it was closed by mistake."
+    echo "Either way the next mirror run rewrites this file."
+    echo
+    echo "| Handoff | Issue | On the board | On the tracker |"
+    echo "| --- | --- | --- | --- |"
+    sort "$1" | while IFS=$'\t' read -r marker number status state; do
+      [ -n "$marker" ] || continue
+      # The marker is section-qualified; the table names the handoff by the id a reader would type.
+      printf '| %s | #%s | %s | %s |\n' "${marker##*/}" "$number" "$status" "$state"
+    done
+  } > "$new"
+  if [ -f "$out" ] && cmp -s "$new" "$out"; then
+    rm -f "$new"
+    return 0
+  fi
+  mkdir -p "$(dirname "$out")"
+  cat "$new" > "$out"
+  rm -f "$new"
+  printf 'Wrote %s — %s handoff(s) diverge from the tracker.\n' "$out" "$(grep -c . "$1")"
+}
+
+# The live check behind `list --tracker`: the same verdict the mirror reaches, computed now against
+# the tracker instead of read from the last run's report. It writes nothing — the report on disk
+# still describes the last real mirror run, which is what makes the two readings comparable.
+drift_live() { # -> rows, id<TAB>number<TAB>board-status<TAB>tracker-state
+  local repo existing desired gone ownrefs public=0
+  repo="$(require_tracker mirror)" || return 1
+  tracker_adapter > /dev/null || return 1
+  if tracker_is_public "$repo" && ! board_allows_public; then
+    echo "handoff: $repo reads as public and this board does not allow publishing to it, so the" >&2
+    echo "         mirror would refuse the run outright — there is no drift to report (ADR 0013)." >&2
+    return 1
+  fi
+  existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || return 1
+  tracker_is_public "$repo" && public=1
+  desired="$(mktemp)" || return 1
+  gone="$(mktemp)" || return 1
+  ownrefs="$(mktemp)" || return 1
+  # The survey's progress lines are the mirror's narration, not this command's output.
+  mirror_survey "$desired" "$gone" "$ownrefs" "$public" > /dev/null
+  mirror_plan "$existing" "$desired" "$gone" | python3 -c 'import json, sys
+for line in sys.stdin:
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) == 4 and parts[0] == "drift":
+        d = json.loads(parts[3])
+        print("%s\t%s\t%s\t%s" % (parts[2].rsplit("/", 1)[-1], parts[1],
+                                   d.get("status", "open"), d.get("state", "closed")))'
+  rm -f "$desired" "$gone" "$ownrefs"
+}
+
+# One row's drift marker for a listing, or nothing. Matched on the document's own `id`, which is
+# what the marker carries — a prefix-layout board's FILENAME also carries its section, and matching
+# on that would silently find nothing.
+drift_note() { # rows doc-path base -> "  ⚠️ tracker #N closed", or empty
+  # No drift is the normal state, and this runs once per listed row: leave before reading anything.
+  [ -n "$1" ] || return 0
+  local id
+  id="$(meta "$2" id)"
+  [ -n "$id" ] || id="$3"
+  printf '%s\n' "$1" | awk -F'\t' -v id="$id" '$1 == id { printf "  ⚠️ tracker #%s %s", $2, $4; exit }'
+}
+
+# The handoffs this section's drift report names, one `id<TAB>number<TAB>board-status<TAB>state`
+# per line. Reads the generated file and nothing else, so it is offline and costs a single `sed`.
+drift_rows() { # -> rows, or nothing when the file is absent (the quiet, normal state)
+  local out
+  out="$(drift_file)"
+  [ -f "$out" ] || return 0
+  sed -n 's/^| \([^ |][^|]*\) | #\([0-9]*\) | \([^|]*\) | \([^|]*\) |$/\1\t\2\t\3\t\4/p' "$out" \
+    | sed 's/[[:space:]]*\t/\t/g; s/[[:space:]]*$//'
+}
+
+# `handoff mirror [--dry-run]` (ADR 0011, level 3). A ONE-WAY projection of this section's open work
+# into the board's issue tracker, so teammates without board access can follow it. It never writes to
+# the board: issues are found by a hidden marker, not by a stored number, and edits made in the
+# tracker are overwritten on the next run.
+cmd_mirror() {
+  local dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      *) die "unknown flag: $1 (usage: handoff mirror [--dry-run])" ;;
+    esac
+    shift
+  done
+  if board_is_grouped && [ -z "$GROUP" ]; then
+    die "this board is sectioned ($BOARD_GROUPS); mirror one section at a time: HANDOFF_GROUP=<section> handoff mirror"
+  fi
+  local repo existing plan desired="" gone="" refused=0
+  repo="$(require_tracker mirror)" || exit 3
+  tracker_adapter > /dev/null || exit 3
+  # No label filter: on GitHub a label-filtered listing lags a create, so a run right after another
+  # could not see the issue it had just opened and made a second one (found in a live run). Issues
+  # are matched by their hidden marker alone, which is part of the issue's own body.
+  existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || exit 3
+  local public=0
+  if tracker_is_public "$repo"; then
+    if ! board_allows_public; then
+      # Refuse the WHOLE run, before any create, update or close — and list what is already out
+      # there, because closing an issue hides nothing and a person has to decide what to do with it.
+      local already
+      already="$(printf '%s' "$existing" | python3 -c 'import json, re, sys
+rows = ["#%d (%s) %s" % (i["number"], i.get("state", ""), i.get("title", ""))
+        for i in json.load(sys.stdin) if re.search(r"<!-- handoff:.*? -->", i.get("body", ""))]
+print(chr(10).join("         " + r for r in rows))')"
+      die "$(public_refusal "$repo" "mirroring this board")${already:+
+       Issues this mirror has already put there, for review (nothing was closed or deleted):
+$already}"
+    fi
+    public=1
+  fi
+  desired="$(mktemp)" || die "mktemp failed"
+  gone="$(mktemp)" || die "mktemp failed"
+  local ownrefs
+  ownrefs="$(mktemp)" || die "mktemp failed"
+
+  # Decide per document, in the shell where the board's own rules live (sensitivity, types, the
+  # secret scanner). A rendered body is scanned before it can be planned.
+  mirror_survey "$desired" "$gone" "$ownrefs" "$public" || refused=1
 
   plan="$(mirror_plan "$existing" "$desired" "$gone")"
   rm -f "$gone"
   # marker -> issue number, and the markers created in THIS run. The link pass needs both, and a
   # create's number is only knowable from its reply, so the reply is no longer thrown away.
-  local nummap created
+  local nummap created drift
   nummap="$(mktemp)" || die "mktemp failed"
   created="$(mktemp)" || die "mktemp failed"
+  drift="$(mktemp)" || die "mktemp failed"
   printf '%s' "$existing" | python3 -c 'import json, re, sys
 for i in sorted(json.load(sys.stdin), key=lambda i: i["number"]):
     m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
     if m:
         print("%s\t%d" % (m.group(1), i["number"]))' > "$nummap"
-  local action number marker payload reply
+  local action number marker payload reply dstatus dstate
   while IFS=$'\t' read -r action number marker payload; do
     [ -n "$action" ] || continue
     [ "$action" = same ] && continue
     [ "$number" = - ] && number=""
+    if [ "$action" = drift ]; then
+      # Reported in both modes and acted on in neither — a dry run and a real run see the same
+      # divergence, and neither sends the issue anything (ADR 0014).
+      IFS=$'\t' read -r dstatus dstate <<< "$(printf '%s' "$payload" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("%s\t%s" % (d.get("status", "open"), d.get("state", "closed")))')"
+      printf 'drift %s (#%s) — %s on the tracker, %s on the board\n' "$marker" "$number" "$dstate" "$dstatus"
+      printf '%s\t%s\t%s\t%s\n' "$marker" "$number" "$dstatus" "$dstate" >> "$drift"
+      continue
+    fi
     if [ "$dry" = 1 ]; then
       printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
       continue
@@ -3593,8 +3750,11 @@ try: print(json.load(sys.stdin).get("skipped") or "")
 except Exception: print("")')"
     printf 'link %s (#%s)\n' "$lmarker" "$lnum"
     [ -n "$skipped" ] && [ "$skipped" != 0 ] && printf 'note %s — %s child issue(s) past the tracker cap stay in the checklist only\n' "$lmarker" "$skipped"
-  done <<< "$(mirror_links "$existing" "$desired" "$nummap" "$created" "$ownrefs")"
-  rm -f "$desired" "$nummap" "$created" "$ownrefs"
+  done <<< "$(mirror_links "$existing" "$desired" "$nummap" "$created" "$ownrefs" "$drift")"
+  # A dry run reports the divergence and leaves the report alone: it writes nothing, here as
+  # everywhere else, so the file on disk still describes the last real run.
+  [ "$dry" = 1 ] || write_drift_report "$drift"
+  rm -f "$desired" "$nummap" "$created" "$ownrefs" "$drift"
   [ "$dry" = 1 ] && echo "(dry run — nothing was sent)"
   [ "$refused" = 0 ] || {
     echo "handoff mirror: one or more documents were refused (see above) — redact them and re-run." >&2
@@ -3753,9 +3913,16 @@ for d in desired:
     if same:
         out.append(("same", str(have["number"]), d["marker"], {}))
         continue
-    req = dict(req, number=have["number"], managed=MANAGED)
     if have.get("state") != "open":
-        req["state"] = "open"
+        # TRACKER DRIFT (ADR 0014). The board still wants this work and the tracker says it is
+        # finished. The mirror neither reopens the issue nor sends it anything: a close made in the
+        # tracker is a person's judgement, and a `done` on the board needs evidence (ADR 0011).
+        # It is reported, and the run still exits zero.
+        status = next((l.split(":", 1)[1] for l in d["labels"] if l.startswith("status:")), "open")
+        out.append(("drift", str(have["number"]), d["marker"],
+                    {"status": status, "state": have.get("state", "closed")}))
+        continue
+    req = dict(req, number=have["number"], managed=MANAGED)
     out.append(("update", str(have["number"]), d["marker"], req))
 
 for marker, i in sorted(by_marker.items()):
@@ -3787,8 +3954,8 @@ PY
 # Whether an adapter supports links at all is read from its `list` reply: a row carrying "children"
 # can be linked, one without it cannot, so there is no capability probe. A parent CREATED in this
 # run has no row to read, so its links are sent once regardless.
-mirror_links() { # existing-json desired-file nummap-file created-file ownrefs-file
-  python3 - "$1" "$2" "$3" "$4" "$5" "$(external_setting repo)" << 'PYLINKS'
+mirror_links() { # existing-json desired-file nummap-file created-file ownrefs-file drift-file
+  python3 - "$1" "$2" "$3" "$4" "$5" "$(external_setting repo)" "$6" << 'PYLINKS'
 import json, re, sys
 
 existing = json.loads(sys.argv[1] or "[]")
@@ -3803,6 +3970,9 @@ for line in open(sys.argv[3]):
 created = {l.strip() for l in open(sys.argv[4]) if l.strip()}
 own_refs = {int(l) for l in (x.strip() for x in open(sys.argv[5])) if l.isdigit()}
 repo = sys.argv[6]
+# A parent whose own issue is closed in the tracker has DRIFTED (ADR 0014): the mirror sends it
+# nothing at all, and a link is something sent. Its children keep whatever links they already have.
+drifted = {l.split("\t")[0] for l in open(sys.argv[7]) if l.strip()}
 MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:"]
 
 # Rows by marker, and the numbers of issues the mirror itself made. A link to anything outside that
@@ -3822,6 +3992,8 @@ for i in sorted(existing, key=lambda i: i["number"]):
 ours.update(own_refs)
 
 for d in desired:
+    if d["marker"] in drifted:
+        continue
     kids = d.get("children") or []
     refs = d.get("child_refs") or {}
     parent = num.get(d["marker"])
