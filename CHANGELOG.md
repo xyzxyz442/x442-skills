@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.13.0](https://github.com/xyzxyz442/x442-skills/compare/v0.12.8...v0.13.0) (2026-09-18)
+
+### 🚀 Features
+
+- **feature:** add an optional Ruled out section and release --ruled-out (ADR 0012) ([da395d5](https://github.com/xyzxyz442/x442-skills/commit/da395d53952fc2589011e6237130a0ecd99e6d93))
+- **feature:** add handoff checkpoint to publish progress without releasing ([209f516](https://github.com/xyzxyz442/x442-skills/commit/209f51609da8880eaac708b4ea31d8d991d5d344))
+- **feature:** add handoff show to read a doc by id, never by path (ADR 0012) ([9049910](https://github.com/xyzxyz442/x442-skills/commit/9049910beb879cb2b1875a6a9ad05833cad7b38e))
+- **feature:** attach an external tracker per board by reference, schema 2 ([856cdeb](https://github.com/xyzxyz442/x442-skills/commit/856cdebf96ea6aa4c4c26da7f91623d90941cf63))
+- **feature:** delegate through an issue and mirror open work into a tracker ([352f6e2](https://github.com/xyzxyz442/x442-skills/commit/352f6e25dd4739da4e8328301268b6f9be6d94e4))
+- **feature:** detect boards two parent levels up and stop on ambiguity ([a6bf9df](https://github.com/xyzxyz442/x442-skills/commit/a6bf9df9405778d17b47769990c38b586faeb8ad))
+- **feature:** detect what needs ignoring in setup and verify, and suggest only ([263ae48](https://github.com/xyzxyz442/x442-skills/commit/263ae489a3b99b4b7b347766e05c20f5fa955843))
+- **feature:** install a mirror workflow on request (ADR 0011) ([18f2d19](https://github.com/xyzxyz442/x442-skills/commit/18f2d1944e43ab4f674f3ece28f39daafc087282)), references [#11](https://github.com/xyzxyz442/x442-skills/issues/11)
+- **feature:** move a handoff between boards with a remote-based trust check ([4b32ed0](https://github.com/xyzxyz442/x442-skills/commit/4b32ed0183c15491f0991ba781bb2f7fe03214f1))
+- **feature:** project a bundle as native sub-issues (ADR 0014) ([3eebcb3](https://github.com/xyzxyz442/x442-skills/commit/3eebcb363eec29dff0b9661d369b4419bc017917))
+- **feature:** publish to a public tracker only by double opt-in (ADR 0013) ([709a968](https://github.com/xyzxyz442/x442-skills/commit/709a968cdd63c2f26b5b76c8477741996afac29c))
+- **feature:** record a developer's own board in handoff.local.json ([55cb69d](https://github.com/xyzxyz442/x442-skills/commit/55cb69d5515106544430f69a08d882bfdebdf3da))
+- **feature:** report tracker drift instead of reconciling it (ADR 0014) ([80b7e18](https://github.com/xyzxyz442/x442-skills/commit/80b7e18379d64f9b64edd657c962a56977dc9165))
+- **feature:** restore held-lease context after compaction on Claude Code (ADR 0012) ([7ff50c0](https://github.com/xyzxyz442/x442-skills/commit/7ff50c03477ce8ecbf0056617c2d2ac8343cdea6))
+
+### 🐞 Bug Fixes
+
+- **bug:** apply the code-review decisions on board resolution and move ([fee71b9](https://github.com/xyzxyz442/x442-skills/commit/fee71b9fd305c1bd6906622dc2aa97af4ec15554))
+- **bug:** apply the code-review findings on the tracker mirror and public-repo guard ([2009c98](https://github.com/xyzxyz442/x442-skills/commit/2009c9843d0948bab6c94012066f32b13d267150))
+- **bug:** classify a split-payload board as current and count sectioned docs ([d5c2155](https://github.com/xyzxyz442/x442-skills/commit/d5c2155fbfefaddb9dfb19765fc2c5412c0607d4))
+- **bug:** close four code-review findings on board resolution and move ([b9f5709](https://github.com/xyzxyz442/x442-skills/commit/b9f5709d4568d8a607a8379a290d56121a1a5079))
+- **bug:** fix three defects found running the mirror against real GitHub ([c2c6506](https://github.com/xyzxyz442/x442-skills/commit/c2c65069ff39746bc335ddbe9f2e496eec93c232))
+- **bug:** keep a multi-id depends_on as separate ids ([ebac4a1](https://github.com/xyzxyz442/x442-skills/commit/ebac4a144b101451ddee896dbe37270498eb690b))
+- **bug:** keep board resolution inside the repo and move the location cache into the board ([78aec0f](https://github.com/xyzxyz442/x442-skills/commit/78aec0f028a66165e23af857860bd7636f976309))
+- **bug:** keep compound-command rewrites and detect credentials in jsonl strings ([139df24](https://github.com/xyzxyz442/x442-skills/commit/139df2467ec1278acf2299d35b3bfe253a9b04ef))
+- **bug:** let the fleet verifier accept a member wired with --local-wiring ([63c43cc](https://github.com/xyzxyz442/x442-skills/commit/63c43cc93308ff69bb9215d29277c0cf353a87dc))
+
+### 📚 Documentation
+
+- **docs:** accept ADR 0011 ([40a59b1](https://github.com/xyzxyz442/x442-skills/commit/40a59b168d2d4d23bc7f65660d7dc483f486eb7c))
+- **docs:** keep solo session continuity off the handoff board ([cc0475e](https://github.com/xyzxyz442/x442-skills/commit/cc0475e28b4ca9e9554943fd9f76b0fb09a74d35))
+- **docs:** move the repo-location cache out of the user layer in ADR 0010 ([70cb237](https://github.com/xyzxyz442/x442-skills/commit/70cb237d400b441c0e51e1965b7889bb3379aaa8))
+- **docs:** record ADR 0014 for bundles as native sub-issues ([312848b](https://github.com/xyzxyz442/x442-skills/commit/312848bffd25dfc0ca140a8b67588f7311fa1ba8))
+- **docs:** record board resolution and tracker attachment as ADRs 0010 and 0011 ([eaa2604](https://github.com/xyzxyz442/x442-skills/commit/eaa2604f169c2eff067bb2d11bd283848b1aa025))
+- **docs:** record post-compaction context and the Ruled out section as ADR 0012 ([ec2b93f](https://github.com/xyzxyz442/x442-skills/commit/ec2b93f62b729c0dddb8d548da050b08cd226510))
+- **docs:** size bundle children as slices and confirm them before filing ([ffb25cc](https://github.com/xyzxyz442/x442-skills/commit/ffb25cc8c5556ca51da27af65216a835fc91d981))
+- **docs:** sync the catalog, README, and skill index with ADR 0012 ([6f9d99e](https://github.com/xyzxyz442/x442-skills/commit/6f9d99ee663053caabc3c4c81aa6d9f2f6ba1ebf))
+- **docs:** sync the handoff suite summaries with ADRs 0010 and 0011 ([787ff0f](https://github.com/xyzxyz442/x442-skills/commit/787ff0f00b97a690f5946c150551fe3b4e219627))
+
+### 🧼 Code Refactoring
+
+- **refactor:** split cmd_move into steps and share one board reader ([c2299bb](https://github.com/xyzxyz442/x442-skills/commit/c2299bb5025c9b3cac67413cd15ac27baaa6c551))
+
 ## [0.12.8](https://github.com/xyzxyz442/x442-skills/compare/v0.12.7...v0.12.8) (2026-09-16)
 
 ### 🐞 Bug Fixes
