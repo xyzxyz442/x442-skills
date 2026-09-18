@@ -2432,9 +2432,6 @@ chk "the issue carries the rendered brief" "True" "$(fq '"brief:" in db["issues"
 chk "the doc records the issue as its external_ref" "#1" "$(sed -n 's/^external_ref: //p' "$DLB/d-work-handoff.md")"
 chk "and who it went to" "issue #1" "$(sed -n 's/^delegated_to: //p' "$DLB/d-work-handoff.md")"
 chk_contains "a doc already linked is not delegated twice" "$(mih "$DL" export d-work --to-issue)" "already linked"
-mih "$DL" new d-kid --title "Kid" > /dev/null
-mih "$DL" new d-bundle --orchestrator --children d-kid --title "Bundle" > /dev/null
-chk_contains "a bundle is not delegated as one issue" "$(mih "$DL" export d-bundle --to-issue)" "bundle"
 mih "$DL" new d-secret --title "Secret" --sensitivity restricted > /dev/null
 chk_contains "a restricted doc is never delegated" "$(mih "$DL" export d-secret --to-issue)" "restricted"
 
@@ -2457,6 +2454,114 @@ chk "the commenter is recorded as who reported it" "carol" "$(sed -n 's/^result_
 chk "it lands as a claim awaiting review" "pending" "$(sed -n 's/^review: //p' "$DLB/d-work-handoff.md")"
 chk "and never changes status" "open" "$(sed -n 's/^status: //p' "$DLB/d-work-handoff.md")"
 chk_contains "the result text itself is spliced in" "$(cat "$DLB/d-work-handoff.md")" "All of it."
+
+printf '\nexport <bundle> --to-issue — a parent issue with one issue per child (ADR 0015)\n'
+# `export --to-issue` used to refuse a bundle outright, so handing a planned feature to a contractor
+# meant exporting each child separately and losing the sequencing and the depends_on edges that made
+# it a bundle. ADR 0014 had already taught the MIRROR to project a bundle as a parent issue with
+# native sub-issues, so the tracker knew a shape the delegation path still refused to produce.
+BD="$(mkboard)"
+BDB="$BD/.agents/handoff"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$BDB/handoff.json"
+mih "$BD" new b-one --title "First unit" > /dev/null
+mih "$BD" new b-two --title "Second unit" > /dev/null
+mih "$BD" new b-bundle --orchestrator --children b-one,b-two --title "The bundle" > /dev/null
+BD_ISSUES_BEFORE="$(fq 'len(db["issues"])')"
+BD_OUT="$(mih "$BD" export b-bundle --to-issue)"
+chk "one parent issue plus one per child" "$((BD_ISSUES_BEFORE + 3))" "$(fq 'len(db["issues"])')"
+# Per child, not one issue holding every brief: a child is claimed, answered and reviewed on its
+# own, and a single issue cannot carry N results.
+chk "each child records its own external_ref" "2" \
+  "$(cat "$BDB/b-one-handoff.md" "$BDB/b-two-handoff.md" | grep -c '^external_ref: #')"
+chk "and which issue it went to" "2" \
+  "$(cat "$BDB/b-one-handoff.md" "$BDB/b-two-handoff.md" | grep -c '^delegated_to: issue #')"
+chk "the parent carries one too" "1" "$(grep -c '^external_ref: #' "$BDB/b-bundle-handoff.md")"
+BD_PNUM="$(sed -n 's/^external_ref: #//p' "$BDB/b-bundle-handoff.md")"
+BD_KNUM="$(sed -n 's/^external_ref: #//p' "$BDB/b-one-handoff.md")"
+chk_contains "the run names the parent issue" "$BD_OUT" "#$BD_PNUM"
+# Linking reuses ADR 0014's request fields rather than a second implementation that would drift.
+chk "the children are linked under the parent" "2" \
+  "$(fq "len([i for i in db['issues'] if i['number']==$BD_PNUM][0].get('children',[]))")"
+chk "and the link call names the issues this board owns" "True" \
+  "$(fq "any(c[0]=='update' and c[1].get('number')==$BD_PNUM and 'owned' in c[1] for c in db['calls'])")"
+# The parent is an index, not a unit of work: it carries the cover and says so, and no result is
+# ever reported against it.
+chk "the parent issue carries the bundle cover" "True" \
+  "$(fq "'## Units' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
+chk "and tells the reader nothing is reported there" "True" \
+  "$(fq "'Nothing is reported against this issue' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
+
+# The return half is per child and unchanged — every refusal the ordinary import makes still applies.
+python3 - "$MI_STATE" "$BD_KNUM" << 'PYB'
+import json, sys
+p, n = sys.argv[1], int(sys.argv[2])
+db = json.load(open(p))
+block = "<!-- handoff:result:begin -->\n\n### Summary\n\nDid the first unit.\n\n### Commits and PR\n\nabc1234\n\n<!-- handoff:result:end -->"
+for i in db["issues"]:
+    if i["number"] == n:
+        i["comments"].append({"author": "dana", "body": "result_status: done\n\n" + block, "created_at": "2026-01-03T00:00:00Z"})
+json.dump(db, open(p, "w"))
+PYB
+mih "$BD" import --result --from-issue b-one > /dev/null
+chk "the child that answered is awaiting review" "pending" "$(sed -n 's/^review: //p' "$BDB/b-one-handoff.md")"
+chk "its sibling is untouched" "" "$(sed -n 's/^review: //p' "$BDB/b-two-handoff.md")"
+chk "and an import still never writes status" "open" "$(sed -n 's/^status: //p' "$BDB/b-one-handoff.md")"
+
+# One issue has one owner (ADR 0015). Every doc involved now carries an external_ref, and the mirror
+# already skips those — so a delegated bundle is never projected twice.
+BD_MIR="$(mih "$BD" mirror --dry-run)"
+chk_contains "a delegated bundle leaves the mirror" "$BD_MIR" "skip b-bundle-handoff — linked elsewhere"
+chk_contains "and so does each delegated child" "$BD_MIR" "skip b-one-handoff — linked elsewhere"
+
+# Opening N+1 issues can fail part-way and there is no transaction to undo — an issue that exists
+# has been seen. So a re-run RESUMES: external_ref makes it idempotent, exactly as the hidden marker
+# does for the mirror.
+BD_RESUME_BEFORE="$(fq 'len(db["issues"])')"
+mih "$BD" export b-bundle --to-issue > /dev/null
+chk "a re-run opens no second set of issues" "$BD_RESUME_BEFORE" "$(fq 'len(db["issues"])')"
+# A resume re-renders every brief, and export_one re-stamps delegated_to with the bare recipient as
+# it goes. Left alone that wipes the issue NUMBER, which is what import --result --from-issue
+# matches on — so a resume would silently break the return path on every unit already out there.
+chk "the parent keeps its issue number through a resume" "issue #$BD_PNUM" \
+  "$(sed -n 's/^delegated_to: //p' "$BDB/b-bundle-handoff.md")"
+chk "and so does an already-exported child" "issue #$BD_KNUM" \
+  "$(sed -n 's/^delegated_to: //p' "$BDB/b-one-handoff.md")"
+chk_contains "so the return path still resolves after a resume" \
+  "$(mih "$BD" import --result --from-issue b-one)" "Imported"
+
+printf '\nwhat a bundle export refuses, it refuses whole\n'
+BD_SENT="$(fq 'len(db["issues"])')"
+# Each child gets its own default branch, so one --branch cannot apply to N of them. The file-based
+# bundle export already refuses this; the issue path inherits the same answer.
+mih "$BD" new c-one --title "Kid" > /dev/null
+mih "$BD" new c-bundle --orchestrator --children c-one --title "Branchy" > /dev/null
+chk_contains "--branch on a bundle export is refused" \
+  "$(mih "$BD" export c-bundle --to-issue --branch feature/x)" "--branch is not supported for a bundle export"
+# A restricted CHILD refuses the whole bundle: sending the other briefs would hand an executor a
+# cover naming a unit they were never given.
+mih "$BD" new d-open --title "Ordinary" > /dev/null
+mih "$BD" new d-secret --title "Sensitive" --sensitivity restricted > /dev/null
+mih "$BD" new d-bundle --orchestrator --children d-open,d-secret --title "Mixed" > /dev/null
+chk_contains "a restricted child refuses the bundle" "$(mih "$BD" export d-bundle --to-issue)" "restricted"
+chk "its innocent sibling is not delegated either" "0" \
+  "$(grep -c '^external_ref: #' "$BDB/d-open-handoff.md" || true)"
+chk "and no refusal above sent anything" "$BD_SENT" "$(fq 'len(db["issues"])')"
+
+# ADR 0013 still governs, doc by doc. The cover names every child, so a public parent with an
+# unmarked child would publish that child's title regardless — the gate is all-or-nothing.
+PB="$(mkboard)"
+PBB="$PB/.agents/handoff"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$PBB/handoff.json"
+pbh() { (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY=public ./.agents/handoff/handoff "$@") 2>&1; }
+pbh new p-one --title "Kid" > /dev/null
+pbh new p-bundle --orchestrator --children p-one --title "Public bundle" > /dev/null
+chk_contains "a public repository refuses a bundle without allowPublic" \
+  "$(pbh export p-bundle --to-issue)" "public"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "allowPublic": true } }\n' > "$PBB/handoff.json"
+chk_contains "and refuses one whose child is not marked share public" \
+  "$(pbh export p-bundle --to-issue)" "share"
+chk "neither refusal sent anything" "$BD_SENT" "$(fq 'len(db["issues"])')"
 
 printf '\nthe GitHub adapter speaks gh, and passes no credential\n'
 GHB="$(mktemp -d)"

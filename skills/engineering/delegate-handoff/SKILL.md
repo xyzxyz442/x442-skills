@@ -119,11 +119,34 @@ handoff export ID --to-issue
 
 It renders the same brief — same restricted refusal, same outbound secret scan, same claim — and
 opens it as an issue in `external.repo`, recording the issue as the doc's `external_ref` and
-`delegated_to: issue #N`. It refuses a bundle (delegate its children one at a time) and a doc that
-is already linked to a ticket. On a **public** repository it refuses unless the board allows it
+`delegated_to: issue #N`. It refuses a doc that is already linked to a ticket. On a **public**
+repository it refuses unless the board allows it
 (`external.allowPublic`) and the doc is marked `share: public` (ADR 0013) — the brief would be
 readable by anyone, permanently. The executor answers with **one comment** holding a
 `result_status:` line and the filled Result block; the import in step 5 reads it from there.
+
+**A bundle goes out as a bundle** (ADR 0015). `export <bundle> --to-issue` opens a parent issue
+carrying the cover — the Bundle and Sequencing sections, and the Units list — plus **one issue per
+child**, linked beneath it as sub-issues where the tracker expresses them. One issue per child, not
+one issue holding every brief: a child is claimed, answered and reviewed on its own, and a single
+issue cannot carry N results. Each child gets its own `external_ref` and returns through its own
+`handoff import --result --from-issue <child-id>`; nothing is ever reported against the parent, and
+the parent issue says so.
+
+Three things follow, and they look like bugs if you do not expect them:
+
+- **A refusal refuses the whole bundle.** A `restricted` parent or _any_ restricted child sends
+  nothing at all — the cover names every child, so a partial bundle would disclose the unit you held
+  back. Same for the ADR 0013 public gate: the parent and every child need `share: public`.
+- **`--branch` is refused**, because each child gets its own default `fix/<child-id>` and one branch
+  name cannot apply to N independent children. Same answer as the file-based bundle export.
+- **A part-way failure is resumed, not rolled back.** Opening N+1 issues is a multi-write operation
+  and an issue that exists has been seen, so there is nothing to undo. The run fails and leaves what
+  it made; re-run the same command and `external_ref` makes it idempotent — every doc already out
+  there is skipped and only the missing issues are opened.
+
+A delegated bundle then **leaves the mirror**: every doc involved carries an `external_ref`, and the
+mirror skips those as "linked elsewhere", so one issue always has one owner.
 
 A delegated child still counts as part of its bundle. Where the tracker expresses parent/child
 natively, the mirror finds a delegated child's issue through its `external_ref` and links it under

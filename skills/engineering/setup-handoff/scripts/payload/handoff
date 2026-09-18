@@ -2172,7 +2172,14 @@ cmd_export() {
     && die "$id is sensitivity: restricted — it cannot be exported as a brief or handed to an external executor. Do the work in a session with board access. (This is a handling rule; board membership is the access boundary.)"
 
   if [ "$to_issue" = 1 ]; then
-    export_to_issue "$id" "$f" "$outdir" "$branch" "$do_claim" "$force_secret"
+    # A bundle is a shape the tracker can already express (ADR 0014 projects one as a parent issue
+    # with native sub-issues), so the issue path splits the same way the file path does rather than
+    # refusing the unit a contractor is actually handed.
+    if is_orchestrator "$f"; then
+      export_bundle_to_issue "$id" "$f" "$outdir" "$branch" "$do_claim" "$force_secret"
+    else
+      export_to_issue "$id" "$f" "$outdir" "$branch" "$do_claim" "$force_secret"
+    fi
     return
   fi
 
@@ -3398,9 +3405,181 @@ public_refusal() { # repo what -> the refusal sentence
 # `export <id> --to-issue` (ADR 0011, level 2). The brief is rendered exactly as `export` renders it —
 # same restricted refusal, same outbound secret scan, same claim — and then opened as an issue, so
 # someone with no board access can pick it up. The issue number becomes the doc's external_ref.
+# `export <bundle> --to-issue` (ADR 0015). The file-based bundle export has rendered a cover plus one
+# brief per child since ADR 0011, and ADR 0014 taught the mirror to project a bundle as a parent
+# issue with its children linked beneath it. Only this entry point still refused, so handing a
+# planned feature to a contractor meant exporting each child separately and throwing away the
+# sequencing and the `depends_on` edges that made it a bundle.
+#
+# One issue per child, not one issue holding every brief: a child is claimed, answered and reviewed
+# on its own, and a single issue cannot carry N results.
+#
+# RESUMED, NOT ROLLED BACK. Opening N+1 issues is a multi-write operation and the tracker can fail
+# part-way. There is no transaction to roll back to — an issue that exists has been seen — so a
+# failed run leaves what it made and `external_ref` makes the re-run idempotent, exactly as the
+# hidden marker does for the mirror. Every doc that already carries one is skipped, and a run with
+# nothing left to open says so rather than erroring.
+export_bundle_to_issue() { # id doc outdir branch do_claim force-secret
+  local id="$1" f="$2" outdir="$3" branch="$4" do_claim="$5" force_secret="${6:-}"
+  local repo ref_style kids kid kf kbrief kn parent_num reply body title
+  local made=0 skipped=0 child_nums=""
+
+  # The file path refuses this rather than pretending one branch name could apply to N independent
+  # children; the issue path inherits the same answer.
+  [ -n "$branch" ] \
+    && die "--branch is not supported for a bundle export — each child gets its own default branch (fix/<child-id>)"
+
+  repo="$(require_tracker delegate)" || exit 3
+  tracker_adapter > /dev/null || exit 3
+  kids="$(children_of "$f")"
+  [ -n "$kids" ] \
+    || die "$id has no children — a bundle with no units is nothing to delegate. Add them with 'handoff children add $id <child>'."
+
+  # --- every refusal first, before one issue is opened ------------------------------------
+  # A restricted CHILD refuses the whole bundle, matching both the file export and the mirror.
+  # cmd_export already refused a restricted parent. Sending the other briefs and holding this one
+  # back would hand an executor a cover naming a unit they were never given.
+  local restricted=""
+  while IFS= read -r kid; do
+    [ -n "$kid" ] || continue
+    kf="$(doc_of "$kid" 2> /dev/null || true)"
+    [ -n "$kf" ] && [ -f "$kf" ] || continue
+    is_restricted "$kf" && restricted="${restricted:+$restricted }$kid"
+  done <<< "$kids"
+  [ -z "$restricted" ] \
+    || die "cannot export bundle $id — restricted child(ren):$restricted. A restricted unit is never handed to an external executor. Nothing was sent; split it out of the bundle, or do the whole bundle in a session with board access."
+
+  # ADR 0013, applied to every doc that would become an issue. The parent's cover names each child,
+  # so a public parent with a child nobody marked would publish that child's title regardless.
+  if tracker_is_public "$repo"; then
+    board_allows_public || die "$(public_refusal "$repo" "opening $id and its children as issues")"
+    [ "$(meta "$f" share)" = public ] \
+      || die "$repo is public and $id is not marked share: public — only docs marked for public sharing are delegated there. Nothing was sent."
+    local unshared=""
+    while IFS= read -r kid; do
+      [ -n "$kid" ] || continue
+      kf="$(doc_of "$kid" 2> /dev/null || true)"
+      [ -n "$kf" ] && [ -f "$kf" ] || continue
+      [ "$(meta "$kf" share)" = public ] || unshared="${unshared:+$unshared }$kid"
+    done <<< "$kids"
+    [ -z "$unshared" ] \
+      || die "$repo is public and these children are not marked share: public:$unshared. The bundle cover names every child, so a partial bundle would publish them anyway. Nothing was sent."
+  fi
+
+  # Decided before anything is created, so a pattern that cannot hold an issue number refuses here
+  # instead of leaving N orphaned issues behind.
+  if printf '#1\n' | grep -Eqx -- "$(external_setting refPattern)" 2> /dev/null; then
+    ref_style="#"
+  elif printf '1\n' | grep -Eqx -- "$(external_setting refPattern)" 2> /dev/null; then
+    ref_style=""
+  else
+    die "external.refPattern ($(external_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
+  fi
+
+  # Renders the cover and every child brief, and runs its own pre-flight for foreign leases. Local
+  # writes only — nothing has been sent yet, so its refusals still leave the tracker untouched.
+  export_bundle "$id" "$f" "issue" "$outdir" "$do_claim" "$force_secret" > /dev/null || exit 3
+
+  # The PARENT first: a child cannot be linked under an issue that does not exist yet.
+  parent_num="$(meta "$f" external_ref)"
+  parent_num="${parent_num#\#}"
+  if [ -z "$parent_num" ]; then
+    local cover
+    cover="$(meta "$f" brief)"
+    case "$cover" in /*) ;; *) cover="${REPO_DIR:+$REPO_DIR/}$cover" ;; esac
+    [ -f "$cover" ] || die "the bundle cover for $id was not written — nothing was sent."
+    # No return footer on the cover: the parent is an index, and a result is imported against the
+    # child that did the work (never against the bundle).
+    body="$(cat "$cover")
+---
+**This is a bundle.** Each unit below has its own issue; claim, answer and return each one there. Nothing is reported against this issue."
+    title="$(meta "$f" title)"
+    reply="$(tracker_call create "$(python3 -c 'import json, sys
+print(json.dumps({"repo": sys.argv[1], "title": sys.argv[2], "body": sys.argv[3], "labels": ["handoff-delegation"]}))' "$repo" "$title" "$body")")" || exit 3
+    parent_num="$(printf '%s' "$reply" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("number", ""))')"
+    [ -n "$parent_num" ] || die "the tracker did not return an issue number for the bundle — check $repo before retrying."
+    set_field "$f" external_ref "${ref_style}${parent_num}"
+    set_field "$f" delegated_to "issue #$parent_num"
+    log_activity "$f" "bundle delegated as parent issue #$parent_num in $repo by $(whoami_id)."
+    made=$((made + 1))
+    echo "Opened parent issue #$parent_num in $repo for bundle $id."
+  else
+    # export_bundle above re-rendered every brief and re-stamped `delegated_to` with the bare
+    # recipient ("issue"), wiping the issue NUMBER a previous run recorded. Restore it: that field
+    # is what `import --result --from-issue` matches on, so leaving the bare value would make a
+    # resume silently break the return path on every unit that was already out there.
+    set_field "$f" delegated_to "issue #$parent_num"
+    echo "Bundle $id is already linked to #$parent_num — resuming into it."
+  fi
+
+  while IFS= read -r kid; do
+    [ -n "$kid" ] || continue
+    kf="$(doc_of "$kid" 2> /dev/null || true)"
+    if [ -z "$kf" ] || [ ! -f "$kf" ]; then
+      echo "⚠️  child $kid has no doc on this board — skipped" >&2
+      continue
+    fi
+    kn="$(meta "$kf" external_ref)"
+    kn="${kn#\#}"
+    if [ -n "$kn" ]; then
+      # Already out there from an earlier run. Its `delegated_to` was just flattened to "issue" by
+      # the re-render above, so put the number back for the same reason as the parent. Still
+      # collected for the link set, or a resumed run would drop the children it did not open.
+      set_field "$kf" delegated_to "issue #$kn"
+      child_nums="${child_nums:+$child_nums }$kn"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    kbrief="$(meta "$kf" brief)"
+    case "$kbrief" in /*) ;; *) kbrief="${REPO_DIR:+$REPO_DIR/}$kbrief" ;; esac
+    [ -f "$kbrief" ] || die "the brief for child $kid was not written — issues already opened for this bundle are kept; re-run to resume."
+    body="$(cat "$kbrief")
+$(issue_result_footer)"
+    reply="$(tracker_call create "$(python3 -c 'import json, sys
+print(json.dumps({"repo": sys.argv[1], "title": sys.argv[2], "body": sys.argv[3], "labels": ["handoff-delegation"]}))' "$repo" "$(meta "$kf" title)" "$body")")" || exit 3
+    kn="$(printf '%s' "$reply" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("number", ""))')"
+    [ -n "$kn" ] || die "the tracker did not return an issue number for child $kid — issues already opened for this bundle are kept; re-run to resume."
+    set_field "$kf" external_ref "${ref_style}${kn}"
+    set_field "$kf" delegated_to "issue #$kn"
+    log_activity "$kf" "delegated as issue #$kn in $repo (child of bundle $id, issue #$parent_num) by $(whoami_id)."
+    child_nums="${child_nums:+$child_nums }$kn"
+    made=$((made + 1))
+    echo "Opened issue #$kn in $repo for $kid."
+  done <<< "$kids"
+
+  # Links LAST, once every number is known — the same ordering cmd_mirror uses, and for the same
+  # reason. `owned` names the issues this board opened, so a sub-issue someone attached by hand is
+  # never reconciled away (ADR 0014, Decision 4). An adapter with no link support reports none and
+  # is simply never asked again; the cover's Units list is the portable form.
+  if [ -n "$child_nums" ]; then
+    local lreq
+    lreq="$(python3 -c 'import json, sys
+kids = [int(n) for n in sys.argv[3].split()]
+print(json.dumps({"repo": sys.argv[1], "number": int(sys.argv[2]), "children": kids,
+                  "owned": sorted(set(kids) | {int(sys.argv[2])})}))' "$repo" "$parent_num" "$child_nums")"
+    tracker_call update "$lreq" > /dev/null || exit 3
+  fi
+
+  cmd_index > /dev/null
+  if [ "$made" -eq 0 ]; then
+    echo "Nothing left to open — every unit of $id is already on $repo ($skipped child(ren) linked)."
+  else
+    echo "Bundle $id is on $repo as #$parent_num with $(printf '%s' "$child_nums" | wc -w | tr -d ' ') child issue(s)${skipped:+, $skipped already there}."
+  fi
+  echo "Each child returns on its own issue: handoff import --result --from-issue <child-id>"
+}
+
+# The instruction that turns an issue into a return path. Shared by the single-doc and the bundle
+# export so an executor reads the same sentence whichever way the work reached them — two spellings
+# of "how to answer" is exactly how one of them ends up subtly wrong.
+issue_result_footer() {
+  printf '%s' "
+---
+**Returning this result:** post ONE comment containing a line \`result_status: done\` (or \`partial\` / \`blocked\`) and the filled-in Result block, between the \`handoff:result:begin\` and \`handoff:result:end\` markers above. The board imports the most recent such comment for review; it never marks the work done on your word alone."
+}
+
 export_to_issue() { # id doc outdir branch do_claim force-secret
   local id="$1" f="$2" repo existing ref_style reply number brief body title
-  is_orchestrator "$f" && die "$id is a bundle — delegate its children one issue at a time; a bundle is not one piece of work."
   existing="$(meta "$f" external_ref)"
   [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
   repo="$(require_tracker delegate)" || exit 3
@@ -3425,8 +3604,7 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   case "$brief" in /*) ;; *) brief="${REPO_DIR:+$REPO_DIR/}$brief" ;; esac
   [ -f "$brief" ] || die "the brief for $id was not written — nothing was sent."
   body="$(cat "$brief")
----
-**Returning this result:** post ONE comment containing a line \`result_status: done\` (or \`partial\` / \`blocked\`) and the filled-in Result block, between the \`handoff:result:begin\` and \`handoff:result:end\` markers above. The board imports the most recent such comment for review; it never marks the work done on your word alone."
+$(issue_result_footer)"
   title="$(meta "$f" title)"
   reply="$(tracker_call create "$(python3 -c 'import json, sys
 print(json.dumps({"repo": sys.argv[1], "title": sys.argv[2], "body": sys.argv[3], "labels": ["handoff-delegation"]}))' "$repo" "$title" "$body")")" || exit 3
