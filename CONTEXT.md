@@ -100,8 +100,11 @@ hold the lease for.
 _Avoid_: guard, check
 
 **Review gate**:
-The separate hold on a result reported by someone outside the board, requiring a reader
-other than the executor before the handoff can close. Unrelated to the edit gate.
+The hold on a handoff that is finished but not closed, asking for a reader before it can be
+archived. Set by an imported result, or by the author with `release --for-review`. It checks the
+evidence, not who wrote it: the board has no roles, so it cannot require a second person, and what
+it does catch is a closure whose stated evidence merely restates the claim. Unrelated to the edit
+gate.
 
 ## Document
 
@@ -252,5 +255,7 @@ gate. Distinguished from **export**, which sends a brief to an executor outside 
 entirely.
 
 **Executed by**:
-Who actually did the work behind a closure — this session, a delegated agent, or an offline
-brief. It determines how much independent review the evidence needs.
+Who actually did the work behind a closure — this session, a delegated agent, an offline brief, or
+an external team acting on live systems. It determines how much independent review the evidence
+needs, and what evidence even looks like: external work is answered with a change reference and an
+observation, not a `file:line` or a test run.
