@@ -255,7 +255,11 @@ gate. Distinguished from **export**, which sends a brief to an executor outside 
 entirely.
 
 **Executed by**:
-Who actually did the work behind a closure — this session, a delegated agent, an offline brief, or
-an external team acting on live systems. It determines how much independent review the evidence
-needs, and what evidence even looks like: external work is answered with a change reference and an
-observation, not a `file:line` or a test run.
+Whether a human was in the loop for the work behind a closure — **HITL** if a person was present,
+**AFK** if nobody watched. Agent-executed work is AFK by default, because assuming supervision that
+did not happen is the more expensive mistake. It decides how much independent review a closure needs
+and what its evidence even looks like: HITL work is answered with a change reference, what was
+observed and when; AFK work must be reproducible by someone who was not there. Not to be confused
+with _who_ acted — an outside contractor's unattended agent and an engineer watching a change land
+are both off the board, and need opposite amounts of scrutiny.
+_Avoid_: who ran it, executor type

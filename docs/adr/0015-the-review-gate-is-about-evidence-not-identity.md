@@ -13,7 +13,7 @@ one code path while two others treat it as one shareable thing. And an external 
 systems produces evidence that is not a diff, which the close-time advice actively argues against.
 
 We decided to widen the review gate to any handoff that asks for review, to make a bundle delegable
-as a parent brief with one issue per child, and to name external execution as its own kind. None of
+as a parent brief with one issue per child, and to record whether a human was in the loop. None of
 it enforces **who** closes a handoff. The gate checks what the evidence says, because that is the
 part a board with no roles can actually check. This extends ADR 0011 and follows the shape ADR 0014
 established; it is bound by ADR 0013.
@@ -37,10 +37,13 @@ established; it is bound by ADR 0013.
   `export_bundle` already renders one for the file-based path; and ADR 0014 projects a bundle to the
   tracker as a parent issue with its children linked as native sub-issues. The tracker therefore
   already knows the shape that delegation refuses to produce.
-- **A HITL executor's evidence is not a diff.** An infrastructure or devops team acts on live
-  systems: `Where` names a cluster or a service rather than a `file:line`, and the evidence is a
-  change-request reference and an observation, not a test run. `executed_by` exists precisely to say
-  how much independent review a closure needs, and has no value for this case.
+- **Evidence changes shape when a human is in the loop, and `executed_by` cannot say whether one
+  was.** An infrastructure or devops team acting on live systems answers with a change-request
+  reference and an observation, not a test run: `Where` names a cluster, not a `file:line`. The
+  field exists precisely to say how much independent review a closure needs, but its only value —
+  `delegate` — records **who** acted, and who acted does not answer the question. A contractor's
+  agent grinding through a migration unattended and an engineer watching a change land are both
+  "outside the board", and they need opposite amounts of scrutiny.
 - **Boards have no roles** (ADR 0011). There is no identity model to enforce against. The nearest
   handle is the lease owner, and a lease is held by a _session_, not a person.
 
@@ -68,13 +71,19 @@ established; it is bound by ADR 0013.
   the run fails and leaves what it made. `external_ref` makes a re-run idempotent, exactly as the
   hidden marker does for the mirror. A bundle holding a `restricted` child refuses whole, matching
   the mirror's rule.
-- **`executed_by: external` names work done by a team on live systems.** The self-review refusal is
-  unchanged. What changes is the close-time advice: instead of asking for a command, a `file:line`
-  or a commit, it asks for the change reference, what was observed, and when. The value is set when
-  the work is handed out rather than when the result arrives, so the brief can be shaped for it, and
-  the import path preserves it instead of overwriting it with `delegate`. Setting it is a flag on
-  `export`; naming that flag is implementation, not this decision.
-- **Evidence guidance for external work stays advisory.** No pattern is enforced on `--verified-by`.
+- **`executed_by` records whether a human was in the loop — `hitl` or `afk` — not who acted.** That
+  is the axis the field was always trying to express. `hitl` means a person was present and the
+  evidence is their observation: the change reference, what they saw, and when. `afk` means nobody
+  watched, so the evidence has to be reproducible by someone who was not there.
+- **Agent-executed work defaults to `afk`.** The default assumes nobody was supervising rather than
+  assuming supervision that may not have happened, because the cost of the two mistakes is not
+  symmetric: under-reviewing unwatched work is how a wrong change closes, while over-reviewing
+  watched work costs a second look. The value is set when work is handed out rather than when a
+  result arrives, so the brief can be shaped for it, and the import path preserves it.
+- **The mirror projects it as a `mode:` label.** The document stays the source of truth and the
+  label is a projection, exactly as `status:` and `type:` already are, so a teammate reading the
+  tracker can see how a piece of work is being executed without opening the board.
+- **Evidence guidance stays advisory either way.** No pattern is enforced on `--verified-by`.
 
 ## Considered options
 
@@ -91,7 +100,12 @@ established; it is bound by ADR 0013.
   it again with fresh eyes — which is a discipline worth encouraging, not blocking. And it invents a
   role out of lease ownership, which ADR 0011 deliberately does not have. A rule people cannot
   satisfy honestly is satisfied dishonestly.
-- **Enforcing an evidence pattern for external work.** Rejected. No pattern can enumerate every
+- **A single `executed_by: external` value for work done off the board.** Rejected, and this was
+  the first draft of this ADR. It conflates two independent things — that an outside party acted,
+  and that a human observed it — which come apart immediately in both directions. It also leaves the
+  high-scrutiny case unnamed: unattended agent work is the thing most needing independent review,
+  and "external" does not say it.
+- **Enforcing an evidence pattern for HITL work.** Rejected. No pattern can enumerate every
   organisation's change-management artifact, and a `--verified-by` that must match a regex gets
   written to match the regex.
 - **One issue for a whole delegated bundle.** Rejected. It collapses the slices back into a single
@@ -118,14 +132,18 @@ established; it is bound by ADR 0013.
   and writes it up the same way will see the warning more often than before. It is a warning.
 - **Delegating a bundle is now a multi-write operation** and can fail part-way. The failure mode is
   a partially exported bundle that a re-run completes.
-- **`executed_by` gains its second written value.** Today the field is either absent, meaning this
-  session did the work, or `delegate`. Every consumer comparing it to `delegate` must be re-read:
-  one asking "was this done outside the board" now needs to match `external` too, while the
-  self-review refusal genuinely wants both.
+- **`executed_by` changes meaning, and that is a migration of understanding rather than of data.**
+  Today the field is absent, meaning this session acted, or `delegate`, meaning someone off the
+  board did. Both readings are about **who**. Existing documents keep their values and stay valid;
+  what changes is that new writers record **whether a human was in the loop**. Every consumer
+  comparing against `delegate` must be re-read against that axis rather than mechanically extended.
+- **The managed label prefixes gain `mode:`, in two places.** `MANAGED` is declared in both
+  `mirror_plan` and `mirror_links` and the two must not drift; a prefix listed in one and not the
+  other reconciles inconsistently. Labels outside the managed set are still a person's and survive.
 - **No schema bump.** `review` and `executed_by` are existing fields gaining a writer and a value.
   Documents written before this change are unaffected and need no migration.
-- **`CONTEXT.md` moves**: **Review gate** widens beyond outside executors, and **Executed by** gains
-  the external-team case.
+- **`CONTEXT.md` moves**: **Review gate** widens beyond outside executors, and **Executed by** is
+  re-cut along the human-in-the-loop axis rather than the who-acted one.
 
 ## Sources
 
