@@ -3370,7 +3370,7 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   # The publication gate, before the brief is rendered or the lease taken — a refusal leaves nothing.
   if tracker_is_public "$repo"; then
     board_allows_public || die "$(public_refusal "$repo" "opening $id as an issue")"
-    [ "$(meta "$f" share)" = public ]       || die "$repo is public and $id is not marked share: public — only docs marked for public sharing are delegated there. Nothing was sent."
+    [ "$(meta "$f" share)" = public ] || die "$repo is public and $id is not marked share: public — only docs marked for public sharing are delegated there. Nothing was sent."
   fi
   # Decide how the issue number will be written BEFORE anything is created, so a pattern that
   # cannot hold it refuses here instead of leaving an orphaned issue behind.
@@ -3490,6 +3490,8 @@ $already}"
   fi
   desired="$(mktemp)" || die "mktemp failed"
   gone="$(mktemp)" || die "mktemp failed"
+  local ownrefs
+  ownrefs="$(mktemp)" || die "mktemp failed"
 
   # Decide per document, in the shell where the board's own rules live (sensitivity, types, the
   # secret scanner). A rendered body is scanned before it can be planned.
@@ -3518,6 +3520,9 @@ $already}"
     if [ -n "$(meta "$f" external_ref)" ]; then
       printf 'skip %s — linked elsewhere (%s)\n' "$base" "$(meta "$f" external_ref)"
       printf '%s\tlinked to its own ticket\n' "$base" >> "$gone"
+      # The board's own record that it opened this issue, kept whether or not the doc is still in
+      # some bundle's roster (ADR 0014, Decision 4: marker OR external_ref).
+      printf '%s\n' "$(meta "$f" external_ref)" | tr -cd '0-9\n' >> "$ownrefs"
       continue
     fi
     local rendered
@@ -3541,8 +3546,18 @@ $already}"
   done < <(each_archive)
 
   plan="$(mirror_plan "$existing" "$desired" "$gone")"
-  rm -f "$desired" "$gone"
-  local action number marker payload
+  rm -f "$gone"
+  # marker -> issue number, and the markers created in THIS run. The link pass needs both, and a
+  # create's number is only knowable from its reply, so the reply is no longer thrown away.
+  local nummap created
+  nummap="$(mktemp)" || die "mktemp failed"
+  created="$(mktemp)" || die "mktemp failed"
+  printf '%s' "$existing" | python3 -c 'import json, re, sys
+for i in sorted(json.load(sys.stdin), key=lambda i: i["number"]):
+    m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
+    if m:
+        print("%s\t%d" % (m.group(1), i["number"]))' > "$nummap"
+  local action number marker payload reply
   while IFS=$'\t' read -r action number marker payload; do
     [ -n "$action" ] || continue
     [ "$action" = same ] && continue
@@ -3552,12 +3567,34 @@ $already}"
       continue
     fi
     case "$action" in
-      create) tracker_call create "$payload" > /dev/null || exit 3 ;;
+      create)
+        reply="$(tracker_call create "$payload")" || exit 3
+        number="$(printf '%s' "$reply" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("number", ""))')"
+        printf '%s\n' "$marker" >> "$created"
+        printf '%s\t%s\n' "$marker" "$number" >> "$nummap"
+        ;;
       update) tracker_call update "$payload" > /dev/null || exit 3 ;;
       close) tracker_call close "$payload" > /dev/null || exit 3 ;;
     esac
     printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
   done <<< "$plan"
+
+  # Links last, once every marker's number is known (ADR 0014).
+  local lnum lmarker lreq skipped
+  while IFS=$'\t' read -r lnum lmarker lreq; do
+    [ -n "$lnum" ] || continue
+    if [ "$dry" = 1 ]; then
+      printf 'link %s (#%s)\n' "$lmarker" "$lnum"
+      continue
+    fi
+    reply="$(tracker_call update "$lreq")" || exit 3
+    skipped="$(printf '%s' "$reply" | python3 -c 'import json, sys
+try: print(json.load(sys.stdin).get("skipped") or "")
+except Exception: print("")')"
+    printf 'link %s (#%s)\n' "$lmarker" "$lnum"
+    [ -n "$skipped" ] && [ "$skipped" != 0 ] && printf 'note %s — %s child issue(s) past the tracker cap stay in the checklist only\n' "$lmarker" "$skipped"
+  done <<< "$(mirror_links "$existing" "$desired" "$nummap" "$created" "$ownrefs")"
+  rm -f "$desired" "$nummap" "$created" "$ownrefs"
   [ "$dry" = 1 ] && echo "(dry run — nothing was sent)"
   [ "$refused" = 0 ] || {
     echo "handoff mirror: one or more documents were refused (see above) — redact them and re-run." >&2
@@ -3587,9 +3624,9 @@ mirror_render() { # doc-path public(0|1) -> JSON line
     while IFS= read -r c; do
       [ -n "$c" ] || continue
       if cf="$(doc_of "$c" 2> /dev/null)"; then
-        kids="${kids}$(meta "$cf" status)"$'\t'"$(meta "$cf" title)"$'\t'"$c"$'\t'"$(meta "$cf" share)"$'\n'
+        kids="${kids}$(meta "$cf" status)"$'\t'"$(meta "$cf" title)"$'\t'"$c"$'\t'"$(meta "$cf" share)"$'\t'"$(meta "$cf" external_ref)"$'\n'
       else
-        kids="${kids}missing"$'\t'$'\t'"$c"$'\t'$'\n'
+        kids="${kids}missing"$'\t'$'\t'"$c"$'\t'$'\t'$'\n'
       fi
     done <<< "$(children_of "$f")"
   fi
@@ -3617,12 +3654,13 @@ def section(name):
 doc_id = meta.get("id") or path.rsplit("/", 1)[-1][:-3]
 marker = "%s%s" % (group + "/" if group else "", doc_id)
 parts = []
+linkable, child_refs = [], {}
 if dtype == "orchestrator":
     if section("Bundle"):
         parts.append("## Bundle\n\n" + section("Bundle"))
     rows, hidden = [], 0
     for row in kids.splitlines():
-        status, title, cid, share = (row.split("\t") + ["", "", "", ""])[:4]
+        status, title, cid, share, ref = (row.split("\t") + ["", "", "", "", ""])[:5]
         # On a public repository a child that is not itself marked public is COUNTED, never named:
         # its id is a slug of its title, so even the id would leak what nobody chose to publish.
         if public == "1" and share != "public":
@@ -3632,6 +3670,17 @@ if dtype == "orchestrator":
             rows.append("- [ ] %s (not filed yet)" % cid)
         else:
             rows.append("- [%s] %s (`%s`)" % ("x" if status == "done" else " ", title or cid, cid))
+            # Linkable children are exactly the ones the checklist may name (ADR 0014). Computing
+            # this here rather than in the link pass is deliberate: the public share gate above is
+            # the only copy, so a second pass cannot diverge from it and leak a link.
+            linkable.append(cid)
+            # A child DELEGATED as an issue is skipped by the mirror (it is "linked elsewhere"), so
+            # it never gets a marker and no marker lookup can find it. Its issue number is on the
+            # child's own doc, as external_ref -- the second lookup key (Decision 6), which is what
+            # lets one bundle issue hold a mix of mirrored and delegated children.
+            r = ref.lstrip("#")
+            if r.isdigit():
+                child_refs[cid] = int(r)
     if hidden:
         rows.append("- and %d more item%s not shared publicly" % (hidden, "" if hidden == 1 else "s"))
     parts.append("## Children\n\n" + "\n".join(rows))
@@ -3650,7 +3699,8 @@ else:
 if group:
     labels.append("section:%s" % group)
 print(json.dumps({"marker": marker, "id": doc_id, "title": meta.get("title", doc_id),
-                  "body": "\n\n".join(parts) + "\n", "labels": labels}))
+                  "body": "\n\n".join(parts) + "\n", "labels": labels, "children": linkable,
+                  "child_refs": child_refs}))
 PY
 }
 
@@ -3723,6 +3773,80 @@ for action, number, marker, req in out:
     # "-" for no number: `read` collapses consecutive tabs, so an empty field would shift the rest.
     print("%s\t%s\t%s\t%s" % (action, number or "-", marker, json.dumps(req)))
 PY
+}
+
+# A bundle's parent/child relationship in the tracker's own native form (ADR 0014). This runs AFTER
+# the create/update/close loop, and it has to: `mirror_plan` builds every request before any action
+# executes, so a parent's request cannot name a child issue number that does not exist yet. On a
+# first run none of them do.
+#
+# The board speaks issue NUMBERS end to end. Resolving a number to whatever identifier an API wants
+# is the adapter's business -- GitHub's sub-issue endpoints name the child by its internal database
+# id, which nothing on the board ever holds.
+#
+# Whether an adapter supports links at all is read from its `list` reply: a row carrying "children"
+# can be linked, one without it cannot, so there is no capability probe. A parent CREATED in this
+# run has no row to read, so its links are sent once regardless.
+mirror_links() { # existing-json desired-file nummap-file created-file ownrefs-file
+  python3 - "$1" "$2" "$3" "$4" "$5" "$(external_setting repo)" << 'PYLINKS'
+import json, re, sys
+
+existing = json.loads(sys.argv[1] or "[]")
+desired = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+num = {}
+for line in open(sys.argv[3]):
+    marker, _, n = line.rstrip("\n").partition("\t")
+    if n:
+        # setdefault, over input sorted by number: a marker with a DUPLICATE issue links the one
+        # that is kept -- the lowest-numbered -- and never the duplicate the run is closing.
+        num.setdefault(marker, int(n))
+created = {l.strip() for l in open(sys.argv[4]) if l.strip()}
+own_refs = {int(l) for l in (x.strip() for x in open(sys.argv[5])) if l.isdigit()}
+repo = sys.argv[6]
+MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:"]
+
+# Rows by marker, and the numbers of issues the mirror itself made. A link to anything outside that
+# set belongs to a person: never counted as drift, never removed (Decision 4).
+rows, ours = {}, set()
+for i in sorted(existing, key=lambda i: i["number"]):
+    m = re.search(r"<!-- handoff:(.*?) -->", i.get("body", ""))
+    if not m:
+        continue
+    ours.add(i["number"])
+    rows.setdefault(m.group(1), i)
+# An issue this board delegated is also the mirror's to link and unlink, even though it carries no
+# marker -- a doc's external_ref is the board's own record of having opened it (Decision 4 reads
+# "marker OR external_ref"). Board-wide, not per-roster: a child dropped from a bundle must still be
+# recognised as ours, or its link could never be taken down. An issue named by neither belongs to a
+# person and is never touched.
+ours.update(own_refs)
+
+for d in desired:
+    kids = d.get("children") or []
+    refs = d.get("child_refs") or {}
+    parent = num.get(d["marker"])
+    if parent is None:
+        continue
+    prefix = d["marker"][: len(d["marker"]) - len(d["id"])]
+    # Hidden marker first, then external_ref (Decision 6).
+    want = sorted(n for n in (num.get(prefix + c, refs.get(c)) for c in kids) if n is not None)
+    have = rows.get(d["marker"])
+    if d["marker"] not in created:
+        if have is None or "children" not in have:
+            continue  # this adapter does not report links, so it is never asked to make them
+        # Compare only against links the mirror owns, or a hand-attached child reads as drift and
+        # every run sends a pointless update.
+        if want == sorted(n for n in have.get("children", []) if n in ours):
+            continue
+    elif not want:
+        continue  # a brand-new parent with nothing to link needs no call at all
+    # "owned" is every issue the mirror itself made, so the adapter knows which links are its to
+    # remove without re-deriving it from bodies or labels. Same principle as "managed" for labels:
+    # the CLI holds the rule, the adapter is told it on every call.
+    print("%d\t%s\t%s" % (parent, d["marker"],
+                           json.dumps({"repo": repo, "number": parent, "children": want,
+                                       "owned": sorted(ours), "managed": MANAGED})))
+PYLINKS
 }
 
 validate_external_ref() { # ref -> prints the ref as stored; non-zero with a message when refused

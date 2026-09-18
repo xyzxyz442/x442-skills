@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-18
 ---
 
@@ -55,6 +55,26 @@ needs. This extends ADR 0011 and is bound by ADR 0013.
   cannot link keeps the checklist and nothing else changes. The alternative — teaching the contract
   a second identifier — would push a tracker's implementation detail onto every adapter and into the
   document schema, to be resolved by exactly one of them.
+- **Links reconcile in a pass of their own, after the create/update/close loop.** They cannot ride
+  on the body-diffed update, for two reasons found in the code: every request is built before any
+  action runs, so a parent cannot name a child issue that does not exist yet — and on a first run
+  none of them do — while an unchanged parent is short-circuited to `same` and emits no request at
+  all. So the pass runs once every marker's number is known, and compares desired links against
+  actual ones rather than against the body.
+- **Support is read from the `list` reply, per issue.** An issue row carrying `children` can be
+  linked; one without it cannot. Reporting them is part of supporting them, so there is still no
+  probe. A parent created in the same run has no row to read, so its links are sent once regardless:
+  against an adapter with no link support that costs one ignored call per bundle, on the run that
+  creates it, and nothing after.
+- **Ownership is told to the adapter, not re-derived by it.** The link request names every issue the
+  mirror made in `owned`, exactly as it already names the label prefixes it manages in `managed`. An
+  adapter that had to work ownership out for itself would need a fetch per linked child, and two
+  adapters would drift on the definition.
+- **An issue the board delegated is the mirror's to link, too.** A child handed out with
+  `export --to-issue` is skipped by the mirror and never carries a marker, so its number is read
+  from its own doc's `external_ref` — the second lookup key. That record is read board-wide rather
+  than per-roster: a child dropped from a bundle must still be recognised as the board's own, or its
+  link could never be taken down.
 - **The mirror never re-parents.** `replace_parent` is never sent. Because linking is destructive of
   an existing parent, sending it would let the mirror silently steal a child a person had deliberately
   parented elsewhere. A refusal there is reported and the run continues, consistent with ADR 0011's
@@ -102,6 +122,8 @@ needs. This extends ADR 0011 and is bound by ADR 0013.
 - The GitHub adapter gains one API call per child linked or unlinked to resolve a number to a
   database id, plus one read per mirrored parent. A bundle already in sync costs the read and no
   writes.
+- `update` becomes **partial**: absent `title`, `body` and `labels` mean "do not touch". Without
+  that, a link-only update would pass an empty title and blank the issue.
 - The GitHub adapter is no longer expressible in issue subcommands alone; the write path needs raw
   API calls. Its contract header must say so.
 - The no-network adapter used by the harness has to model parent/child links, including a

@@ -2049,6 +2049,91 @@ MI_CALLS="$(fq 'calls("create") + calls("update")')"
 mih "$MI" mirror > /dev/null
 chk "re-running with nothing changed creates and updates nothing" "$MI_CALLS" "$(fq 'calls("create") + calls("update")')"
 
+# --- sub-issue links (ADR 0014) -------------------------------------------------------------------
+# A bundle's parent/child relationship, projected into the tracker's own native form. The board
+# speaks issue NUMBERS end to end; resolving a number to whatever id an API wants is the adapter's
+# job. Links ride on `update` with no title/body, so an adapter that ignores the field keeps the
+# checklist and nothing else changes.
+mi_kids() { # -> the bundle issue's linked child numbers, sorted
+  fq 'sorted(by("m-bundle-handoff -->")[0].get("children") or [])'
+}
+MI_OPEN_N="$(fq 'min(i["number"] for i in by("m-open-handoff -->"))')"
+MI_KID_N="$(fq 'min(i["number"] for i in by("m-kid-handoff -->"))')"
+chk "a bundle's mirrored children become sub-issue links" \
+  "$(printf '%s' "$(python3 -c 'import sys; print(sorted([int(sys.argv[1]), int(sys.argv[2])]))' "$MI_OPEN_N" "$MI_KID_N")")" \
+  "$(mi_kids)"
+chk "the link update carries no title or body, so it cannot overwrite the issue text" "True" \
+  "$(fq 'all("title" not in c[1] and "body" not in c[1] for c in db["calls"] if c[0] == "update" and "children" in c[1])')"
+MI_LINKUPD="$(fq 'len([c for c in db["calls"] if c[0] == "update" and "children" in c[1]])')"
+mih "$MI" mirror > /dev/null
+chk "re-running with the links already right sends no further link update" "$MI_LINKUPD" \
+  "$(fq 'len([c for c in db["calls"] if c[0] == "update" and "children" in c[1]])')"
+
+# Decision 4 — managed links only. A child a person attached by hand carries no mirror marker, so
+# the mirror must never remove it; a link to an issue the mirror itself made, but which is no longer
+# a child, must go.
+python3 - "$MI_STATE" << 'PY2'
+import json, sys
+p = sys.argv[1]
+db = json.load(open(p))
+n = max(i["number"] for i in db["issues"]) + 1
+db["issues"].append({"repo": "acme/backlog", "number": n, "state": "open", "title": "filed by a person",
+                     "body": "no marker here", "labels": [], "comments": [], "children": []})
+bundle = [i for i in db["issues"] if "<!-- handoff:m-bundle-handoff -->" in i["body"]][0]
+stray = min(i["number"] for i in db["issues"] if "<!-- handoff:m-blocked-handoff -->" in i["body"])
+bundle["children"] = sorted(bundle["children"] + [n, stray])
+json.dump(db, open(p, "w"))
+PY2
+mih "$MI" mirror > /dev/null
+chk "a hand-attached sub-issue survives the run" "True" \
+  "$(fq '(lambda h: h and max(h) in (by("m-bundle-handoff -->")[0].get("children") or []))([i["number"] for i in db["issues"] if "no marker here" in i["body"]])')"
+chk "a stale link to an issue the mirror made is removed" "False" \
+  "$(fq 'min(i["number"] for i in by("m-blocked-handoff -->")) in (by("m-bundle-handoff -->")[0].get("children") or [])')"
+
+# An adapter with no link support reports no "children" and is simply left alone — no probe, no new
+# verb, and the checklist is still there (Decision 3).
+mi_alt() { # state-file env-assignment... -> a fresh mirror run against its own tracker state
+  local st="$1"
+  shift
+  env "$@" sh -c 'cd "$1" && HANDOFF_SESSION_ID="$2" HANDOFF_TRACKER_ADAPTER="$3" \
+    FAKE_TRACKER_STATE="$4" ./.agents/handoff/handoff mirror 2>&1' _ "$MI" "$MI_SESS" "$SRC/fake-tracker.sh" "$st"
+}
+mi_altq() { # state-file python-expression -> the value, over that run's state
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {"issues": [], "calls": []}
+db.setdefault("issues", []); db.setdefault("calls", [])
+def by(marker): return [i for i in db["issues"] if marker in i["body"]]
+print(eval(sys.argv[2]))' "$1" "$2"
+}
+# A bundle created in a run has no list entry to diff against, so it is linked once regardless. On
+# every run after that the missing "children" is the signal, and the adapter is left alone.
+MI_NL="$(mktemp -d)/nl.json"
+mi_alt "$MI_NL" FAKE_TRACKER_NO_LINKS=1 > /dev/null
+mi_alt "$MI_NL" FAKE_TRACKER_NO_LINKS=1 > /dev/null
+mi_alt "$MI_NL" FAKE_TRACKER_NO_LINKS=1 > /dev/null
+chk "an adapter reporting no children is asked once for a new bundle, then never again" "1" \
+  "$(mi_altq "$MI_NL" 'len([c for c in db["calls"] if c[0] == "update" and c[1].get("children")])')"
+chk_contains "and the checklist is still in the bundle body" \
+  "$(mi_altq "$MI_NL" 'by("m-bundle-handoff -->")[0]["body"]')" "- ["
+
+# Decision 8 — past the tracker's per-parent cap the extras stay in the checklist and the run says
+# so, exiting zero. A visibility feature that fails a run is worse than the checklist it replaced.
+# This board holds m-leak, so every run here exits non-zero on the refused credential. The cap must
+# add no failure of its OWN, so it is compared against a control run rather than against zero.
+MI_CTL="$(mktemp -d)/ctl.json"
+mi_alt "$MI_CTL" HANDOFF_SELFTEST=1 > /dev/null
+MI_CTL_RC=$?
+MI_CAP="$(mktemp -d)/cap.json"
+MI_CAP_OUT="$(mi_alt "$MI_CAP" FAKE_TRACKER_LINK_CAP=1)"
+MI_CAP_RC=$?
+chk_contains "overflow past the per-parent cap warns" "$MI_CAP_OUT" "cap"
+chk "and the cap adds no failure of its own" "$MI_CTL_RC" "$MI_CAP_RC"
+chk "and links only as many children as the cap allows" "1" \
+  "$(mi_altq "$MI_CAP" 'len(by("m-bundle-handoff -->")[0].get("children") or [])')"
+chk_contains "while the overflowing child is still named in the checklist" \
+  "$(mi_altq "$MI_CAP" 'by("m-bundle-handoff -->")[0]["body"]')" "- ["
+
 # The CLI owns which label prefixes the mirror manages and tells the adapter on every update, so an
 # adapter never hardcodes them and a label a person added in the tracker survives the run.
 python3 - "$MI_STATE" << 'PY'
@@ -2072,6 +2157,26 @@ mih "$MI" mirror > /dev/null
 chk "a doc closed as done closes its issue" "closed" "$(fq 'by("m-open-handoff -->")[0]["state"]')"
 chk "with a comment saying why" "True" "$(fq '"done" in by("m-open-handoff -->")[0]["comments"][-1]["body"]')"
 chk "the bundle's checklist ticks the closed child" "True" "$(fq '"- [x] Open work" in by("m-bundle-handoff -->")[0]["body"]')"
+# Decision 7 — a child closed as done keeps its link while the bundle is still mirrored, resolved
+# out of the archive exactly as its checklist row is. Unlinking on close would make the parent's
+# progress read as though the work had vanished rather than finished.
+chk "a child closed as done keeps its sub-issue link" "True" \
+  "$(fq 'min(i["number"] for i in by("m-open-handoff -->")) in (by("m-bundle-handoff -->")[0].get("children") or [])')"
+
+# Decision 6 — a child DELEGATED as an issue is skipped by the mirror ("linked elsewhere"), so it
+# never carries a marker and no marker lookup can find it. Its number lives on its own doc as
+# external_ref, which is the second lookup key: without it a bundle would silently drop the very
+# children someone had handed out. m-linked carries --ref "#77".
+mih "$MI" children add m-bundle m-linked > /dev/null
+mih "$MI" mirror > /dev/null
+chk "a delegated child is linked through its external_ref, not a marker" "True" \
+  "$(fq '77 in (by("m-bundle-handoff -->")[0].get("children") or [])')"
+chk "and it is still never given a second issue of its own" "0" \
+  "$(fq 'len(by("m-linked-handoff -->"))')"
+mih "$MI" children rm m-bundle m-linked > /dev/null
+mih "$MI" mirror > /dev/null
+chk "removing it from the roster unlinks it, since the board opened that issue" "False" \
+  "$(fq '77 in (by("m-bundle-handoff -->")[0].get("children") or [])')"
 
 MI_T="$(mktemp)"
 awk '{ sub(/^sensitivity: normal$/, "sensitivity: restricted"); print }' "$MIB/m-blocked-handoff.md" > "$MI_T" && cat "$MI_T" > "$MIB/m-blocked-handoff.md"
@@ -2124,12 +2229,22 @@ GH_LOG="$GHB/gh.log"
 cat > "$GHB/gh" << 'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_LOG"
+# `gh api` is how the adapter reaches the sub-issue endpoints and the child's database id.
+if [ "$1" = api ]; then
+  case "$*" in
+    *"--method POST"* | *"--method DELETE"*) exit 0 ;;
+    *) n="${2##*/}"; echo "90000$n" ;; # the REST database id, deliberately NOT the number
+  esac
+fi
 case "$1 $2" in
   "issue create") echo "https://github.com/acme/backlog/issues/7" ;;
-  "issue list") echo '[{"number":7,"state":"OPEN","title":"T","body":"B <!-- handoff:x-handoff -->","labels":[{"name":"handoff-mirror"},{"name":"status:open"}]}]' ;;
+  "issue list") echo '[{"number":7,"state":"OPEN","title":"T","body":"B <!-- handoff:x-handoff -->","labels":[{"name":"handoff-mirror"},{"name":"status:open"}],"subIssues":{"nodes":[{"number":11},{"number":13}],"totalCount":2}}]' ;;
   "issue view")
     case "$*" in
       *"--json labels"*) echo '{"labels":[{"name":"status:open"},{"name":"keep-me"}]}' ;;
+      *"--json subIssues"*) echo '11
+13
+99' ;;
       *) echo '{"comments":[{"author":{"login":"carol"},"body":"hi","createdAt":"2026-01-01T00:00:00Z"}]}' ;;
     esac
     ;;
@@ -2164,6 +2279,35 @@ chk "and leaves a label a person added by hand" "0" "$(grep -c -- '--remove-labe
 printf '{"repo":"acme/backlog","number":7,"title":"T","body":"B","labels":["status:blocked"]}' \
   | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" update > /dev/null
 chk "an update naming no managed prefixes removes no label" "0" "$(grep -c -- '--remove-label' "$GH_LOG")"
+
+# Sub-issue links through the real adapter (ADR 0014). The stub's parent #7 already has children
+# 11 and 13 linked plus 99 attached by a person; the board owns 11, 12 and 13 and wants 11 and 12.
+# So: 12 is added, 13 is removed, 11 is left as it is, and 99 is never touched.
+chk "list reports current links, which is what says this adapter can link at all" "[11, 13]" \
+  "$(printf '%s' "$GH_LIST" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["children"])')"
+: > "$GH_LOG"
+GH_LINK="$(printf '{"repo":"acme/backlog","number":7,"children":[11,12],"owned":[11,12,13],"managed":["status:"]}' \
+  | GH_LOG="$GH_LOG" PATH="$GHB:$PATH" bash "$SRC/tracker-github.sh" update)"
+chk "a link-only update never passes a title, so it cannot blank the issue text" "0" \
+  "$(grep -c -- '--title' "$GH_LOG")"
+chk "nor a body" "0" "$(grep -c -- '--body-file' "$GH_LOG")"
+chk "the child is named by its database id, never by its number" "1" \
+  "$(grep -c -- 'sub_issue_id=9000012' "$GH_LOG")"
+chk "the id is read from the REST resource, not from gh's node id" "1" \
+  "$(grep -c -- 'api /repos/acme/backlog/issues/12 --jq .id' "$GH_LOG")"
+chk "and never from --json id, which the endpoint rejects" "0" "$(grep -c -- '--json id' "$GH_LOG")"
+chk "replace_parent is never sent, so a child's existing parent is never stolen" "0" \
+  "$(grep -ci 'replace_parent' "$GH_LOG")"
+chk "a link already in place is not re-added" "0" "$(grep -c -- 'sub_issue_id=9000011' "$GH_LOG")"
+chk "a link the mirror owns but no longer wants is removed" "1" \
+  "$(grep -c -- '--method DELETE /repos/acme/backlog/issues/7/sub_issue' "$GH_LOG")"
+chk "and the one it removes is the unwanted child" "1" \
+  "$(grep -c -- 'sub_issue_id=9000013' "$GH_LOG")"
+chk "a sub-issue a person attached is never unlinked" "0" "$(grep -c -- 'sub_issue_id=9000099' "$GH_LOG")"
+chk "the reply reports what was linked" "2" \
+  "$(printf '%s' "$GH_LINK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["linked"])')"
+chk "and nothing was over the cap" "0" \
+  "$(printf '%s' "$GH_LINK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skipped"])')"
 
 printf '\na public tracker repository needs the board and the document to opt in (ADR 0013)\n'
 PB="$(mkboard)"
@@ -2218,6 +2362,12 @@ chk_contains "--dry-run says why it was skipped" "$(pbh public mirror --dry-run)
 chk "the public bundle names its public child" "True" "$(fq '"Public kid" in by("p-bundle-handoff -->")[0]["body"]')"
 chk "and never an unshared child's title" "False" "$(fq '"Confidential kid title" in by("p-bundle-handoff -->")[0]["body"]')"
 chk "but counts it" "True" "$(fq '"and 1 more item not shared publicly" in by("p-bundle-handoff -->")[0]["body"]')"
+# A link names the child, so on a public repository an unshared child must not be linked either --
+# the counted-not-named rule has to hold in the native relationship, not just in the checklist
+# (ADR 0014). mirror_render applies the gate once and the link pass consumes its result, so these
+# two cannot drift apart.
+chk "a public repo links its public child" "True" \
+  "$(fq 'min(i["number"] for i in by("p-kid-pub-handoff -->")) in (by("p-bundle-handoff -->")[0].get("children") or [])')"
 chk_contains "export --to-issue refuses an unmarked doc on a public repo" "$(pbh public export p-internal --to-issue)" "share: public"
 chk_contains "and delegates a marked one" "$(pbh public export p-deleg --to-issue)" "Opened issue"
 
@@ -2227,6 +2377,16 @@ pbh public mirror > /dev/null
 chk "removing the mark closes its issue" "closed" "$(fq 'by("p-kid-pub-handoff -->")[0]["state"]')"
 chk "saying the issue stays visible" "True" "$(fq '"stays visible" in by("p-kid-pub-handoff -->")[0]["comments"][-1]["body"]')"
 
+pbh private mirror > /dev/null
+# On a private repository the unshared child is mirrored and linked like any other. Turning the
+# repository public must REMOVE that link: a link names the child, and ADR 0013's counted-not-named
+# rule would be defeated by a relationship pointing straight at it. This is the leak the vacuous
+# version of this check could not see, because on a public-only run the child has no issue at all.
+chk "on a private repo an unshared child is linked like any other" "True" \
+  "$(fq 'min(i["number"] for i in by("p-kid-priv-handoff -->")) in (by("p-bundle-handoff -->")[0].get("children") or [])')"
+pbh public mirror > /dev/null
+chk "and turning the repository public unlinks it" "False" \
+  "$(fq 'min(i["number"] for i in by("p-kid-priv-handoff -->")) in (by("p-bundle-handoff -->")[0].get("children") or [])')"
 pbh private mirror > /dev/null
 pb_ext ''
 PB_CALLS="$(fq 'calls("create") + calls("update") + calls("close")')"

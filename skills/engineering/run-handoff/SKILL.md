@@ -310,12 +310,26 @@ docs, bundles with a restricted child, standalone docs, and docs already linked 
 by name and the run exits non-zero. When a doc closes, moves, or becomes restricted, its issue is
 closed with a one-line reason. A board whose tracker is a sprint tool is never mirrored.
 
+**A bundle becomes a real parent issue where the tracker can express one** (ADR 0014). On GitHub the
+mirror links the bundle's issue to its children's issues as native sub-issues, so teammates get the
+parent progress bar instead of an inert checklist. The `## Children` checklist stays either way — it
+is the portable form for trackers with no such relationship, and the only place a public bundle's
+count of unshared children can live.
+
+You do not ask for this and there is no flag: a tracker that reports its links gets them, one that
+does not keeps the checklist alone. Three rules are worth knowing because they look like bugs
+otherwise. A sub-issue **you** attached by hand is never removed — only links the mirror made are
+reconciled. A child that already has a different parent is **left with it**, and the run says so
+rather than re-parenting it. And a child closed as `done` **stays linked** while the bundle is open,
+so the parent's progress reads as finished work rather than vanished work.
+
 **A public repository needs two opt-ins** (ADR 0013). The mirror asks the tracker for the
 repository's visibility on every run, and treats "could not tell" as public. On a public repository
 it refuses — sending nothing, and listing any issues it already put there — unless the board's
 committed `handoff.json` sets `external.allowPublic: true`. Even then only docs marked
 `share: public` (`handoff new … --share public`) go out; a public bundle's checklist counts the
-children nobody marked instead of naming them. Removing the mark closes the issue, but the issue
+children nobody marked instead of naming them, and never links them either — a link names a child
+as surely as a title does. Removing the mark closes the issue, but the issue
 stays readable: publishing cannot be undone, so ask the user before marking anything public.
 
 To hand one piece of work to someone through an issue instead, see

@@ -125,6 +125,12 @@ is already linked to a ticket. On a **public** repository it refuses unless the 
 readable by anyone, permanently. The executor answers with **one comment** holding a
 `result_status:` line and the filled Result block; the import in step 5 reads it from there.
 
+A delegated child still counts as part of its bundle. Where the tracker expresses parent/child
+natively, the mirror finds a delegated child's issue through its `external_ref` and links it under
+the bundle's issue like any other, so one bundle issue can hold a mix of mirrored and delegated
+children (ADR 0014). What it does **not** do is close the loop for you: an issue closed in the
+tracker never becomes `done` on the board — you import the result and close it with evidence.
+
 ## 3. What to send
 
 Export writes `.agents/handoff/briefs/<id>.brief.md`. **Commit it** before telling the executor —
