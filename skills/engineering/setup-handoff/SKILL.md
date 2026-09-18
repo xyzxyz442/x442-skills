@@ -278,6 +278,40 @@ stale on a rename and nothing on the board can see that it has. `hooks.sh`/`hand
 path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## Mirroring on a schedule (optional)
+
+A board whose own repository is on GitHub can run its mirror in CI instead of by hand:
+
+```text
+setup-handoff.sh --board-only <board> --with-mirror-workflow
+```
+
+**On request only, never by default.** It writes `.github/workflows/handoff-mirror.yml` at the
+board's _repository_ root — which is not always the board directory, since a board at
+`.agents/handoff` inside a project has its root two levels up — and the job cds into the board from
+there. The workflow runs `handoff mirror` once per section the board hosts, on every push to the
+board's default branch and on demand.
+
+Every value in it is read from the board's own committed config, never guessed and never taken from
+a flag, so the file cannot claim a section the board does not host. The flag **refuses** — writing
+nothing — when the board has no `origin`, when that remote is not on github.com, or when the board
+declares no `external.repo`. A workflow committed to a board that cannot run it is worse than none:
+it reads as working automation, and nobody looks again until the drift it was meant to surface has
+gone stale.
+
+**No token value is ever written.** When the tracker _is_ the board's own repository the built-in
+`GITHUB_TOKEN` already carries `issues: write`, so no secret is needed at all. Any other tracker
+renders a secret **name** (`HANDOFF_TRACKER_TOKEN`) for you to set on the repository, and the
+installer says so. `verify-setup-handoff.sh` re-checks both halves: that the workflow's sections
+still match the board's, and that every `GH_TOKEN` is a `${{ }}` expression rather than a literal.
+
+Two behaviours are deliberate and look odd otherwise. The job **retries a failed section up to
+three times** — a mirror run can die part-way on a transient GitHub error, and because issues are
+matched by a hidden marker rather than a stored number, a re-run resumes where it stopped and opens
+no duplicates. And it **commits only when something changed**: `TRACKER-DRIFT.md` is created when a
+divergence appears, left alone while it stands, and deleted when it clears, so an unconditional
+commit would append an empty commit to the board on every push forever.
+
 ## Two version numbers — payload and schema
 
 A board carries **`payload`** (the CLI, templates, hooks) and **`schema`** (the document format).

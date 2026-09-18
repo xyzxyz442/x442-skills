@@ -26,6 +26,11 @@
 #   handoff.local.json, a personal in-repo board, a board repo nested in this worktree, a board in a
 #   workspace repo. `exclude` is .git/info/exclude (this clone only); `gitignore` is committed.
 #
+#   --with-mirror-workflow installs a GitHub Actions workflow that runs `handoff mirror` for the
+#       board on every push to its default branch (ADR 0011). ON REQUEST ONLY, never by default, and
+#       refused unless the board's own repository has a GitHub remote. No token value is ever
+#       written: it renders GITHUB_TOKEN when the tracker IS the board's repo, else a secret NAME.
+#
 #   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
 #       no per-tool wiring, no AGENTS.md edit, no git/AGENTS.md precondition. This is what
@@ -325,7 +330,7 @@ VENDOR_CLI=1
 FORCE_DOWNGRADE=0
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
-GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE=""
+GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE="" MIRROR_WORKFLOW=0
 # GROUP_LIST_SET/LAYOUT_SET: whether --groups/--layout were PASSED at all (any value, including
 # an explicit empty string), as distinct from not passed. write_board_config needs this to tell
 # "override with empty" (flag passed as "") apart from "leave alone" (flag absent) — a plain
@@ -415,6 +420,10 @@ while [ $# -gt 0 ]; do
       ;;
     --allow-verify-cmd)
       ALLOW_VERIFY=1
+      shift
+      ;;
+    --with-mirror-workflow)
+      MIRROR_WORKFLOW=1
       shift
       ;;
     *) die "unknown arg: $1" ;;
@@ -574,6 +583,93 @@ board_ensure_git() { # board-dir [remote-url]
   fi
 }
 
+# --- the mirror workflow (ADR 0011, ADR 0014) --------------------------------------------
+# On request only. A workflow committed to a board that cannot run it is worse than none: it reads
+# as working automation, and nobody looks again until the drift it was meant to surface is stale.
+# So every precondition is checked and a failure REFUSES rather than writing a file that cannot work.
+#
+# The workflow lives at the board's REPOSITORY root, which is not always the board directory: a
+# board at .agents/handoff inside a project has its repo root two levels up, and .github/workflows
+# is only read there. The rendered job cds into the board from wherever that is.
+install_mirror_workflow() { # board-dir
+  local b="$1" top rel branch sections repo tracker token_expr token_note dest tmp
+  command -v python3 > /dev/null 2>&1 || die "--with-mirror-workflow needs python3 to read the board's config"
+  top="$(git -C "$b" rev-parse --show-toplevel 2> /dev/null)" \
+    || die "--with-mirror-workflow: $b is not in a git repository, so no workflow could ever run for it"
+  # A GitHub remote specifically: the workflow is GitHub Actions, and a board on another host would
+  # get a file its forge never reads.
+  local url
+  url="$(git -C "$b" remote get-url origin 2> /dev/null || true)"
+  case "$url" in
+    *github.com[:/]*) ;;
+    "") die "--with-mirror-workflow: the board at $b has no 'origin' remote. Give it a GitHub home first, then re-run." ;;
+    *) die "--with-mirror-workflow: the board's remote is not on github.com ($url), so a GitHub Actions workflow cannot run for it." ;;
+  esac
+  branch="$(git -C "$b" symbolic-ref --quiet --short HEAD 2> /dev/null || true)"
+  [ -n "$branch" ] || die "--with-mirror-workflow: the board is in detached HEAD; check out its branch first"
+  # Sections, and the tracker, read from the board's own committed config — never guessed, and never
+  # taken from flags, so the file cannot claim a section the board does not host.
+  sections="$(
+    python3 - "$b/handoff.json" << 'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+g = cfg.get("groups") or []
+if isinstance(g, dict):
+    g = sorted(g)
+print(" ".join(str(x) for x in g))
+PY
+  )"
+  tracker="$(
+    python3 - "$b/handoff.json" << 'PY'
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print((cfg.get("external") or {}).get("repo") or "")
+PY
+  )"
+  [ -n "$tracker" ] || die "--with-mirror-workflow: this board declares no external tracker (external.repo in handoff.json), so there is nothing for the workflow to mirror into."
+  # A flat board hosts exactly one unnamed section. The loop still runs once, so the rendered file
+  # is the same shape either way and there is no second code path to keep correct.
+  [ -n "$sections" ] || sections=""
+  repo="$(printf '%s' "$url" | sed -e 's#.*github\.com[:/]##' -e 's#\.git$##')"
+  # ADR 0011: GITHUB_TOKEN already carries issues:write for the repository the workflow runs in, so
+  # a board that mirrors into ITSELF needs no secret at all. Any other tracker needs one, and only
+  # its NAME is written here — never a value, in this file or any other.
+  if [ "$tracker" = "$repo" ]; then
+    token_expr='${{ secrets.GITHUB_TOKEN }}'
+    token_note="The tracker is this workflow's own repository, so the built-in GITHUB_TOKEN suffices."
+  else
+    token_expr='${{ secrets.HANDOFF_TRACKER_TOKEN }}'
+    token_note="The tracker ($tracker) is a DIFFERENT repository, so set a repository secret named HANDOFF_TRACKER_TOKEN (issues:write on $tracker). Only the name appears here."
+  fi
+  rel="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]) or ".")' "$(cd "$b" && pwd -P)" "$(cd "$top" && pwd -P)")"
+  dest="$top/.github/workflows/handoff-mirror.yml"
+  mkdir -p "$(dirname "$dest")"
+  tmp="$(mktemp)" || die "mktemp failed"
+  # Substitution by python, not sed: the token expression contains ${{ }} and the note contains
+  # arbitrary text, both of which sed would happily mangle into something that still parses as YAML.
+  python3 - "$ASSETS/mirror-workflow.yml" "$tmp" "$branch" "$sections" "$rel" "$token_expr" "$token_note" << 'PY'
+import io, sys
+src, dst, branch, sections, rel, token_expr, token_note = sys.argv[1:8]
+t = io.open(src, encoding="utf-8").read()
+for k, v in (("__BRANCH__", branch), ("__SECTIONS__", sections), ("__BOARD_PATH__", rel),
+             ("__TOKEN_EXPR__", token_expr), ("__TOKEN_NOTE__", token_note)):
+    t = t.replace(k, v)
+io.open(dst, "w", encoding="utf-8").write(t)
+PY
+  install_file "$tmp" "$dest"
+  rm -f "$tmp"
+  echo "setup-handoff: installed the mirror workflow at ${dest#"$top"/}"
+  echo "  runs on push to '$branch' and on demand, once per section: ${sections:-(the flat board)}"
+  echo "  mirrors into $tracker using ${token_expr##*secrets.}" | sed 's/ }}$//'
+  [ "$tracker" = "$repo" ] || echo "  ACTION NEEDED: set the repository secret HANDOFF_TRACKER_TOKEN (issues:write on $tracker) — the workflow cannot run without it."
+}
+
 # --- --board-only: scaffold a standalone shared board, owned by no repo -----------------
 # Copies the payload + writes a cross-repo config (with any group facts), then exits. No per-tool
 # wiring, no AGENTS.md edit, no git/AGENTS.md precondition — the board is a plain directory the
@@ -599,6 +695,9 @@ if [ -n "$BOARD_ONLY" ]; then
   supersede_legacy "$HDEST/config.json" "board config now lives in handoff.json"
   supersede_legacy "$HDEST/.version" "the payload stamp now lives in handoff.json"
   board_ensure_git "$HDEST" "$BOARD_REMOTE"
+  # After the board exists and has its remote: the workflow's every precondition is read from that
+  # finished state, so it cannot be rendered against a board that is still half-written.
+  [ "$MIRROR_WORKFLOW" = 1 ] && install_mirror_workflow "$HDEST"
   echo "setup-handoff: scaffolded standalone board at $HDEST (topology=cross-repo${GROUP_LIST:+, groups=$GROUP_LIST}${LAYOUT:+, layout=$LAYOUT})"
   exit 0
 fi
@@ -908,5 +1007,8 @@ PYEOF
 
 # --- what needs ignoring (ADR 0010) ------------------------------------------------------
 apply_ignore_needs "$REPO" "$HDEST"
+
+# Last, and only on request: every precondition it checks is read from the finished board.
+[ "$MIRROR_WORKFLOW" = 1 ] && install_mirror_workflow "$HDEST"
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

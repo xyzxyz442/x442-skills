@@ -407,6 +407,56 @@ PYEOF
   esac
 fi
 
+# --- the mirror workflow, when one is installed (ADR 0011) ------------------------------------
+# Opt-in, so ABSENCE is not a finding and says nothing. A workflow that IS present makes claims
+# about the board — which sections it mirrors, which repository it mirrors into — and those claims
+# rot silently: a section added later is simply never projected, and nothing anywhere says so.
+WF_ROOT="$(git -C "$HD" rev-parse --show-toplevel 2> /dev/null || true)"
+WF="${WF_ROOT:+$WF_ROOT/.github/workflows/handoff-mirror.yml}"
+if [ -n "$WF" ] && [ -f "$WF" ]; then
+  WF_SECTIONS="$(sed -n 's/^[[:space:]]*SECTIONS="\(.*\)"[[:space:]]*$/\1/p' "$WF" | head -1)"
+  # The board's own sections, from its committed config — the same source the installer rendered
+  # from, so a disagreement means the board moved after the workflow was written.
+  BOARD_SECTIONS=""
+  if [ -n "$BOARD_CFG" ] && command -v python3 > /dev/null 2>&1; then
+    BOARD_SECTIONS="$(
+      python3 - "$BOARD_CFG" << 'PY' 2> /dev/null
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+g = cfg.get("groups") or []
+if isinstance(g, dict):
+    g = sorted(g)
+print(" ".join(str(x) for x in g))
+PY
+    )"
+  fi
+  WF_STRAY="" WF_MISSING=""
+  for s in $WF_SECTIONS; do
+    printf '%s\n' $BOARD_SECTIONS | grep -qxF "$s" || WF_STRAY="$WF_STRAY $s"
+  done
+  for s in $BOARD_SECTIONS; do
+    printf '%s\n' $WF_SECTIONS | grep -qxF "$s" || WF_MISSING="$WF_MISSING $s"
+  done
+  if [ -n "$WF_STRAY" ]; then
+    bad board.mirror_workflow.sections "the mirror workflow names section(s) this board does not host:${WF_STRAY} — re-run setup-handoff --with-mirror-workflow"
+  elif [ -n "$WF_MISSING" ]; then
+    # A warning, not a failure: what is there still works, it just no longer covers everything.
+    warn board.mirror_workflow.sections "the mirror workflow does not mirror section(s):${WF_MISSING} — re-run setup-handoff --with-mirror-workflow"
+  else
+    ok board.mirror_workflow.sections "the mirror workflow mirrors exactly this board's sections (${WF_SECTIONS:-flat board})"
+  fi
+  # A token VALUE in a committed workflow is the one failure here that cannot be undone by editing
+  # the file, so it is checked rather than trusted: every GH_TOKEN must be a ${{ }} expression.
+  if sed -n 's/^[[:space:]]*GH_TOKEN:[[:space:]]*//p' "$WF" | grep -qv '^\${{.*}}$'; then
+    bad board.mirror_workflow.token "the mirror workflow sets GH_TOKEN to something other than a \${{ secrets.* }} expression — a literal token here is committed to history; remove it and rotate it"
+  else
+    ok board.mirror_workflow.token "the mirror workflow passes its token by reference, never by value"
+  fi
+fi
+
 section "3. Wired tools + hard-enforcement primary"
 WIRED=""
 HARD=""
