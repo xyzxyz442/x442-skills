@@ -1459,6 +1459,47 @@ chk "the doc travels with its lease" "yes" \
 chk "the generated index travels too, so the next fast-forward is not blocked" "yes" \
   "$(git -C "$SB" ls-files --error-unmatch INDEX.md > /dev/null 2>&1 && echo yes || echo no)"
 
+printf '\nboard_generated_dirty — every GENERATED spelling across all three layouts, together\n'
+# Regression test. board_generated_dirty used to list only INDEX.md and */INDEX.md — the flat
+# board and the subfolder layout — and never INDEX-<group>.md, which is what sec_index() writes
+# under LAYOUT=prefix. A regenerated prefix sub-index was then left behind by lease_commit_push,
+# so the next board_sync_or_die fast-forward refused it and sent the board's bookkeeping down the
+# claim path instead of the fast path. All three layouts plus the TRACKER-DRIFT sibling are
+# asserted together, from one call, so a future edit that widens one spelling and forgets another
+# fails loudly instead of the three quietly drifting apart again.
+#
+# The board must be a SHARED board — the root of its own git worktree, per ADR 0002 — not a board
+# nested inside a larger repo (mkboard's shape). `git status --porcelain` always reports paths
+# relative to the repo ROOT, never to the `-C` directory, so a nested board's files would come
+# back prefixed with the path down to it and never match board_generated_dirty's bare patterns.
+# lease_commit_push, the caller this guards, only ever runs against a shared board (leases_shared
+# gates it), so mkshared is the fixture that actually matches production.
+GDB="$(mkshared)"
+mkdir -p "$GDB/widgets"
+: > "$GDB/INDEX.md"                 # flat layout
+: > "$GDB/widgets/INDEX.md"         # subfolder layout
+: > "$GDB/INDEX-widgets.md"         # prefix layout — the spelling the fix added
+: > "$GDB/TRACKER-DRIFT.md"         # flat drift file
+: > "$GDB/widgets/TRACKER-DRIFT.md" # subfolder drift file
+: > "$GDB/TRACKER-DRIFT-widgets.md" # prefix drift file
+: > "$GDB/INDEX-widgets.md.bak"     # decoy: a near-miss name that must NOT be swept in
+GDB_OUT="$(DIR="$GDB" && board_generated_dirty)"
+chk "flat sub-index reported" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX.md' && echo yes || echo no)"
+chk "subfolder sub-index reported" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/INDEX.md' && echo yes || echo no)"
+chk "prefix sub-index reported (the bug this test guards)" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md' && echo yes || echo no)"
+chk "flat TRACKER-DRIFT reported" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT.md' && echo yes || echo no)"
+chk "subfolder TRACKER-DRIFT reported" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/TRACKER-DRIFT.md' && echo yes || echo no)"
+chk "prefix TRACKER-DRIFT reported" "yes" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT-widgets.md' && echo yes || echo no)"
+chk "a near-miss name is not swept in" "no" \
+  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md.bak' && echo yes || echo no)"
+trash "$GDB" 2> /dev/null
+
 printf '\nshared board — expiry is stamped from the commit, not the claiming clock\n'
 # Rewrite the recorded expiry into the deep past and commit it. On a shared board the reader
 # recomputes from the COMMIT time, so the lease is still live; trusting the field would report it
