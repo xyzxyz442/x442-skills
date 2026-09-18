@@ -832,6 +832,106 @@ case "$VS_OUT" in
   *) chk "no false warning when the match is only in the Verify section" "no" "no" ;;
 esac
 
+printf '\nrelease --for-review — the board-side review hold (ADR 0015)\n'
+# The second writer of `review: pending`. Until this, the whole review gate was reachable only from
+# OUTSIDE the board, through `import --result`: a collaborator who is ON the board could release
+# `open` (losing the "someone should look at this" signal) or `done` (archiving work nobody
+# reviewed), and nothing in between. These cases are the in-between.
+hb "$R" new fr-case --title "Parser work" > /dev/null
+FR_DOC="$BOARD/fr-case-handoff.md"
+FR_AUD_BEFORE="$(sed -n 's/^audience: //p' "$FR_DOC" | head -1)"
+FR_OUT="$(hb "$R" release fr-case --for-review "parser done, needs your eyes")"
+chk "the doc stays on the board, unarchived" "yes" "$([ -f "$FR_DOC" ] && echo yes || echo no)"
+chk "status stays open — archiving is what done means" "open" "$(sed -n 's/^status: //p' "$FR_DOC" | head -1)"
+chk "review flips to pending" "pending" "$(sed -n 's/^review: //p' "$FR_DOC" | head -1)"
+# `audience` names a REPO, not a person, and `import --result` refuses to change it. The two writers
+# of `review: pending` must not disagree about what else they touch.
+chk "audience is left alone" "$FR_AUD_BEFORE" "$(sed -n 's/^audience: //p' "$FR_DOC" | head -1)"
+chk_contains "the activity log records who did the work" \
+  "$(sed -n '/^## Activity/,$p' "$FR_DOC")" "handed back for review by"
+chk_contains "the output says a reviewer acts next" "$FR_OUT" "awaiting review"
+# Scoped to THIS doc's own row and to the exact marker glyph, for the same reason the delegated case
+# above is: other docs on this shared test board carry their own pending review.
+chk_contains "list marks the row exactly as it marks a delegated one" \
+  "$(hb "$R" list | grep '^fr-case-handoff ')" "⇤ review"
+
+# A for-review release is still a release: the lease goes, or the reviewer could never claim the doc
+# they have just been handed.
+hb "$R" new fr-lease --title "Lease case" > /dev/null
+hb "$R" claim fr-lease "working" > /dev/null
+hb "$R" release fr-lease --for-review "over to you" > /dev/null
+FR_LEASE_ROW="$(hb "$R" list | grep '^fr-lease-handoff ')"
+chk "a for-review release drops the lease like any other" "yes" \
+  "$(printf '%s' "$FR_LEASE_ROW" | grep -q '🔒' && echo no || echo yes)"
+
+# The reviewer's own close then behaves exactly as it does for delegated work — finish_release
+# clears the pending marker and archives, so the hold is genuinely temporary.
+hb "$R" release fr-case --status done --verified-by "re-ran parser_test.sh myself, 12 passing" > /dev/null
+chk "a later done close archives the doc" "yes" \
+  "$([ -f "$BOARD/archive/fr-case-handoff.md" ] && echo yes || echo no)"
+chk "and clears the review to done" "done" \
+  "$(sed -n 's/^review: //p' "$BOARD/archive/fr-case-handoff.md" | head -1)"
+
+printf '\n--for-review and --status done are contrary instructions\n'
+# One keeps the doc on the board for someone else to close; the other closes it. Refused rather than
+# silently resolved in either direction — resolving it would archive work the author asked to have
+# reviewed, or ignore a --status the author typed.
+hb "$R" new fr-contrary --title "Contrary" > /dev/null
+FR_CONTRARY_OUT="$(hb "$R" release fr-contrary --for-review --status done --verified-by "ran it")"
+chk_contains "refused" "$FR_CONTRARY_OUT" "hands work back for someone else to close"
+chk "and the doc was not archived on the way out" "yes" \
+  "$([ -f "$BOARD/fr-contrary-handoff.md" ] && echo yes || echo no)"
+
+# The session banner is the one place that decides what gets picked up, and it never carried this
+# marker — not for delegated work either. Unmarked, a handoff awaiting review reads exactly like
+# work nobody has started, so the next agent redoes it instead of reviewing it.
+cp "$SRC/hooks.sh" "$BOARD/scripts/hooks.sh"
+FR_BANNER="$(cd "$R" && printf '{}' | bash "$BOARD/scripts/hooks.sh" \
+  --kind sessionstart --tool claude --project-dir "$R" 2>&1)"
+chk_contains "the session banner marks work that is awaiting review" "$FR_BANNER" "AWAITING REVIEW"
+chk_contains "and says to review it rather than redo it" "$FR_BANNER" "do not redo the work"
+# The hook emits ONE line of JSON whose rows are \n escapes, so a per-row assertion has to split it
+# first. Grepping the raw blob returns the whole thing for any id in it — which makes a marked row
+# and an unmarked row indistinguishable, and is why the scoped check below first passed on the
+# marked doc and then falsely failed on the unmarked one.
+FR_BANNER_ROWS="$(printf '%s' "$FR_BANNER" | awk '{ gsub(/\\n/, "\n"); print }')"
+chk_contains "on the handed-back handoff's own row" \
+  "$(printf '%s\n' "$FR_BANNER_ROWS" | grep 'fr-lease-handoff')" "AWAITING REVIEW"
+# Scoped, not blanket: a doc nobody handed back must not wear the marker.
+chk "an ordinary open handoff is left unmarked" "no" \
+  "$(printf '%s\n' "$FR_BANNER_ROWS" | grep 'fr-contrary-handoff' | grep -q 'AWAITING REVIEW' && echo yes || echo no)"
+
+printf '\nthe copied-evidence check falls back to Current state when there is no Result block\n'
+# The check asks whether the closer simply echoed the EXECUTOR's own account back as the review. For
+# delegated work that account is the spliced Result block. On-board review work has no result block
+# at all, so without this fallback the gate would have been inert in exactly the case ADR 0015
+# widened it to cover — `## Current state` is where an on-board executor writes the same thing.
+hb "$R" new fr-copied --title "Copied evidence" > /dev/null
+hb "$R" claim fr-copied "working" > /dev/null
+hb "$R" checkpoint fr-copied "Ran the tenant regression suite; 14 passing." > /dev/null
+chk_contains "Current state carries the author's own account of the work" \
+  "$(hb "$R" show fr-copied --section "Current state")" "14 passing"
+hb "$R" release fr-copied --for-review > /dev/null
+FR_COPIED_OUT="$(hb "$R" release fr-copied --status done --verified-by "Ran the tenant regression suite; 14 passing.")"
+chk_contains "closing on a restatement of that account is called out" \
+  "$FR_COPIED_OUT" "identical to the reported evidence"
+# A WARNING, never a refusal, because there is no delegate here — no second party whose words these
+# are. ADR 0015 declines to make this an identity check: a board has no roles, and the same person
+# in tomorrow's session is a different session id.
+case "$FR_COPIED_OUT" in
+  *"delegate reviewing itself"*) chk "it warns rather than refusing when no delegate acted" "no" "yes" ;;
+  *) chk "it warns rather than refusing when no delegate acted" "no" "no" ;;
+esac
+
+printf '\na bundle and a standalone doc have no work of their own to hand back\n'
+hb "$R" new fr-child --title "Child" > /dev/null
+hb "$R" new fr-bundle --orchestrator --children fr-child --title "Bundle" > /dev/null
+chk_contains "an orchestrator refuses --for-review" \
+  "$(hb "$R" release fr-bundle --for-review)" "no work of its own to hand back"
+hb "$R" new fr-ref --standalone --title "Reference" > /dev/null
+chk_contains "a standalone doc refuses --for-review" \
+  "$(hb "$R" release fr-ref --for-review)" "no work of its own to hand back"
+
 printf '\nset_field — a write failure is refused, not a silent no-op (minor)\n'
 hb "$R" new writeprotect-case --title "Write protect case" > /dev/null
 WP_DOC="$BOARD/writeprotect-case-handoff.md"

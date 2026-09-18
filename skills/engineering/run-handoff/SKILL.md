@@ -396,6 +396,7 @@ frontmatter and body, not the index.
 ```text
 handoff release <id> --status open                                  # more work remains
 handoff release <id> --status blocked --blocked-on <id|"external: …">   # waiting on something
+handoff release <id> --for-review "<what you did>"                  # finished — a reviewer acts next
 handoff release <id> --status done --verified-by "<how you verified LIVE code>"
 ```
 
@@ -408,6 +409,19 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   the blocker first, or use `external: …` for something off the board. When the blocker closes
   `done` — including a retired standalone or a completed bundle — this handoff is surfaced as newly
   unblocked at the next session start.
+- **`--for-review` is "finished, over to you" — the fourth honest answer.** Use it when the work is
+  done as far as you can tell but somebody else should look before it closes: a junior handing back
+  to a senior, or your own work parked to re-read with fresh eyes. It keeps `status: open`, leaves
+  the doc on the board, sets `review: pending`, and drops the lease so the reviewer can claim it;
+  the row then carries `⇤ review` in `list`, exactly as delegated work awaiting review does. The
+  reviewer closes it the ordinary way, with `--status done --verified-by`. `--for-review` together
+  with `--status done` is refused — one hands the work on, the other closes it.
+- **The gate is about evidence, not identity** (ADR 0015). Nothing stops you closing work you
+  yourself asked to have reviewed: a board has no roles, and the same person in tomorrow's session
+  is a different session id, so a rule keyed on that would fire on honest work and miss the rest.
+  What the tool does check is whether your `--verified-by` is word-for-word the account already in
+  the doc — the delegate's reported Result, or, for on-board work, your own `## Current state`. It
+  warns; for delegated work it refuses. Re-run the check and write what **you** observed.
 - Don't hold a lease you are not working. The stop hook nags if you end a session still holding
   one — release it so others are not blocked.
 - **A release refused for looking like a secret is not a bug to route around.** Redact the
@@ -450,6 +464,8 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
 - Abandoning an approach without a `## Ruled out` line → the next session tries it again.
 - Closing delegated work by quoting the delegate's own report back as `--verified-by` → refused,
   and rightly: nobody checked anything.
+- Releasing finished-but-unreviewed work `open` (the "someone should look at this" signal is lost)
+  or `done` (it archives work nobody reviewed) → that is what `--for-review` is for.
 - Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;
   do the work in this session instead.
 - Reaching for `--force-secret` to push past a real credential match → redact and rotate it

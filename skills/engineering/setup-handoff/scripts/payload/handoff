@@ -4144,11 +4144,11 @@ finish_release() { # id status
 }
 
 cmd_release() {
-  local id="${1:?usage: handoff release <id> --status open|blocked|done [--verified-by \"...\"] [--blocked-on \"...\"] [--ruled-out \"approach — why — evidence\"] [--run-verify] [--force-secret REASON] [note]}"
+  local id="${1:?usage: handoff release <id> --status open|blocked|done [--for-review] [--verified-by \"...\"] [--blocked-on \"...\"] [--ruled-out \"approach — why — evidence\"] [--run-verify] [--force-secret REASON] [note]}"
   shift
   local raw_id="$id"
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
-  local status='' note='' verified_by='' blocked_on='' ruled_out='' run_verify=0 force_secret=''
+  local status='' note='' verified_by='' blocked_on='' ruled_out='' run_verify=0 force_secret='' for_review=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force-secret)
@@ -4177,6 +4177,10 @@ cmd_release() {
         run_verify=1
         shift
         ;;
+      --for-review)
+        for_review=1
+        shift
+        ;;
       *)
         reject_unknown_flag "$1" "the note is a trailing positional, not a flag"
         note="$note $1"
@@ -4184,8 +4188,18 @@ cmd_release() {
         ;;
     esac
   done
+  # `--for-review` says the work is finished as far as the executor can tell and a reviewer acts
+  # next, so it implies the one status that can carry that: the doc is still live work. It is a flag
+  # on `open` rather than a fourth status because `status` is the lifecycle and review is orthogonal
+  # to it — which is why `review` is already its own field (ADR 0015).
+  [ "$for_review" = 1 ] && [ -z "$status" ] && status=open
   [ -n "$status" ] || die "release needs --status open|blocked|done"
   case "$status" in open | blocked | done) ;; *) die "bad status: $status" ;; esac
+  # Contrary instructions, refused rather than silently resolved in either direction: one of them
+  # archives the doc and the other exists to keep it on the board.
+  if [ "$for_review" = 1 ] && [ "$status" = "done" ]; then
+    die "--for-review hands work back for someone else to close; --status done closes it yourself. Pick one."
+  fi
 
   local f
   f="$(doc_of "$id")" || no_such "$id"
@@ -4211,6 +4225,13 @@ cmd_release() {
   # approach to rule out. Refused before either branch writes anything.
   if [ -n "$ruled_out" ] && { is_orchestrator "$f" || is_standalone "$f"; }; then
     die "--ruled-out applies to coordination handoffs — $id is $(doc_type "$f") and has no work of its own to rule out"
+  fi
+
+  # Same reasoning, same place. A bundle's state is derived from its children, so there is nothing
+  # on it for a reviewer to look at; a standalone doc carries no lease and makes no claim about live
+  # code, so it never had a closer to hand anything back to.
+  if [ "$for_review" = 1 ] && { is_orchestrator "$f" || is_standalone "$f"; }; then
+    die "--for-review applies to coordination handoffs — $id is $(doc_type "$f") and has no work of its own to hand back"
   fi
 
   if is_orchestrator "$f"; then
@@ -4320,9 +4341,17 @@ cmd_release() {
     # This used to compare `--verified-by` against `result_claimed`, which holds the executor's
     # STATUS word (done/partial/blocked), not their evidence — so the check could only fire if
     # somebody typed `--verified-by "done"`. It was inert, and it read as though it were not.
-    local copied=0
+    #
+    # The haystack is the EXECUTOR's own account of the work. For delegated work that is the spliced
+    # Result block. For work done on the board and handed back with `release --for-review` there is
+    # no result block at all, so this check would have been inert in exactly the case ADR 0015
+    # widened the gate to cover — `## Current state` is where that executor wrote the same account,
+    # so it is the fallback rather than a second, differently-shaped check.
+    local copied=0 evidence_src
+    evidence_src="$(result_block "$f")"
+    [ -n "$evidence_src" ] || evidence_src="$(doc_section "$f" "Current state")"
     if [ -n "$verified_by" ] && [ "$(meta "$f" review)" = "pending" ] \
-      && grep -Fq -- "$verified_by" <<< "$(result_block "$f")"; then
+      && [ -n "$evidence_src" ] && grep -Fq -- "$verified_by" <<< "$evidence_src"; then
       copied=1
     fi
     # For DELEGATED work that is a refusal, not a warning. The executor is outside the board and
@@ -4408,6 +4437,21 @@ cmd_release() {
     fi
     echo "🔒 This doc is committed to git history — confirm no secrets/keys/passwords/PII remain."
     surface_unblocked "$id"
+  elif [ "$for_review" = 1 ]; then
+    # The SECOND writer of `review: pending` (ADR 0015). `import --result` is the first, for work
+    # done off the board; this is the same hold for a collaborator who is on it. Setting the existing
+    # field is the whole feature: every reader already keyed on it — the `⇤ review` marker in `list`,
+    # the session banner, the copied-evidence check above — starts covering on-board work the moment
+    # it is set, and nothing needed a new status or a new field to say so.
+    #
+    # `audience` is deliberately left alone. It names a REPO, not a person, so on a single-repo board
+    # there is nobody to flip it to and on a cross-repo board the reviewer is usually in the repo
+    # that already owns the doc. `import --result` refuses to change it for the same reason, and the
+    # two writers of this field must not disagree about what else they touch.
+    set_field "$f" review pending
+    log_activity "$f" "$status — handed back for review by $me, who did the work.${note}"
+    echo "Released $id → $status, awaiting review."
+    echo "    It stays on the board until a reviewer closes it with --verified-by."
   else
     log_activity "$f" "$status — released by $me.${note}"
     echo "Released $id → $status."

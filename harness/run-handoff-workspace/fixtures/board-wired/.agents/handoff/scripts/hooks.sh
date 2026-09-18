@@ -618,6 +618,14 @@ case "$KIND" in
       # the id discloses as much as the title does.
       [ "$(meta "$f" sensitivity)" = "restricted" ] \
         && line="$line [🔴 RESTRICTED — never export or delegate; do it in this session]"
+      # Finished, not closed (ADR 0015). Both writers of `review: pending` land here — `import
+      # --result` for work done off the board, `release --for-review` for a collaborator on it — and
+      # the banner is the one place that decides what gets picked up. Unmarked, a handoff awaiting
+      # review reads as `open · medium · Title`, exactly like work nobody has started, and the next
+      # agent redoes it instead of reviewing it. `handoff list` has carried this marker all along;
+      # the banner never did.
+      [ "$(meta "$f" review)" = "pending" ] \
+        && line="$line [⇤ AWAITING REVIEW — reproduce the evidence and close it, do not redo the work]"
       if lock_live "$id" && [ -n "$(field session)" ] && [ "$(lock_session "$id")" = "$(field session)" ]; then
         # This session's own lease — a resumed or compacted session reads the banner too, and
         # "do not work on it" would tell it to abandon its own work.
