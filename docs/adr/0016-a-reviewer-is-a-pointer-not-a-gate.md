@@ -35,8 +35,9 @@ ADR 0015, reuses ADR 0014's assign-on-create rule, and is bound by ADR 0013.
 - **The measured migration cost is small, and mostly pre-existing.** A census of every board on the
   filing developer's machine outside test fixtures found 9 board directories, 7 holding documents,
   607 documents in total — of which **347 are archived and out of scope by rule**, since ADR 0003
-  migrates the live section only. Exactly **one** board is actually at schema 2, with **8 live
-  documents**. The other six are already stranded at schema 1 or pre-schema: they are behind today,
+  migrates the live section only. Exactly **one** board is actually at schema 2, with **6 live
+  documents** (corrected from 8 after the migration ran and counted them- the first census script
+  had included the board's three document _templates_, which carry `id:` placeholders). The other six are already stranded at schema 1 or pre-schema: they are behind today,
   they need a `setup-handoff` re-sync regardless of this change, and schema 3 does not worsen them.
   The fleet drift that looked like this feature's cost is a debt that already exists.
 
@@ -102,7 +103,7 @@ ADR 0015, reuses ADR 0014's assign-on-create rule, and is bound by ADR 0013.
   downstream forks, not to upstream features.
 - **Wait and batch the bump with another schema-3 candidate.** Rejected on measurement, having been
   the filing recommendation. No such candidate exists or is foreseeable, so "batch it" resolves to
-  "wait indefinitely"; and the cost it was protecting against is one board of 8 live documents.
+  "wait indefinitely"; and the cost it was protecting against is one board of 6 live documents.
 - **A people registry mapping names to handles.** Rejected — it is a second source of truth about
   who someone is, for a field whose only consumer is an adapter that already speaks handles.
 - **Infer a reviewer during migration** from the last holder, the closer, or the delegate. Rejected
@@ -127,6 +128,16 @@ ADR 0015, reuses ADR 0014's assign-on-create rule, and is bound by ADR 0013.
 - Because assignment is never reconciled, the board's `reviewer` and the tracker's assignee may
   legitimately disagree. The tracker wins in practice and the board is not corrected. This is the
   intended asymmetry, not drift in ADR 0014's sense, and nothing reports it.
+
+## Outcome
+
+Recorded after the fact, because this ADR predicted a cost and the cost has since been paid. The one
+board that was actually at schema 2 was lifted to payload 48 and migrated on 2026-09-19- **6 live
+documents 2 to 3, 102 archived left alone** exactly as ADR 0003 specifies, board stamp moved, no
+`reviewer` inferred onto any of them, `verify-setup-handoff.sh` clean afterwards. The migration's own
+count is what corrected the 8 above to 6.
+
+The unmeasured cost in Consequences remains unmeasured- no other machine has been seen since.
 
 ## Sources
 
