@@ -235,6 +235,11 @@ This splices the Result block into the board doc under `## Result (reported)`, s
 brief replaces the spliced block rather than stacking a second copy, so pulling a corrected brief
 and importing again is safe.
 
+`import` takes no `--reviewer`: the reviewer of delegated work is normally whoever delegated it, and
+they are the one running this command. Name them at filing time instead (`new --reviewer <handle>`,
+ADR 0016) and the returned work arrives already pointing at the person who has to look at it — which
+is also what puts their name on the tracker issue. The handle never travels in the brief.
+
 **`import` never sets `status`.** Not for `done`, not even for `blocked` — a `blocked` claim still
 needs you to supply a validated `--blocked-on` before the doc can carry it. The executor's account
 lands in `result_claimed`, sitting next to a `status` field it did not touch. After you have

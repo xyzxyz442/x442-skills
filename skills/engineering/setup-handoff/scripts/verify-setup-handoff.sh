@@ -332,16 +332,17 @@ if [ "$TOPO" = "cross-repo" ]; then
 else
   grep -q '/.locks/' .gitignore 2> /dev/null && ok repo.gitignore.locks ".gitignore excludes .locks/" || warn repo.gitignore.locks ".gitignore missing a .locks/ entry — leases could get committed"
 fi
-# handoff.local.json holds one developer's choices only — board, group, and the userLayer opt-in.
+# handoff.local.json holds one developer's choices only — board, group, handle, and the userLayer
+# opt-in.
 # Anything else in it is ignored by the CLI, so say so instead of letting it look like it applies.
 if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
   LOCAL_EXTRA="$(python3 -c 'import json,sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 if isinstance(d, dict):
-    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "userLayer"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
+    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "handle", "userLayer"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
   if [ -n "$LOCAL_EXTRA" ]; then
-    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group and userLayer are one developer's to choose; board-wide keys belong in the committed config"
+    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group, handle and userLayer are one developer's to choose; board-wide keys belong in the committed config"
   else
     ok repo.local_config.keys ".agents/handoff.local.json sets only per-developer keys"
   fi

@@ -5,8 +5,8 @@
 # request on stdin, a JSON reply on stdout, non-zero exit on failure. State lives in the JSON file
 # named by $FAKE_TRACKER_STATE, so a test can seed issues, add comments, and assert on every call.
 #
-#   list      {"repo", "label"}                          -> [{"number","state","title","body","labels","children"}]
-#   create    {"repo", "title", "body", "labels"}        -> {"number", "url"}
+#   list      {"repo", "label"}                          -> [{"number","state","title","body","labels","children","assignees"}]
+#   create    {"repo", "title", "body", "labels", "assignees"?} -> {"number", "url"}
 #   update    {"repo", "number", "title", "body", "labels", "managed", "children", "owned"}
 #                                                        -> {} or {"linked", "skipped"}
 #     No reopen: a closed issue whose handoff is still open is drift, reported and never
@@ -20,6 +20,13 @@
 # asked to link. On `update`, "children" is the set the board wants; only links to issues the mirror
 # itself made -- the CLI names them in "owned" -- are reconciled, so a child a person attached by
 # hand survives every run.
+#
+# Assignees (ADR 0016): the reviewer pointer projected outward. Set on `create` and NEVER on
+# `update`, so a reassignment made in the tracker survives every later run -- a test asserts exactly
+# that by reassigning here and mirroring again. $FAKE_TRACKER_BAD_ASSIGNEE=<handle> models a handle
+# the tracker will not accept (not a collaborator): the issue is still created, the assignment is
+# dropped, and a line goes to stderr -- which is the real adapter's behaviour, where assignment is a
+# separate non-fatal step after the create.
 #
 # Test hooks: $FAKE_TRACKER_FAIL=<op> makes that operation exit 1. $FAKE_TRACKER_NO_LINKS=1 makes it
 # an adapter with no link support. $FAKE_TRACKER_LINK_CAP=<n> caps links per parent, to exercise
@@ -67,15 +74,23 @@ if op == "list":
         if req.get("label") and req["label"] not in i.get("labels", []):
             continue
         row = {k: i[k] for k in ("number", "state", "title", "body", "labels")}
+        row["assignees"] = list(i.get("assignees", []))
         # Absent, not empty, when this adapter does not do links: the CLI distinguishes the two.
         if links:
             row["children"] = sorted(i.get("children", []))
         out.append(row)
 elif op == "create":
     n = max([i["number"] for i in db["issues"]] + [0]) + 1
+    want = list(req.get("assignees", []))
+    bad = os.environ.get("FAKE_TRACKER_BAD_ASSIGNEE")
+    if bad and bad in want:
+        # Reported, and survived. The issue is the point; the assignment is a courtesy.
+        sys.stderr.write("fake-tracker: could not assign %s on #%d — not a collaborator. The issue was still created.\n" % (bad, n))
+        want = [a for a in want if a != bad]
     db["issues"].append({
         "repo": req["repo"], "number": n, "state": "open", "title": req["title"],
         "body": req["body"], "labels": list(req.get("labels", [])), "comments": [], "children": [],
+        "assignees": want,
     })
     out = {"number": n, "url": "https://tracker.invalid/%s/issues/%d" % (req["repo"], n)}
 elif op == "update":

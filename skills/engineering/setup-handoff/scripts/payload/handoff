@@ -785,7 +785,7 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
 # offline-import path dies on an unknown format instead; that is right for a brief (one file, one
 # executor, a bad parse means wrong work) and wrong here, where one newer document would take
 # `list` down for every member of a shared board.
-SCHEMA_VERSION=2
+SCHEMA_VERSION=3
 
 # Absent means schema 0 — every document written before the format was versioned. Not "unknown":
 # those docs have a known shape, it is simply the one that predates the stamp.
@@ -1467,7 +1467,8 @@ warn_archive_failed() { # id
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
   local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref="" share=""
-  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--note N]}"
+  local reviewer="" reviewer_set=0
+  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--reviewer HANDLE] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
   # board this CLI must not add to. The board stamp is board-wide, so --group cannot change it.
@@ -1545,6 +1546,12 @@ cmd_new() {
         share="$2"
         shift 2
         ;;
+      --reviewer)
+        require_value --reviewer "$#" "${2:-}"
+        reviewer="$2"
+        reviewer_set=1
+        shift 2
+        ;;
       --force-secret)
         # Reason REQUIRED, and recorded on the doc. An override with no stated reason is a silent
         # bypass wearing a flag, and the whole point of putting the scanner on the write path is
@@ -1561,6 +1568,10 @@ cmd_new() {
   done
   case " $VALID_SENSITIVITY " in *" $sensitivity "*) ;; *) die "bad --sensitivity: $sensitivity (use ${VALID_SENSITIVITY// /|})" ;; esac
   [ -n "${ext_ref:-}" ] && { ext_ref="$(validate_external_ref "$ext_ref")" || exit 3; }
+  # Refused, not folded — see validate_reviewer. A handle is an identifier, not prose. Keyed on
+  # "the flag was given" rather than "the value is non-empty", so `--reviewer ""` is refused instead
+  # of quietly filing a doc with no reviewer on it.
+  [ "$reviewer_set" = 1 ] && { reviewer="$(validate_reviewer "$reviewer")" || exit 3; }
   # ADR 0013: `share` is audience, not handling. One value exists; restricted always wins; a
   # standalone doc is never published, so marking it would assert something nothing honours.
   if [ -n "$share" ]; then
@@ -1571,6 +1582,11 @@ cmd_new() {
   [ "$sensitivity" = "restricted" ] && [ "$type" = "standalone" ] \
     && die "--sensitivity applies to work that can be delegated; a standalone/reference doc is never exported. Keep the material off the board instead."
   case "$type" in coordination | standalone | orchestrator) ;; *) die "bad --type: $type (use coordination|standalone|orchestrator)" ;; esac
+  # Scoped exactly as `--for-review` is, and for the same reason: the field names who reviews THIS
+  # WORK. A bundle holds no work of its own and is never claimed, and a standalone doc has no
+  # lifecycle to review — naming a reviewer on either asserts a duty against nothing.
+  [ -n "$reviewer" ] && [ "$type" != "coordination" ] \
+    && die "--reviewer applies to coordination handoffs; a doc of type '$type' has no work of its own to review"
   if [ -n "$role" ]; then
     [ "$type" = "standalone" ] || die "--role only applies to a standalone doc (it says what a reference doc is FOR; coordination docs have a lifecycle, not a role)"
     case " $VALID_ROLES " in *" $role "*) ;; *) die "bad --role: $role (use ${VALID_ROLES// /|})" ;; esac
@@ -1773,6 +1789,7 @@ cmd_new() {
   [ -n "$dlist" ] && set_field "$target" depends_on "[$dlist]"
   [ -n "$spec" ] && set_field "$target" spec "$spec"
   [ -n "${ext_ref:-}" ] && set_field "$target" external_ref "$ext_ref"
+  [ -n "$reviewer" ] && set_field "$target" reviewer "$reviewer"
   [ -n "$share" ] && set_field "$target" share "$share"
   # Coordination and orchestrator docs carry it explicitly so the field is discoverable at the one
   # moment somebody is looking at the frontmatter. A standalone doc is never exported or delegated,
@@ -2874,7 +2891,14 @@ cmd_list() {
     deleg="$(meta "$f" delegated_to)"
     review_flag="$(meta "$f" review)"
     [ -n "$deleg" ] && [ "$(meta "$f" review)" != "done" ] && extra="$extra  → $deleg"
-    [ "$review_flag" = "pending" ] && extra="$extra  ⇤ review"
+    # Naming the reviewer when the doc names one: `⇤ review` says work is waiting, and the handle
+    # says on whom. Appended to the same marker rather than given a column, because it is present on
+    # a minority of rows and an empty column on every other one buys nothing.
+    if [ "$review_flag" = "pending" ]; then
+      local rvw_h
+      rvw_h="$(meta "$f" reviewer)"
+      extra="$extra  ⇤ review${rvw_h:+ → $rvw_h}"
+    fi
     extra="$extra$dnote"
     printf '%-44s %-9s %-14s %-8s %-8s %s\n' \
       "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(doc_env "$f")" "$(meta "$f" severity)" "$lock$extra"
@@ -4083,9 +4107,19 @@ else:
         labels.append("mode:%s" % meta["executed_by"])
 if group:
     labels.append("section:%s" % group)
+# The reviewer pointer, projected as the tracker's assignee -- the only mechanism in this system
+# that actually reaches a PERSON (a `status:` label reaches whoever is already looking). It is a
+# list because trackers model assignment as one, not because the board has more than one reviewer.
+#
+# There is no public-share test here ON PURPOSE. `mirror_survey` already drops any doc that is not
+# `share: public` before it is rendered on a public repository (ADR 0013), so a handle cannot reach
+# a public tracker through this line. A second copy of that gate could only diverge from the first,
+# and the divergence would leak a login -- the same reason `linkable` above computes the child gate
+# exactly once.
+assignees = [meta["reviewer"]] if meta.get("reviewer") else []
 print(json.dumps({"marker": marker, "id": doc_id, "title": meta.get("title", doc_id),
                   "body": "\n\n".join(parts) + "\n", "labels": labels, "children": linkable,
-                  "child_refs": child_refs}))
+                  "child_refs": child_refs, "assignees": assignees}))
 PY
 }
 
@@ -4129,7 +4163,14 @@ for d in desired:
     req = {"repo": repo, "title": d["title"], "body": d["body"], "labels": d["labels"]}
     have = by_marker.get(d["marker"])
     if have is None:
-        out.append(("create", "", d["marker"], req))
+        # Assigned on CREATE and never afterwards, which is ADR 0014's existing rule for links
+        # applied to the assignee for the same reason: reassigning in the tracker is a legitimate
+        # human act -- the reviewer is on leave, the team rotates -- and a board that reconciled it
+        # would fight the person every run and always win. Note what follows from that: `assignees`
+        # is absent from the `same` comparison below, so a reassignment is not drift and does not
+        # even mark the issue as needing an update.
+        out.append(("create", "", d["marker"],
+                    dict(req, assignees=d["assignees"]) if d.get("assignees") else req))
         continue
     same = (have.get("state") == "open" and have.get("title") == d["title"]
             and have.get("body", "").strip() == d["body"].strip()
@@ -4262,6 +4303,41 @@ validate_external_ref() { # ref -> prints the ref as stored; non-zero with a mes
   printf '%s' "$ref"
 }
 
+# A reviewer handle, validated rather than folded. Every other free-text frontmatter value goes
+# through fold_colons, which turns a `:` into an em dash so the unquoted YAML stays parseable — the
+# right answer for prose, and the wrong one here. A handle is an IDENTIFIER: it is projected as a
+# tracker assignee, so a silently mangled one is not a cosmetic blemish but an assignment to a user
+# that does not exist, reported once by the adapter and then invisible. Refuse instead, and say so.
+#
+# The shape is deliberately permissive about WHICH tracker: the board declares that, and a handle
+# that is legal on one system is not on another. What it refuses is what no tracker accepts and what
+# would break the frontmatter — whitespace, a colon, a quote, a comma, a bracket. A leading `@` is
+# accepted and stripped, because that is how people write handles and storing both spellings would
+# make two docs naming one person compare unequal.
+validate_reviewer() { # handle -> prints the handle as stored; non-zero with a message when refused
+  local h="${1#@}"
+  if [ -z "$h" ]; then
+    echo "handoff: --reviewer needs a tracker handle (the login the work is assigned to), not an empty value." >&2
+    return 1
+  fi
+  case "$h" in
+    *[[:space:]]* | *:* | *\"* | *\'* | *,* | *\[* | *\]* | *'#'*)
+      echo "handoff: --reviewer '$1' is not a usable handle — no whitespace, colons, quotes, commas, brackets or '#'." >&2
+      echo "         It is stored verbatim and projected as a tracker assignee, so it is refused rather than reshaped." >&2
+      return 1
+      ;;
+  esac
+  # Leading punctuation is the one shape worth calling out separately: `-alice` is a plausible typo
+  # for `alice` and GitHub rejects it, so catching it here beats learning from the adapter.
+  case "$h" in
+    [!A-Za-z0-9]*)
+      echo "handoff: --reviewer '$1' must start with a letter or digit." >&2
+      return 1
+      ;;
+  esac
+  printf '%s' "$h"
+}
+
 # ADR 0011 — a progress checkpoint. Progress used to reach the team only at `release`, and `touch`
 # extends a lease without carrying any, so a long piece of work was invisible until it ended. This
 # rewrites `## Current state` (or, with no text, takes the doc as the holder already edited it),
@@ -4369,11 +4445,12 @@ finish_release() { # id status
 }
 
 cmd_release() {
-  local id="${1:?usage: handoff release <id> --status open|blocked|done [--for-review] [--verified-by \"...\"] [--blocked-on \"...\"] [--ruled-out \"approach — why — evidence\"] [--run-verify] [--force-secret REASON] [note]}"
+  local id="${1:?usage: handoff release <id> --status open|blocked|done [--for-review] [--reviewer HANDLE] [--verified-by \"...\"] [--blocked-on \"...\"] [--ruled-out \"approach — why — evidence\"] [--run-verify] [--force-secret REASON] [note]}"
   shift
   local raw_id="$id"
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   local status='' note='' verified_by='' blocked_on='' ruled_out='' run_verify=0 force_secret='' for_review=0
+  local reviewer='' reviewer_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force-secret)
@@ -4406,6 +4483,12 @@ cmd_release() {
         for_review=1
         shift
         ;;
+      --reviewer)
+        require_value --reviewer "$#" "${2:-}"
+        reviewer="$2"
+        reviewer_set=1
+        shift 2
+        ;;
       *)
         reject_unknown_flag "$1" "the note is a trailing positional, not a flag"
         note="$note $1"
@@ -4425,6 +4508,14 @@ cmd_release() {
   if [ "$for_review" = 1 ] && [ "$status" = "done" ]; then
     die "--for-review hands work back for someone else to close; --status done closes it yourself. Pick one."
   fi
+  # `--reviewer` names who acts next, which is only a thing a hand-back says. On a plain
+  # open/blocked/done release there is no such moment: nobody is being asked to look, and recording
+  # a reviewer there would leave a pointer at work that is not waiting on anyone. Refused rather
+  # than ignored, so a mistyped hand-back does not silently lose the handle.
+  if [ "$reviewer_set" = 1 ] && [ "$for_review" != 1 ]; then
+    die "--reviewer names who reviews the work you are handing back, so it needs --for-review. To retarget a doc you are not handing back, edit its reviewer under your lease."
+  fi
+  [ "$reviewer_set" = 1 ] && { reviewer="$(validate_reviewer "$reviewer")" || exit 3; }
 
   local f
   f="$(doc_of "$id")" || no_such "$id"
@@ -4696,8 +4787,15 @@ cmd_release() {
     # that already owns the doc. `import --result` refuses to change it for the same reason, and the
     # two writers of this field must not disagree about what else they touch.
     set_field "$f" review pending
-    log_activity "$f" "$status — handed back for review by $me, who did the work.${note}"
-    echo "Released $id → $status, awaiting review."
+    # Optional, and only when stated. A hand-back with no handle is the ordinary case — "somebody
+    # should look at this" — and stamping a guess would appoint someone who never agreed.
+    [ -n "$reviewer" ] && set_field "$f" reviewer "$reviewer"
+    log_activity "$f" "$status — handed back for review by $me${reviewer:+, to $reviewer}, who did the work.${note}"
+    if [ -n "$reviewer" ]; then
+      echo "Released $id → $status, awaiting review by $reviewer."
+    else
+      echo "Released $id → $status, awaiting review."
+    fi
     echo "    It stays on the board until a reviewer closes it with --verified-by."
   else
     log_activity "$f" "$status — released by $me.${note}"
@@ -4858,6 +4956,17 @@ migrate_doc_1_to_2() { # path
   log_activity "$1" "migrated to schema 2 (structure only — external_ref is optional and never inferred)"
 }
 
+# One document, schema 2 -> 3. Schema 3 adds `reviewer`, an OPTIONAL pointer to the tracker handle
+# that reviews this work. Absent means "nobody named", which is what every doc written before this
+# change meant and still means, so there is nothing to write into a doc but the stamp — and nothing
+# to infer. Inferring one WOULD be possible here (the last holder, the closer, the delegate) and is
+# exactly what ADR 0003 forbids: a reviewer nobody appointed is a false claim about who is
+# accountable, and it would be projected outward as a tracker assignment.
+migrate_doc_2_to_3() { # path
+  set_field "$1" schema 3
+  log_activity "$1" "migrated to schema 3 (structure only — reviewer is optional and never inferred)"
+}
+
 cmd_migrate() {
   local yes=0 dry=0
   while [ $# -gt 0 ]; do
@@ -4977,6 +5086,10 @@ cmd_migrate() {
     if [ "$(doc_schema "$f")" -lt 2 ]; then
       migrate_doc_1_to_2 "$f"
       echo "  migrated $(basename "$f" .md) (1 → 2)"
+    fi
+    if [ "$(doc_schema "$f")" -lt 3 ]; then
+      migrate_doc_2_to_3 "$f"
+      echo "  migrated $(basename "$f" .md) (2 → 3)"
     fi
     migrated=$((migrated + 1))
   done < <(each_doc)

@@ -59,6 +59,20 @@ chk "a local repo identity is ignored" myrepo "$HC_REPO_NAME"
 chk "a local groupLayout is ignored" "" "$HC_GROUP_LAYOUT"
 chk "the local group still applies" mine "$HC_GROUP"
 
+# `handle` is the one piece of IDENTITY the local layer may set (ADR 0016), and the exception proves
+# the rule above: it is this developer's own tracker login, per-machine by nature, read only to
+# decide whether a handoff's `reviewer` points at the person reading the banner. It authorises
+# nothing, so an inaccurate value costs one wrong marker and never an access decision.
+printf '{"handle":"alice"}\n' > "$T/repo_local/.agents/handoff.local.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a local handle is read" alice "$HC_HANDLE"
+# Not a committed key: team identity stays in handoff.json, and one machine's login is not the team's.
+printf '{"repo":"myrepo","group":"team","handle":"committed-somebody"}\n' > "$T/repo_local/.agents/handoff.json"
+printf '{}\n' > "$T/repo_local/.agents/handoff.local.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a handle in the COMMITTED file is ignored" "" "$HC_HANDLE"
+chk "and no handle set at all is empty, never a guess" "" "$HC_HANDLE"
+
 # handoff_config_board — the one reader of `board`, first file that names one wins.
 mkdir -p "$T/cb"
 printf '{"group":"g"}\n' > "$T/cb/none.json"

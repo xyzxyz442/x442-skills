@@ -133,9 +133,13 @@ if [ "$CONFIG_MISSING" = "1" ]; then
   HC_TTL_HOURS=4
   HC_ALLOW_VERIFY_CMD=0
   HC_BOARD_PATH=""
+  HC_HANDLE=""
 fi
 
 TOPOLOGY="$HC_TOPOLOGY"
+# Overridable by env for the same reason every other setting is: a test, and a developer with two
+# logins. Empty is the normal state and simply means "no reviewer pointer is about me".
+ME_HANDLE="${HANDOFF_HANDLE:-$HC_HANDLE}"
 TTL_HOURS="${HANDOFF_TTL_HOURS:-$HC_TTL_HOURS}"
 [ -z "$REPO" ] && REPO="${HANDOFF_REPO:-$HC_REPO_NAME}"
 
@@ -624,8 +628,24 @@ case "$KIND" in
       # review reads as `open · medium · Title`, exactly like work nobody has started, and the next
       # agent redoes it instead of reviewing it. `handoff list` has carried this marker all along;
       # the banner never did.
-      [ "$(meta "$f" review)" = "pending" ] \
-        && line="$line [⇤ AWAITING REVIEW — reproduce the evidence and close it, do not redo the work]"
+      if [ "$(meta "$f" review)" = "pending" ]; then
+        # Schema 3's reviewer pointer, read here and nowhere that decides anything. "Somebody should
+        # look at this" and "YOU should look at this" are different instructions to the agent reading
+        # the banner, and before this field there was no way to say the second one: every reader saw
+        # the same AWAITING REVIEW, which is addressed to everyone and therefore to no one.
+        #
+        # The match is against `handle` in handoff.local.json — this developer's own tracker login,
+        # uncommitted and per-machine. Unset, or set to someone else, and the generic marker stands:
+        # a pointer is never a gate (ADR 0016), so nothing here refuses, hides, or reassigns work.
+        rvw="$(meta "$f" reviewer)"
+        if [ -n "$rvw" ] && [ -n "$ME_HANDLE" ] && [ "$rvw" = "$ME_HANDLE" ]; then
+          line="$line [⇤ AWAITING YOUR REVIEW ($rvw) — reproduce the evidence and close it, do not redo the work]"
+        elif [ -n "$rvw" ]; then
+          line="$line [⇤ AWAITING REVIEW by $rvw — reproduce the evidence and close it, do not redo the work]"
+        else
+          line="$line [⇤ AWAITING REVIEW — reproduce the evidence and close it, do not redo the work]"
+        fi
+      fi
       if lock_live "$id" && [ -n "$(field session)" ] && [ "$(lock_session "$id")" = "$(field session)" ]; then
         # This session's own lease — a resumed or compacted session reads the banner too, and
         # "do not work on it" would tell it to abandon its own work.
