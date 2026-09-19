@@ -87,6 +87,10 @@ Rules:
 | `personal`     | `setup-delegate-agent`        | `experimental` | Install the dispatcher, per-vendor adapters, consent gate and credential scanning, and render an `AGENTS.md` routing block from the agents the cascade permits. Chains after `register-delegate-agents`, before `run-delegate-agent`.                                                                                                                                                                                                                                                             |
 | `personal`     | `run-delegate-agent`          | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed delegation setup: the user approves before anything is dispatched, and the sub-agent can ask back rather than guess. Chains after `setup-delegate-agent`.                                                                                                                                                                                                                                                      |
 
+**New to a suite?** The [usage guides](docs/usage/README.md) are the layer above `SKILL.md` — what
+a suite is for, what a real run looks like, and which situations it answers. Handoff and secret
+guard are written up; the rest follow the same template.
+
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each
 skill's frontmatter `name` (e.g. `initial-project/` → `name: x442-initial-project`).

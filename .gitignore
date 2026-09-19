@@ -497,3 +497,6 @@ harness/**/iterations/**/run-*/transcript.md
 # listed: payload 21 renamed handoff.config.json to handoff.json.
 .agents/handoff.json
 .agents/handoff.config.json
+
+# archify visual-check sidecars: per-run browser evidence, not a committed artifact.
+docs/usage/diagrams/*.visual-check.json

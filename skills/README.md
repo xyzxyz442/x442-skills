@@ -38,6 +38,13 @@ own `README.md`.
 | `draft`        | incomplete; expect breakage (usually under `in-progress/`)              |
 | `deprecated`   | retired; kept for reference (usually under `deprecated/`)               |
 
+## Usage guides
+
+This catalog says what each skill **is**. The [usage guides](../docs/usage/README.md) say what a
+suite is **for** — a situation-led walkthrough with diagrams, for a reader who has not met these
+skills before. Written so far: [handoff](../docs/usage/handoff.md) and
+[secret guard](../docs/usage/secret-guard.md).
+
 ## Catalog
 
 `Skill` is the installed (slash) name — `x442-`-prefixed (see [Conventions](#authoring--conventions)).
