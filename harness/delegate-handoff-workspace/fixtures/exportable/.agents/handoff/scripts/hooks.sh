@@ -242,7 +242,14 @@ LOCKS="$(sec_dir)/.locks"
 # nobody listening, and taking a session down over a board upgrade is how a hook gets deleted.
 # Reported in both directions, because they need opposite actions — an older board wants
 # `handoff migrate`, a newer one wants the payload updated first.
-SCHEMA_VERSION=2
+#
+# This RESTATES the CLI's `SCHEMA_VERSION` rather than reading it, because schema_note must work with
+# nothing but bash and must not pay to resolve the CLI just to print one banner line. The cost of that
+# choice is a constant in two files, and it has already been paid once- schema 3 shipped with this
+# copy left at 2, so every session on a migrated board was told "this payload understands 2 — re-run
+# setup-handoff", which was false and the remedy pointless. The selftest now asserts the two agree;
+# bump both or neither.
+SCHEMA_VERSION=3
 schema_note() { # -> one line, or nothing
   local board=0 ahead=0 f v
   if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then

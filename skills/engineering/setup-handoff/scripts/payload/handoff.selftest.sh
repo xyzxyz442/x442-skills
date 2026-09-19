@@ -2825,6 +2825,15 @@ chk_contains "migrate names the 2 to 3 step" "$RW_OUT" "2 → 3"
 chk "a schema-2 doc is lifted to 3" "3" "$(sed -n 's/^schema: //p' "$RWB/w-old-handoff.md" | head -1)"
 chk "no reviewer is invented on the way" "0" "$(grep -c '^reviewer:' "$RWB/w-old-handoff.md")"
 chk_contains "and the step is logged" "$(cat "$RWB/w-old-handoff.md")" "migrated to schema 3"
+# The constant is declared TWICE — the CLI owns it, and hooks.sh restates it so the session banner
+# can report schema drift with nothing but bash. Exactly the `MANAGED` situation, and it has already
+# gone wrong once- schema 3 shipped with hooks.sh still at 2, so every session on a migrated board was
+# told "this payload understands 2 — re-run setup-handoff", which was false and the fix pointless.
+# Nothing in the CLI's own tests could catch that, because the CLI was right. Assert they agree.
+chk "hooks.sh restates the CLI's schema version, and has not drifted from it" "$CUR_SCHEMA" \
+  "$(sed -n 's/^SCHEMA_VERSION=//p' "$SRC/hooks.sh" | head -1)"
+chk "and each declares it exactly once" "1 1" \
+  "$(printf '%s %s' "$(grep -c '^SCHEMA_VERSION=' "$SRC/handoff")" "$(grep -c '^SCHEMA_VERSION=' "$SRC/hooks.sh")")"
 chk "the board stamp moves too" "3" \
   "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$RWB/handoff.json")"
 # The other half of ADR 0003, which is what makes reading forward safe: a CLI that predates the

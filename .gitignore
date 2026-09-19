@@ -495,8 +495,15 @@ harness/**/iterations/**/run-*/transcript.md
 # the installer's tracked-file writes (.claude/settings.json, AGENTS.md) are reverted by hand
 # and the wiring lives in .claude/settings.local.json instead. Both config filenames are
 # listed: payload 21 renamed handoff.config.json to handoff.json.
+#
+# handoff.local.json is the third name in that family and the one that is uncommittable BY DESIGN
+# (ADR 0010) rather than by this repo's circumstances: it is one developer's layer, and since ADR
+# 0016 it may carry `handle`, that developer's own tracker login. Committing it would hand one
+# person's identity to everyone on the board — the board layer is shared, so a handle there tells
+# every member they are the same person, which is why the CLI drops it from every layer but this one.
 .agents/handoff.json
 .agents/handoff.config.json
+.agents/handoff.local.json
 
 # archify visual-check sidecars: per-run browser evidence, not a committed artifact.
 docs/usage/diagrams/*.visual-check.json
