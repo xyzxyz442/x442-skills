@@ -2788,6 +2788,26 @@ chk "but names nobody" "0" \
   "$(rv_row bob r-anon-handoff | grep -c 'REVIEW by\|YOUR REVIEW')"
 chk_contains "handoff list names the reviewer on the review marker" "$(rvh list)" "review → bob"
 
+# --- the handle does not travel outward --------------------------------------
+# ADR 0016's Consequences lean on this: a brief renders named sections rather than copying
+# frontmatter, so the reviewer's login never reaches the outside executor the brief is handed to. A
+# login is personal data, and an executor has no use for the name of whoever will review their work.
+# The property was verified by hand when the ADR was written and then left unguarded -- one refactor
+# of the brief's identity block away from silently shipping a third party's handle off-board, with
+# nothing to report it.
+rvh new r-priv --title "Names a reviewer" --reviewer octocat > /dev/null
+rvh export r-priv --to "External Contractor" > /dev/null
+RV_BRIEF="$RVB/briefs/r-priv-handoff.brief.md"
+# Both guards run BEFORE the absence checks, for the reason given at the release-path absence test
+# above: an absence asserted over a brief that was never written, or over a doc that never named
+# anyone, passes for the happy reason and can never fail.
+chk "the brief was written and is non-empty (or the absence checks below are vacuous)" "yes" \
+  "$([ -s "$RV_BRIEF" ] && echo yes || echo no)"
+chk "and the doc really does carry the handle the brief must not leak" "octocat" \
+  "$(rv_field r-priv reviewer)"
+chk "the brief carries no reviewer field" "0" "$(grep -c '^reviewer:' "$RV_BRIEF")"
+chk "nor the handle anywhere in its text" "0" "$(grep -c 'octocat' "$RV_BRIEF")"
+
 # --- migration 2 -> 3 --------------------------------------------------------
 # A new field is ADR 0003's trigger. The stamp moves and nothing else does: a reviewer nobody
 # appointed would be a false claim about who is accountable, projected outward as a real assignment.
