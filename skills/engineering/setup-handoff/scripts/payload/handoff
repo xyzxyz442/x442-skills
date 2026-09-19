@@ -684,6 +684,19 @@ lease_is_mine() { # id -> 0 when this session holds a live lease on it
   [ -n "$held" ] && [ "$held" = "$mine" ]
 }
 
+# Appended to every refusal that `lease_is_mine` drives, and empty whenever a session id exists.
+#
+# With none exposed, `lease_is_mine` cannot answer yes for ANYONE — including the caller who claimed
+# the lease one command ago — so the refusal is not about who holds it but about nothing here being
+# able to prove a holder at all. The bare messages do not survive that state: `claim` records
+# `session=` empty and `whoami_id` falls back to `$$`, so "held by alice (52170)" names the caller's
+# own earlier PROCESS back at them and reads as somebody else's lease. The behaviour is deliberate
+# (a false yes is the dangerous direction, see above); being unable to tell why it fired is not.
+advisory_hint() { # -> one sentence when no session id is exposed, empty otherwise
+  [ -n "$(session_id)" ] && return 0
+  printf '%s' " No session id is exposed here, so ownership cannot be proven for anyone and this would refuse whoever ran it — the owner shown may well be your own earlier process. Set HANDOFF_SESSION_ID to a value that is stable for this terminal, then re-claim."
+}
+
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
 # Handoff type. "standalone" = a self-contained reference/knowledge doc: gate-exempt (no lease
@@ -2747,7 +2760,7 @@ export_bundle() { # id doc to outdir do_claim force-secret-reason
       fi
     done <<< "$kids"
     [ -z "$busy" ] \
-      || die "cannot export bundle $id — a child has a live lease held by another session and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run."
+      || die "cannot export bundle $id — a child has a live lease held by another session and cannot be claimed:$busy. Nothing was written; wait for the lease to clear or ask the holder, then re-run.$(advisory_hint)"
   fi
 
   dest_dir="${outdir:-$(briefs_dir)}"
@@ -3335,7 +3348,7 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   is_orchestrator "$f" && die "$id is an orchestrator — move its children; a bundle index belongs to the board its children are on."
   [ "$(meta "$f" status)" = "done" ] && die "$id is done — closed work stays on the board that closed it."
   if ! is_standalone "$f"; then
-    lease_is_mine "$id" || die "moving $id transfers ownership, so this session has to hold its lease — claim it first: handoff claim $id"
+    lease_is_mine "$id" || die "moving $id transfers ownership, so this session has to hold its lease — claim it first: handoff claim $id.$(advisory_hint)"
   fi
 
   local across=""
@@ -4374,7 +4387,7 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
   local kind owner exp
   IFS='|' read -r kind owner exp <<< "$(lock_state "$(lock_key "$id")")"
   [ "$kind" = "free" ] && die "$id is not claimed — claim it first: handoff claim $id"
-  lease_is_mine "$id" || die "this session does not hold the lease on $id (held by ${owner:-unknown}, $kind). Only the holder can checkpoint it."
+  lease_is_mine "$id" || die "this session does not hold the lease on $id (held by ${owner:-unknown}, $kind). Only the holder can checkpoint it.$(advisory_hint)"
 
   # Build what will be published first, then scan ALL of it. A checkpoint pushes the whole doc, so
   # scanning only the new text let a credential pasted into the doc by hand ride along — and a
