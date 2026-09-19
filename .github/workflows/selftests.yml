@@ -1,0 +1,69 @@
+name: selftests
+
+# The two shipped suites that nothing else runs. `harness-fixtures` and `standalone` guard
+# committed state; these guard BEHAVIOUR — 659 assertions over the board CLI and 36 over the
+# installer — and until now they ran only when somebody remembered to invoke them locally.
+#
+# Why both operating systems, rather than ubuntu alone:
+#
+#   `/bin/bash` is 5.x on ubuntu-latest and 3.2.57 on macos-latest, so naming it explicitly runs
+#   each suite under both shells without installing anything. That is not redundancy. Bash 3.2
+#   leaves an array UNSET where later versions leave it empty, which under `set -u` aborts the
+#   whole script — the defect fixed in d2925ef, invisible on bash 5, and shipped in an installer
+#   whose users are overwhelmingly on the macOS default shell. A matrix that ran ubuntu alone
+#   would have passed that bug and reported green.
+#
+# Minutes are free on a public repository, so the cost here is wall-clock, not money: the CLI
+# suite takes eight to ten minutes and the installer suite about eight seconds.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Every board these suites create points at a deliberately unreachable remote. A cached
+  # credential helper on a runner could otherwise turn a push that must fail into a prompt that
+  # hangs until the job times out.
+  GIT_TERMINAL_PROMPT: '0'
+
+jobs:
+  installer:
+    name: installer selftest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both shells. Stopping at the first failure hides whether a break is
+      # version-specific, which is the one question this matrix exists to answer.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run setup-handoff.selftest.sh
+        working-directory: skills/engineering/setup-handoff/scripts
+        run: /bin/bash setup-handoff.selftest.sh
+
+  cli:
+    name: handoff CLI selftest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Measured at eight to ten minutes locally; the ceiling is there to fail a hang loudly
+    # rather than let it sit for the six-hour default.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run handoff.selftest.sh
+        working-directory: skills/engineering/setup-handoff/scripts/payload
+        run: /bin/bash handoff.selftest.sh
