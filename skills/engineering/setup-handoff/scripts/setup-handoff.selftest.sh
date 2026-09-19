@@ -201,5 +201,46 @@ chk "nested board: workflow file was written at the PARENT repo's root" "yes" "$
 chk_contains "nested board: working-directory is the board's relative subpath" "$(cat "$WF7")" "working-directory: .agents/handoff"
 chk_contains "nested board: branch is read from the parent repo's actual HEAD" "$(cat "$WF7")" "branches: [$NB_BRANCH]"
 
+printf '\nomitting --tools does not abort on bash 3.2 (unbound array)\n'
+# `IFS=',' read -r -a ARR <<< ""` leaves the array UNSET on bash 3.2 -- the default /bin/bash on
+# macOS -- rather than zero-length, so the next `"${ARR[@]}"` under `set -u` aborts the script.
+# bash 4+ does NOT reproduce it, so this case must run under /bin/bash explicitly; running it
+# under whatever `bash` is first on PATH proves nothing.
+#
+# It is reachable from the tool's OWN printed advice: detect-handoff.sh suggests
+# `setup-handoff.sh <repo> --migrate <src>` and `... --topology cross-repo --handoff-dir <board>`,
+# neither of which carries --tools.
+UB="$(mkparentrepo)"
+UB_OUT="$(/bin/bash "$INSTALLER" "$UB" 2>&1)"
+UB_ST=$?
+chk "installer exits 0 with no --tools" "0" "$UB_ST"
+case "$UB_OUT" in
+  *"unbound variable"*) chk "no unbound-variable abort" "no" "yes" ;;
+  *) chk "no unbound-variable abort" "no" "no" ;;
+esac
+# TOOLS defaults to "" and PRIMARY to "none", so wiring nothing is the coherent reading -- but it
+# must be SAID, or the operator gets a board whose lease gate is off and no hint why.
+chk_contains "and it says no tool config was wired" "$UB_OUT" "no --tools"
+chk "the board is still installed" "yes" "$([ -d "$UB/.agents/handoff" ] && echo yes || echo no)"
+chk "and the CLI is executable" "yes" "$([ -x "$UB/.agents/handoff/handoff" ] && echo yes || echo no)"
+# An explicit empty list is the same instruction, spelled out.
+UB2="$(mkparentrepo)"
+UB2_ST=$(
+  /bin/bash "$INSTALLER" "$UB2" --tools "" --primary none > /dev/null 2>&1
+  echo $?
+)
+chk "an explicitly empty --tools behaves the same" "0" "$UB2_ST"
+# The sibling site: setup-graph-hooks.sh defaults TOOLS to "claude", so it only reaches the same
+# shape when an empty list is passed explicitly -- which is one flag away, not unreachable.
+GH_INST="$HERE/../../setup-graph-hooks/scripts/setup-graph-hooks.sh"
+if [ -f "$GH_INST" ]; then
+  UB3="$(mkparentrepo)"
+  UB3_OUT="$(/bin/bash "$GH_INST" "$UB3" --tools "" 2>&1)"
+  case "$UB3_OUT" in
+    *"unbound variable"*) chk "setup-graph-hooks.sh survives an empty --tools too" "no" "yes" ;;
+    *) chk "setup-graph-hooks.sh survives an empty --tools too" "no" "no" ;;
+  esac
+fi
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

@@ -59,8 +59,11 @@ is_valid() { case " $VALID " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
 
 # normalize TOOLS (comma -> space), validate
 TOOLS_LIST=""
+# Same bash 3.2 unbound-array shape as setup-handoff.sh: an empty $TOOLS leaves the array unset,
+# and a bare expansion under `set -u` aborts. TOOLS defaults to "claude" here, so this is reachable
+# only via an explicit `--tools ""` -- one flag away, not unreachable.
 IFS=',' read -r -a _t <<< "$TOOLS"
-for t in "${_t[@]}"; do
+for t in ${_t[@]+"${_t[@]}"}; do
   t="$(printf '%s' "$t" | tr -d '[:space:]')"
   [ -z "$t" ] && continue
   is_valid "$t" || {

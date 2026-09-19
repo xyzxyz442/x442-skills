@@ -950,8 +950,23 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
     || echo "  WARN: could not wire $tool config: $cfg" >&2
 }
 
+# `read -r -a` into an EMPTY string leaves the array unset on bash 3.2 -- the default /bin/bash on
+# macOS -- rather than zero-length, so a bare `"${TOOL_ARR[@]}"` under `set -u` aborts the whole
+# install. Pre-initialising with `TOOL_ARR=()` does NOT help: the `read` runs afterwards and unsets
+# it again. `${ARR[@]+"${ARR[@]}"}` expands to nothing when unset and to the quoted elements
+# otherwise -- the same idiom tracker-github.sh already uses for its optional label array.
+#
+# Wiring NOTHING is the coherent reading of an empty list, not an error: TOOLS defaults to "" and
+# PRIMARY to "none", and detect-handoff.sh prints `--migrate` and `--topology cross-repo` commands
+# that carry no --tools at all. But it has to be said out loud, or the operator gets a board whose
+# lease gate is off with no hint why.
 IFS=',' read -r -a TOOL_ARR <<< "$TOOLS"
-for t in "${TOOL_ARR[@]}"; do
+if [ -z "$TOOLS" ]; then
+  echo "setup-handoff: no --tools given — wiring no tool configs. The board is installed, but"
+  echo "  nothing enforces its leases in this repo yet. Re-run with --tools <list> --primary <tool|none>"
+  echo "  to wire them (see the skill's Apply step for the list)."
+fi
+for t in ${TOOL_ARR[@]+"${TOOL_ARR[@]}"}; do
   [ -n "$t" ] || continue
   if [ "$t" = "$PRIMARY" ]; then render_and_merge "$t" 1; else render_and_merge "$t" 0; fi
 done
