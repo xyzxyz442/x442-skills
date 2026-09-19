@@ -219,7 +219,11 @@ cannot see is one nobody is warned about.
 **`depends_on` vs `blocked_on`.** `depends_on` holds **board ids only** and means _this cannot
 start before that lands_. `blocked_on` is free text, reserved for what the board cannot model
 (`external: …`, `decision: …`). If your blocker is a handoff id it belongs in `depends_on`; put it
-in `blocked_on` and the verifier will say so.
+in `blocked_on` and the verifier will say so. **Waiting on a team that is not on the board** — an
+infrastructure or devops group acting on live systems, a vendor, another company — is exactly what
+the `external:` prefix is for: `--blocked-on "external: platform team — CHG-4471"`. That is how a
+bundle child waits on such a team, and naming the change request in the blocker is what makes the
+wait auditable later.
 
 ```text
 handoff new prod-backfill --title "…" --env prod --after schema-change
@@ -256,6 +260,13 @@ The reference must match the board's `refPattern` in full, and a board with no t
 `verified_by:`, not only as a sentence in the activity log. Write something the next reader can
 re-run: a command, a `file:line`, a commit. Evidence naming none of those is a claim about your
 memory, and the verifier reports it as such.
+
+**`executed_by` says whether a human was in the loop** — `hitl` or `afk` — and it changes what
+evidence the closure owes (ADR 0015). Work done on live systems with a person watching is answered
+with the change reference, what they observed and when; unattended work has to be reproducible by
+someone who was not there. It is set when work is handed out (`export --executed-by hitl`) and
+defaults to `afk`, because assuming supervision that did not happen is the more expensive mistake.
+It never changes who closes the handoff.
 
 ## Keep `## Current state` current, and the activity log boring
 

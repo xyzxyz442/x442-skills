@@ -1929,9 +1929,13 @@ import_result() {
   set_field "$f" result_from "$(fold_colons "$result_by_raw")"
   set_field "$f" result_at "$(fold_colons "$result_at_raw")"
   set_field "$f" result_claimed "$claimed"
-  # What makes the doc delegate-executed. Without it the release path has no way to tell work done
-  # by a party outside the board from work done by whoever is closing it.
-  set_field "$f" executed_by delegate
+  # `executed_by` is decided when work is handed OUT (ADR 0015), so an import PRESERVES it — a
+  # result arriving is not the moment anyone learns whether a human was watching. Only a doc with no
+  # kind at all is stamped here: one delegated before this field was re-cut, or handed out by hand.
+  # It is stamped `afk`, because a result arriving from outside with nobody having said a person was
+  # present is exactly the unattended case, and that is the reading that asks for more scrutiny
+  # rather than less.
+  [ -n "$(meta "$f" executed_by)" ] || set_field "$f" executed_by afk
   set_field "$f" review pending
 
   if [ "$(meta "$f" verify)" != "$deny_before_verify" ] \
@@ -2118,9 +2122,9 @@ cmd_import() {
 # board — no leases, no hooks, no skills. The brief inlines the executor contract that those would
 # otherwise carry, and it carries repo identity so it cannot be run against the wrong checkout.
 cmd_export() {
-  local id="${1:?usage: handoff export <id> [--to WHO] [--out DIR] [--branch NAME] [--no-claim] [--force-secret REASON]}"
+  local id="${1:?usage: handoff export <id> [--to WHO] [--executed-by hitl|afk] [--out DIR] [--branch NAME] [--no-claim] [--force-secret REASON]}"
   shift
-  local raw_id="$id" to="" outdir="" branch="" do_claim=1 force_secret="" to_issue=0
+  local raw_id="$id" to="" outdir="" branch="" do_claim=1 force_secret="" to_issue=0 executed_by=afk
   id="$(resolve_id "$id")" || die "unusable id: '$raw_id' (needs at least one letter or digit)"
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -2146,6 +2150,15 @@ cmd_export() {
       --no-claim)
         do_claim=0
         shift
+        ;;
+      --executed-by)
+        require_value --executed-by "$#" "${2:-}"
+        executed_by="$2"
+        case "$executed_by" in
+          hitl | afk) ;;
+          *) die "--executed-by must be hitl (a person is present and will report what they observed) or afk (nobody is watching, so the evidence must be reproducible) — got '$executed_by'" ;;
+        esac
+        shift 2
         ;;
       --force-secret)
         require_value --force-secret "$#" "${2:-}"
@@ -2180,6 +2193,7 @@ cmd_export() {
     else
       export_to_issue "$id" "$f" "$outdir" "$branch" "$do_claim" "$force_secret"
     fi
+    stamp_executed_by "$f" "$executed_by"
     return
   fi
 
@@ -2189,9 +2203,36 @@ cmd_export() {
     # it outright rather than pretend a single branch name could apply to N independent children.
     [ -n "$branch" ] && die "--branch is not supported for a bundle export — each child gets its own default branch (fix/<child-id>)"
     export_bundle "$id" "$f" "$to" "$outdir" "$do_claim" "$force_secret"
+    stamp_executed_by "$f" "$executed_by"
     return
   fi
   export_one "$id" "$f" "$to" "$outdir" "$branch" "$do_claim" "$force_secret"
+  stamp_executed_by "$f" "$executed_by"
+}
+
+# ADR 0015 — `executed_by` records whether a HUMAN WAS IN THE LOOP, not who acted. Who acted does
+# not decide how much review a closure needs: a contractor's agent grinding through a migration
+# unattended and an engineer watching a change land are both outside the board, and they need
+# opposite amounts of scrutiny.
+#
+# Written when work is handed OUT rather than when a result arrives, so the value exists even if no
+# result ever comes back, and so the requester has decided what evidence they will accept before
+# anyone starts. `afk` is the default because the two mistakes do not cost the same: under-reviewing
+# unwatched work is how a wrong change closes, while over-reviewing watched work costs a second look.
+#
+# On a bundle the CHILDREN carry it. The parent is an index — nobody executes it — and giving it a
+# kind would put a `mode:` label on an issue that reports no work.
+stamp_executed_by() { # doc mode
+  local f="$1" mode="$2" kid kf
+  if is_orchestrator "$f"; then
+    while IFS= read -r kid; do
+      [ -n "$kid" ] || continue
+      kf="$(doc_of "$kid" 2> /dev/null || true)"
+      [ -n "$kf" ] && [ -f "$kf" ] && set_field "$kf" executed_by "$mode"
+    done <<< "$(children_of "$f")"
+    return
+  fi
+  set_field "$f" executed_by "$mode"
 }
 
 # Guard for brief_identity's packed "a|b|c|d|e" return: `fold_colons` only folds ":", so a
@@ -4034,6 +4075,12 @@ else:
     if meta.get("severity"):
         labels.append("severity:%s" % meta["severity"])
     labels.append("env:%s" % env)
+    # ADR 0015. The DOCUMENT is the source of truth and the label is a projection, exactly as
+    # `status:` and `type:` are -- so a teammate reading the tracker can see how a piece of work is
+    # being executed without opening the board. Only when the doc states a kind: a doc that was
+    # never handed out has none, and inventing one here would assert something nobody decided.
+    if meta.get("executed_by") in ("hitl", "afk"):
+        labels.append("mode:%s" % meta["executed_by"])
 if group:
     labels.append("section:%s" % group)
 print(json.dumps({"marker": marker, "id": doc_id, "title": meta.get("title", doc_id),
@@ -4060,7 +4107,7 @@ repo, group = sys.argv[4], sys.argv[5]
 prefix = group + "/" if group else ""
 # The label prefixes mirror_render writes. Only these are compared, and the adapter is told to
 # reconcile only these, so a label a person added by hand survives every run.
-MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:"]
+MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:", "mode:"]
 
 by_marker = {}
 out = []
@@ -4151,7 +4198,7 @@ repo = sys.argv[6]
 # A parent whose own issue is closed in the tracker has DRIFTED (ADR 0014): the mirror sends it
 # nothing at all, and a link is something sent. Its children keep whatever links they already have.
 drifted = {l.split("\t")[0] for l in open(sys.argv[7]) if l.strip()}
-MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:"]
+MANAGED = ["handoff-", "status:", "severity:", "env:", "section:", "type:", "mode:"]
 
 # Rows by marker, and the numbers of issues the mirror itself made. A link to anything outside that
 # set belongs to a person: never counted as drift, never removed (Decision 4).
@@ -4532,30 +4579,52 @@ cmd_release() {
       && [ -n "$evidence_src" ] && grep -Fq -- "$verified_by" <<< "$evidence_src"; then
       copied=1
     fi
-    # For DELEGATED work that is a refusal, not a warning. The executor is outside the board and
-    # never runs `release`, so the thing to refuse is not a person — it is the executor's words
+    # A refusal rather than a warning when a SECOND PARTY reported — the executor is outside the
+    # board and never runs `release`, so what is refused is not a person but the executor's own words
     # being used as the review. Closing on them stamps a verification date asserting somebody
     # checked, when nobody did.
-    if [ "$copied" = 1 ] && [ "$(meta "$f" executed_by)" = "delegate" ]; then
-      die "$id was executed by a delegate and your --verified-by is word-for-word what the delegate reported.
-       That is the delegate reviewing itself. Re-run the check and say what YOU observed, or
+    #
+    # Keyed on `result_from` (somebody outside filed a report), NOT on `executed_by`. Since ADR 0015
+    # that field answers a different question — whether a human was in the loop — and both of its
+    # values can describe off-board work, so it can no longer stand in for "a second party's words
+    # are in this doc". The legacy `delegate` value still counts, for docs written before the re-cut.
+    local reported_by_other=0
+    { [ -n "$(meta "$f" result_from)" ] || [ "$(meta "$f" executed_by)" = "delegate" ]; } && reported_by_other=1
+    if [ "$copied" = 1 ] && [ "$reported_by_other" = 1 ]; then
+      die "$id was executed by someone else and your --verified-by is word-for-word what they reported.
+       That is the executor reviewing itself. Re-run the check and say what YOU observed, or
        release --status open and hand it to a reviewer."
     fi
-    if [ "$(meta "$f" executed_by)" = "delegate" ] && [ "$(meta "$f" review)" = "pending" ]; then
-      echo "NOTE: this handoff was executed by a delegate and is awaiting review."
+    if [ "$reported_by_other" = 1 ] && [ "$(meta "$f" review)" = "pending" ]; then
+      echo "NOTE: this handoff was executed by someone else and is awaiting review."
       echo "      Closing it records YOU as the reviewer — --verified-by must be what you checked yourself."
     fi
     # Evidence quality is advisory and is said HERE, at the moment of closing, because that is the
     # only moment anyone can still act on it: `done` archives the doc, so a later scan is talking to
     # nobody. Generous on purpose — no pattern can judge whether evidence is good, only whether it
     # names something a second person could go and look at.
-    case "$verified_by" in
-      '' | *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
-      *)
-        echo "⚠️  Your evidence names no command, file reference, or commit — nobody can re-check it."
-        echo "    Closing anyway. Next time: what you ran, or the file:line you read."
-        ;;
-    esac
+    #
+    # WHAT counts as something to go and look at depends on the executor kind (ADR 0015). An
+    # infrastructure team acting on live systems answers with a change reference and an observation:
+    # there is no diff to read and `Where` names a cluster, not a `file:line`. Demanding a command or
+    # a commit there is asking for evidence that cannot exist, and a rule people cannot satisfy
+    # honestly gets satisfied dishonestly. No pattern is ENFORCED either way (Decision 4) — the two
+    # arms differ only in what they suggest.
+    if [ "$(meta "$f" executed_by)" = "hitl" ]; then
+      echo "NOTE: a person was in the loop on this one (executed_by: hitl)."
+      echo "      Good evidence here is the change reference, what was observed, and when —"
+      echo "      not a command, since there may be no diff to re-run."
+    else
+      case "$verified_by" in
+        '' | *:[0-9]* | */*[a-z]* | *' -'[a-z-]* | *' --'[a-z-]* | *test* | *spec* | *commit* | *sha* | *exit* | *'()'*) ;;
+        *)
+          echo "⚠️  Your evidence names no command, file reference, or commit — nobody can re-check it."
+          echo "    Nobody was watching this work (executed_by: $(meta "$f" executed_by)), so the evidence has to be"
+          echo "    reproducible by someone who was not there. Closing anyway. Next time: what you ran,"
+          echo "    or the file:line you read."
+          ;;
+      esac
+    fi
     # done is a claim about the LIVE CODE, not about the doc. Require evidence.
     [ -n "$verified_by" ] || die "release --status done needs --verified-by \"<how you verified against live code>\" (e.g. a test run or file:line). Trust-closing is disabled."
     local vcmd

@@ -746,7 +746,7 @@ chk_contains "list shows review pending" "$(hb "$R" list)" "review"
 # through `import --result`, so it carries executed_by: delegate, and closing it on the executor's
 # evidence would stamp a verification date asserting somebody checked when nobody did.
 OUT="$(hb "$R" release rbac-gap --status done --verified-by "Ran npm test -- tenant; 14 passing.")"
-chk_contains "refuses the delegate's own words as the review" "$OUT" "That is the delegate reviewing itself"
+chk_contains "refuses the delegate's own words as the review" "$OUT" "That is the executor reviewing itself"
 chk "and the doc is NOT closed" "open" "$(sed -n 's/^status: //p' "$BOARD/rbac-gap-handoff.md" | head -1)"
 chk "nor stamped with a verification date" "" "$(sed -n 's/^verified_at: //p' "$BOARD/rbac-gap-handoff.md" | head -1)"
 # Evidence the reviewer actually produced closes it normally.
@@ -2454,6 +2454,136 @@ chk "the commenter is recorded as who reported it" "carol" "$(sed -n 's/^result_
 chk "it lands as a claim awaiting review" "pending" "$(sed -n 's/^review: //p' "$DLB/d-work-handoff.md")"
 chk "and never changes status" "open" "$(sed -n 's/^status: //p' "$DLB/d-work-handoff.md")"
 chk_contains "the result text itself is spliced in" "$(cat "$DLB/d-work-handoff.md")" "All of it."
+
+printf '\nexecuted_by says whether a human was in the loop, not who acted (ADR 0015)\n'
+# The field existed to say how much independent review a closure needs, but its only value —
+# `delegate` — answered a different question. A contractor's agent grinding through a migration
+# unattended and an engineer watching a change land are both off the board and need opposite
+# amounts of scrutiny, so "who acted" cannot decide it.
+EX="$(mkboard)"
+EXB="$EX/.agents/handoff"
+exh() {
+  local r="$1"
+  shift
+  (cd "$r" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$MI_STATE" ./.agents/handoff/handoff "$@") 2>&1
+}
+ex_kind() { sed -n 's/^executed_by: //p' "$EXB/$1-handoff.md"; }
+exh "$EX" new a-work --title "Unattended migration" > /dev/null
+exh "$EX" export a-work --to "Contractor" > /dev/null
+# The default is the DECISION, not an implementation detail: assuming supervision that did not
+# happen is the more expensive mistake, because under-reviewing unwatched work is how a wrong
+# change closes while over-reviewing watched work costs a second look.
+chk "agent-executed work with nothing stated lands as afk" "afk" "$(ex_kind a-work)"
+chk "as a value on the doc, not an absent field" "1" "$(grep -c '^executed_by: ' "$EXB/a-work-handoff.md")"
+exh "$EX" new b-work --title "Watched cert rotation" > /dev/null
+exh "$EX" export b-work --to "Platform team" --executed-by hitl > /dev/null
+chk "a human in the loop is recorded as hitl" "hitl" "$(ex_kind b-work)"
+chk_contains "and a third kind is refused — the axis has exactly two ends" \
+  "$(exh "$EX" export a-work --executed-by external)" "must be hitl"
+
+# Set when work is handed OUT, so an import preserves it: a result arriving is not the moment
+# anyone learns whether a person was watching.
+fill_brief "$EXB/briefs/b-work-handoff.brief.md" done
+exh "$EX" import --result "$EXB/briefs/b-work-handoff.brief.md" > /dev/null
+chk "hitl survives the import rather than being overwritten" "hitl" "$(ex_kind b-work)"
+chk "and the result still lands as a claim awaiting review" "pending" \
+  "$(sed -n 's/^review: //p' "$EXB/b-work-handoff.md")"
+# A doc with no kind at all — delegated before the re-cut, or by hand — is stamped afk on import,
+# the reading that asks for more scrutiny rather than less.
+exh "$EX" new c-legacy --title "No kind recorded" > /dev/null
+exh "$EX" export c-legacy --to "Contractor" > /dev/null
+python3 - "$EXB/c-legacy-handoff.md" << 'PYE'
+import re, sys
+# Read BEFORE opening for write: open(p, "w") truncates, and it is evaluated before the argument
+# to .write(), so the one-liner form reads back an empty file and destroys the doc.
+p = sys.argv[1]
+text = open(p).read()
+with open(p, "w") as fh:
+    fh.write(re.sub(r"^executed_by: .*\n", "", text, flags=re.M))
+PYE
+fill_brief "$EXB/briefs/c-legacy-handoff.brief.md" done
+exh "$EX" import --result "$EXB/briefs/c-legacy-handoff.brief.md" > /dev/null
+chk "a doc with no kind is stamped afk on import" "afk" "$(ex_kind c-legacy)"
+
+printf '\nclose-time advice differs by executor kind, and enforces neither\n'
+# An infrastructure team acting on live systems answers with a change reference and an observation.
+# There is no diff to re-run and `Where` names a cluster, not a file:line — so demanding a command
+# there asks for evidence that cannot exist, and a rule people cannot satisfy honestly is satisfied
+# dishonestly.
+EX_H="$(exh "$EX" release b-work --status done --verified-by "CHG-4471 applied; watched the rollout drain cleanly at 14:05 UTC")"
+chk_contains "hitl asks for the change reference and what was observed" "$EX_H" "change reference"
+case "$EX_H" in
+  *"names no command, file reference, or commit"*) chk "and never demands a command for watched work" "no" "yes" ;;
+  *) chk "and never demands a command for watched work" "no" "no" ;;
+esac
+EX_A="$(exh "$EX" release a-work --status done --verified-by "I looked at it and it seemed fine")"
+chk_contains "afk asks for something reproducible by someone who was not there" "$EX_A" "reproducible"
+chk "but neither arm ENFORCES a pattern — both still closed" "2" \
+  "$(ls "$EXB/archive" | grep -c '^[ab]-work-handoff.md$')"
+
+printf '\nthe echoed-report refusal follows the second party, not the kind\n'
+# Since the re-cut, `executed_by` answers a different question and both its values can describe
+# off-board work — so it can no longer stand in for "a second party's words are in this doc".
+# `result_from` can.
+exh "$EX" new d-echo --title "Echoed" > /dev/null
+exh "$EX" export d-echo --to "Contractor" > /dev/null
+fill_brief "$EXB/briefs/d-echo-handoff.brief.md" done
+exh "$EX" import --result "$EXB/briefs/d-echo-handoff.brief.md" > /dev/null
+# "Ran npm test -- tenant; 14 passing." is what fill_brief puts in the executor's Result block,
+# so handing it straight back is the executor reviewing itself.
+chk_contains "afk work reported by someone else still refuses their own words as the review" \
+  "$(exh "$EX" release d-echo --status done --verified-by "Ran npm test -- tenant; 14 passing.")" \
+  "reviewing itself"
+chk "and done still refuses to close with no evidence at all" "1" \
+  "$(
+    exh "$EX" release d-echo --status done > /dev/null 2>&1
+    echo $?
+  )"
+
+printf '\nthe mirror projects the kind as a label (ADR 0015)\n'
+mi_ext_for() { printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$EXB/handoff.json"; }
+mi_ext_for
+exh "$EX" new m-watch --title "Watched" > /dev/null
+exh "$EX" export m-watch --to "Ops" --executed-by hitl > /dev/null
+exh "$EX" new m-none --title "Never handed out" > /dev/null
+exh "$EX" mirror > /dev/null 2>&1
+chk "a hitl doc carries mode:hitl" "True" "$(fq '"mode:hitl" in by("m-watch-handoff -->")[0]["labels"]')"
+# Only when the doc states one: a doc never handed out has no kind, and inventing a label here
+# would assert something nobody decided.
+chk "a doc that was never handed out carries none" "False" \
+  "$(fq 'any(l.startswith("mode:") for l in by("m-none-handoff -->")[0]["labels"])')"
+# The document is the source of truth and the label is a projection, so it follows the document.
+python3 - "$MI_STATE" << 'PYT'
+import json, sys
+db = json.load(open(sys.argv[1]))
+for i in db["issues"]:
+    if "m-watch-handoff -->" in i["body"]:
+        i["labels"].append("needs-triage")  # a person's label, added by hand in the tracker
+json.dump(db, open(sys.argv[1], "w"))
+PYT
+python3 - "$EXB/m-watch-handoff.md" << 'PYW'
+import re, sys
+p = sys.argv[1]
+text = open(p).read()  # see the note above: never read inside an open(..., "w").write(...) call
+with open(p, "w") as fh:
+    fh.write(re.sub(r"^executed_by: hitl$", "executed_by: afk", text, flags=re.M))
+PYW
+exh "$EX" mirror > /dev/null 2>&1
+chk "the label follows the document when the kind changes" "True" \
+  "$(fq '"mode:afk" in by("m-watch-handoff -->")[0]["labels"]')"
+chk "and the superseded one is reconciled away, not left beside it" "False" \
+  "$(fq '"mode:hitl" in by("m-watch-handoff -->")[0]["labels"]')"
+chk "a label a person added by hand still survives" "True" \
+  "$(fq '"needs-triage" in by("m-watch-handoff -->")[0]["labels"]')"
+# MANAGED is declared TWICE — mirror_plan compares against it, mirror_links tells the adapter what
+# to reconcile. A prefix in one and not the other is compared but never reconciled, or the reverse,
+# so the invariant is that the two lines are identical rather than merely both mentioning mode:.
+chk "there are exactly two MANAGED declarations" "2" "$(grep -c '^MANAGED = ' "$SRC/handoff")"
+chk "and they have not drifted apart" "1" "$(grep '^MANAGED = ' "$SRC/handoff" | sort -u | wc -l | tr -d ' ')"
+chk "both carry mode:" "2" "$(grep -c '^MANAGED = .*mode:' "$SRC/handoff")"
+# `executed_by` is an existing field gaining values, so ADR 0003's rule for a schema bump is not met.
+chk "no schema bump" "2" "$(sed -n 's/^schema: //p' "$EXB/m-watch-handoff.md")"
 
 printf '\nexport <bundle> --to-issue — a parent issue with one issue per child (ADR 0015)\n'
 # `export --to-issue` used to refuse a bundle outright, so handing a planned feature to a contractor

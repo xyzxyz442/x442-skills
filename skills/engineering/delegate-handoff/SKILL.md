@@ -48,9 +48,14 @@ Once a handoff clears that gate, check all four:
   written down.
 - **Where names `file:line` you opened**, not a guess at which module probably owns this. An
   executor who has to relocate the bug before fixing it has been handed a different, harder task
-  than the one you think you delegated.
+  than the one you think you delegated. **When the work is on live systems rather than in a
+  repository**, the same criterion reads one level out: name the cluster, service, pipeline or
+  environment precisely enough that the executor does not have to work out which one you meant.
+  There is no `file:line` to give, and demanding one would rule out an entire class of legitimately
+  brief-able work.
 - **Verify is runnable by someone who was not in this conversation.** A command they can paste, or
-  a concrete state they can check — not "confirm it feels right."
+  a concrete state they can check — not "confirm it feels right." For live-systems work that is an
+  observation anyone can go and make (a dashboard, a health check, a queue depth), not a test run.
 - **Decisions are settled.** Anything still open is a design question, and a design question
   handed to an executor gets answered by whoever is cheapest to guess, not by whoever should
   decide it.
@@ -154,6 +159,31 @@ the bundle's issue like any other, so one bundle issue can hold a mix of mirrore
 children (ADR 0014). What it does **not** do is close the loop for you: an issue closed in the
 tracker never becomes `done` on the board — you import the result and close it with evidence.
 
+### Say whether a human will be watching
+
+```text
+handoff export ID --to "Platform team" --executed-by hitl
+```
+
+`executed_by` records **whether a human was in the loop**, not who acted (ADR 0015) — because who
+acted does not decide how much independent review a closure needs. A contractor's agent grinding
+through a migration unattended and an engineer watching a change land are both outside the board,
+and they need opposite amounts of scrutiny.
+
+- **`hitl`** — a person is present. Their evidence is an observation: the change reference, what
+  they saw, and when. There is no diff to re-run.
+- **`afk`** — nobody is watching, so the evidence has to be reproducible by someone who was not
+  there. This is the high-scrutiny case.
+
+**It defaults to `afk`, and that default is a decision.** Assuming supervision that did not happen
+is the more expensive mistake: under-reviewing unwatched work is how a wrong change closes, while
+over-reviewing watched work costs a second look. Set it when you hand the work out — that is when
+you decide what evidence you will accept, and the value survives the import rather than being
+overwritten when a result arrives. Where the board mirrors to a tracker, it shows there as a
+`mode:` label.
+
+Neither value changes who closes the handoff: **you** verify, either way.
+
 ## 3. What to send
 
 Export writes `.agents/handoff/briefs/<id>.brief.md`. **Commit it** before telling the executor —
@@ -213,6 +243,12 @@ reproduced the evidence from step 4, you close it the same way you would close a
 ```text
 handoff release <id> --status done --verified-by "how YOU verified live code"
 ```
+
+**What good evidence looks like depends on the executor kind.** For `afk` work, something
+reproducible: a command, a `file:line`, a commit. For `hitl` work, the change reference, what the
+person observed, and when — asking for a command there is asking for evidence that cannot exist,
+and a rule people cannot satisfy honestly gets satisfied dishonestly. The tool says which it
+expects when you close, and enforces neither.
 
 If `--verified-by` echoes text already present in the executor's reported Result block — the
 check is scoped to that spliced block, never the rest of the doc — the CLI warns you: that is
