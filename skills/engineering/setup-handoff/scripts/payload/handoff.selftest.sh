@@ -2084,6 +2084,36 @@ chk "and nothing is pushed" "no" \
 CK_OUT2="$(HANDOFF_SESSION_ID="$CK_ME" "$CKB/handoff" checkpoint ck-work "clean text" 2>&1)"
 chk_contains "clean text does not launder a credential already in the doc" "$CK_OUT2" "looks like it contains a credential"
 
+printf '\nan ownership refusal with no session id says why, not just no\n'
+# `lease_is_mine` cannot answer yes for ANYONE when nothing exposes a session id, so the refusal
+# fires on the very caller who claimed the lease one command earlier. Left bare, the message names
+# `whoami_id`'s `$$` fallback as the holder -- the caller's OWN earlier process -- so it reads as a
+# colleague's lease and sends the reader looking for somebody who does not exist. The refusal itself
+# is deliberate and stays; being unable to tell why it fired is the defect.
+#
+# This is the one block that must take the session away explicitly: the suite pins HANDOFF_SESSION_ID
+# at the top precisely so no other assertion depends on the ambient environment, and advisory mode is
+# unreachable without undoing that here.
+AVR="$(mkboard)"
+avh() { (cd "$AVR" && env -u HANDOFF_SESSION_ID -u CLAUDE_SESSION_ID -u CLAUDE_CODE_SESSION_ID \
+  ./.agents/handoff/handoff "$@") 2>&1; }
+avh new av-work --title "Advisory" > /dev/null
+avh claim av-work "working" > /dev/null
+AV_OUT="$(avh checkpoint av-work "progress")"
+chk_contains "checkpoint still refuses, exactly as the ownership model says it must" \
+  "$AV_OUT" "does not hold the lease"
+chk_contains "but the refusal names the real reason instead of a PID that reads as a colleague" \
+  "$AV_OUT" "No session id is exposed"
+chk_contains "and it says which variable to set" "$AV_OUT" "HANDOFF_SESSION_ID"
+# Scoped, not blanket. With a session id present the refusal IS a genuine foreign lease, and advice
+# about setting a variable that is already set would be noise pointing at the wrong cause. Counted
+# rather than `grep -q`: this assertion expects a NEGATIVE, and a pipeline that exits before its
+# writer finishes returns non-zero under pipefail for a reason that has nothing to do with the text.
+hb "$AVR" new av-held --title "Held" > /dev/null
+hb "$AVR" claim av-held "mine" > /dev/null
+chk "a foreign-lease refusal carries no advisory hint when a session id is set" "0" \
+  "$( (cd "$AVR" && HANDOFF_SESSION_ID="av-other-$$" ./.agents/handoff/handoff checkpoint av-held "x" 2>&1) | grep -c 'No session id is exposed')"
+
 printf '\nignore-rule appends never glue onto an unterminated last line (review fix)\n'
 GL="$(mkboard)"
 GLB="$GL/.agents/handoff"
