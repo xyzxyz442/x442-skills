@@ -27,6 +27,23 @@ cp "$HERE/tracker-github.sh" "$HERE/hooks.sh" "$SRC/"
 cp "$HERE/../../../../../harness/lib/fake-tracker.sh" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
 chmod +x "$SRC/handoff"
+
+# ONE session id per run, pinned here so the suite never inherits the developer's.
+#
+# Lease ownership is proven by `session_id()`, which falls back to the AMBIENT CLAUDE_SESSION_ID /
+# CLAUDE_CODE_SESSION_ID and is EMPTY when nothing exposes one. `lease_is_mine` answers no on an
+# empty session by design, so every ownership-gated command — `checkpoint`, `move`, the bundle
+# export pre-flight — behaves differently depending on whether the suite happens to be run from
+# inside an agent session. A developer machine exposes one and the assertions pass; CI exposes none
+# and they fail, which is exactly how the two review-gate assertions below came to fail on both
+# runners while passing everywhere they were written.
+#
+# Two blocks had already patched this per-case by exporting an explicit foreign session (see the
+# comments at cmd_export's claim-race and bundle pre-flight tests). Pinning the DEFAULT is the
+# general form of that fix: ownership becomes a property of the fixture instead of the terminal.
+# Blocks that need a different identity still export their own over the top of this.
+export HANDOFF_SESSION_ID="selftest-$$"
+
 P=0
 F=0
 
