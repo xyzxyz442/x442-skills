@@ -243,6 +243,51 @@ URL — use an SSH remote or a credential helper.
 One board per **trust boundary**, not per group: groups are sections inside a board. A board's
 readers are everyone who can clone it, so the line worth drawing is the one an ACL already draws.
 
+## Two people sharing one board
+
+The machinery above is described in terms of repos, because that is what it resolves. But the thing
+people most often want from it is not a fleet — it is **a senior and a junior working the same
+code**, where one plans and reviews and the other executes. That is the same install, read
+differently, and nothing else in this repo says so.
+
+What makes it work is the remote, not the grouping. A board with a remote is shared, and `claim` can
+only exclude another _machine_ when there is a remote to push against (ADR 0002). A board without
+one is merely versioned, and two people on it will silently clobber each other.
+
+```text
+setup-handoff.sh --board-only ../workspace/.agents/handoff --remote git@github.com:acme/acme-handoff-board.git
+```
+
+From there the two of you have a choice about sections, and it is worth making deliberately:
+
+- **One section, shared.** You both see one list and claim from it. Right when the work is genuinely
+  joint — the lease is what keeps you apart, and that is enough.
+- **A section each.** Right when you each have a backlog the other should not have to read. Sections
+  are the sub-index boundary, not an access boundary: everyone who can clone the board reads all of
+  it.
+
+Then the loop is the one the rest of the suite already documents, with nothing extra installed:
+
+1. The senior files the work — a bundle when it splits into slices, sized so each child lands and is
+   reviewed on its own. See [`run-handoff`](../run-handoff/SKILL.md) on sizing children as slices,
+   and **confirm the roster with the other person before filing it**: a roster nobody agreed to gets
+   re-sliced after the work has started.
+2. The junior claims a child, works under the lease, and hands it back with
+   `handoff release <id> --for-review "<what they did>"`. It stays open, stays on the board, and the
+   lease drops so the senior can claim it.
+3. The senior reviews and closes with `--status done --verified-by "<what THEY checked>"`.
+
+**The gate is about evidence, not identity.** Nothing stops the junior closing their own work: a
+board has no roles, and the same person in tomorrow's session is a different session id, so a rule
+keyed on that would fire on honest work and miss the rest (ADR 0015). What the tool does check is
+whether the closing evidence merely restates the account already in the doc. If you need real
+two-person enforcement, it belongs on the board repository — branch protection requiring a review is
+the only layer that can actually tell two people apart.
+
+**When the other party is not on the board at all** — a contractor, another team, an AI tool without
+the protocol — do not add them to it. Export a brief instead, and see
+[`delegate-handoff`](../delegate-handoff/SKILL.md) for whether the work is even brief-able.
+
 ## Caveats
 
 - **No seed, no fusion.** Each board is a plain shared directory; a member only reads/writes the

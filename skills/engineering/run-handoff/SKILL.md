@@ -357,8 +357,9 @@ children nobody marked instead of naming them, and never links them either — a
 as surely as a title does. Removing the mark closes the issue, but the issue
 stays readable: publishing cannot be undone, so ask the user before marking anything public.
 
-To hand one piece of work to someone through an issue instead, see
-[`delegate-handoff`](../delegate-handoff/SKILL.md) (`export --to-issue`).
+To hand work to someone through an issue instead, see
+[`delegate-handoff`](../delegate-handoff/SKILL.md) (`export --to-issue`) — one handoff, or a whole bundle
+as a parent issue with one issue per child, each returning on its own.
 
 ## Moving a handoff to another board
 
@@ -424,7 +425,7 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   done as far as you can tell but somebody else should look before it closes: a junior handing back
   to a senior, or your own work parked to re-read with fresh eyes. It keeps `status: open`, leaves
   the doc on the board, sets `review: pending`, and drops the lease so the reviewer can claim it;
-  the row then carries `⇤ review` in `list`, exactly as delegated work awaiting review does. The
+  the row then carries `⇤ review` in `list` and `AWAITING REVIEW` on the session banner, exactly as delegated work awaiting review does — so the next agent reviews it instead of starting it again. The
   reviewer closes it the ordinary way, with `--status done --verified-by`. `--for-review` together
   with `--status done` is refused — one hands the work on, the other closes it.
 - **The gate is about evidence, not identity** (ADR 0015). Nothing stops you closing work you

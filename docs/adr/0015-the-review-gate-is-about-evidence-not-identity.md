@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-19
 ---
 
@@ -50,9 +50,11 @@ established; it is bound by ADR 0013.
 ## Decision
 
 - **`release --for-review` is the second writer of `review: pending`.** `status` stays `open`, the
-  lease releases as it always does, and the existing marker in `list` and on the session banner
-  starts covering on-board work. No new status and no new field: `review` is an existing field
-  gaining a writer, so ADR 0003's rule for bumping the schema is not met.
+  lease releases as it always does, and the existing `⇤ review` marker in `list` starts covering
+  on-board work. No new status and no new field: `review` is an existing field gaining a writer, so
+  ADR 0003's rule for bumping the schema is not met. _(Corrected before acceptance — this bullet
+  originally said the marker also existed on the session banner. It did not, for delegated work
+  either; see Consequences.)_
 - **`copied` falls back to `## Current state` when there is no result block.** The comparison that
   makes the gate meaningful keeps working for on-board review, using the account the author wrote
   of their own work. Same mechanism, same field, no new state.
@@ -144,6 +146,29 @@ established; it is bound by ADR 0013.
   Documents written before this change are unaffected and need no migration.
 - **`CONTEXT.md` moves**: **Review gate** widens beyond outside executors, and **Executed by** is
   re-cut along the human-in-the-loop axis rather than the who-acted one.
+
+## What shipped
+
+Recorded at acceptance, because three things differ from the decision as drafted.
+
+- **The session banner had no review marker at all**, for delegated work either — this ADR asserted
+  one existed. Unmarked, a handoff awaiting review renders as `open · medium · Title`,
+  indistinguishable from work nobody has started, in the one place an agent decides what to pick up.
+  The marker was added to `hooks.sh` rather than the gap being left open, since without it the
+  feature is invisible where it matters most. A decision premise about the code was wrong and
+  nobody had checked it; the lesson is narrower than the feature.
+- **`audience` is not flipped to the reviewer.** The bundle child proposing this change had it as a
+  decision; this ADR never mentioned it, and it was dropped with the user's agreement. `audience`
+  names a repo, not a person, so on a single-repo board there is nobody to flip it to and on a
+  cross-repo board it would name the executor's own repo. `import --result` refuses the same write,
+  and two writers of one field must not disagree about what else they touch. Naming a reviewer is a
+  real gap, tracked separately — it needs a new field and therefore a schema bump.
+- **The echoed-report refusal no longer keys on `executed_by`.** Once that field answers whether a
+  human was in the loop, both of its values describe off-board work, so it can no longer stand in
+  for "a second party's words are in this doc". It keys on `result_from`, with the legacy
+  `delegate` value still accepted. This is what "every consumer comparing against `delegate` must be
+  re-read against that axis" meant in practice, and it is the part most easily got wrong by
+  mechanically adding a value.
 
 ## Sources
 
