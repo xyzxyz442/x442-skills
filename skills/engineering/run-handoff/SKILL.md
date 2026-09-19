@@ -408,7 +408,7 @@ frontmatter and body, not the index.
 ```text
 handoff release <id> --status open                                  # more work remains
 handoff release <id> --status blocked --blocked-on <id|"external: …">   # waiting on something
-handoff release <id> --for-review "<what you did>"                  # finished — a reviewer acts next
+handoff release <id> --for-review [--reviewer HANDLE] "<what you did>"  # finished — a reviewer acts next
 handoff release <id> --status done --verified-by "<how you verified LIVE code>"
 ```
 
@@ -428,6 +428,27 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   the row then carries `⇤ review` in `list` and `AWAITING REVIEW` on the session banner, exactly as delegated work awaiting review does — so the next agent reviews it instead of starting it again. The
   reviewer closes it the ordinary way, with `--status done --verified-by`. `--for-review` together
   with `--status done` is refused — one hands the work on, the other closes it.
+- **`--reviewer` names who it is waiting on** (ADR 0016). Without it, `AWAITING REVIEW` is addressed
+  to every reader and therefore to none, and nothing tells a human that work is waiting on them. Pass
+  a **tracker handle** — the login, not a display name — either at filing time (`new --reviewer`,
+  when the person filing will review it) or at hand-back (`release --for-review --reviewer`):
+
+  ```text
+  handoff new auth-gap --title "…" --reviewer alice
+  handoff release auth-gap --for-review --reviewer alice "parser done, wiring reviewed separately"
+  ```
+
+  It is **a pointer, never a gate**: nothing compares a closer against it, because a board has no
+  roles and a session is not a person. On a board with a tracker it is projected as the issue's
+  **assignee** — set when the issue is created and never reconciled afterwards, so reassigning in
+  the tracker is a legitimate act that survives every later run. Set your own handle in
+  `.agents/handoff.local.json` (`{"handle": "alice"}`, uncommitted) and the session banner tells you
+  `AWAITING YOUR REVIEW` instead of the generic marker. `--reviewer` on a plain
+  `open`/`blocked`/`done` release is refused — a release that names nobody as next has no reviewer to
+  record, and silently dropping the handle would hide a mistyped hand-back. A leading `@` is
+  stripped; a handle with whitespace, a colon or a quote is refused rather than reshaped, since a
+  mangled handle becomes an assignment to somebody who does not exist.
+
 - **The gate is about evidence, not identity** (ADR 0015). Nothing stops you closing work you
   yourself asked to have reviewed: a board has no roles, and the same person in tomorrow's session
   is a different session id, so a rule keyed on that would fire on honest work and miss the rest.
@@ -478,6 +499,10 @@ YAML. Readers strip one surrounding quote pair, so the command still runs verbat
   and rightly: nobody checked anything.
 - Releasing finished-but-unreviewed work `open` (the "someone should look at this" signal is lost)
   or `done` (it archives work nobody reviewed) → that is what `--for-review` is for.
+- Expecting `reviewer` to stop the wrong person closing a handoff → it is a pointer, not a gate; the
+  check that exists is on the evidence, not on identity.
+- Hand-editing a tracker assignee back onto the board because the two disagree → the tracker wins by
+  design; the board is not corrected and nothing reports it.
 - Exporting or delegating a handoff marked `sensitivity: restricted` → refused, with no override;
   do the work in this session instead.
 - Reaching for `--force-secret` to push past a real credential match → redact and rotate it

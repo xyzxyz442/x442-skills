@@ -30,6 +30,11 @@ chmod +x "$SRC/handoff"
 P=0
 F=0
 
+# The schema this CLI writes, read from the CLI rather than restated. Every assertion about "the
+# current schema" derives from this, so a bump changes one line of test code instead of eight — and
+# a test that was never about a particular version cannot be falsified by moving to the next one.
+CUR_SCHEMA="$(sed -n 's/^SCHEMA_VERSION=//p' "$SRC/handoff" | head -1)"
+
 chk() { # label expected actual
   if [ "$2" = "$3" ]; then
     printf '  [PASS] %s\n' "$1"
@@ -898,8 +903,11 @@ FR_BANNER_ROWS="$(printf '%s' "$FR_BANNER" | awk '{ gsub(/\\n/, "\n"); print }')
 chk_contains "on the handed-back handoff's own row" \
   "$(printf '%s\n' "$FR_BANNER_ROWS" | grep 'fr-lease-handoff')" "AWAITING REVIEW"
 # Scoped, not blanket: a doc nobody handed back must not wear the marker.
-chk "an ordinary open handoff is left unmarked" "no" \
-  "$(printf '%s\n' "$FR_BANNER_ROWS" | grep 'fr-contrary-handoff' | grep -q 'AWAITING REVIEW' && echo yes || echo no)"
+# Counted, not `grep -q`: this assertion expects a NEGATIVE, and `grep -q` at the end of a pipeline
+# returns non-zero under `set -o pipefail` whenever it exits before the writer upstream finishes
+# (SIGPIPE, 141) -- which would satisfy "no" for a reason that has nothing to do with the marker.
+chk "an ordinary open handoff is left unmarked" "0" \
+  "$(printf '%s\n' "$FR_BANNER_ROWS" | grep 'fr-contrary-handoff' | grep -c 'AWAITING REVIEW')"
 
 printf '\nthe copied-evidence check falls back to Current state when there is no Result block\n'
 # The check asks whether the closer simply echoed the EXECUTOR's own account back as the review. For
@@ -1879,7 +1887,7 @@ chk "and creates nothing" "no" "$([ -f "$XRB/no-tracker-handoff.md" ] && echo ye
 printf '{ "external": { "kind": "sprints", "system": "jira", "refPattern": "[A-Z]+-[0-9]+" } }\n' > "$XRB/handoff.json"
 hb "$XR" new ticketed --title "Ticketed" --ref ABC-12 > /dev/null
 chk "new --ref records external_ref" "ABC-12" "$(sed -n 's/^external_ref: //p' "$XRB/ticketed-handoff.md" | head -1)"
-chk "a new doc is stamped with the current schema" "2" "$(sed -n 's/^schema: //p' "$XRB/ticketed-handoff.md" | head -1)"
+chk "a new doc is stamped with the current schema" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$XRB/ticketed-handoff.md" | head -1)"
 chk_contains "a reference that does not match refPattern refuses" \
   "$(hb "$XR" new mistyped --title "m" --ref abc12)" "does not match"
 chk "and creates nothing" "no" "$([ -f "$XRB/mistyped-handoff.md" ] && echo yes || echo no)"
@@ -1901,7 +1909,7 @@ hb "$XM" new zero-doc --title "Zero" > /dev/null
 git -C "$XM" add -A && git -C "$XM" commit -qm "board"
 # Age the board: one doc at schema 1, one at schema 0 (no stamp, no Current state).
 XT="$(mktemp)"
-awk '{ sub(/^schema: 2$/, "schema: 1"); print }' "$XMB/one-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/one-doc-handoff.md"
+awk '{ sub(/^schema: [0-9]+$/, "schema: 1"); print }' "$XMB/one-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/one-doc-handoff.md"
 awk '/^schema: /{next} /^environment: /{next} /^depends_on: /{next} /^## Current state/{skip=1; next} skip && /^## /{skip=0} !skip{print}' \
   "$XMB/zero-doc-handoff.md" > "$XT" && cat "$XT" > "$XMB/zero-doc-handoff.md"
 
@@ -1909,19 +1917,19 @@ printf '{ "schema": 1 }\n' > "$XMB/handoff.json"
 git -C "$XM" add -A && git -C "$XM" commit -qm "aged"
 XM_OUT="$(hb "$XM" migrate --yes)"
 chk_contains "migrate names the step" "$XM_OUT" "1 → 2"
-chk "a schema-1 doc is stamped 2" "2" "$(sed -n 's/^schema: //p' "$XMB/one-doc-handoff.md" | head -1)"
-chk "a schema-0 doc goes all the way to 2" "2" "$(sed -n 's/^schema: //p' "$XMB/zero-doc-handoff.md" | head -1)"
+chk "a schema-1 doc is stamped with the current schema" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$XMB/one-doc-handoff.md" | head -1)"
+chk "a schema-0 doc goes all the way up" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$XMB/zero-doc-handoff.md" | head -1)"
 chk "and still gains its Current state on the way" "yes" \
   "$(grep -q '^## Current state' "$XMB/zero-doc-handoff.md" && echo yes || echo no)"
 chk "no reference is invented" "0" "$(grep -c '^external_ref' "$XMB/one-doc-handoff.md")"
-chk_contains "the migration is logged on the doc" "$(cat "$XMB/one-doc-handoff.md")" "migrated to schema 2"
-chk "the board is stamped 2" "2" \
+chk_contains "the migration is logged on the doc" "$(cat "$XMB/one-doc-handoff.md")" "migrated to schema $CUR_SCHEMA"
+chk "the board is stamped with the current schema" "$CUR_SCHEMA" \
   "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$XMB/handoff.json")"
 
 # A schema-1 CLI must refuse to write a schema-2 doc: it would silently drop external_ref (ADR 0003).
 XO="$(mktemp -d)"
-sed 's/^SCHEMA_VERSION=2$/SCHEMA_VERSION=1/' "$SRC/handoff" > "$XO/handoff"
-chk_contains "a schema-1 CLI refuses to claim a schema-2 doc" \
+sed 's/^SCHEMA_VERSION=[0-9]*$/SCHEMA_VERSION=1/' "$SRC/handoff" > "$XO/handoff"
+chk_contains "a schema-1 CLI refuses to claim a current-schema doc" \
   "$(cd "$XR" && HANDOFF_BOARD_PATH="$XRB" bash "$XO/handoff" claim ticketed "old tool" 2>&1)" "refusing to write"
 
 printf '\nmove transfers a handoff between boards, checked against the remotes (ADR 0011)\n'
@@ -2583,7 +2591,218 @@ chk "there are exactly two MANAGED declarations" "2" "$(grep -c '^MANAGED = ' "$
 chk "and they have not drifted apart" "1" "$(grep '^MANAGED = ' "$SRC/handoff" | sort -u | wc -l | tr -d ' ')"
 chk "both carry mode:" "2" "$(grep -c '^MANAGED = .*mode:' "$SRC/handoff")"
 # `executed_by` is an existing field gaining values, so ADR 0003's rule for a schema bump is not met.
-chk "no schema bump" "2" "$(sed -n 's/^schema: //p' "$EXB/m-watch-handoff.md")"
+chk "the doc carries the current schema, not one of its own" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$EXB/m-watch-handoff.md")"
+chk "and no migration step ever writes executed_by — it needed no bump of its own" "0" \
+  "$(awk '/^migrate_doc_[0-9]+_to_[0-9]+\(\)/,/^}/' "$SRC/handoff" | grep -c 'executed_by')"
+
+printf '\nreviewer is a pointer to who reviews, projected as an assignee (ADR 0016)\n'
+# `release --for-review` hands work back to NOBODY IN PARTICULAR: every reader sees the same
+# AWAITING REVIEW, which is addressed to everyone and therefore to no one. `reviewer` names the
+# person, and a tracker assignee is the only mechanism here that actually reaches one.
+RV="$(mkboard)"
+RVB="$RV/.agents/handoff"
+RV_STATE="$(mktemp)"
+printf '{}' > "$RV_STATE"
+rvh() { (cd "$RV" && HANDOFF_SESSION_ID="rv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$RV_STATE" ./.agents/handoff/handoff "$@") 2>&1; }
+rvq() { python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {"issues": [], "calls": []}
+db.setdefault("issues", []); db.setdefault("calls", [])
+def by(marker): return [i for i in db["issues"] if marker in i["body"]]
+def calls(op): return len([c for c in db["calls"] if c[0] == op])
+print(eval(sys.argv[2]))' "$RV_STATE" "$1"; }
+rv_field() { sed -n "s/^$2: //p" "$RVB/$1-handoff.md" | head -1; }
+
+# --- the field itself ---------------------------------------------------------
+rvh new r-filed --title "Senior files it" --reviewer @alice > /dev/null
+chk "new --reviewer records the handle" "alice" "$(rv_field r-filed reviewer)"
+chk "a leading @ is stripped, so two docs naming one person compare equal" "0" \
+  "$(grep -c '^reviewer: @' "$RVB/r-filed-handoff.md")"
+chk "and the doc is stamped at the schema that added the field" "$CUR_SCHEMA" "$(rv_field r-filed schema)"
+# Validated, never folded. Every other free-text value passes through fold_colons; doing that to an
+# identifier produces an assignment to a user who does not exist, which fails silently out at the
+# tracker rather than here.
+chk_contains "a colon is refused rather than folded to an em dash" \
+  "$(rvh new r-bad --title "B" --reviewer "a:b")" "not a usable handle"
+chk "and no doc is created by the refused call" "0" \
+  "$([ -f "$RVB/r-bad-handoff.md" ] && echo 1 || echo 0)"
+chk_contains "whitespace is refused" "$(rvh new r-bad2 --title "B" --reviewer "two words")" "not a usable handle"
+chk_contains "leading punctuation is named separately, since it is a plausible typo" \
+  "$(rvh new r-bad3 --title "B" --reviewer "-alice")" "must start with a letter or digit"
+chk_contains "an empty value is refused" "$(rvh new r-bad4 --title "B" --reviewer "")" "needs a tracker handle"
+# Scoped exactly as --for-review is: a bundle holds no work of its own, a standalone doc has no
+# lifecycle to review, so naming a reviewer on either asserts a duty against nothing.
+chk_contains "a standalone doc takes no reviewer" \
+  "$(rvh new r-std --standalone --title "S" --reviewer alice)" "has no work of its own to review"
+chk_contains "nor does a bundle" \
+  "$(rvh new r-bun --orchestrator --children x,y --title "B" --reviewer alice)" "has no work of its own to review"
+
+# --- set at hand-back --------------------------------------------------------
+rvh new r-back --title "Junior hands it back" > /dev/null
+rvh claim r-back "doing it" > /dev/null
+RV_OUT="$(rvh release r-back --for-review --reviewer bob)"
+chk "release --for-review --reviewer records the handle" "bob" "$(rv_field r-back reviewer)"
+chk "and still sets the review hold" "pending" "$(rv_field r-back review)"
+chk_contains "the release says who it went to" "$RV_OUT" "awaiting review by bob"
+chk_contains "and the activity log names them" "$(cat "$RVB/r-back-handoff.md")" "to bob"
+# Refused rather than ignored: a plain release names nobody as next, so a mistyped hand-back would
+# silently lose the handle it was trying to record.
+rvh new r-plain --title "Plain" > /dev/null
+rvh claim r-plain "x" > /dev/null
+chk_contains "--reviewer without --for-review is refused" \
+  "$(rvh release r-plain --status open --reviewer bob)" "needs --for-review"
+chk "so no reviewer is written by it" "" "$(rv_field r-plain reviewer)"
+
+# --- a pointer, never a gate (the decision this ADR pre-refuses undoing) -----
+# Asserting an ABSENCE, which is the whole point: the field must not become an authorisation check.
+# A board has no roles, and a session is not a person, so a rule keyed on either fires on honest
+# work and misses the dishonest case. Read the release path itself, not just its behaviour.
+# Guard first: if cmd_release is ever renamed, the awk range below goes EMPTY and `grep -c` returns
+# 0 for the happy reason instead of the real one -- an absence test that cannot fail is worse than no
+# test. Prove the range is really the release path before trusting what is missing from it.
+chk "the release path is actually found (or the absence check below is vacuous)" "3" \
+  "$(awk '/^cmd_release\(\)/,/^\}/' "$SRC/handoff" | grep -c 'finish_release')"
+chk "no release path compares a closer against reviewer" "0" \
+  "$(awk '/^cmd_release\(\)/,/^\}/' "$SRC/handoff" | grep -c 'meta .*reviewer')"
+chk "and nothing anywhere refuses on it" "0" "$(grep -c 'die .*reviewer.*clos' "$SRC/handoff")"
+# Behaviourally: somebody who is not the named reviewer closes it, and it simply closes.
+rvh claim r-back "reviewing" > /dev/null
+chk_contains "a closer who is not the named reviewer is not refused" \
+  "$(rvh release r-back --status done --verified-by "re-ran the suite at handoff.selftest.sh:1; 3 passing")" \
+  "done"
+
+# --- projected as the tracker's assignee -------------------------------------
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$RVB/handoff.json"
+rvh new r-mirror --title "Pointed work" --reviewer carol > /dev/null
+rvh new r-nobody --title "Unpointed work" > /dev/null
+rvh mirror > /dev/null 2>&1
+chk "a doc naming a reviewer mirrors to an issue assigned to them" "['carol']" \
+  "$(rvq 'by("r-mirror-handoff -->")[0]["assignees"]')"
+chk "a doc naming none is unassigned, not assigned to a guess" "[]" \
+  "$(rvq 'by("r-nobody-handoff -->")[0]["assignees"]')"
+
+# Assigned on CREATE and never reconciled (ADR 0014's rule, extended). Reassigning in the tracker is
+# a legitimate human act -- leave, rotation -- and a board that fought it would win every run.
+python3 - "$RV_STATE" << 'PYRV'
+import json, sys
+db = json.load(open(sys.argv[1]))
+for i in db["issues"]:
+    if "r-mirror-handoff -->" in i["body"]:
+        i["assignees"] = ["dave"]  # a human reassignment, made in the tracker
+json.dump(db, open(sys.argv[1], "w"))
+PYRV
+rvh mirror > /dev/null 2>&1
+chk "a reassignment made in the tracker survives the next run" "['dave']" \
+  "$(rvq 'by("r-mirror-handoff -->")[0]["assignees"]')"
+# It follows that assignees are absent from the sameness comparison: a reassignment is not drift and
+# does not even mark the issue as needing an update. Assert the mechanism, not just the outcome.
+chk "and no update request ever carries assignees" "0" \
+  "$(rvq 'len([c for c in db["calls"] if c[0] == "update" and "assignees" in c[1]])')"
+chk "the board is not corrected either — the tracker wins, by design" "carol" "$(rv_field r-mirror reviewer)"
+
+# A handle the tracker will not accept costs the assignment, never the issue: the issue is the point
+# and the assignment is a courtesy, so the step is separate and its failure is survived.
+rvh new r-ghost --title "Names a non-collaborator" --reviewer ghost > /dev/null
+RV_GHOST="$(
+  cd "$RV" && HANDOFF_SESSION_ID="rv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$RV_STATE" FAKE_TRACKER_BAD_ASSIGNEE=ghost ./.agents/handoff/handoff mirror 2>&1
+  echo "rc=$?"
+)"
+chk_contains "a rejected assignee is reported" "$RV_GHOST" "could not assign"
+chk_contains "and the run still exits zero" "$RV_GHOST" "rc=0"
+chk "the issue exists all the same" "1" "$(rvq 'len(by("r-ghost-handoff -->"))')"
+chk "just unassigned" "[]" "$(rvq 'by("r-ghost-handoff -->")[0]["assignees"]')"
+
+# ADR 0013: on a public repository the handle rides the EXISTING share gate and no second copy of it.
+# A login is personal data, and a second gate could only diverge from the first.
+RV_PUB="$(mktemp)"
+printf '{}' > "$RV_PUB"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "allowPublic": true } }\n' > "$RVB/handoff.json"
+rvh new r-open --title "Shared work" --reviewer erin --share public > /dev/null
+rvh new r-quiet --title "Unshared work" --reviewer frank > /dev/null
+(cd "$RV" && HANDOFF_SESSION_ID="rv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$RV_PUB" FAKE_TRACKER_VISIBILITY=public ./.agents/handoff/handoff mirror > /dev/null 2>&1)
+chk "on a public repo a share: public doc still carries its assignee" "['erin']" \
+  "$(python3 -c 'import json,sys
+db = json.load(open(sys.argv[1]))
+print([i["assignees"] for i in db["issues"] if "r-open-handoff -->" in i["body"]][0])' "$RV_PUB")"
+chk "and an unshared doc reaches the tracker at all" "0" \
+  "$(python3 -c 'import json,sys
+db = json.load(open(sys.argv[1]))
+print(len([i for i in db["issues"] if "r-quiet-handoff -->" in i["body"]]))' "$RV_PUB")"
+chk "so no handle for it was ever sent" "0" \
+  "$(python3 -c 'import json,sys
+db = json.load(open(sys.argv[1]))
+print(len([c for c in db["calls"] if "frank" in json.dumps(c[1])]))' "$RV_PUB")"
+
+# --- the banner says whether it is YOUR review ------------------------------
+# Before this field every reader saw one marker, so "somebody should look" and "you should look"
+# were the same sentence. The match is against `handle` in handoff.local.json -- per-machine,
+# uncommitted, and authorising nothing.
+cp "$SRC/hooks.sh" "$RVB/scripts/hooks.sh"
+# A doc of its own, still awaiting review. `r-back` above was closed `done` and is therefore in the
+# archive -- asserting the banner on it tested nothing and failed for the wrong reason.
+rvh new r-watch --title "Waiting on a named reviewer" > /dev/null
+rvh claim r-watch "did the work" > /dev/null
+rvh release r-watch --for-review --reviewer bob > /dev/null
+rvh new r-anon --title "Anonymous hand-back" > /dev/null
+rvh claim r-anon "x" > /dev/null
+rvh release r-anon --for-review > /dev/null
+# The hook emits ONE line of JSON whose rows are \n escapes, so a per-row assertion has to split it
+# first -- grepping the blob cannot tell a marked row from an unmarked one. Note also that the
+# banner's em dashes arrive as \u2014, so assertions here stay on ASCII.
+rv_rows() { # handle -> the banner, one row per line
+  (cd "$RV" && printf '{}' | HANDOFF_HANDLE="$1" bash "$RVB/scripts/hooks.sh" \
+    --kind sessionstart --tool claude --project-dir "$RV" 2>&1) | awk '{ gsub(/\\n/, "\n"); print }'
+}
+rv_row() { printf '%s\n' "$(rv_rows "$1")" | grep "$2"; }
+chk_contains "with no handle set, a named reviewer is still named" "$(rv_row '' r-watch-handoff)" "AWAITING REVIEW by bob"
+chk_contains "when the handle matches, the banner addresses the reader" "$(rv_row bob r-watch-handoff)" "AWAITING YOUR REVIEW (bob)"
+chk_contains "a different handle gets the third-person form" "$(rv_row zoe r-watch-handoff)" "AWAITING REVIEW by bob"
+# Scoped, not blanket: the handle belongs to the doc that names it and must not bleed onto a row that
+# does not. An unpointed hand-back keeps the generic marker -- the pointer is optional, and its
+# absence means nobody was named, not that nobody should look.
+chk "an unpointed hand-back is still marked" "1" \
+  "$(rv_row bob r-anon-handoff | grep -c 'AWAITING REVIEW')"
+# Expected ZERO, so this is the assertion a false negative would have passed silently -- counted, not
+# tested with `grep -q`, for exactly that reason.
+chk "but names nobody" "0" \
+  "$(rv_row bob r-anon-handoff | grep -c 'REVIEW by\|YOUR REVIEW')"
+chk_contains "handoff list names the reviewer on the review marker" "$(rvh list)" "review → bob"
+
+# --- migration 2 -> 3 --------------------------------------------------------
+# A new field is ADR 0003's trigger. The stamp moves and nothing else does: a reviewer nobody
+# appointed would be a false claim about who is accountable, projected outward as a real assignment.
+RW="$(mkboard)"
+RWB="$RW/.agents/handoff"
+hb "$RW" new w-old --title "Filed before the field existed" > /dev/null
+git -C "$RW" add -A && git -C "$RW" commit -qm "board" > /dev/null
+RWT="$(mktemp)"
+awk '{ sub(/^schema: [0-9]+$/, "schema: 2"); print }' "$RWB/w-old-handoff.md" > "$RWT" \
+  && cat "$RWT" > "$RWB/w-old-handoff.md"
+printf '{ "schema": 2 }\n' > "$RWB/handoff.json"
+git -C "$RW" add -A && git -C "$RW" commit -qm "aged to 2" > /dev/null
+RW_OUT="$(hb "$RW" migrate --yes)"
+chk_contains "migrate names the 2 to 3 step" "$RW_OUT" "2 → 3"
+chk "a schema-2 doc is lifted to 3" "3" "$(sed -n 's/^schema: //p' "$RWB/w-old-handoff.md" | head -1)"
+chk "no reviewer is invented on the way" "0" "$(grep -c '^reviewer:' "$RWB/w-old-handoff.md")"
+chk_contains "and the step is logged" "$(cat "$RWB/w-old-handoff.md")" "migrated to schema 3"
+chk "the board stamp moves too" "3" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$RWB/handoff.json")"
+# The other half of ADR 0003, which is what makes reading forward safe: a CLI that predates the
+# field refuses to WRITE a doc carrying it, rather than dropping it silently.
+RW_OLD="$(mktemp -d)"
+sed 's/^SCHEMA_VERSION=[0-9]*$/SCHEMA_VERSION=2/' "$SRC/handoff" > "$RW_OLD/handoff"
+chk_contains "a schema-2 CLI refuses to claim a schema-3 doc" \
+  "$(cd "$RW" && HANDOFF_BOARD_PATH="$RWB" bash "$RW_OLD/handoff" claim w-old "old tool" 2>&1)" \
+  "refusing to write"
+chk_contains "and says how to fix it" \
+  "$(cd "$RW" && HANDOFF_BOARD_PATH="$RWB" bash "$RW_OLD/handoff" claim w-old "old tool" 2>&1)" \
+  "re-run setup-handoff"
+# Reading forward never dies -- one warning, then it proceeds (ADR 0003).
+chk_contains "but still reads it, with a warning" \
+  "$(cd "$RW" && HANDOFF_BOARD_PATH="$RWB" bash "$RW_OLD/handoff" list 2>&1)" "w-old-handoff"
 
 printf '\nexport <bundle> --to-issue — a parent issue with one issue per child (ADR 0015)\n'
 # `export --to-issue` used to refuse a bundle outright, so handing a planned feature to a contractor
@@ -2960,7 +3179,7 @@ chk "without gaining one" "0" "$(grep -c '^## Ruled out$' "$ROO")"
 chk_contains "an old doc still lists" "$(hb "$RO" list)" "ro-old-handoff"
 hb "$RO" migrate --yes > /dev/null
 chk "migrate does not add it" "0" "$(grep -c '^## Ruled out$' "$ROO")"
-chk "the schema does not move" "2" "$(sed -n 's/^schema: //p' "$ROO" | head -1)"
+chk "the schema does not move" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$ROO" | head -1)"
 hb "$RO" claim ro-old "old" > /dev/null
 hb "$RO" release ro-old --status open --ruled-out "Shim — broke the gate — hooks.sh:40" > /dev/null
 chk "--ruled-out creates the section on an old doc" "- Shim — broke the gate — hooks.sh:40" "$(ro_section "$ROO")"

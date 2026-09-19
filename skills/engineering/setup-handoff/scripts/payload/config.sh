@@ -221,6 +221,10 @@ cfg = {"topology": "single-repo", "repoName": "", "group": "", "groups": [],
 cfg.update(read_legacy(os.path.join(board, "config")))
 cfg.update(read_json(os.path.join(board, "config.json")))
 cfg.update(read_json(os.path.join(board, "handoff.json")))
+# `handle` is per-MACHINE identity (ADR 0016) and the board layer is shared by everyone on it, so a
+# handle set there would tell every member they are the same person. Dropped rather than merely
+# overridden, so that a value committed by accident is inert instead of being a default nobody set.
+cfg.pop("handle", None)
 
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
@@ -234,6 +238,8 @@ if repo:
         for key, val in data.items():
             if key in ("repo", "board"):
                 continue  # this layer's documented keys, applied last — see below
+            if key == "handle":
+                continue  # per-machine identity — handoff.local.json only (ADR 0016)
             cfg["board" if key == "boardPath" else key] = val
         # The documented keys go on LAST so a superseded spelling can never beat the live one.
         # merge-hooks.py carries a legacy `boardPath` forward alongside the `board` that replaced
@@ -258,6 +264,14 @@ if repo:
         cfg["board"] = local["board"]
     if "group" in local:
         cfg["group"] = local["group"]
+    # The one piece of IDENTITY an uncommitted file may set, and the exception proves the rule above:
+    # every other local key answers "which board, which section" because board-wide policy and TEAM
+    # identity must stay committed. `handle` is neither — it is who *this developer* is on the
+    # tracker, which is per-machine by nature and belongs to nobody else. It is read only to decide
+    # whether a `reviewer` pointer is pointing at the person reading the banner; nothing is
+    # authorised by it and nothing is written from it, so an inaccurate value costs one wrong marker.
+    if "handle" in local:
+        cfg["handle"] = local["handle"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
@@ -288,6 +302,7 @@ emit("HC_GROUP_LAYOUT", cfg.get("groupLayout") or cfg.get("layout") or "")
 emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
 emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
 emit("HC_BOARD_PATH", cfg.get("board") or "")
+emit("HC_HANDLE", cfg.get("handle") or "")
 emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
 PY
 }

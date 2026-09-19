@@ -106,6 +106,14 @@ evidence, not who wrote it: the board has no roles, so it cannot require a secon
 it does catch is a closure whose stated evidence merely restates the claim. Unrelated to the edit
 gate.
 
+**Reviewer**:
+The optional tracker **handle** of the person a handoff is waiting on, projected as the tracker's
+assignee — the one mechanism here that reaches a person rather than whoever is already looking. It
+is a pointer and never a gate: nothing compares a closer against it, because a board has no roles.
+Distinguished from **Audience**, which names a repo, and from the **review gate**, which is the hold
+itself rather than who is asked.
+_Avoid_: owner, assignee (the projection, not the field), approver
+
 ## Document
 
 **Type**:

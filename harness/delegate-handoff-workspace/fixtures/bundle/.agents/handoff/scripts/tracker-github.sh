@@ -7,7 +7,9 @@
 # by the board. Install `gh` and run `gh auth login` once; nothing else is configured here.
 #
 #   list      {"repo", "label"?}                    -> [{"number","state","title","body","labels","children"}]
-#   create    {"repo", "title", "body", "labels"}                -> {"number", "url"}
+#   create    {"repo", "title", "body", "labels", "assignees"?}  -> {"number", "url"}
+#     "assignees" is the reviewer pointer projected outward. It is applied AFTER the issue exists,
+#     as a separate non-fatal step -- see the create arm for why.
 #   update    {"repo", "number", "title"?, "body"?, "labels"?, "managed", "children"?, "owned"?}
 #                                                                -> {} or {"linked", "skipped"}
 #     There is no reopen: an issue closed in the tracker while its handoff is still open is drift,
@@ -61,6 +63,7 @@ print("labels=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("labels", []))
 print("managed=(%s)" % " ".join(shlex.quote(str(l)) for l in r.get("managed", [])))
 print("children=(%s)" % " ".join(str(int(n)) for n in r.get("children", [])))
 print("owned=(%s)" % " ".join(str(int(n)) for n in r.get("owned", [])))
+print("assignees=(%s)" % " ".join(shlex.quote(str(a)) for a in r.get("assignees", [])))
 # Presence, not emptiness: a link-only update omits the text fields entirely and must leave them be,
 # while an empty "children" legitimately means "remove every link this mirror made".
 for k in ("title", "body", "labels", "children"):
@@ -192,6 +195,18 @@ json.dump([i for i in out if not want or want in i["labels"]], sys.stdout)' "$la
       exit 1
     }
     rm -f "$bf"
+    # The assignee is applied here rather than passed to `issue create` above, and the difference
+    # matters: `gh issue create --assignee` fails the WHOLE create when the handle cannot be
+    # assigned -- a typo, or someone who is simply not a collaborator on this repo. That would trade
+    # a shared issue for a missing one, which is the wrong way round; the issue is the point and the
+    # assignment is a courtesy. So it is a second step, and its failure is reported and survived.
+    # The reply is printed either way, so the mirror records the issue it really made.
+    if [ ${#assignees[@]} -gt 0 ]; then
+      aargs=(issue edit)
+      for a in ${assignees[@]+"${assignees[@]}"}; do aargs+=(--add-assignee "$a"); done
+      quiet_gh "${aargs[@]}" "$url" > /dev/null 2>&1 \
+        || echo "tracker-github: could not assign ${assignees[*]} on $url — is that a collaborator? The issue was still created." >&2
+    fi
     printf '%s' "$url" | python3 -c 'import json, re, sys
 u = sys.stdin.read().strip()
 m = re.search(r"/issues/([0-9]+)", u)
