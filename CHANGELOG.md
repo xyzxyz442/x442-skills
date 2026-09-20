@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.14.0](https://github.com/xyzxyz442/x442-skills/compare/v0.13.0...v0.14.0) (2026-09-20)
+
+### 🚀 Features
+
+- **feature:** delegate a bundle as a parent issue with child briefs (ADR 0015) ([0e8d047](https://github.com/xyzxyz442/x442-skills/commit/0e8d0474722bf178f6b7edec9ea068f8c2916ba9))
+- **feature:** hand work back for review without closing it (ADR 0015) ([0b74d85](https://github.com/xyzxyz442/x442-skills/commit/0b74d85285c5e2f63dbe2a50057acdb12ed11e82))
+- **feature:** name a reviewer and project it as a tracker assignee, schema 3 ([fc7dc30](https://github.com/xyzxyz442/x442-skills/commit/fc7dc301c44164f6a9c4080ded218a9554d1ca2d))
+- **feature:** re-cut executed_by as human-in-the-loop, not who acted (ADR 0015) ([8dca19f](https://github.com/xyzxyz442/x442-skills/commit/8dca19f9a35609cd0be44b7bf359fcf11fe693b1))
+
+### 🐞 Bug Fixes
+
+- **bug:** bump hooks.sh to schema 3 so the banner stops crying drift ([1c6ca89](https://github.com/xyzxyz442/x442-skills/commit/1c6ca8911ec86300a941d738d124b0e086933845))
+- **bug:** say why an ownership check refused when no session id exists ([c2a08c5](https://github.com/xyzxyz442/x442-skills/commit/c2a08c5a4d0f272053e9510f1247f5259da54362))
+- **bug:** survive an empty --tools on bash 3.2 in both installers ([d2925ef](https://github.com/xyzxyz442/x442-skills/commit/d2925ef7217dc6ed648a704b2079adcabcb6203b))
+- **docs:** escape the pipe that split the delegate-handoff table row ([0172827](https://github.com/xyzxyz442/x442-skills/commit/017282754a832de8bb47895fb87156a3e03476e7))
+- **test:** pin the selftest's session id so lease ownership is hermetic ([1f9054a](https://github.com/xyzxyz442/x442-skills/commit/1f9054a62a56e13a3bdb1e98f581e5b3e9728458))
+
+### 📚 Documentation
+
+- **docs:** add usage guides for the handoff and secret-guard suites ([59c35cc](https://github.com/xyzxyz442/x442-skills/commit/59c35cccbe0c1279594915625519abb8f683b2a1))
+- **docs:** correct the migration count in ADR 0016 and record the outcome ([5c1294a](https://github.com/xyzxyz442/x442-skills/commit/5c1294ab26f259ea9122f4b5b947ac6e633952cc))
+- **docs:** re-cut ADR 0015's executed_by onto the human-in-the-loop axis ([cc4493a](https://github.com/xyzxyz442/x442-skills/commit/cc4493a71a12ef1c0a9fc5e053504cf5b0694053))
+- **docs:** record ADR 0015 for the review gate, bundle export, and HITL evidence ([37c5165](https://github.com/xyzxyz442/x442-skills/commit/37c5165bd76d912ed78bc8711e3787c70227a6ce))
+- **feature:** document the senior/junior loop and accept ADR 0015 ([d57dc7e](https://github.com/xyzxyz442/x442-skills/commit/d57dc7e6153f360997b41886320ec18d184509a6))
+
+### 🧪 Tests
+
+- **feature:** cover the sub-index sweep and the mirror-workflow installer ([3b5b10e](https://github.com/xyzxyz442/x442-skills/commit/3b5b10e6ecf18a2a5d4db41e0f47e0874a961eb1))
+- **test:** guard the brief against leaking the reviewer handle ([09baa3c](https://github.com/xyzxyz442/x442-skills/commit/09baa3c5b9a31595b6fcbc24cb7780b33b4f1044))
+
+### 🔁 CI/CD
+
+- **ci:** refuse a payload edit that does not move its payload.version ([fb7ec12](https://github.com/xyzxyz442/x442-skills/commit/fb7ec121150c91e6d49d5807690cf928fc6a82f0))
+- **ci:** run both selftests on bash 5 and bash 3.2 ([95a25ef](https://github.com/xyzxyz442/x442-skills/commit/95a25efa5af9eee212c11bb1b004f6260df35e80))
+
+### 🧹 Miscellaneous Chores
+
+- **release:** bump the payload to 50 for the advisory-mode refusal fix ([518000c](https://github.com/xyzxyz442/x442-skills/commit/518000cfe3bac3f96606c13974a491e5c22dc4fb))
+
 ## [0.13.0](https://github.com/xyzxyz442/x442-skills/compare/v0.12.8...v0.13.0) (2026-09-18)
 
 ### 🚀 Features
