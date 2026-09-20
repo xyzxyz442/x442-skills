@@ -25,7 +25,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # Full history: the payload-version check below compares a RANGE, so it needs the
+          # merge-base with main. fetch-depth 1 leaves a repository with no base to diff against.
+          fetch-depth: 0
 
       - name: Check every fixture board against the payload
         run: bash scripts/sync-fixture-boards.sh --check
+
+      # The other half of the same invariant, and the half nothing else sees: a payload edit has
+      # to move that skill's payload.version, or no install is ever told it is behind. Asked of
+      # the branch as a whole rather than per commit, so splitting the edit and the bump across
+      # two commits on one branch is fine — what must not land is a branch carrying one without
+      # the other.
+      # Both contexts are GitHub-generated (an event name and a commit sha), never user text, but
+      # they go through `env` anyway: interpolating any ${{ }} straight into `run` is the shape
+      # that becomes an injection the day someone swaps in a field an author controls.
+      - name: Check payload edits carry their version bump
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE_SHA"
+          else
+            git fetch --quiet origin main || true
+            base="$(git rev-parse origin/main 2> /dev/null || echo '')"
+          fi
+          if [ -z "$base" ] || [ "$base" = "$(git rev-parse HEAD)" ]; then
+            echo "no base to compare against — skipping"
+            exit 0
+          fi
+          bash scripts/verify-payload-version.sh --against "$base"
