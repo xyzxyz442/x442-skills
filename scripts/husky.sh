@@ -157,6 +157,15 @@ run_pre_commit() {
     echo "husky: verify-standalone"
     scripts/verify-standalone.sh --staged
   fi
+  # A payload edit must move that skill's payload.version. Nothing else catches this: the fixture
+  # check below compares fixtures against the payload, and no fixture carries the CLI, so a
+  # CLI-only edit drifts nothing and passes every other gate. Staged set, because the bump has to
+  # be staged with the change that needs it — the same discipline the fixture check already forces.
+  if [ -x scripts/verify-payload-version.sh ]; then
+    echo "husky: verify-payload-version --staged"
+    scripts/verify-payload-version.sh --staged \
+      || fail "a payload changed without its payload.version bump (see above)."
+  fi
   # Harness fixture boards mirror setup-handoff's payload. Three payload bumps in a row shipped
   # without the mirrors, and the graders were the first thing to notice. Whole tree, not staged
   # files: a bump to payload.version is what makes every fixture stale, and the fixtures are not
