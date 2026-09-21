@@ -87,8 +87,11 @@ Fixed during brainstorming; the rest of the design depends on them.
 - An alias with no entry is never mirrored.
 - `trackers` is board policy. It survives a re-install and is never written from
   `handoff.local.json` or the environment (ADR 0013).
-- A board that is not a git repository gets `boardId`, a generated identifier written once. A git
-  board's identity is its root commit, which the registry already records for members.
+- A board's **identity** is derived, never stored: the first 12 hex digits of a SHA-256 over its git
+  root commit and its path relative to the git toplevel. Every clone of one board shares it; a draft
+  board in an ignored folder of the same repository gets a different one, because its path differs.
+  A board with no git history falls back to a hash of its physical path — such a board cannot be
+  cloned, so nothing else can share it.
 
 ### Trust check
 
@@ -98,14 +101,19 @@ both owners. A board without a remote takes its owner from its trackers.
 
 ### Legacy `external`
 
-- **Single-repository board** (in-repo boards): read as `trackers[<that repo>]`. Behavior is
-  unchanged except the projection default, which the upgrade names (see Migration).
-- **Multi-repository board**: not used for routing. The verifier warns `board.external.legacy`.
+- **Legacy mode** — a board with no `trackers`, an `external` block, and topology `single-repo`
+  (in-repo boards): every mirrorable document goes to `external`, `home` is ignored, and no schema
+  gate applies. `external` may carry `projection` too; its default is `summary`, as everywhere.
+- **Multi-repository board**: `external` is not used for routing. The verifier warns
+  `board.external.legacy`.
+- When `trackers` is present, `external` is ignored entirely.
 
 ## Document
 
-- New frontmatter key `home: <alias>`, set by `new` from `--home`, else `HANDOFF_REPO`, else the
-  first entry of `repos`. `new` refuses an alias the board does not register.
+- New frontmatter key `home: <alias>`, set by `new` from `--home`, else `HANDOFF_REPO`, else — for a
+  coordination doc — its `audience`. An orchestrator with neither flag nor `HANDOFF_REPO` gets no
+  `home` and is not mirrored until one is set by `migrate` or by hand. On a `cross-repo` board, `new`
+  refuses an alias the registry does not list.
 - Immutable after `new`. `import --result` adds `home` to its protected keys.
 - `move --to` re-validates `home` against the target board's registry and refuses an alias that
   board does not register.
@@ -152,29 +160,31 @@ is the bundle and checklist, which carry no detail.
 
 ### Bundles across repositories
 
-An orchestrator's children may be homed in different repositories. Sub-issue links are made across
-repositories where the tracker accepts them; where it refuses, the checklist remains and the failure
-is reported as today (ADR 0014 — the adapter owns the gap). Before relying on it, confirm GitHub's
-current constraints on cross-repository sub-issues against its documentation and record them in the
-adapter.
+An orchestrator's children may be homed in different repositories. Native sub-issue links are made
+only between a parent and children **in the same tracker** — the link pass resolves child issue
+numbers within one tracker, and the adapter's `update` request names children by number alone.
+A child homed elsewhere appears in the parent's checklist and is never linked. Cross-repository
+links would change the adapter interface; they are deferred until a board needs them.
 
 ### Drift and CI
 
-Tracker drift is still reported, never reconciled; the drift file gains a tracker column. The mirror
+Tracker drift is still reported, never reconciled. Rows from every pass are gathered and the drift
+file is written once per run, in its current format — a handoff has exactly one home, so `#N` beside
+its id is unambiguous. `list --tracker` checks every pass the same way. The mirror
 workflow template runs every pass and needs a token with issue write access on each member
 repository, documented by secret name only.
 
 ## Migration
 
-- The schema-4 CLI reads schema-3 boards. `mirror` refuses a board below schema 4 and names
-  `migrate`.
-- `migrate` (confirmed, one board at a time) backfills `home` from `audience`, else `repos[0]`,
-  and lists every document it could not resolve, which stays unmirrored.
-- Setup's upgrade path converts `external` with confirmation:
-  - single-repository board — to `trackers[<that repo>]`, naming the new `summary` default and
-    offering `full` to keep today's issue bodies;
-  - multi-repository board — removes `external` and offers each registered repository a tracker
-    pre-filled from its `origin`.
+- The schema-4 CLI reads schema-3 boards. On a board with `trackers`, `mirror` refuses while the
+  board is below schema 4 and names `migrate`. Legacy mode needs no `home` and has no such gate.
+- `migrate` (confirmed, one board at a time) backfills `home` on a coordination doc from its
+  `audience`, and on an orchestrator from the one `home` all its children share. It lists every
+  document it could not resolve; those stay unmirrored.
+- A legacy single-repository board keeps its `external` block. Setup's upgrade path names the new
+  `summary` default when `external` sets no `projection`, and offers `full` to keep today's bodies.
+- On a multi-repository board, setup's upgrade path (confirmed) removes `external` and offers each
+  registered repository a tracker pre-filled from its `origin`.
 - Issues already mirrored into a retired board-level tracker are **listed for a person to close**,
   never closed or deleted automatically (the stance ADR 0013 takes for a repository turned public).
 - The payload version is bumped (`scripts/verify-payload-version.sh`), and the fixture boards are
@@ -193,7 +203,6 @@ tracker, a first push to a board remote — waits for explicit confirmation.
 | `board.trackers.owner`         | tracker owners differ, or differ from the board remote's owner       |
 | `board.trackers.unknown-alias` | a tracker key is not a registered alias                              |
 | `board.external.legacy`        | `external` remains on a multi-repository board                       |
-| `board.id.missing`             | a non-git board has no `boardId`                                     |
 | `doc.home.missing`             | a coordination or orchestrator doc on a schema-4 board has no `home` |
 | `doc.home.unregistered`        | `home` names an alias the board does not register                    |
 
