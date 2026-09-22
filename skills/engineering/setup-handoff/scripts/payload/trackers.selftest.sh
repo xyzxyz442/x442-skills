@@ -438,5 +438,49 @@ TW="$(mkboard)"
 tr_cfg "$TW/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "external": { "kind": "issues", "system": "github", "repo": "acme/board", "refPattern": "#[0-9]+" } }'
 chk_contains "external on a cross-repo board is legacy" "$(vids "$TW")" "warn:board.external.legacy"
 
+printf '\nwhat a board identity refuses to guess, and what a reference may still point at (ADR 0017)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+# A SHALLOW clone reports the commit it fetched as the repository's root, so an identity derived
+# from it changes after every push — which is how a CI mirror would refuse the tracker its own
+# previous run had written. The board says so instead of guessing.
+TSH_SRC="$(mkboard)"
+tr_cfg "$TSH_SRC/.agents/handoff" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/shallow", "refPattern": "#[0-9]+" } }'
+trh "$TSH_SRC" new s-one --title "Shallow work" > /dev/null
+git -C "$TSH_SRC" add -A && git -C "$TSH_SRC" commit -qm "docs"
+TSH="$(mktemp -d)/clone"
+git clone -q --depth 1 "file://$TSH_SRC" "$TSH"
+chk "the fixture really is shallow (so the refusal below is not vacuous)" "true" "$(git -C "$TSH" rev-parse --is-shallow-repository)"
+SHALLOW_CREATES="$(fq "calls('create')")"
+chk_contains "a shallow board refuses to mirror rather than mint a drifting identity" \
+  "$(trh "$TSH" mirror)" "shallow clone"
+chk "and sends nothing" "$SHALLOW_CREATES" "$(fq "calls('create')")"
+chk "a full clone of the same board still mirrors" "yes" \
+  "$(trh "$TSH_SRC" mirror > /dev/null && echo yes || echo no)"
+
+# A standalone doc carries no home, but a REFERENCE is a pointer, not a projection: it is checked
+# against every tracker the board declares. Losing that would take ADR 0011's level 1 away from
+# reference docs the moment a board moved to per-repository trackers.
+TRF="$(mkboard)"
+TRFB="$TRF/.agents/handoff"
+tr_cfg "$TRFB" "$TRACKERS_CFG"
+trh "$TRF" new r-ref --standalone --title "Reference" --ref "#31" > /dev/null
+chk "a standalone doc may still point at a ticket" "#31" "$(sed -n 's/^external_ref: //p' "$TRFB/r-ref-handoff.md" | tr -d '"')"
+trh "$TRF" new r-plan --standalone --title "Sprint reference" --ref "PLAN-9" > /dev/null
+chk "including one in the board's sprint tool" "PLAN-9" "$(sed -n 's/^external_ref: //p' "$TRFB/r-plan-handoff.md" | tr -d '"')"
+chk_contains "but not a reference no declared tracker would take" \
+  "$(trh "$TRF" new r-bad --standalone --title "Bad" --ref "nonsense ref")" "does not match"
+
+# A home taken from the environment is a deliberate identity, not free text. It never refuses the
+# write, but the person running the command has not seen it, so it is said out loud.
+TEV="$(mkboard)"
+TEVB="$TEV/.agents/handoff"
+tr_cfg "$TEVB" "$TRACKERS_CFG"
+EV_OUT="$(cd "$TEV" && HANDOFF_REPO=acme-typo HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$ST" ./.agents/handoff/handoff new e-one --title "Typo home" --audience acme-api 2>&1)"
+chk_contains "an unregistered home from the environment is named" "$EV_OUT" "acme-typo"
+chk "but the doc is still written" "acme-typo" "$(sed -n 's/^home: //p' "$TEVB/e-one-handoff.md")"
+ST="$ST_SAVE"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

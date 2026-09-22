@@ -1606,9 +1606,14 @@ cmd_new() {
     # from the audience is as good as the audience, which nothing validates either; and a cross-repo
     # board has no registry at all until the cross-repo sync writes one, so validating there would
     # refuse every `new` on a board that is working perfectly well.
-    if [ -n "$home_named" ] && [ -n "$(registered_aliases)" ]; then
-      board_registers "$DIR" "$home" \
-        || die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
+    if [ -n "$(registered_aliases)" ] && ! board_registers "$DIR" "$home"; then
+      if [ -n "$home_named" ]; then
+        die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
+      fi
+      # Derived, so the write proceeds — but a home nothing registers is mirrored nowhere, and the
+      # value came from $HANDOFF_REPO or the audience rather than from this command line, so the
+      # person running it has not seen it. Say it once, here, rather than only in the verifier.
+      echo "⚠️  home: $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — $id will be mirrored nowhere until it names one." >&2
     fi
   fi
   CUR_TRACKER="$home"
@@ -3524,6 +3529,14 @@ for alias, e in sorted((d.get("trackers") or {}).items()):
   esac
 }
 
+tracker_aliases_all() { # -> every alias this board declares a tracker for, sprint tools included
+  [ "$(tracker_mode)" = trackers ] || return 0
+  python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+for alias, e in sorted((d.get("trackers") or {}).items()):
+    if isinstance(e, dict): print(alias)' "$DIR/handoff.json" 2> /dev/null
+}
+
 # One board per trust boundary (ADR 0011), kept when trackers multiply (ADR 0017): every tracker on a
 # board shares one host and owner, and a board with a remote shares it too. A board without a remote
 # takes its owner from its trackers. Checked before anything is sent.
@@ -3554,10 +3567,18 @@ print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
 # root commit plus the board's path inside it, so every clone agrees and a draft board kept in an
 # ignored folder of the same repository does not. A board with no git history falls back to its
 # physical path; such a board cannot be cloned, so nothing else can share the answer.
-board_identity() { # -> 12 lowercase hex digits
+board_identity() { # -> 12 lowercase hex digits; dies on a shallow clone
   local top root rel
   top="$(board_git rev-parse --show-toplevel)"
   root="$(repo_root_commit "$DIR")"
+  # A SHALLOW clone has no root commit to find: the commit it checked out has no parent locally, so
+  # `rev-list --max-parents=0 HEAD` answers with that commit — a different one after every push. An
+  # identity computed from it would make each CI run look like a different board and refuse the
+  # tracker its predecessor had just written. Say so instead of guessing; the workflow this skill
+  # installs checks out full history for exactly this reason.
+  if [ "$(board_git rev-parse --is-shallow-repository 2> /dev/null)" = true ]; then
+    die "this board is a shallow clone, so it has no stable identity — and one tracker is written by one board (ADR 0017). Check it out with full history (git fetch --unshallow, or fetch-depth: 0 in CI) and run this again. Nothing was sent."
+  fi
   if [ -n "$top" ] && [ -n "$root" ]; then
     rel="$(python3 -c 'import os,sys; print(os.path.relpath(os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2])))' "$DIR" "$top")"
     printf '%s:%s' "$root" "$rel"
@@ -4095,7 +4116,7 @@ drift_live_pass() { # -> this tracker's rows
     return 1
   fi
   existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || return 1
-  BOARD_ID="$(board_identity)"
+  BOARD_ID="$(board_identity)" || return 1
   existing="$(mirror_claim_tracker "$existing" 2> /dev/null)" || {
     echo "handoff: $repo is mirrored by another board, so this board has no drift to report there (ADR 0017)." >&2
     return 1
@@ -4155,7 +4176,7 @@ mirror_pass() { # dry(0|1) drift-rows-file -> 0, or 1 when a document was refuse
   # could not see the issue it had just opened and made a second one (found in a live run). Issues
   # are matched by their hidden marker alone, which is part of the issue's own body.
   existing="$(tracker_call list "{\"repo\": \"$repo\"}")" || exit 3
-  BOARD_ID="$(board_identity)"
+  BOARD_ID="$(board_identity)" || exit 3
   local claim_err owners
   claim_err="$(mktemp)" || die "mktemp failed"
   if ! existing="$(mirror_claim_tracker "$existing" 2> "$claim_err")"; then
@@ -4638,6 +4659,25 @@ validate_external_ref() { # ref -> prints the ref as stored; non-zero with a mes
   local ref pat
   ref="$(fold_colons "$1")"
   pat="$(tracker_setting refPattern)"
+  # No home resolves a tracker for a standalone doc, which carries none (ADR 0017) — but a reference
+  # is a pointer, not a projection, so it is checked against EVERY tracker the board declares and
+  # accepted if any of them would take it. Refusing here would take level 1 away from reference docs
+  # on a per-repository board, which nothing in ADR 0011 or 0017 intends.
+  if [ -z "$pat" ] && [ "$(tracker_mode)" = trackers ]; then
+    local alias
+    while IFS= read -r alias; do
+      [ -n "$alias" ] || continue
+      pat="$(CUR_TRACKER="$alias" tracker_setting refPattern)"
+      [ -n "$pat" ] && printf '%s\n' "$ref" | grep -Eqx -- "$pat" && {
+        printf '%s' "$ref"
+        return 0
+      }
+    done <<< "$(tracker_aliases_all)"
+    if [ -n "$(tracker_aliases_all)" ]; then
+      echo "handoff: --ref '$ref' does not match the refPattern of any tracker this board declares ($(tracker_aliases_all | tr '\n' ' ' | sed 's/ $//'))." >&2
+      return 1
+    fi
+  fi
   if [ -z "$pat" ]; then
     echo "handoff: this board attaches no external tracker for ${CUR_TRACKER:-it} (no refPattern in $DIR/handoff.json), so --ref has nothing to point into." >&2
     return 1
