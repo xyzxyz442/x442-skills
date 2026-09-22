@@ -3741,7 +3741,7 @@ export_bundle_to_issue() { # id doc outdir branch do_claim force-secret
   elif printf '1\n' | grep -Eqx -- "$(tracker_setting refPattern)" 2> /dev/null; then
     ref_style=""
   else
-    die "external.refPattern ($(tracker_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
+    die "the refPattern of this handoff's tracker ($(tracker_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
   fi
 
   # Renders the cover and every child brief, and runs its own pre-flight for foreign leases. Local
@@ -3866,7 +3866,7 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   elif printf '1\n' | grep -Eqx -- "$(tracker_setting refPattern)" 2> /dev/null; then
     ref_style=""
   else
-    die "external.refPattern ($(tracker_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
+    die "the refPattern of this handoff's tracker ($(tracker_setting refPattern)) would not accept an issue number as external_ref — fix the pattern before delegating to an issue."
   fi
 
   export_one "$id" "$f" "issue" "$3" "$4" "$5" "$6" > /dev/null || exit 3
@@ -4622,12 +4622,12 @@ validate_external_ref() { # ref -> prints the ref as stored; non-zero with a mes
   ref="$(fold_colons "$1")"
   pat="$(tracker_setting refPattern)"
   if [ -z "$pat" ]; then
-    echo "handoff: this board attaches no external tracker (no external.refPattern in $DIR/handoff.json), so --ref has nothing to point into." >&2
+    echo "handoff: this board attaches no external tracker for ${CUR_TRACKER:-it} (no refPattern in $DIR/handoff.json), so --ref has nothing to point into." >&2
     return 1
   fi
   # -x: the WHOLE reference must match. A substring match would accept "see ABC-12 please".
   if ! printf '%s\n' "$ref" | grep -Eqx -- "$pat"; then
-    echo "handoff: --ref '$ref' does not match this board's external.refPattern ($pat)." >&2
+    echo "handoff: --ref '$ref' does not match the refPattern of the tracker for ${CUR_TRACKER:-this board} ($pat)." >&2
     return 1
   fi
   printf '%s' "$ref"
