@@ -1480,7 +1480,7 @@ warn_archive_failed() { # id
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
   local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref="" share=""
-  local reviewer="" reviewer_set=0 home=""
+  local reviewer="" reviewer_set=0 home="" home_named=""
   id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--home REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--reviewer HANDLE] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
@@ -1499,6 +1499,7 @@ cmd_new() {
       --home)
         require_value --home "$#" "${2:-}"
         home="$2"
+        home_named=1
         shift 2
         ;;
       --group)
@@ -1592,11 +1593,23 @@ cmd_new() {
     home="${HANDOFF_REPO:-}"
     [ -z "$home" ] && [ "$type" = coordination ] && home="$audience"
   fi
+  # A DEFAULTED home that cannot be an alias is dropped, never fatal: it came from `audience`, which
+  # is free text this board accepts as given (a `|` in one is a case the brief packer already
+  # handles). Only a home somebody NAMED is worth refusing over.
+  if [ -n "$home" ] && [ -z "$home_named" ]; then
+    case "$home" in *[!A-Za-z0-9._-]*) home="" ;; esac
+  fi
   if [ -n "$home" ]; then
     case "$home" in *[!A-Za-z0-9._-]*) die "--home '$home' is not a repository alias (letters, digits, dot, dash, underscore)." ;; esac
     [ "$type" = standalone ] && die "a standalone doc has no home — it is never mirrored (ADR 0017)."
-    board_registers "$DIR" "$home" \
-      || die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
+    # Checked only when the caller NAMED it, and only against a registry that exists. A home derived
+    # from the audience is as good as the audience, which nothing validates either; and a cross-repo
+    # board has no registry at all until the cross-repo sync writes one, so validating there would
+    # refuse every `new` on a board that is working perfectly well.
+    if [ -n "$home_named" ] && [ -n "$(registered_aliases)" ]; then
+      board_registers "$DIR" "$home" \
+        || die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
+    fi
   fi
   CUR_TRACKER="$home"
   [ -n "${ext_ref:-}" ] && { ext_ref="$(validate_external_ref "$ext_ref")" || exit 3; }
@@ -3377,11 +3390,15 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   move_check_trust "$f" "$id" "$to" "$to_remote" || across=" (across remotes, target named as $(board_owner_key "$to"))"
 
   # ADR 0017 — a home names a repository of THIS board's registry. The target must register it too,
-  # or the doc lands homed at a repository that board has never heard of and can never mirror.
+  # or the doc lands homed at a repository that board has never heard of and can never mirror. Only
+  # a target that HAS a registry can contradict a home: a board has none until the cross-repo sync
+  # writes one, and refusing there would block a move onto a board that works perfectly well.
   local fhome
   fhome="$(meta "$f" home)"
-  [ -z "$fhome" ] || board_registers "$to" "$fhome" \
-    || die "$id is homed at $fhome, which the target board does not register — nothing moved. Register $fhome there first (register-cross-repo-handoff)."
+  if [ -n "$fhome" ] && [ -n "$(DIR="$to" registered_aliases)" ]; then
+    board_registers "$to" "$fhome" \
+      || die "$id is homed at $fhome, which the target board does not register — nothing moved. Register $fhome there first (register-cross-repo-handoff)."
+  fi
 
   local hits=""
   if hits="$(scan_secrets < "$f")"; then

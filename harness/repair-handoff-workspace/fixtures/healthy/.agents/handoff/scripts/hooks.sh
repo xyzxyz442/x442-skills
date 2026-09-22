@@ -249,7 +249,7 @@ LOCKS="$(sec_dir)/.locks"
 # copy left at 2, so every session on a migrated board was told "this payload understands 2 — re-run
 # setup-handoff", which was false and the remedy pointless. The selftest now asserts the two agree;
 # bump both or neither.
-SCHEMA_VERSION=3
+SCHEMA_VERSION=4
 schema_note() { # -> one line, or nothing
   local board=0 ahead=0 f v
   if [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1; then

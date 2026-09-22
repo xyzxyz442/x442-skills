@@ -2177,7 +2177,9 @@ mi_ext '{ "kind": "sprints", "system": "github", "refPattern": "#[0-9]+", "repo"
 chk_contains "mirror refuses a board whose tracker is a sprint tool" "$(mih "$MI" mirror)" "sprint"
 mi_ext '{ "kind": "issues", "system": "github", "refPattern": "#[0-9]+" }'
 chk_contains "mirror refuses an issue tracker with no external.repo" "$(mih "$MI" mirror)" "external.repo"
-mi_ext '{ "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" }'
+# `projection: full` because this block asserts on `## Context` and `## Verify` reaching the issue
+# (the credential planted below lives in Context). The default is a summary since ADR 0017.
+mi_ext '{ "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "projection": "full" }'
 
 mih "$MI" new m-open --title "Open work" --severity high > /dev/null
 mih "$MI" new m-blocked --title "Blocked work" > /dev/null
@@ -2208,7 +2210,7 @@ MI_RC="$(
   echo $?
 )"
 chk "open coordination docs and a clean bundle become issues" "4" "$(fq 'len(db["issues"])')"
-chk "each issue carries the hidden marker" "1" "$(fq 'len(by("<!-- handoff:m-open-handoff -->"))')"
+chk "each issue carries the hidden marker" "1" "$(fq 'len(by("/m-open-handoff -->"))')"
 chk "restricted docs never leave the board" "0" "$(fq 'len([i for i in db["issues"] if "Restricted work" in i["title"]])')"
 chk "a bundle with a restricted child is skipped whole" "0" "$(fq 'len(by("m-bundle-r-handoff"))')"
 chk "standalone docs are never mirrored" "0" "$(fq 'len(by("m-ref-handoff"))')"
@@ -2233,7 +2235,7 @@ python3 - "$MI_STATE" << 'PY'
 import json, sys
 p = sys.argv[1]
 db = json.load(open(p))
-orig = [i for i in db["issues"] if "<!-- handoff:m-kid-handoff -->" in i["body"]][0]
+orig = [i for i in db["issues"] if "/m-kid-handoff -->" in i["body"]][0]
 dup = dict(orig, number=max(i["number"] for i in db["issues"]) + 1, comments=[])
 db["issues"].append(dup)
 json.dump(db, open(p, "w"))
@@ -2277,8 +2279,8 @@ db = json.load(open(p))
 n = max(i["number"] for i in db["issues"]) + 1
 db["issues"].append({"repo": "acme/backlog", "number": n, "state": "open", "title": "filed by a person",
                      "body": "no marker here", "labels": [], "comments": [], "children": []})
-bundle = [i for i in db["issues"] if "<!-- handoff:m-bundle-handoff -->" in i["body"]][0]
-stray = min(i["number"] for i in db["issues"] if "<!-- handoff:m-blocked-handoff -->" in i["body"])
+bundle = [i for i in db["issues"] if "/m-bundle-handoff -->" in i["body"]][0]
+stray = min(i["number"] for i in db["issues"] if "/m-blocked-handoff -->" in i["body"])
 bundle["children"] = sorted(bundle["children"] + [n, stray])
 json.dump(db, open(p, "w"))
 PY2
@@ -2338,7 +2340,7 @@ python3 - "$MI_STATE" << 'PY'
 import json, sys
 p = sys.argv[1]
 db = json.load(open(p))
-i = min((i for i in db["issues"] if "<!-- handoff:m-kid-handoff -->" in i["body"]), key=lambda i: i["number"])
+i = min((i for i in db["issues"] if "/m-kid-handoff -->" in i["body"]), key=lambda i: i["number"])
 i["title"] = "edited in the tracker"
 i["labels"].append("keep-me")
 json.dump(db, open(p, "w"))
@@ -2415,7 +2417,7 @@ MI_RC_BEFORE="$(
   mih "$MI" mirror > /dev/null
   echo $?
 )"
-mi_close_issue "<!-- handoff:m-kid-handoff -->"
+mi_close_issue "/m-kid-handoff -->"
 MI_UPD_BEFORE="$(fq 'calls("update")')"
 MI_DRIFT_OUT="$(mih "$MI" mirror)"
 MI_DRIFT_RC="$(
@@ -2455,7 +2457,7 @@ MI_HOOK="$(cd "$MI" && printf '{}' | HANDOFF_SESSION_ID="$MI_SESS" bash "$MIB/sc
 chk_contains "the session banner surfaces drift on the affected handoff" "$MI_HOOK" "tracker drift"
 chk_contains "and says where status actually changes" "$MI_HOOK" "status changes on the board"
 # A parent whose own issue is closed is sent nothing — and a link is something sent.
-mi_close_issue "<!-- handoff:m-bundle-handoff -->"
+mi_close_issue "/m-bundle-handoff -->"
 mih "$MI" children add m-bundle m-linked > /dev/null
 MI_LINKS_BEFORE="$(fq 'len([c for c in db["calls"] if c[0] == "update" and "children" in c[1]])')"
 mih "$MI" mirror > /dev/null
@@ -2466,8 +2468,8 @@ chk "and both drifting handoffs are in the report" "2" \
 mih "$MI" children rm m-bundle m-linked > /dev/null
 # Drift CLEARS when the two sides agree again, and the report goes away with it: absence is the
 # normal state, so nothing is left behind claiming a divergence that is over.
-mi_open_issue "<!-- handoff:m-kid-handoff -->"
-mi_open_issue "<!-- handoff:m-bundle-handoff -->"
+mi_open_issue "/m-kid-handoff -->"
+mi_open_issue "/m-bundle-handoff -->"
 MI_CLEARED="$(mih "$MI" mirror)"
 chk "the report is removed once nothing diverges" "0" "$([ -f "$MI_DRIFT" ] && echo 1 || echo 0)"
 chk_contains "and the run says so" "$MI_CLEARED" "nothing diverges from the tracker any more"
@@ -2852,7 +2854,7 @@ printf '{ "schema": 2 }\n' > "$RWB/handoff.json"
 git -C "$RW" add -A && git -C "$RW" commit -qm "aged to 2" > /dev/null
 RW_OUT="$(hb "$RW" migrate --yes)"
 chk_contains "migrate names the 2 to 3 step" "$RW_OUT" "2 → 3"
-chk "a schema-2 doc is lifted to 3" "3" "$(sed -n 's/^schema: //p' "$RWB/w-old-handoff.md" | head -1)"
+chk "a schema-2 doc is lifted to the current schema" "$CUR_SCHEMA" "$(sed -n 's/^schema: //p' "$RWB/w-old-handoff.md" | head -1)"
 chk "no reviewer is invented on the way" "0" "$(grep -c '^reviewer:' "$RWB/w-old-handoff.md")"
 chk_contains "and the step is logged" "$(cat "$RWB/w-old-handoff.md")" "migrated to schema 3"
 # The constant is declared TWICE — the CLI owns it, and hooks.sh restates it so the session banner
@@ -2864,7 +2866,7 @@ chk "hooks.sh restates the CLI's schema version, and has not drifted from it" "$
   "$(sed -n 's/^SCHEMA_VERSION=//p' "$SRC/hooks.sh" | head -1)"
 chk "and each declares it exactly once" "1 1" \
   "$(printf '%s %s' "$(grep -c '^SCHEMA_VERSION=' "$SRC/handoff")" "$(grep -c '^SCHEMA_VERSION=' "$SRC/hooks.sh")")"
-chk "the board stamp moves too" "3" \
+chk "the board stamp moves too" "$CUR_SCHEMA" \
   "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schema"))' "$RWB/handoff.json")"
 # The other half of ADR 0003, which is what makes reading forward safe: a CLI that predates the
 # field refuses to WRITE a doc carrying it, rather than dropping it silently.
@@ -2885,15 +2887,34 @@ printf '\nexport <bundle> --to-issue — a parent issue with one issue per child
 # meant exporting each child separately and losing the sequencing and the depends_on edges that made
 # it a bundle. ADR 0014 had already taught the MIRROR to project a bundle as a parent issue with
 # native sub-issues, so the tracker knew a shape the delegation path still refused to produce.
+BD_STATE="$(mktemp -d)/tracker.json"
+# Its OWN tracker state, not the mirror block's: BD is a different board, and one tracker is
+# written by ONE board (ADR 0017) — a second board's mirror run into it is refused by design, which
+# is exactly what this block would otherwise be asserting against.
+bdh() { # board-repo subcommand... -> that board's CLI against BD's own tracker
+  local r="$1"
+  shift
+  (cd "$r" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$BD_STATE" ./.agents/handoff/handoff "$@") 2>&1
+}
+bdfq() { # python-expression over BD's own tracker state
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {"issues": [], "calls": []}
+db.setdefault("issues", []); db.setdefault("calls", [])
+def by(marker): return [i for i in db["issues"] if marker in i["body"]]
+def calls(op): return len([c for c in db["calls"] if c[0] == op])
+print(eval(sys.argv[2]))' "$BD_STATE" "$1"
+}
 BD="$(mkboard)"
 BDB="$BD/.agents/handoff"
 printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$BDB/handoff.json"
-mih "$BD" new b-one --title "First unit" > /dev/null
-mih "$BD" new b-two --title "Second unit" > /dev/null
-mih "$BD" new b-bundle --orchestrator --children b-one,b-two --title "The bundle" > /dev/null
-BD_ISSUES_BEFORE="$(fq 'len(db["issues"])')"
-BD_OUT="$(mih "$BD" export b-bundle --to-issue)"
-chk "one parent issue plus one per child" "$((BD_ISSUES_BEFORE + 3))" "$(fq 'len(db["issues"])')"
+bdh "$BD" new b-one --title "First unit" > /dev/null
+bdh "$BD" new b-two --title "Second unit" > /dev/null
+bdh "$BD" new b-bundle --orchestrator --children b-one,b-two --title "The bundle" > /dev/null
+BD_ISSUES_BEFORE="$(bdfq 'len(db["issues"])')"
+BD_OUT="$(bdh "$BD" export b-bundle --to-issue)"
+chk "one parent issue plus one per child" "$((BD_ISSUES_BEFORE + 3))" "$(bdfq 'len(db["issues"])')"
 # Per child, not one issue holding every brief: a child is claimed, answered and reviewed on its
 # own, and a single issue cannot carry N results.
 chk "each child records its own external_ref" "2" \
@@ -2906,18 +2927,18 @@ BD_KNUM="$(sed -n 's/^external_ref: #//p' "$BDB/b-one-handoff.md")"
 chk_contains "the run names the parent issue" "$BD_OUT" "#$BD_PNUM"
 # Linking reuses ADR 0014's request fields rather than a second implementation that would drift.
 chk "the children are linked under the parent" "2" \
-  "$(fq "len([i for i in db['issues'] if i['number']==$BD_PNUM][0].get('children',[]))")"
+  "$(bdfq "len([i for i in db['issues'] if i['number']==$BD_PNUM][0].get('children',[]))")"
 chk "and the link call names the issues this board owns" "True" \
-  "$(fq "any(c[0]=='update' and c[1].get('number')==$BD_PNUM and 'owned' in c[1] for c in db['calls'])")"
+  "$(bdfq "any(c[0]=='update' and c[1].get('number')==$BD_PNUM and 'owned' in c[1] for c in db['calls'])")"
 # The parent is an index, not a unit of work: it carries the cover and says so, and no result is
 # ever reported against it.
 chk "the parent issue carries the bundle cover" "True" \
-  "$(fq "'## Units' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
+  "$(bdfq "'## Units' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
 chk "and tells the reader nothing is reported there" "True" \
-  "$(fq "'Nothing is reported against this issue' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
+  "$(bdfq "'Nothing is reported against this issue' in [i for i in db['issues'] if i['number']==$BD_PNUM][0]['body']")"
 
 # The return half is per child and unchanged — every refusal the ordinary import makes still applies.
-python3 - "$MI_STATE" "$BD_KNUM" << 'PYB'
+python3 - "$BD_STATE" "$BD_KNUM" << 'PYB'
 import json, sys
 p, n = sys.argv[1], int(sys.argv[2])
 db = json.load(open(p))
@@ -2927,23 +2948,23 @@ for i in db["issues"]:
         i["comments"].append({"author": "dana", "body": "result_status: done\n\n" + block, "created_at": "2026-01-03T00:00:00Z"})
 json.dump(db, open(p, "w"))
 PYB
-mih "$BD" import --result --from-issue b-one > /dev/null
+bdh "$BD" import --result --from-issue b-one > /dev/null
 chk "the child that answered is awaiting review" "pending" "$(sed -n 's/^review: //p' "$BDB/b-one-handoff.md")"
 chk "its sibling is untouched" "" "$(sed -n 's/^review: //p' "$BDB/b-two-handoff.md")"
 chk "and an import still never writes status" "open" "$(sed -n 's/^status: //p' "$BDB/b-one-handoff.md")"
 
 # One issue has one owner (ADR 0015). Every doc involved now carries an external_ref, and the mirror
 # already skips those — so a delegated bundle is never projected twice.
-BD_MIR="$(mih "$BD" mirror --dry-run)"
+BD_MIR="$(bdh "$BD" mirror --dry-run)"
 chk_contains "a delegated bundle leaves the mirror" "$BD_MIR" "skip b-bundle-handoff — linked elsewhere"
 chk_contains "and so does each delegated child" "$BD_MIR" "skip b-one-handoff — linked elsewhere"
 
 # Opening N+1 issues can fail part-way and there is no transaction to undo — an issue that exists
 # has been seen. So a re-run RESUMES: external_ref makes it idempotent, exactly as the hidden marker
 # does for the mirror.
-BD_RESUME_BEFORE="$(fq 'len(db["issues"])')"
-mih "$BD" export b-bundle --to-issue > /dev/null
-chk "a re-run opens no second set of issues" "$BD_RESUME_BEFORE" "$(fq 'len(db["issues"])')"
+BD_RESUME_BEFORE="$(bdfq 'len(db["issues"])')"
+bdh "$BD" export b-bundle --to-issue > /dev/null
+chk "a re-run opens no second set of issues" "$BD_RESUME_BEFORE" "$(bdfq 'len(db["issues"])')"
 # A resume re-renders every brief, and export_one re-stamps delegated_to with the bare recipient as
 # it goes. Left alone that wipes the issue NUMBER, which is what import --result --from-issue
 # matches on — so a resume would silently break the return path on every unit already out there.
@@ -2952,25 +2973,25 @@ chk "the parent keeps its issue number through a resume" "issue #$BD_PNUM" \
 chk "and so does an already-exported child" "issue #$BD_KNUM" \
   "$(sed -n 's/^delegated_to: //p' "$BDB/b-one-handoff.md")"
 chk_contains "so the return path still resolves after a resume" \
-  "$(mih "$BD" import --result --from-issue b-one)" "Imported"
+  "$(bdh "$BD" import --result --from-issue b-one)" "Imported"
 
 printf '\nwhat a bundle export refuses, it refuses whole\n'
-BD_SENT="$(fq 'len(db["issues"])')"
+BD_SENT="$(bdfq 'len(db["issues"])')"
 # Each child gets its own default branch, so one --branch cannot apply to N of them. The file-based
 # bundle export already refuses this; the issue path inherits the same answer.
-mih "$BD" new c-one --title "Kid" > /dev/null
-mih "$BD" new c-bundle --orchestrator --children c-one --title "Branchy" > /dev/null
+bdh "$BD" new c-one --title "Kid" > /dev/null
+bdh "$BD" new c-bundle --orchestrator --children c-one --title "Branchy" > /dev/null
 chk_contains "--branch on a bundle export is refused" \
-  "$(mih "$BD" export c-bundle --to-issue --branch feature/x)" "--branch is not supported for a bundle export"
+  "$(bdh "$BD" export c-bundle --to-issue --branch feature/x)" "--branch is not supported for a bundle export"
 # A restricted CHILD refuses the whole bundle: sending the other briefs would hand an executor a
 # cover naming a unit they were never given.
-mih "$BD" new d-open --title "Ordinary" > /dev/null
-mih "$BD" new d-secret --title "Sensitive" --sensitivity restricted > /dev/null
-mih "$BD" new d-bundle --orchestrator --children d-open,d-secret --title "Mixed" > /dev/null
-chk_contains "a restricted child refuses the bundle" "$(mih "$BD" export d-bundle --to-issue)" "restricted"
+bdh "$BD" new d-open --title "Ordinary" > /dev/null
+bdh "$BD" new d-secret --title "Sensitive" --sensitivity restricted > /dev/null
+bdh "$BD" new d-bundle --orchestrator --children d-open,d-secret --title "Mixed" > /dev/null
+chk_contains "a restricted child refuses the bundle" "$(bdh "$BD" export d-bundle --to-issue)" "restricted"
 chk "its innocent sibling is not delegated either" "0" \
   "$(grep -c '^external_ref: #' "$BDB/d-open-handoff.md" || true)"
-chk "and no refusal above sent anything" "$BD_SENT" "$(fq 'len(db["issues"])')"
+chk "and no refusal above sent anything" "$BD_SENT" "$(bdfq 'len(db["issues"])')"
 
 # ADR 0013 still governs, doc by doc. The cover names every child, so a public parent with an
 # unmarked child would publish that child's title regardless — the gate is all-or-nothing.
@@ -2986,7 +3007,7 @@ chk_contains "a public repository refuses a bundle without allowPublic" \
 printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "allowPublic": true } }\n' > "$PBB/handoff.json"
 chk_contains "and refuses one whose child is not marked share public" \
   "$(pbh export p-bundle --to-issue)" "share"
-chk "neither refusal sent anything" "$BD_SENT" "$(fq 'len(db["issues"])')"
+chk "neither refusal sent anything" "$BD_SENT" "$(bdfq 'len(db["issues"])')"
 
 printf '\nthe GitHub adapter speaks gh, and passes no credential\n'
 GHB="$(mktemp -d)"
