@@ -67,3 +67,7 @@ jobs:
       - name: Run handoff.selftest.sh
         working-directory: skills/engineering/setup-handoff/scripts/payload
         run: /bin/bash handoff.selftest.sh
+
+      - name: Run trackers.selftest.sh
+        working-directory: skills/engineering/setup-handoff/scripts/payload
+        run: /bin/bash trackers.selftest.sh
