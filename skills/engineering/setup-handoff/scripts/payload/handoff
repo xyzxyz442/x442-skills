@@ -4182,12 +4182,12 @@ for i in sorted(json.load(sys.stdin), key=lambda i: i["number"]):
       IFS=$'\t' read -r dstatus dstate <<< "$(printf '%s' "$payload" | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print("%s\t%s" % (d.get("status", "open"), d.get("state", "closed")))')"
-      printf 'drift %s (#%s) — %s on the tracker, %s on the board\n' "$marker" "$number" "$dstate" "$dstatus"
+      printf 'drift %s (#%s) — %s on the tracker, %s on the board\n' "${marker##*/}" "$number" "$dstate" "$dstatus"
       printf '%s\t%s\t%s\t%s\n' "$marker" "$number" "$dstatus" "$dstate" >> "$drift"
       continue
     fi
     if [ "$dry" = 1 ]; then
-      printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
+      printf '%s %s%s\n' "$action" "${marker##*/}" "${number:+ (#$number)}"
       continue
     fi
     case "$action" in
@@ -4200,7 +4200,7 @@ print("%s\t%s" % (d.get("status", "open"), d.get("state", "closed")))')"
       update) tracker_call update "$payload" > /dev/null || exit 3 ;;
       close) tracker_call close "$payload" > /dev/null || exit 3 ;;
     esac
-    printf '%s %s%s\n' "$action" "$marker" "${number:+ (#$number)}"
+    printf '%s %s%s\n' "$action" "${marker##*/}" "${number:+ (#$number)}"
   done <<< "$plan"
 
   # Links last, once every marker's number is known (ADR 0014).
@@ -4208,15 +4208,15 @@ print("%s\t%s" % (d.get("status", "open"), d.get("state", "closed")))')"
   while IFS=$'\t' read -r lnum lmarker lreq; do
     [ -n "$lnum" ] || continue
     if [ "$dry" = 1 ]; then
-      printf 'link %s (#%s)\n' "$lmarker" "$lnum"
+      printf 'link %s (#%s)\n' "${lmarker##*/}" "$lnum"
       continue
     fi
     reply="$(tracker_call update "$lreq")" || exit 3
     skipped="$(printf '%s' "$reply" | python3 -c 'import json, sys
 try: print(json.load(sys.stdin).get("skipped") or "")
 except Exception: print("")')"
-    printf 'link %s (#%s)\n' "$lmarker" "$lnum"
-    [ -n "$skipped" ] && [ "$skipped" != 0 ] && printf 'note %s — %s child issue(s) past the tracker cap stay in the checklist only\n' "$lmarker" "$skipped"
+    printf 'link %s (#%s)\n' "${lmarker##*/}" "$lnum"
+    [ -n "$skipped" ] && [ "$skipped" != 0 ] && printf 'note %s — %s child issue(s) past the tracker cap stay in the checklist only\n' "${lmarker##*/}" "$skipped"
   done <<< "$(mirror_links "$existing" "$desired" "$nummap" "$created" "$ownrefs" "$drift")"
   # A dry run reports the divergence and leaves the report alone: it writes nothing, here as
   # everywhere else, so the file on disk still describes the last real run.
