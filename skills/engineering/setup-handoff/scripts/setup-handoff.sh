@@ -285,6 +285,22 @@ if isinstance(envs, list) and envs and all(isinstance(v, str) for v in envs):
 ext = existing.get("external")
 if isinstance(ext, dict):
     cfg["external"] = ext
+# ADR 0017 — a tracker per repository is the same kind of committed decision, and `allowPublic`
+# inside it is publishing policy (ADR 0013): an install that reverted either would silently take a
+# board's mirror down, or take its consent to publish away.
+trk = existing.get("trackers")
+if isinstance(trk, dict):
+    cfg["trackers"] = trk
+if isinstance(ext, dict) and not isinstance(trk, dict):
+    if existing.get("topology") == "cross-repo":
+        sys.stderr.write(
+            "note: `external` is set on a cross-repository board, where it now routes nothing.\n"
+            "      Declare a tracker per repository under `trackers` (ADR 0017) — see setup-handoff\n"
+            "      SKILL.md, 'Per-repository trackers', and confirm each entry before writing it.\n")
+    elif "projection" not in ext:
+        sys.stderr.write(
+            "note: the mirror now sends a summary (title, labels, Current state) by default.\n"
+            "      Set external.projection to \"full\" to keep sending Context and Verify.\n")
 
 # The DOCUMENT schema, which is the only thing that triggers a migration — distinct from the
 # payload version beside it, which moves on every CLI bugfix (ADR 0003). Preserved when already
@@ -622,6 +638,9 @@ if isinstance(g, dict):
 print(" ".join(str(x) for x in g))
 PY
   )"
+  # Every issue tracker the board declares (ADR 0017), or its single pre-0017 `external` one. The
+  # workflow itself needs no list — `./handoff mirror` walks the trackers on its own — but the token
+  # decision below does: a job may only rely on GITHUB_TOKEN when every tracker is this repository.
   tracker="$(
     python3 - "$b/handoff.json" << 'PY'
 import json, sys
@@ -629,10 +648,14 @@ try:
     cfg = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(0)
-print((cfg.get("external") or {}).get("repo") or "")
+repos = [e.get("repo") for e in (cfg.get("trackers") or {}).values()
+         if isinstance(e, dict) and e.get("kind") == "issues" and e.get("repo")]
+if not repos and isinstance(cfg.get("external"), dict) and cfg["external"].get("repo"):
+    repos = [cfg["external"]["repo"]]
+print(" ".join(sorted(set(repos))))
 PY
   )"
-  [ -n "$tracker" ] || die "--with-mirror-workflow: this board declares no external tracker (external.repo in handoff.json), so there is nothing for the workflow to mirror into."
+  [ -n "$tracker" ] || die "--with-mirror-workflow: this board declares no external tracker (no trackers with a repo, and no external.repo, in handoff.json), so there is nothing for the workflow to mirror into."
   # A flat board hosts exactly one unnamed section. The loop still runs once, so the rendered file
   # is the same shape either way and there is no second code path to keep correct.
   [ -n "$sections" ] || sections=""
@@ -645,7 +668,7 @@ PY
     token_note="The tracker is this workflow's own repository, so the built-in GITHUB_TOKEN suffices."
   else
     token_expr='${{ secrets.HANDOFF_TRACKER_TOKEN }}'
-    token_note="The tracker ($tracker) is a DIFFERENT repository, so set a repository secret named HANDOFF_TRACKER_TOKEN (issues:write on $tracker). Only the name appears here."
+    token_note="The tracker(s) — $tracker — are not only this workflow's own repository, so set a repository secret named HANDOFF_TRACKER_TOKEN with issues:write on each of them. Only the name appears here."
   fi
   rel="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]) or ".")' "$(cd "$b" && pwd -P)" "$(cd "$top" && pwd -P)")"
   dest="$top/.github/workflows/handoff-mirror.yml"

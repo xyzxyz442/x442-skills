@@ -296,7 +296,7 @@ if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command 
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
        "board","boardPath","environments","layout","boardRemote","locations","repo",
-       "schema","_generated","external"}
+       "schema","_generated","external","trackers"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -608,6 +608,83 @@ if [ "${EXT_PRESENT:-0}" = 1 ]; then
   fi
 fi
 
+# ADR 0017 — a tracker attaches per REPOSITORY, keyed by the aliases the registry lists. Each entry
+# is checked like `external` above, and then the board as a whole: one host and owner across every
+# tracker, and the board's own remote too. Offline, like everything here — visibility is a run-time
+# question, and `board.external.public` below is the standing audit line for a board that may publish.
+TRK_PRESENT=0 TRK_PUBLIC="" TRK_ALIASES="" REG_ALIASES="" TRK_PATTERNS=""
+if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+  # Records are \x1f-separated, never tab: `read` collapses consecutive tabs, so an entry with an
+  # empty refPattern would shift every field after it (the `external` reader above does the same).
+  TRK_REPORT="$(
+    python3 - "$HD/handoff.json" "$(git -C "$HD" config --get remote.origin.url 2> /dev/null)" << 'PY'
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+if not isinstance(d, dict):
+    raise SystemExit(0)
+t = d.get("trackers")
+reg = [r.get("alias") for r in ((d.get("_generated") or {}).get("repos") or [])
+       if isinstance(r, dict) and r.get("alias")]
+print("REG\x1f" + " ".join(reg))
+if isinstance(d.get("external"), dict) and d.get("topology") == "cross-repo" and not isinstance(t, dict):
+    print("LEGACY\x1f")
+if not isinstance(t, dict):
+    raise SystemExit(0)
+print("PRESENT\x1f")
+owners = set()
+for alias, e in sorted(t.items()):
+    if not isinstance(e, dict):
+        continue
+    s = lambda k: e.get(k) if isinstance(e.get(k), str) else ""
+    print("ENTRY\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s" % (
+        alias, s("kind"), s("refPattern"), s("repo"), s("system"),
+        "1" if e.get("allowPublic") is True else "0"))
+    if "/" in s("repo"):
+        system = s("system") or "github"
+        host = "github.com" if system == "github" else system
+        owners.add(("%s/%s" % (host, s("repo").split("/")[0])).lower())
+m = re.search(r"github\.com[:/]([^/]+)/", sys.argv[2] or "")
+board_owner = "github.com/" + m.group(1).lower() if m else ""
+if board_owner and owners and owners != {board_owner}:
+    print("OWNER\x1fboard remote %s, trackers %s" % (board_owner, " ".join(sorted(owners))))
+elif len(owners) > 1:
+    print("OWNER\x1ftrackers %s" % " ".join(sorted(owners)))
+PY
+  )"
+  while IFS=$'\x1f' read -r kind a b c dd ee ff; do
+    case "$kind" in
+      REG) REG_ALIASES="$a" ;;
+      LEGACY) warn board.external.legacy "external is set on a cross-repository board, where it routes nothing — declare a tracker per repository under trackers instead (ADR 0017)" ;;
+      PRESENT) TRK_PRESENT=1 ;;
+      OWNER) warn board.trackers.owner "this board's trackers cross a trust boundary ($a) — one board per owner (ADR 0011, ADR 0017); the mirror refuses until they agree" ;;
+      ENTRY)
+        TRK_ALIASES="$TRK_ALIASES $a"
+        TRK_PATTERNS="$TRK_PATTERNS$a=$c
+"
+        case "$b" in
+          issues | sprints) ;;
+          *) warn board.trackers.kind "trackers.$a kind is \"$b\" — use issues (an issue tracker used as a backlog) or sprints (a sprint tool, never mirrored)" ;;
+        esac
+        [ -n "$c" ] || warn board.trackers.pattern "trackers.$a declares no refPattern — new --ref will refuse every reference for a doc homed there"
+        [ "$b" != issues ] || [ -n "$dd" ] || warn board.trackers.repo "trackers.$a is an issue tracker with no repo — mirror and export --to-issue refuse it until it names owner/name"
+        [ -z "$ee" ] || [ -f "$HD/scripts/tracker-$ee.sh" ] \
+          || warn board.trackers.adapter "no adapter for trackers.$a system '$ee' at scripts/tracker-$ee.sh — re-run setup-handoff, or check the system name"
+        [ "$ff" = 1 ] && TRK_PUBLIC="${TRK_PUBLIC:+$TRK_PUBLIC, }$a"
+        if [ "$TOPO" = "cross-repo" ]; then
+          case " $REG_ALIASES " in
+            *" $a "*) ;;
+            *) warn board.trackers.unknown-alias "trackers.$a is not a repository this board registers ($REG_ALIASES) — nothing can be homed there" ;;
+          esac
+        fi
+        ;;
+    esac
+  done <<< "$TRK_REPORT"
+  [ "$TRK_PRESENT" = 1 ] && ok board.trackers "a tracker per repository:$TRK_ALIASES"
+fi
+
 # The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
 # rather than restated here: two copies of a credential-pattern list is two copies that drift, and
 # the one that drifts is always the one nobody runs interactively. The CLI cannot simply be sourced
@@ -651,12 +728,30 @@ while IFS= read -r doc; do
       SHARED_PUBLIC="${SHARED_PUBLIC:+$SHARED_PUBLIC, }${dname%.md}"
     fi
   fi
+  # ADR 0017 — on a board with per-repository trackers, every live coordination or orchestrator doc
+  # needs a home the registry knows, or no mirror pass will ever carry it.
+  dhome="$(fm "$doc" home)"
+  if [ "${TRK_PRESENT:-0}" = 1 ] && [ "$darch" = 0 ] && [ "$dtype" != standalone ]; then
+    if [ -z "$dhome" ]; then
+      warn doc.home.missing "$dname: no home, so it is never mirrored — set one of:$TRK_ALIASES"
+    elif [ "$TOPO" = "cross-repo" ]; then
+      case " $REG_ALIASES " in
+        *" $dhome "*) ;;
+        *) warn doc.home.unregistered "$dname: home $dhome is not a repository this board registers ($REG_ALIASES)" ;;
+      esac
+    fi
+  fi
+
   xref="$(fm "$doc" external_ref)"
   if [ -n "$xref" ]; then
-    if [ -z "$EXT_PATTERN" ]; then
-      warn doc.external_ref.no_tracker "$dname: external_ref is \"$xref\" but this board declares no external tracker"
-    elif ! printf '%s\n' "$xref" | grep -Eqx -- "$EXT_PATTERN" 2> /dev/null; then
-      warn doc.external_ref.pattern "$dname: external_ref \"$xref\" does not match external.refPattern ($EXT_PATTERN)"
+    # The pattern is the one belonging to THIS doc's tracker: a reference is checked against the
+    # tracker it points into, which on a per-repository board is whichever its home names.
+    DOC_PATTERN="$EXT_PATTERN"
+    [ "${TRK_PRESENT:-0}" = 1 ] && DOC_PATTERN="$(printf '%s' "$TRK_PATTERNS" | sed -n "s/^$dhome=//p" | head -1)"
+    if [ -z "$DOC_PATTERN" ]; then
+      warn doc.external_ref.no_tracker "$dname: external_ref is \"$xref\" but no tracker is declared for it"
+    elif ! printf '%s\n' "$xref" | grep -Eqx -- "$DOC_PATTERN" 2> /dev/null; then
+      warn doc.external_ref.pattern "$dname: external_ref \"$xref\" does not match its tracker's refPattern ($DOC_PATTERN)"
     fi
   fi
 
@@ -845,8 +940,8 @@ else
   # fact is stated rather than looking like an undercount.
   # Offline on purpose: visibility is only known at run time. A board that opted in to publishing is
   # said out loud on every verify, so it never looks like a board that did not.
-  if [ "${EXT_PUBLIC:-0}" = 1 ]; then
-    warn board.external.public "this board allows publishing to a public tracker (external.allowPublic) — docs marked share: public: ${SHARED_PUBLIC:-none}"
+  if [ "${EXT_PUBLIC:-0}" = 1 ] || [ -n "${TRK_PUBLIC:-}" ]; then
+    warn board.external.public "this board allows publishing to a public tracker (${TRK_PUBLIC:-external.allowPublic}) — docs marked share: public: ${SHARED_PUBLIC:-none}"
   fi
   [ "$SCHEMA_OLD_ARCH" -gt 0 ] \
     && ok board.schema.archive "$SCHEMA_OLD_ARCH of $SCHEMA_ARCH archived doc(s) predate schema $CLI_SCHEMA — left alone by design; './handoff migrate' walks the live section only, and a closed doc's shape is history. Not counted in doc.schema.behind."

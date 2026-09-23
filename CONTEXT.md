@@ -49,9 +49,27 @@ declared.
 _Avoid_: tenant, account
 
 **External tracker**:
-The one project tracker a board links to — a sprint tool or an issue tracker — where planning
-lives. Linked by reference; mirrored only where it is the team's issue backlog. Never the board.
+The project tracker a handoff's issue is mirrored into — the one declared for its **home**
+repository on the board, where planning lives. A sprint tool is linked by reference and never
+mirrored; an issue tracker the team uses as its backlog can be. Never the board.
 _Avoid_: board, backend, sync target
+
+**Home**:
+The repository whose tracker owns a handoff's issue, pinned when the handoff is created and never
+changed afterwards. Distinguished from **Audience**, which names the repository acting next and
+changes freely — a flip relabels the issue, it never moves it.
+_Avoid_: owner repo, target repo, primary repo
+
+**Projection**:
+How much of a handoff its issue carries — `summary` (the current state) by default, or `full`
+(adding context and verification) where a tracker asks for it. Ruled-out options, notes and
+evidence are sent under neither, and stay on the board.
+_Avoid_: sync level, detail level, fidelity
+
+**Board identity**:
+The derived name a mirrored issue carries so that one tracker is written by one board. Every
+clone of a board shares it; a board kept at another path in the same repository does not.
+_Avoid_: board id field, board key
 
 **Sub-issue link**:
 A **bundle**'s parent/child relationship expressed in the tracker's own native form, so a
@@ -66,7 +84,8 @@ while the handoff is still open. It is reported, never reconciled — status cha
 board, with evidence — and is recorded in a generated file, not on the document.
 _Avoid_: out of sync, conflict, stale mirror
 
-A board a developer keeps for their own drafts is an ordinary board with no role of its own.
+A board a developer keeps for their own drafts is an ordinary board with no role of its own, and
+one that never mirrors.
 _Avoid_: personal board, private board, scratch board
 
 **Local config**:

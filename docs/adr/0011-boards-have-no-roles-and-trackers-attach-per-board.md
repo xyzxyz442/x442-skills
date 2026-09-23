@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted — refined by ADR 0017
 date: 2026-09-16
 ---
 
@@ -40,7 +40,8 @@ reference first. This narrows ADR 0002's allowance that an issue tracker may mir
 - **`depends_on` stays within one board.** A dependency on another board is written in
   `blocked_on` as `external — …` (ADR 0004).
 - **A board declares at most one external tracker**, under `external` in its `handoff.json`, with
-  three opt-in levels:
+  three opt-in levels (ADR 0017 attaches a tracker per repository instead, keyed by a handoff's
+  `home`, and keeps these three levels unchanged):
   1. **Reference** — `external_ref` on a handoff, validated by the board's `refPattern`. No
      network. The default.
   2. **Delegation** — `export` may open the brief as an issue; a reply returns through

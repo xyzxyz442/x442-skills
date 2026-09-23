@@ -30,8 +30,9 @@
 #
 # Test hooks: $FAKE_TRACKER_FAIL=<op> makes that operation exit 1. $FAKE_TRACKER_NO_LINKS=1 makes it
 # an adapter with no link support. $FAKE_TRACKER_LINK_CAP=<n> caps links per parent, to exercise
-# overflow. Every call is appended to the state's "calls" list as [op, request] so a test can count
-# creates and updates.
+# overflow. $FAKE_TRACKER_PUBLIC_REPOS=<owner/name ...> makes those repositories answer public,
+# whatever $FAKE_TRACKER_VISIBILITY says (ADR 0017). Every call is appended to the state's
+# "calls" list as [op, request] so a test can count creates and updates.
 set -uo pipefail
 op="${1:?usage: fake-tracker.sh <op>}"
 state="${FAKE_TRACKER_STATE:?FAKE_TRACKER_STATE must name a JSON state file}"
@@ -124,7 +125,12 @@ elif op == "close":
     if req.get("comment"):
         i["comments"].append({"author": "handoff-mirror", "body": req["comment"], "created_at": "2026-01-01T00:00:00Z"})
 elif op == "visibility":
-    out = {"visibility": os.environ.get("FAKE_TRACKER_VISIBILITY", "private")}
+    # Per repository, so a board with several trackers can have one public and one private.
+    public = os.environ.get("FAKE_TRACKER_PUBLIC_REPOS", "").split()
+    if req.get("repo") in public:
+        out = {"visibility": "public"}
+    else:
+        out = {"visibility": os.environ.get("FAKE_TRACKER_VISIBILITY", "private")}
 elif op == "comments":
     out = issue(req["number"]).get("comments", [])
 else:

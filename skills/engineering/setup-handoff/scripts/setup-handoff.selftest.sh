@@ -242,5 +242,37 @@ if [ -f "$GH_INST" ]; then
   esac
 fi
 
+printf '\n8. per-repository trackers (ADR 0017)\n'
+# The same preservation path `external` takes, for the map that replaced it on a cross-repository
+# board: an installer owns wiring facts and must never revert a committed policy decision.
+seed_trackers() { # board-dir json-object-of-trackers
+  python3 -c '
+import json, sys
+path, trackers = sys.argv[1], sys.argv[2]
+json.dump({"trackers": json.loads(trackers)}, open(path, "w"))
+' "$1/handoff.json" "$2"
+}
+B8="$(mkgitboard)"
+git -C "$B8" remote add origin "$GH_FAKE_REMOTE"
+seed_trackers "$B8" '{"acme-api": {"kind": "issues", "system": "github", "repo": "example-invalid/no-such-board", "projection": "summary"}}'
+OUT8="$("$INSTALLER" --board-only "$B8" --groups core --with-mirror-workflow 2>&1)"
+ST8=$?
+chk "trackers board: installer succeeds" "0" "$ST8"
+chk "trackers survive a re-install" "example-invalid/no-such-board" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackers") or {}).get("acme-api", {}).get("repo", ""))' "$B8/handoff.json")"
+chk "the projection setting survives too" "summary" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackers") or {}).get("acme-api", {}).get("projection", ""))' "$B8/handoff.json")"
+WF8="$B8/.github/workflows/handoff-mirror.yml"
+chk "trackers board: the workflow is written from trackers alone" "yes" "$([ -f "$WF8" ] && echo yes || echo no)"
+chk_contains "a tracker that is the board's own repo still needs no secret" "$(cat "$WF8")" 'GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}'
+
+B9="$(mkgitboard)"
+git -C "$B9" remote add origin "$GH_FAKE_REMOTE"
+seed_trackers "$B9" '{"acme-api": {"kind": "issues", "system": "github", "repo": "example-invalid/no-such-board"}, "acme-web": {"kind": "issues", "system": "github", "repo": "example-invalid/other-tracker"}}'
+OUT9="$("$INSTALLER" --board-only "$B9" --groups core --with-mirror-workflow 2>&1)"
+WF9="$B9/.github/workflows/handoff-mirror.yml"
+chk_contains "trackers beyond the board's own repo need the named secret" "$(cat "$WF9")" 'GH_TOKEN: ${{ secrets.HANDOFF_TRACKER_TOKEN }}'
+chk_contains "and the ACTION NEEDED line names every tracker repository" "$OUT9" "example-invalid/other-tracker"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

@@ -32,6 +32,11 @@ jobs:
         with:
           # Check out the BRANCH, not the detached commit: this job may push a drift report back.
           ref: ${{ github.ref_name }}
+          # FULL history. A board's identity is derived from its repository's ROOT commit, and a
+          # shallow checkout reports the commit it fetched as that root — a different one after
+          # every push, so each run would look like a different board and be refused the tracker
+          # the run before it had just written (ADR 0017). The CLI refuses a shallow board outright.
+          fetch-depth: 0
 
       - name: Mirror each section into the tracker
         working-directory: __BOARD_PATH__

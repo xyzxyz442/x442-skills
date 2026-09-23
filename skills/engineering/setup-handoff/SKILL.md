@@ -278,6 +278,54 @@ stale on a rename and nothing on the board can see that it has. `hooks.sh`/`hand
 path-substituted to the real board location. On a
 shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
+## Per-repository trackers
+
+A board projects each handoff into the issue tracker of the repository that handoff belongs to — its
+**home** — so a team reads its own repository's issues rather than a board nobody outside the board
+watches (ADR 0017). The board itself keeps no tracker.
+
+Declare one entry per registered repository alias in the board's committed `handoff.json`:
+
+```json
+"trackers": {
+  "acme-api": { "kind": "issues", "system": "github", "repo": "acme/acme-api",
+                "refPattern": "#[0-9]+", "projection": "summary" },
+  "acme-web": { "kind": "issues", "system": "github", "repo": "acme/acme-web",
+                "refPattern": "#[0-9]+", "projection": "full", "allowPublic": true }
+}
+```
+
+- **`projection`** decides how much of a handoff its issue carries. `summary`, the default, sends the
+  title, the labels and `## Current state`. `full` adds `## Context` and `## Verify`. `## Ruled out`,
+  notes and evidence are sent under neither and stay on the board.
+- **One owner per board.** Every `repo` here shares one host and owner, and a board with a remote
+  shares it too. Anything else refuses and names both owners — a board is one trust boundary
+  (ADR 0011), and another organization's work belongs on its own board.
+- **`allowPublic` is per tracker**, and it is still only half of what a public repository needs: each
+  document also carries `share: public` (ADR 0013). Visibility is asked on every run, for every
+  tracker, before any of them is sent anything.
+- **An alias with no entry is never mirrored**, and `handoff mirror` names each document it skipped
+  for that reason.
+- A `sprints` entry stays reference-only: `handoff new --ref` validates against it and no mirror ever
+  writes to it.
+
+**Upgrading a board that still declares `external`:**
+
+- A **single-repository** board keeps `external` as it is. Only the projection default changes, and a
+  re-install says so; set `"projection": "full"` there to keep the issue bodies it sends today.
+- A **cross-repository** board routes nothing through `external` any more. Convert it with the user,
+  one confirmation at a time: offer each registered repository an entry pre-filled from that
+  repository's `origin`, write `trackers`, then remove `external`. Issues already sitting in the
+  retired board-level tracker are **listed for the user to close by hand** — closing an issue hides
+  nothing, so that call is theirs (ADR 0013's stance for a repository that turned public).
+- Routing by home needs document schema 4, so run `./handoff migrate` before the first mirror. It
+  backfills each handoff's `home` from its audience and names anything it could not resolve.
+
+**One board mirrors into a tracker.** Each issue records the identity of the board that wrote it, so
+a second board mirroring into the same repository refuses and names the first. Several maintainers
+therefore share one board — each keeping a draft board of their own that never mirrors, and moving
+work onto the shared board with `handoff move ID --to BOARD` when it is ready.
+
 ## Mirroring on a schedule (optional)
 
 A board whose own repository is on GitHub can run its mirror in CI instead of by hand:
@@ -295,7 +343,9 @@ board's default branch and on demand.
 Every value in it is read from the board's own committed config, never guessed and never taken from
 a flag, so the file cannot claim a section the board does not host. The flag **refuses** — writing
 nothing — when the board has no `origin`, when that remote is not on github.com, or when the board
-declares no `external.repo`. A workflow committed to a board that cannot run it is worse than none:
+declares no issue tracker at all (`trackers`, or `external` on a single-repository board). When the
+trackers are repositories other than the board's own, the job needs a token with issue write access
+on each of them: the workflow names the secret `HANDOFF_TRACKER_TOKEN` and never carries a value. A workflow committed to a board that cannot run it is worse than none:
 it reads as working automation, and nobody looks again until the drift it was meant to surface has
 gone stale.
 
@@ -418,7 +468,7 @@ have hand-edited.
 
 Three behaviours worth knowing before you re-run the installer:
 
-- **`ttlHours`, `environments` and `external` survive a re-install.** Lease policy is a committed team decision; an install must
+- **`ttlHours`, `environments`, `external` and `trackers` survive a re-install.** Lease policy is a committed team decision; an install must
   not quietly revert it. The installer owns wiring facts (`topology`, `groups`, `groupLayout`,
   `repoName`) and rewrites those every time; it leaves policy alone.
 - **`allowVerifyCmd` does not survive.** It follows `--allow-verify-cmd` on each run, because it

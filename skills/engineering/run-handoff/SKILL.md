@@ -306,13 +306,16 @@ decision, before a long build — not on every edit.
 
 ## Sharing work through the team's issue tracker
 
-A board that declares an issue tracker (`external` with `kind: issues`, `system`, `repo`) can show
-its open work to teammates who never open the board:
+A board that declares an issue tracker can show its open work to teammates who never open the board.
+Each handoff goes to the tracker of its **home** — the repository it belongs to, pinned when it was
+created (`trackers` in the board's `handoff.json`, or `external` on a single-repository board):
 
 ```text
 HANDOFF_GROUP=SECTION handoff mirror --dry-run    # what it would create, update, close, skip
 HANDOFF_GROUP=SECTION handoff mirror
 ```
+
+`handoff mirror --repo ALIAS` runs one tracker instead of all of them.
 
 It is **one way**: issues carry a hidden marker, the board is never written, and an edit made in the
 tracker is overwritten on the next run. Open coordination docs and bundles go out; `restricted`
@@ -320,6 +323,21 @@ docs, bundles with a restricted child, standalone docs, and docs already linked 
 (`external_ref`) never do. A doc whose rendered text looks like it carries a credential is refused
 by name and the run exits non-zero. When a doc closes, moves, or becomes restricted, its issue is
 closed with a one-line reason. A board whose tracker is a sprint tool is never mirrored.
+
+**An issue carries a summary, not the whole handoff.** By default a tracker receives the title, the
+labels and `## Current state`; `## Context` and `## Verify` go out only where that tracker asked for
+`projection: full`, and `## Ruled out`, your notes and your evidence never leave the board. Write
+`## Current state` as the line you would want a teammate to read in their own repository's issues.
+
+**Who acts next is a label, not a move.** `audience` becomes an `audience:ALIAS` label on the issue,
+and the issue stays in its home repository for its whole life — one number, one history, one place a
+pull request can link to. So when the next step belongs to another team:
+
+- **A quick hand-back** — they run a check and pass it straight back — is just the audience flip. The
+  label and the assignee (`--reviewer`) change on the next mirror run.
+- **Work that team owns** is a handoff of its own: file it with `--home THEIR_REPO` and order it with
+  `--after THIS_ID`, or make the two children of one bundle. Each team then gets a real issue in the
+  tracker it watches, instead of a label in a repository it does not.
 
 **A bundle becomes a real parent issue where the tracker can express one** (ADR 0014). On GitHub the
 mirror links the bundle's issue to its children's issues as native sub-issues, so teammates get the

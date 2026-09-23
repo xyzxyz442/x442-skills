@@ -116,21 +116,25 @@ verbatim into an outbound one with no check at all.
 ### Delegating through an issue
 
 When the executor works from the team's issue tracker rather than a file you hand them, and the
-board declares one (`external` in its `handoff.json`, with `kind`, `system` and `repo`):
+board declares one for this handoff's **home** repository (`trackers` in its `handoff.json`, or
+`external` on a single-repository board):
 
 ```text
 handoff export ID --to-issue
 ```
 
 It renders the same brief — same restricted refusal, same outbound secret scan, same claim — and
-opens it as an issue in `external.repo`, recording the issue as the doc's `external_ref` and
+opens it as an issue in the home repository's tracker, recording the issue as the doc's `external_ref` and
 `delegated_to: issue #N`. It refuses a doc that is already linked to a ticket. On a **public**
 repository it refuses unless the board allows it
-(`external.allowPublic`) and the doc is marked `share: public` (ADR 0013) — the brief would be
+(`allowPublic` on that tracker) and the doc is marked `share: public` (ADR 0013) — the brief would be
 readable by anyone, permanently. The executor answers with **one comment** holding a
 `result_status:` line and the filled Result block; the import in step 5 reads it from there.
 
-**A bundle goes out as a bundle** (ADR 0015). `export <bundle> --to-issue` opens a parent issue
+**A bundle goes out as a bundle** (ADR 0015), provided it is one tracker's bundle: a parent whose
+children are homed in other repositories is refused by name, because a parent issue and its children
+live in one tracker (ADR 0017) — export those children on their own. `export <bundle> --to-issue`
+opens a parent issue
 carrying the cover — the Bundle and Sequencing sections, and the Units list — plus **one issue per
 child**, linked beneath it as sub-issues where the tracker expresses them. One issue per child, not
 one issue holding every brief: a child is claimed, answered and reviewed on its own, and a single

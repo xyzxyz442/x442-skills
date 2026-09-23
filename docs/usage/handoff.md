@@ -163,12 +163,18 @@ A handoff marked `sensitivity: restricted` never leaves. `export` refuses it wit
 ## Situation 4 — teammates who never open the board
 
 If the board declares an issue tracker, `handoff mirror` projects open work into it so people can
-see it without learning any of this.
+see it without learning any of this. Each handoff lands in the tracker of the repository it belongs
+to — its **home** — so a team reads its own repository's issues:
 
 ```text
-handoff mirror --dry-run     # what it would create, update, close, skip
-handoff mirror
+handoff mirror --dry-run           # what it would create, update, close, skip
+handoff mirror                     # every tracker this board declares
+handoff mirror --repo acme-web     # just one of them
 ```
+
+An issue carries the title, the labels and `## Current state`. `## Context` and `## Verify` go out
+only where that tracker asked for `"projection": "full"`, and your ruled-out options, notes and
+evidence never leave the board — the board is the record, the issue is the window into it.
 
 It is **one way**. Issues carry a hidden marker, the board is never written from the tracker, and an
 edit made in the tracker is overwritten on the next run. Intake was rejected deliberately: letting a
@@ -179,9 +185,38 @@ The consequence people trip on: **an issue closed out there does not close the h
 is drift. The mirror reports it, writes a generated `TRACKER-DRIFT.md`, and still exits zero —
 status changes on the board, with evidence, and nothing else does it.
 
-On a **public** repository the mirror refuses unless the board opts in _and_ each document is marked
-`share: public` ([ADR 0013](../adr/0013-a-tracker-publishes-to-a-public-repository-only-by-double-opt-in.md)).
-Publishing cannot be undone, so it asks twice.
+On a **public** repository the mirror refuses unless that tracker opts in _and_ each document is
+marked `share: public`
+([ADR 0013](../adr/0013-a-tracker-publishes-to-a-public-repository-only-by-double-opt-in.md)).
+Publishing cannot be undone, so it asks twice. Every tracker is asked for its visibility before any
+of them is written to, so one public repository stops the whole run rather than half of it.
+
+The second consequence: **who acts next is a label, not a move.** A handoff's issue stays in its home
+repository for life. When the next step belongs to another team, flip the `audience` for a quick
+hand-back, or — when that team really owns the work — file it as its own handoff homed in their
+repository (`handoff new ID --home acme-web --after THIS_ID`), so it appears in the tracker they
+actually watch.
+
+---
+
+## Situation 4b — several maintainers, one project
+
+One board mirrors into a tracker. Each issue records which board wrote it, and a second board
+mirroring into the same repository refuses rather than opening duplicates — two boards writing one
+tracker is two sources of truth, and leases on one board do not restrain the other.
+
+So a team shares **one board** — a private repository everyone clones — and each maintainer keeps a
+**draft board** of their own for work that is not ready to be seen:
+
+```text
+handoff new spike-rate-limits --title "Spike — rate limits"     # on your draft board
+handoff move spike-rate-limits --to ../workspace/.agents/handoff
+```
+
+A draft board never mirrors. It holds one person's thinking; the shared board holds what the team
+coordinates on; the repositories' issues hold what everyone else needs to see. A board also stays
+inside one organization — its trackers must all share one owner, and its own remote too — so work
+for another organization gets its own board rather than a section on yours.
 
 ---
 
