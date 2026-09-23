@@ -14,13 +14,25 @@ exact flags a command takes, the `SKILL.md` files are the reference; these pages
 
 ## Diagrams
 
-Both guides link a standalone HTML diagram under [`diagrams/`](diagrams/). Open the file directly —
+The guides link standalone HTML diagrams under [`diagrams/`](diagrams/). Open the file directly —
 the SVG, the styles and the viewer are all inline, so nothing needs a build step or a server.
 
 They pull one webfont from Google Fonts. With no network the page still renders and is fully
 readable; it falls back to a system monospace face. Treat them as **generated artifacts**: they are
 produced by `archify deliver`, which reports a sha256 over the exact committed bytes, so regenerate
 them rather than editing them by hand.
+
+The handoff diagrams' sources live in [`diagrams/src/`](diagrams/src/), one JSON spec per diagram,
+named `NAME.TYPE.json`. To change one, edit the spec, then validate and deliver it from the archify
+skill directory:
+
+```text
+node bin/archify.mjs validate TYPE SPEC.json --quality showcase --json
+node bin/archify.mjs deliver TYPE SPEC.json docs/usage/diagrams/NAME.html --quality showcase --json
+```
+
+`deliver` refuses anything short of a full showcase pass and leaves the previous HTML in place. The
+secret-guard diagram predates this and has no committed source yet.
 
 ## Where the other sources of truth live
 

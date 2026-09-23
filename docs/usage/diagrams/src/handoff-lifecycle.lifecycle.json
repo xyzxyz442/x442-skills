@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Handoff lifecycle",
+    "quality_profile": "showcase",
+    "viewBox": [980, 660]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "On the board"
+    },
+    {
+      "id": "events",
+      "label": "Paused"
+    },
+    {
+      "id": "terminal",
+      "label": "Off the board"
+    }
+  ],
+  "states": [
+    {
+      "id": "filed",
+      "type": "start",
+      "label": "Filed",
+      "sublabel": "open, unclaimed",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "handoff new"
+    },
+    {
+      "id": "claimed",
+      "type": "active",
+      "label": "Claimed",
+      "sublabel": "lease taken",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "handoff claim"
+    },
+    {
+      "id": "working",
+      "type": "active",
+      "label": "In progress",
+      "sublabel": "edits under the lease",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "checkpoint"
+    },
+    {
+      "id": "review",
+      "type": "waiting",
+      "label": "Awaiting review",
+      "sublabel": "open, reviewer named",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "--for-review"
+    },
+    {
+      "id": "done",
+      "type": "success",
+      "label": "Done",
+      "sublabel": "archived with evidence",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "--verified-by"
+    },
+    {
+      "id": "blocked",
+      "type": "waiting",
+      "label": "Blocked",
+      "sublabel": "waits on an id or external",
+      "lane": "events",
+      "col": 0,
+      "tag": "--blocked-on"
+    },
+    {
+      "id": "delegated",
+      "type": "external",
+      "label": "Delegated",
+      "sublabel": "brief or tracker issue",
+      "lane": "terminal",
+      "col": 1,
+      "tag": "handoff export"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "claim",
+      "from": "filed",
+      "to": "claimed",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "edit",
+      "from": "claimed",
+      "to": "working"
+    },
+    {
+      "id": "hand-back",
+      "from": "working",
+      "to": "review",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "reviewer-closes",
+      "from": "review",
+      "to": "done"
+    },
+    {
+      "id": "close-direct",
+      "from": "working",
+      "to": "done",
+      "label": "close with evidence",
+      "variant": "emphasis",
+      "route": "top-channel"
+    },
+    {
+      "id": "release-open",
+      "from": "working",
+      "to": "filed",
+      "label": "release open",
+      "variant": "dashed",
+      "route": "top-channel",
+      "fromSide": "top",
+      "toSide": "top"
+    },
+    {
+      "id": "block",
+      "from": "working",
+      "to": "blocked",
+      "label": "blocked",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "unblock",
+      "from": "blocked",
+      "to": "filed",
+      "label": "blocker closes",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "bottom",
+      "via": [[94, 307]]
+    },
+    {
+      "id": "export",
+      "from": "working",
+      "to": "delegated",
+      "label": "delegate",
+      "labelDy": 42
+    },
+    {
+      "id": "import",
+      "from": "delegated",
+      "to": "review",
+      "label": "import --result"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Main path",
+      "items": [
+        "claim takes the lease; nothing else can edit the doc",
+        "checkpoint pushes Current state and keeps the lease",
+        "done needs --verified-by that a second person can re-run"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Hand-backs",
+      "items": [
+        "--for-review keeps it open and drops the lease",
+        "--reviewer names who acts next, projected as the issue assignee",
+        "import --result is a claim, never a verdict; you still close it"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Pauses",
+      "items": [
+        "release open returns it unclaimed with Current state rewritten",
+        "blocked is surfaced again when its blocker closes done",
+        "a stale lease past its TTL is reclaimable by the next claim"
+      ]
+    }
+  ]
+}

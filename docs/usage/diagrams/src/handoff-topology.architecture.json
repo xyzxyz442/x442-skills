@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Handoff topology",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "frontend": { "label": "Team member" },
+        "database": { "label": "Board or section" },
+        "cloud": { "label": "Home tracker" }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "draft",
+      "type": "database",
+      "label": "Draft board",
+      "sublabel": "Alice only, never mirrors",
+      "pos": [40, 90],
+      "size": [170, 64]
+    },
+    {
+      "id": "alice",
+      "type": "frontend",
+      "label": "Alice",
+      "sublabel": "senior, plans and reviews",
+      "pos": [40, 250],
+      "size": [170, 64]
+    },
+    {
+      "id": "bob",
+      "type": "frontend",
+      "label": "Bob",
+      "sublabel": "junior, executes",
+      "pos": [40, 400],
+      "size": [170, 64]
+    },
+    {
+      "id": "carol",
+      "type": "frontend",
+      "label": "Carol",
+      "sublabel": "platform maintainer",
+      "pos": [40, 560],
+      "size": [170, 64]
+    },
+    {
+      "id": "sec-app",
+      "type": "database",
+      "label": "Section app",
+      "sublabel": "group acme-api, acme-web",
+      "pos": [360, 250],
+      "size": [190, 64],
+      "tag": "sub-index"
+    },
+    {
+      "id": "sec-platform",
+      "type": "database",
+      "label": "Section platform",
+      "sublabel": "group acme-infra",
+      "pos": [360, 560],
+      "size": [190, 64],
+      "tag": "sub-index"
+    },
+    {
+      "id": "issues-app",
+      "type": "cloud",
+      "label": "acme-api, acme-web",
+      "sublabel": "issues, by home",
+      "pos": [700, 250],
+      "size": [180, 64]
+    },
+    {
+      "id": "issues-platform",
+      "type": "cloud",
+      "label": "acme-infra",
+      "sublabel": "issues, by home",
+      "pos": [700, 560],
+      "size": [180, 64]
+    },
+    {
+      "id": "lib-board",
+      "type": "database",
+      "label": "Library board",
+      "sublabel": "shared lib, other owner",
+      "pos": [1010, 90],
+      "size": [180, 64]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "acme, one owner, one trust boundary",
+      "wraps": [
+        "draft",
+        "alice",
+        "bob",
+        "carol",
+        "sec-app",
+        "sec-platform",
+        "issues-app",
+        "issues-platform"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Shared board, private repo",
+      "wraps": ["sec-app", "sec-platform"]
+    },
+    {
+      "kind": "region",
+      "label": "Other owner, optional",
+      "wraps": ["lib-board"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "alice-app",
+      "from": "alice",
+      "to": "sec-app",
+      "label": "claim, review"
+    },
+    {
+      "id": "bob-app",
+      "from": "bob",
+      "to": "sec-app",
+      "label": "for-review",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "carol-platform",
+      "from": "carol",
+      "to": "sec-platform",
+      "label": "claim / release"
+    },
+    {
+      "id": "draft-move",
+      "from": "draft",
+      "to": "sec-app",
+      "label": "handoff move",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "mirror-app",
+      "from": "sec-app",
+      "to": "issues-app",
+      "label": "mirror"
+    },
+    {
+      "id": "mirror-platform",
+      "from": "sec-platform",
+      "to": "issues-platform",
+      "label": "mirror"
+    },
+    {
+      "id": "cross-owner",
+      "from": "sec-app",
+      "to": "lib-board",
+      "label": "external blocker, brief",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "A team on one board",
+      "items": [
+        "Leases keep Alice and Bob apart; the board's remote makes that hold across machines",
+        "Bob hands back with --for-review --reviewer alice",
+        "Alice's draft reaches the team only by handoff move"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Groups are sections",
+      "items": [
+        "Each group has its own section and sub-index; members see only theirs",
+        "The board root INDEX.md rolls every section up",
+        "Sections organise work; everyone who can clone the board reads all of it"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Another trust boundary",
+      "items": [
+        "A library owned elsewhere keeps its own board and tracker",
+        "depends_on cannot cross boards; wait with blocked-on external",
+        "move --to-remote only on confirmation; restricted work never crosses"
+      ]
+    }
+  ]
+}
