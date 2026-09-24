@@ -4028,6 +4028,38 @@ elif isinstance(d.get("external"), dict) and sys.argv[2] != "cross-repo": print(
 else: print("none")' "$DIR/handoff.json" "$TOPOLOGY" 2> /dev/null || printf 'none'
 }
 
+# ADR 0020 — the tracker-rule resolution every rule-aware snippet below shares, defined once so the
+# four readers (tracker_entry, tracker_aliases, tracker_aliases_all, trackers_trust_check) cannot
+# drift apart. A rule names a SYSTEM and a member's recorded origin names a HOST: a member on another
+# host is not the rule's to mirror, or its path would be reused on a host it does not live on.
+# Prepended to each snippet as `python3 -c "$RULE_PY"'...'`, so it must stay free of single quotes.
+RULE_PY="$(
+  cat << 'PY'
+import json, sys
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system):
+    return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+def path_of(o):
+    host = o.split("/", 1)[0]
+    return o.split("/", 1)[1] if host in HOSTS.values() else o
+def rule_member(d, r):
+    rules = d.get("trackerRules")
+    if not isinstance(rules, dict) or not isinstance(r, dict):
+        return None
+    rule, origin = rules.get(r.get("group")), r.get("origin")
+    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        return rule, origin
+    return None
+def ruled_members(d, declared):
+    for r in (d.get("_generated") or {}).get("repos") or []:
+        if not isinstance(r, dict) or not r.get("alias") or r["alias"] in declared:
+            continue
+        hit = rule_member(d, r)
+        if hit:
+            yield r["alias"], hit[0], hit[1]
+PY
+)"
+
 # ADR 0020 — a GROUP can declare a tracker RULE in trackerRules, resolved for a member through the
 # origin recorded at registration (_generated.repos[].origin), never read live: a CI mirror has no
 # member checkouts. A per-repository entry under `trackers` always wins when both exist. A rule
@@ -4036,7 +4068,7 @@ else: print("none")' "$DIR/handoff.json" "$TOPOLOGY" 2> /dev/null || printf 'non
 # opt-in (ADR 0013).
 tracker_entry() { # alias -> that home's tracker as a JSON object, or nothing
   [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
-  python3 -c 'import json,sys
+  python3 -c "$RULE_PY"'
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 d = d if isinstance(d, dict) else {}
@@ -4048,23 +4080,11 @@ if isinstance(t, dict) and isinstance(t.get(alias), dict):
 if isinstance(d.get("external"), dict) and topology != "cross-repo" and not isinstance(t, dict):
     print(json.dumps(d["external"]))
     raise SystemExit(0)
-rules = d.get("trackerRules")
-if not isinstance(rules, dict):
-    raise SystemExit(0)
 repos = (d.get("_generated") or {}).get("repos") or []
-reg = next((r for r in repos if isinstance(r, dict) and r.get("alias") == alias), None)
-group = reg.get("group") if isinstance(reg, dict) else None
-origin = reg.get("origin") if isinstance(reg, dict) else None
-rule = rules.get(group) if group else None
-HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
-def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
-# A rule names a SYSTEM and the origin names a HOST: a member on another host is not for this rule to
-# mirror, or its path would be reused on a host it does not live on.
-if not isinstance(rule, dict) or not isinstance(origin, str) or not origin or not on_host(origin, rule.get("system")):
+hit = rule_member(d, next((r for r in repos if isinstance(r, dict) and r.get("alias") == alias), None))
+if not hit:
     raise SystemExit(0)
-def path_of(o):
-    host = o.split("/", 1)[0]
-    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
+rule, origin = hit
 entry = dict(rule)
 entry.pop("allowPublic", None)
 entry["repo"] = path_of(origin)
@@ -4110,24 +4130,13 @@ tracker_aliases() { # -> one alias per line, a single empty line (legacy), or no
   case "$(tracker_mode)" in
     legacy) printf '\n' ;;
     trackers)
-      python3 -c 'import json,sys
+      python3 -c "$RULE_PY"'
 d = json.load(open(sys.argv[1]))
 declared = d.get("trackers") or {}
 aliases = set(a for a, e in declared.items() if isinstance(e, dict) and e.get("kind") == "issues")
 # ADR 0020 — every registered member of a ruled group is a pass too, unless it already has its own
 # declared entry above (which may be a sprint tool, overriding the rule to opt OUT of the mirror).
-rules = d.get("trackerRules") or {}
-repos = (d.get("_generated") or {}).get("repos") or []
-HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
-def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
-for r in repos:
-    if not isinstance(r, dict): continue
-    a = r.get("alias")
-    if not a or a in declared: continue
-    rule = rules.get(r.get("group"))
-    origin = r.get("origin")
-    if isinstance(rule, dict) and rule.get("kind") == "issues" and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
-        aliases.add(a)
+aliases.update(a for a, rule, _ in ruled_members(d, declared) if rule.get("kind") == "issues")
 for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
       ;;
   esac
@@ -4135,22 +4144,11 @@ for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
 
 tracker_aliases_all() { # -> every alias this board declares a tracker for, sprint tools included
   [ "$(tracker_mode)" = trackers ] || return 0
-  python3 -c 'import json,sys
+  python3 -c "$RULE_PY"'
 d = json.load(open(sys.argv[1]))
 declared = d.get("trackers") or {}
 aliases = set(a for a, e in declared.items() if isinstance(e, dict))
-rules = d.get("trackerRules") or {}
-repos = (d.get("_generated") or {}).get("repos") or []
-HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
-def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
-for r in repos:
-    if not isinstance(r, dict): continue
-    a = r.get("alias")
-    if not a or a in declared: continue
-    rule = rules.get(r.get("group"))
-    origin = r.get("origin")
-    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
-        aliases.add(a)
+aliases.update(a for a, _, _ in ruled_members(d, declared))
 for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
 }
 
@@ -4164,7 +4162,7 @@ trackers_trust_check() { # -> 0, or dies naming the owners
   # ADR 0020 — a rule-derived entry is a tracker like any other, so it belongs in this trust check
   # exactly as a declared one does: a member whose origin sits under a different owner refuses the
   # run, naming both.
-  owners="$(python3 -c 'import json,sys
+  owners="$(python3 -c "$RULE_PY"'
 d = json.load(open(sys.argv[1]))
 keys = set()
 def add(repo, system):
@@ -4175,21 +4173,8 @@ def add(repo, system):
 declared = d.get("trackers") or {}
 for e in declared.values():
     if isinstance(e, dict): add(e.get("repo"), e.get("system"))
-rules = d.get("trackerRules") or {}
-repos = (d.get("_generated") or {}).get("repos") or []
-def path_of(o):
-    host = o.split("/", 1)[0]
-    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
-HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
-def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
-for r in repos:
-    if not isinstance(r, dict): continue
-    a = r.get("alias")
-    if not a or a in declared: continue
-    rule = rules.get(r.get("group"))
-    origin = r.get("origin")
-    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
-        add(path_of(origin), rule.get("system"))
+for _, rule, origin in ruled_members(d, declared):
+    add(path_of(origin), rule.get("system"))
 print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
   [ -n "$owners" ] || return 0
   case "$owners" in
