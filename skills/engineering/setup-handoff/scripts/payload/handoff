@@ -187,6 +187,13 @@ REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
 # drops it from every committed layer) — env wins for the same one-off-override reason as HANDLE.
 # Empty is the normal state and means the guard asks nothing (host_account_guard, below).
 HOST_ACCOUNT="${HANDOFF_HOST_ACCOUNT:-$HC_HOST_ACCOUNT}"
+# The developer's own map of OTHER boards on this machine (ADR 0018): a JSON object, from
+# handoff.local.json only — config.sh already drops `boards` from every committed layer, same as
+# HOST_ACCOUNT above. Read by `external_ref_status` (below) to resolve a recognised cross-board
+# wait in `list`. No env override: unlike HOST_ACCOUNT this names no one-off, so there is nothing
+# an operator would ever need to override for a single run.
+BOARDS_MAP="${HC_BOARDS:-}"
+[ -n "$BOARDS_MAP" ] || BOARDS_MAP='{}'
 
 # --- group sections (multi-group / multi-workspace boards) -----------------------------
 # LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's
@@ -2957,6 +2964,17 @@ cmd_list() {
       rvw_h="$(meta "$f" reviewer)"
       extra="$extra  ⇤ review${rvw_h:+ → $rvw_h}"
     fi
+    # A cross-board wait (ADR 0018): when blocked_on names a recognised "external — HOST/OWNER/
+    # REPO#ID" reference and that board is cloned on this machine (via the developer's own `boards`
+    # map), show its current status next to the entry — read-only, never fetched, never copied.
+    # `list` never showed blocked_on before this, and still does not for ordinary free text: the
+    # blocker appears only when it carries at least one recognised cross-board reference, resolved
+    # or not, so a board of free-text blockers lists exactly as it always has.
+    local bo
+    bo="$(meta "$f" blocked_on)"
+    case "$bo" in
+      *'external — '*/*/*'#'*) extra="$extra  ⛔ $(annotate_blocked_on "$bo")" ;;
+    esac
     extra="$extra$dnote"
     printf '%-44s %-9s %-14s %-8s %-8s %s\n' \
       "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(doc_env "$f")" "$(meta "$f" severity)" "$lock$extra"
@@ -3387,6 +3405,99 @@ board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the p
     [ -n "$c" ] && [ "$(repo_origin_norm "$c")" = "$2" ] && return 0
   done < <(board_config_value "$1" acceptChildren)
   return 1
+}
+
+# ADR 0018 — "cross-board waits have a recognised form": `blocked_on: external — HOST/OWNER/REPO#ID`
+# (several may be joined by "; "). The developer's own `boards` map, BOARDS_MAP (from
+# handoff.local.json ONLY — see config.sh), names where such a board sits on THIS machine. No other
+# discovery ever happens: no scanning a workspace, no guessing from a sibling directory. A wrong
+# guess here would read some unrelated repository as though it spoke for another board.
+board_mapped_path() { # host/owner/repo -> the developer's mapped path for that board, or nothing
+  [ -n "${BOARDS_MAP:-}" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(0)
+v = d.get(sys.argv[2]) if isinstance(d, dict) else None
+if isinstance(v, str) and v:
+    sys.stdout.write(v)' "$BOARDS_MAP" "$1" 2> /dev/null
+}
+
+# Resolve one recognised cross-board reference to the status of ID on that board, when — and only
+# when — BOTH hold: the developer's map names a clone of it, AND that clone's OWN git remote really
+# normalizes to the key the reference names (board_origin_norm, defined above). A stale or wrong
+# mapping is never trusted to speak for another board; the second check is what keeps the map a
+# HINT rather than a claim this function takes on faith.
+#
+# Read-only, always — no git network call is made here (no fetch/pull/ls-remote/clone; the
+# worktree is read exactly as it sits on disk, which is also why the answer can be stale between
+# someone else's push and this developer's next pull. Nothing is fetched to make it fresher, and
+# nothing on the mapped board is ever written).
+#
+# Searches every section shape (flat, subfolder, prefix) because THIS board — the one asking — has
+# no way to know how board B is laid out, and sourcing B's own config.sh to find out would run a
+# second board's shell inside this one's process for a read `list` never needed to make. A glob
+# across all three shapes costs nothing B's own CLI would not already pay, and needs no shell at all.
+external_ref_status() { # host/owner/repo id -> status word ("not on that board" when absent), or
+                         # nothing when the reference cannot be trusted (unmapped or mismatched)
+  local key="$1" want="$2" path p st
+  # annotate_blocked_on (the only caller) runs under `set -f` while it splits blocked_on on ";", and
+  # that shell option survives into this command-substitution subshell — globbing MUST be back on
+  # here, or every subfolder/prefix pattern below stays literal and a real doc reads as absent.
+  set +f
+  path="$(board_mapped_path "$key")"
+  [ -n "$path" ] && [ -d "$path" ] || return 0
+  [ "$(board_origin_norm "$path" 2> /dev/null)" = "$key" ] || return 0
+  want="$(norm_id "$want" 2> /dev/null)" || return 0
+  for p in "$path/$want.md" "$path"/*/"$want.md" "$path"/*--"$want.md"; do
+    [ -f "$p" ] || continue
+    printf '%s' "$(meta "$p" status)"
+    return 0
+  done
+  for p in "$path/archive/$want.md" "$path"/*/archive/"$want.md" "$path/archive"/*--"$want.md"; do
+    [ -f "$p" ] || continue
+    st="$(meta "$p" status)"
+    printf '%s' "${st:-done}"
+    return 0
+  done
+  printf 'not on that board'
+}
+
+# Append the resolved status to each recognised entry inside a blocked_on value, leaving everything
+# else untouched — several waits can be joined by "; ", and each is checked on its own so one
+# unrecognised or unresolvable entry never hides another that IS resolvable. Anything that is not
+# "external — HOST/OWNER/REPO#ID" (no "#", a different prefix, ordinary prose) passes through
+# byte-for-byte, which is what keeps `blocked_on`'s free-text cases (ADR 0004) exactly as free as
+# they were before this existed.
+annotate_blocked_on() { # blocked_on-value -> the same value, external refs annotated
+  local raw="$1" entry key id status joined="" first=1
+  [ -n "$raw" ] || return 0
+  local IFS_OLD="$IFS"
+  IFS=';'
+  set -f
+  for entry in $raw; do
+    entry="${entry# }"
+    entry="${entry% }"
+    case "$entry" in
+      'external —'*'#'*)
+        key="${entry#external — }"
+        key="${key%%#*}"
+        id="${entry##*#}"
+        status="$(external_ref_status "$key" "$id")"
+        [ -n "$status" ] && entry="$entry → $status"
+        ;;
+    esac
+    if [ "$first" = 1 ]; then
+      joined="$entry"
+      first=0
+    else
+      joined="$joined; $entry"
+    fi
+  done
+  set +f
+  IFS="$IFS_OLD"
+  printf '%s' "$joined"
 }
 
 # The generic adapter lookup shared by every ADR 0018 check that is not routed through a

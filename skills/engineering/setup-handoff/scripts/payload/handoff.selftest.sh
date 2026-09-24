@@ -3167,6 +3167,138 @@ HA_RC7=$?
 chk "export --to-issue bundle mismatch: refused" "1" "$([ "$HA_RC7" != 0 ] && echo 1 || echo 0)"
 chk "no create call reaches the tracker (parent or child)" "0" "$(bvcalls "$HA7_STATE" create)"
 
+printf '\ncross-board waits have a recognised form (ADR 0018) — list resolves them read-only\n'
+# `blocked_on: external — HOST/OWNER/REPO#ID` is the recognised form (several joined by "; "). When
+# the developer's own `boards` map (handoff.local.json — the same per-developer file as
+# hostAccount/handle above) names a clone of that board on this machine AND that clone's own git
+# remote really normalizes to the key the reference names, `list` appends the resolved status to the
+# entry. Everything else about blocked_on stays exactly as free text, untouched. mkdedicated/bvrun
+# are reused from the board-visibility block above.
+
+# A DEDICATED, grouped (subfolder-layout) board, built the same way mkdedicated builds a flat one —
+# reused below for the "lives in a group section" case, so that case costs nothing extra to add.
+mkdedicated_grouped() { # url -> a dedicated board, subfolder layout, groups alpha/beta
+  local b bare
+  b="$(mkshared_grouped)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '%s' "$b"
+}
+
+XA="$(mkdedicated "git@github.com:acme/board-a.git")"
+XA_STATE="$(mktemp)"
+printf '{}' > "$XA_STATE"
+XB="$(mkdedicated "git@github.com:acme/team-board.git")"
+XB_STATE="$(mktemp)"
+printf '{}' > "$XB_STATE"
+bvrun "$XB" "$XB_STATE" -- new b-dep --title "B's own work" > /dev/null
+
+mkdir -p "$XA/.agents"
+printf '{ "boards": { "github.com/acme/team-board": "%s" } }\n' "$XB" > "$XA/.agents/handoff.local.json"
+
+bvrun "$XA" "$XA_STATE" -- new a-blocked --title "Blocked on B" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XA_LIST1="$(bvrun "$XA" "$XA_STATE" -- list)"
+# The entry displays exactly as typed (no "-handoff" suffix here — only the lookup normalizes it),
+# with the resolved status appended.
+chk_contains "a mapped, matching board resolves the reference in list" "$XA_LIST1" "github.com/acme/team-board#b-dep → open"
+
+# B closes its side — A's next list picks up the change. Still read-only: nothing above wrote to B.
+bvrun "$XB" "$XB_STATE" -- claim b-dep "closing it out" > /dev/null
+bvrun "$XB" "$XB_STATE" -- release b-dep --status done --verified-by "read the code" > /dev/null
+XA_LIST2="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "closing the blocker on B is reflected on A's next list" "$XA_LIST2" "github.com/acme/team-board#b-dep → done"
+
+# The reference's id resolves the same whether the "-handoff" suffix is spelled out or not.
+bvrun "$XA" "$XA_STATE" -- new a-blocked2 --title "Blocked on B, suffix spelled out" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked2 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked2 --status blocked --blocked-on "external: github.com/acme/team-board#b-dep-handoff" > /dev/null
+XA_LIST3="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "the -handoff suffix spelled out resolves the same as its bare id" "$XA_LIST3" "github.com/acme/team-board#b-dep-handoff → done"
+
+# B is mapped, but the mapped path's own remote does NOT match the key it is filed under — the
+# mapping is not trusted, so the entry stays plain text.
+XC="$(mkdedicated "git@github.com:acme/not-team-board.git")"
+XD="$(mkdedicated "git@github.com:acme/board-d.git")"
+XD_STATE="$(mktemp)"
+printf '{}' > "$XD_STATE"
+mkdir -p "$XD/.agents"
+printf '{ "boards": { "github.com/acme/team-board": "%s" } }\n' "$XC" > "$XD/.agents/handoff.local.json"
+bvrun "$XD" "$XD_STATE" -- new d-blocked --title "Blocked, wrong mapping" > /dev/null
+bvrun "$XD" "$XD_STATE" -- claim d-blocked "starting" > /dev/null
+bvrun "$XD" "$XD_STATE" -- release d-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XD_LIST="$(bvrun "$XD" "$XD_STATE" -- list)"
+chk_contains "a mismatched mapping still shows the plain reference" "$XD_LIST" "external — github.com/acme/team-board#b-dep"
+chk "but never gets an arrow — the mapping is not trusted" "0" "$(printf '%s' "$XD_LIST" | grep -c 'team-board#b-dep →')"
+
+# B is not mapped at all — plain text, exactly as before this feature.
+XE="$(mkdedicated "git@github.com:acme/board-e.git")"
+XE_STATE="$(mktemp)"
+printf '{}' > "$XE_STATE"
+bvrun "$XE" "$XE_STATE" -- new e-blocked --title "Blocked, unmapped" > /dev/null
+bvrun "$XE" "$XE_STATE" -- claim e-blocked "starting" > /dev/null
+bvrun "$XE" "$XE_STATE" -- release e-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XE_LIST="$(bvrun "$XE" "$XE_STATE" -- list)"
+chk_contains "an unmapped board's reference is left exactly as plain text" "$XE_LIST" "external — github.com/acme/team-board#b-dep"
+chk "no arrow at all" "0" "$(printf '%s' "$XE_LIST" | grep -c '→')"
+# Ordinary free-text blockers were never shown by `list`, and the cross-board form must not start
+# showing them: only a row carrying a recognised reference gains the blocker column.
+(cd "$XA" && ./handoff new xa-plain --title "Waits on a person" --audience acme-api > /dev/null 2>&1)
+(cd "$XA" && HANDOFF_SESSION_ID=xa-plain ./handoff claim xa-plain "x" > /dev/null 2>&1 \
+  && HANDOFF_SESSION_ID=xa-plain ./handoff release xa-plain --status blocked --blocked-on "external: the platform team — CHG-4471" > /dev/null 2>&1)
+chk "a free-text blocker is still not shown by list" "0" \
+  "$(cd "$XA" && ./handoff list 2>&1 | grep 'xa-plain-handoff' | grep -c '⛔')"
+
+# The id is absent on the (correctly mapped) board.
+bvrun "$XA" "$XA_STATE" -- new a-blocked3 --title "Blocked on a phantom id" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked3 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked3 --status blocked --blocked-on "external: github.com/acme/team-board#no-such-id" > /dev/null
+XA_LIST4="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "an id absent from the mapped board reads as such" "$XA_LIST4" "github.com/acme/team-board#no-such-id → not on that board"
+
+# Two entries joined by "; " — each is resolved on its own.
+bvrun "$XB" "$XB_STATE" -- new b-dep2 --title "B's second open item" > /dev/null
+bvrun "$XA" "$XA_STATE" -- new a-blocked4 --title "Blocked on two things" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked4 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked4 --status blocked \
+  --blocked-on "external: github.com/acme/team-board#b-dep2; external: github.com/acme/team-board#no-such-id" > /dev/null
+XA_LIST5="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "the first of two joined entries resolves" "$XA_LIST5" "team-board#b-dep2 → open"
+chk_contains "and the second resolves independently" "$XA_LIST5" "team-board#no-such-id → not on that board"
+
+# A grouped (subfolder) board — the doc lives in a group section, not at B's root.
+XG="$(mkdedicated_grouped "git@github.com:acme/grouped-board.git")"
+XF="$(mkdedicated "git@github.com:acme/board-f.git")"
+XF_STATE="$(mktemp)"
+printf '{}' > "$XF_STATE"
+mkdir -p "$XF/.agents"
+printf '{ "boards": { "github.com/acme/grouped-board": "%s" } }\n' "$XG" > "$XF/.agents/handoff.local.json"
+bvrun "$XF" "$XF_STATE" -- new f-blocked --title "Blocked on a grouped board" > /dev/null
+bvrun "$XF" "$XF_STATE" -- claim f-blocked "starting" > /dev/null
+bvrun "$XF" "$XF_STATE" -- release f-blocked --status blocked --blocked-on "external: github.com/acme/grouped-board#a-work" > /dev/null
+XF_LIST="$(bvrun "$XF" "$XF_STATE" -- list)"
+chk_contains "a doc living in a mapped board's group section still resolves" "$XF_LIST" "grouped-board#a-work → open"
+
+# --- no network, ever: A's list must never fetch/pull/ls-remote/clone, on itself or on B ----
+REALGIT="$(command -v git)"
+GITLOG="$(mktemp)"
+GITSHIM="$(mktemp -d)"
+cat > "$GITSHIM/git" << SHIM
+#!/bin/sh
+case " \$* " in
+  *" fetch "*|*" pull "*|*" ls-remote "*|*" clone "*) echo "\$@" >> "$GITLOG" ;;
+esac
+exec "$REALGIT" "\$@"
+SHIM
+chmod +x "$GITSHIM/git"
+XB_PORCELAIN_BEFORE="$(git -C "$XB" status --porcelain)"
+(cd "$XA" && PATH="$GITSHIM:$PATH" HANDOFF_SESSION_ID="bv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$XA_STATE" ./handoff list > /dev/null 2>&1)
+chk "list never invokes fetch/pull/ls-remote/clone, on A or on B" "" "$(cat "$GITLOG")"
+chk "and B's own worktree is untouched by A's list" "$XB_PORCELAIN_BEFORE" "$(git -C "$XB" status --porcelain)"
+
 # --- the banner says whether it is YOUR review ------------------------------
 # Before this field every reader saw one marker, so "somebody should look" and "you should look"
 # were the same sentence. The match is against `handle` in handoff.local.json -- per-machine,

@@ -79,7 +79,9 @@ name — without inventing a role a board can hold. This refines ADR 0002, 0005,
   boundary.
 - **Cross-board waits have a recognised form**: `blocked_on: external — BOARD-REMOTE#ID`. When
   that board is cloned on the same machine, `list` shows its current status next to the entry —
-  read-only, status only, never fetched, never copied. Otherwise it is plain text. `depends_on`
+  read-only, status only, never fetched, never copied. Where a board is cloned comes only from the
+  developer's own `boards` map in `handoff.local.json`, and a mapped path counts only when its own
+  remote matches the reference; nothing scans for boards. Otherwise it is plain text. `depends_on`
   stays within one board.
 
 ## Considered options
@@ -107,7 +109,7 @@ name — without inventing a role a board can hold. This refines ADR 0002, 0005,
 ## Consequences
 
 - Board config gains a parent declaration and an accepted-children list (board config, not the
-  document schema — no schema bump); `handoff.local.json` gains the host account; `move`'s
+  document schema — no schema bump); `handoff.local.json` gains the host account and the map of other boards; `move`'s
   trust check gains the child rules; setup and `mirror` gain the board-visibility check; the
   verifier gains offline parent/child and host-account checks; `list` gains read-only cross-board
   status. An existing board behaves exactly as before until it declares a parent.

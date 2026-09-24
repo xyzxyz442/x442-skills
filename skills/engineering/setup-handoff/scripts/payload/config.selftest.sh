@@ -73,6 +73,23 @@ eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
 chk "a handle in the COMMITTED file is ignored" "" "$HC_HANDLE"
 chk "and no handle set at all is empty, never a guess" "" "$HC_HANDLE"
 
+# `boards` (ADR 0018) is the developer's own map of OTHER boards on this machine, keyed by
+# "host/owner/repo". Same per-developer-identity reasoning as `handle`/`hostAccount` above: it is
+# read from handoff.local.json only, and a committed copy is dropped rather than merely overridden.
+printf '{"boards": {"github.com/acme/team-board": "/abs/path/to/board"}}\n' > "$T/repo_local/.agents/handoff.local.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a local boards map is read" '{"github.com/acme/team-board": "/abs/path/to/board"}' "$HC_BOARDS"
+printf '{"repo":"myrepo","group":"team","boards":{"github.com/acme/team-board":"/committed/path"}}\n' > "$T/repo_local/.agents/handoff.json"
+printf '{}\n' > "$T/repo_local/.agents/handoff.local.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a boards map in the COMMITTED file is ignored" "{}" "$HC_BOARDS"
+printf '{\n  "boards": {"github.com/acme/team-board": "/board/layer/path"}\n}\n' > "$T/board_default/handoff.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "a boards map at the BOARD layer is ignored too" "{}" "$HC_BOARDS"
+rm -f "$T/board_default/handoff.json"
+eval "$(handoff_config_load "$T/board_default" "$T/repo_local")"
+chk "and no boards map set at all reads as an empty object, never a guess" "{}" "$HC_BOARDS"
+
 # handoff_config_board — the one reader of `board`, first file that names one wins.
 mkdir -p "$T/cb"
 printf '{"group":"g"}\n' > "$T/cb/none.json"

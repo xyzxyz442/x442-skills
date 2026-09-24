@@ -215,7 +215,9 @@ cfg = {"topology": "single-repo", "repoName": "", "group": "", "groups": [],
        "groupLayout": "", "ttlHours": 4, "allowVerifyCmd": False, "board": "",
        # Ordered lowest-environment-first. Board-global because an index that sorted one member's
        # work by a different ladder than another's would not be one board's index.
-       "environments": ["dev", "staging", "prod"]}
+       "environments": ["dev", "staging", "prod"],
+       # The developer's own map of OTHER boards on this machine (ADR 0018): {"host/owner/repo": path}.
+       "boards": {}}
 
 # Board layer, oldest name first so the newest wins: KEY=value, then config.json, then handoff.json.
 cfg.update(read_legacy(os.path.join(board, "config")))
@@ -229,6 +231,10 @@ cfg.pop("handle", None)
 # developer must be active as before mirror/export --to-issue send anything, and a value committed
 # at the board layer would assign every member the same account. Dropped, not merely overridden.
 cfg.pop("hostAccount", None)
+# `boards` (ADR 0018) is per-developer for the same reason again: it is where on THIS disk another
+# board's clone sits, and a value committed at the board layer would assign every member the same
+# layout — nonsense the moment two developers' checkouts differ. Dropped, not merely overridden.
+cfg.pop("boards", None)
 
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
@@ -245,6 +251,8 @@ if repo:
             if key == "handle":
                 continue  # per-machine identity — handoff.local.json only (ADR 0016)
             if key == "hostAccount":
+                continue  # per-machine identity — handoff.local.json only (ADR 0018)
+            if key == "boards":
                 continue  # per-machine identity — handoff.local.json only (ADR 0018)
             cfg["board" if key == "boardPath" else key] = val
         # The documented keys go on LAST so a superseded spelling can never beat the live one.
@@ -284,6 +292,13 @@ if repo:
     # per-developer identity, never board-wide policy or team identity.
     if "hostAccount" in local:
         cfg["hostAccount"] = local["hostAccount"]
+    # The developer's own map of OTHER boards on this machine (ADR 0018): {"host/owner/repo": path}
+    # as `board_origin_norm` prints a board's origin. Same per-developer-identity reasoning as
+    # `handle`/`hostAccount` immediately above: a mapping committed at the board or repo layer would
+    # assign every member of the board the SAME disk layout, which breaks the moment two developers'
+    # checkouts differ. No other discovery ever happens — this map is the only source.
+    if "boards" in local and isinstance(local["boards"], dict):
+        cfg["boards"] = local["boards"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
@@ -317,6 +332,10 @@ emit("HC_BOARD_PATH", cfg.get("board") or "")
 emit("HC_HANDLE", cfg.get("handle") or "")
 emit("HC_HOST_ACCOUNT", cfg.get("hostAccount") or "")
 emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
+# Serialized rather than comma-joined like `groups`/`environments` — this is a MAP (key -> path),
+# not a list, so the JSON round-trip is what board_mapped_path (in the handoff CLI) parses back.
+_boards = cfg.get("boards")
+emit("HC_BOARDS", json.dumps(_boards if isinstance(_boards, dict) else {}))
 PY
 }
 
@@ -343,6 +362,7 @@ _handoff_config_legacy_nopython() {
   printf 'HC_BOARD_PATH=%s\n' "''"
   printf 'HC_HOST_ACCOUNT=%s\n' "''"
   printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
+  printf 'HC_BOARDS=%s\n' "$(printf %q "{}")"
 }
 
 # handoff_legacy_locations BOARD_DIR [--move] -> prints how many legacy location entries belong to
