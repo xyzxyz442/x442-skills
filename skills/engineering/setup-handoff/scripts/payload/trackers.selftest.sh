@@ -606,5 +606,204 @@ chk_contains "a rule naming an undeclared group warns" "$VIDS_R" "warn:board.tra
 chk_contains "a malformed rule fails shape" "$VIDS_R" "fail:board.trackerRules.shape"
 chk "trackerRules is a recognised config key" "no" "$(has "$VIDS_R" "warn:board.config.unknown_keys")"
 
+# --- projection: complete (ADR 0020) ----------------------------------------------------------
+inject_sections() { # doc-path -> fills every rewritable section with a distinctive marker
+  python3 - "$1" << 'PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+for head, text in (
+    ("## Current state\n", "STATE-TEXT"),
+    ("## Context\n", "CONTEXT-TEXT"),
+    ("## Verify\n", "VERIFY-TEXT"),
+    ("## Decisions\n", "DECISIONS-TEXT"),
+    ("## Ruled out\n", "RULED-OUT-TEXT"),
+):
+    assert head in t, head
+    t = t.replace(head, head + "\n" + text + "\n", 1)
+open(p, "w").write(t)
+PY
+}
+inject_no_ruled_out() { # doc-path -> fills every section but Ruled out, left empty
+  python3 - "$1" << 'PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+for head, text in (
+    ("## Current state\n", "STATE-TEXT"),
+    ("## Context\n", "CONTEXT-TEXT"),
+    ("## Verify\n", "VERIFY-TEXT"),
+    ("## Decisions\n", "DECISIONS-TEXT"),
+):
+    assert head in t, head
+    t = t.replace(head, head + "\n" + text + "\n", 1)
+open(p, "w").write(t)
+PY
+}
+inject_verified_by() { # doc-path text -> stamps verified_by directly into frontmatter
+  python3 - "$1" "$2" << 'PY'
+import sys
+p, val = sys.argv[1], sys.argv[2]
+t = open(p).read()
+assert "\nstatus: open\n" in t
+open(p, "w").write(t.replace("\nstatus: open\n", "\nstatus: open\nverified_by: \"%s\"\n" % val, 1))
+PY
+}
+
+printf '\nprojection: complete adds Decisions, Ruled out and Evidence to full, never Activity (ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+TC="$(mkboard)"
+TCB="$TC/.agents/handoff"
+tr_cfg "$TCB" '{ "topology": "cross-repo", "schema": 4,
+  "_generated": { "repos": [ { "alias": "acme-comp" }, { "alias": "acme-full3" }, { "alias": "acme-nord" } ] },
+  "trackers": {
+    "acme-comp": { "kind": "issues", "system": "github", "repo": "acme/acme-comp", "refPattern": "#[0-9]+", "projection": "complete" },
+    "acme-full3": { "kind": "issues", "system": "github", "repo": "acme/acme-full3", "refPattern": "#[0-9]+", "projection": "full" },
+    "acme-nord": { "kind": "issues", "system": "github", "repo": "acme/acme-nord", "refPattern": "#[0-9]+", "projection": "complete" } } }'
+trh "$TC" new c-doc --title "Complete doc" --audience acme-comp > /dev/null
+inject_sections "$TCB/c-doc-handoff.md"
+inject_verified_by "$TCB/c-doc-handoff.md" "EVIDENCE-TEXT checked src/x.py:1 by hand"
+printf '\n## Activity\n\n- 2026-01-01 — ACTIVITY-DISTINCT-LINE\n' >> "$TCB/c-doc-handoff.md"
+trh "$TC" new f-doc --title "Full doc" --audience acme-full3 > /dev/null
+inject_sections "$TCB/f-doc-handoff.md"
+inject_verified_by "$TCB/f-doc-handoff.md" "EVIDENCE-TEXT checked src/y.py:1 by hand"
+trh "$TC" new n-doc --title "No ruled out" --audience acme-nord > /dev/null
+inject_no_ruled_out "$TCB/n-doc-handoff.md"
+git -C "$TC" add -A && git -C "$TC" commit -qm "docs"
+trh "$TC" mirror > /dev/null
+COMP_BODY="$(fq "[i for i in in_repo('acme/acme-comp') if 'c-doc-handoff' in i['body']][0]['body']")"
+FULL3_BODY="$(fq "[i for i in in_repo('acme/acme-full3') if 'f-doc-handoff' in i['body']][0]['body']")"
+NORD_BODY="$(fq "[i for i in in_repo('acme/acme-nord') if 'n-doc-handoff' in i['body']][0]['body']")"
+chk_contains "complete sends Current state" "$COMP_BODY" "STATE-TEXT"
+chk_contains "complete sends Context" "$COMP_BODY" "CONTEXT-TEXT"
+chk_contains "complete sends Verify" "$COMP_BODY" "VERIFY-TEXT"
+chk_contains "complete sends Decisions" "$COMP_BODY" "DECISIONS-TEXT"
+chk_contains "complete sends Ruled out" "$COMP_BODY" "RULED-OUT-TEXT"
+chk_contains "complete sends Evidence under its own heading" "$COMP_BODY" "## Evidence"
+chk_contains "and the verified_by text under it" "$COMP_BODY" "EVIDENCE-TEXT checked src/x.py:1 by hand"
+chk "complete never sends Activity text" "no" "$(has "$COMP_BODY" "ACTIVITY-DISTINCT-LINE")"
+chk "nor the Activity heading itself" "no" "$(has "$COMP_BODY" "## Activity")"
+chk "full still omits Decisions (regression)" "no" "$(has "$FULL3_BODY" "DECISIONS-TEXT")"
+chk "full still omits Ruled out (regression)" "no" "$(has "$FULL3_BODY" "RULED-OUT-TEXT")"
+chk "full still omits Evidence (regression)" "no" "$(has "$FULL3_BODY" "EVIDENCE-TEXT")"
+chk "a doc with nothing ruled out gets no empty Ruled out heading" "no" "$(has "$NORD_BODY" "## Ruled out")"
+ST="$ST_SAVE"
+
+printf '\ncomplete is accepted on a legacy external block too (ADR 0020)\n'
+TLE="$(mkboard)"
+tr_cfg "$TLE/.agents/handoff" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/legacy-complete", "refPattern": "#[0-9]+", "projection": "complete" } }'
+chk "tracker_setting reads complete off a legacy external block" "complete" "$(tr_fn "$TLE" 'CUR_TRACKER=""; tracker_setting projection')"
+
+printf '\na public tracker refuses projection: complete even with allowPublic and share: public (ADR 0013, ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+TPC="$(mkboard)"
+TPCB="$TPC/.agents/handoff"
+tr_cfg "$TPCB" '{ "topology": "cross-repo", "schema": 4,
+  "_generated": { "repos": [ { "alias": "acme-pubc" }, { "alias": "acme-pubf" } ] },
+  "trackers": {
+    "acme-pubc": { "kind": "issues", "system": "github", "repo": "acme/acme-pubc", "refPattern": "#[0-9]+", "projection": "complete", "allowPublic": true },
+    "acme-pubf": { "kind": "issues", "system": "github", "repo": "acme/acme-pubf", "refPattern": "#[0-9]+", "projection": "full", "allowPublic": true } } }'
+trh "$TPC" new p-comp --title "Public complete" --audience acme-pubc --share public > /dev/null
+trh "$TPC" new p-full --title "Public full" --audience acme-pubf --share public > /dev/null
+git -C "$TPC" add -A && git -C "$TPC" commit -qm "docs"
+PC_CREATES_BEFORE="$(fq "calls('create')")"
+PC_OUT="$(cd "$TPC" && HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" \
+  FAKE_TRACKER_PUBLIC_REPOS="acme/acme-pubc acme/acme-pubf" ./.agents/handoff/handoff mirror --repo acme-pubc 2>&1)"
+chk_contains "projection complete on a public tracker refuses, naming the repo" "$PC_OUT" "acme/acme-pubc"
+chk_contains "and cites ADR 0020" "$PC_OUT" "ADR 0020"
+chk_contains "even though allowPublic is set" "$PC_OUT" "even with allowPublic set"
+chk "and nothing is sent" "$PC_CREATES_BEFORE" "$(fq "calls('create')")"
+(cd "$TPC" && HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" \
+  FAKE_TRACKER_PUBLIC_REPOS="acme/acme-pubc acme/acme-pubf" ./.agents/handoff/handoff mirror --repo acme-pubf > /dev/null 2>&1)
+chk "projection full on the same public setup is still allowed — ADR 0013's path is unchanged" "1" \
+  "$(fq "len([i for i in in_repo('acme/acme-pubf') if 'p-full-handoff' in i['body']])")"
+ST="$ST_SAVE"
+
+printf '\nan unresolvable visibility reads as public, so projection: complete refuses there too (ADR 0013, ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+TUNK="$(mkboard)"
+tr_cfg "$TUNK/.agents/handoff" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/acme-unk", "refPattern": "#[0-9]+", "projection": "complete" } }'
+trh "$TUNK" new u-one --title "Unknown vis" > /dev/null
+git -C "$TUNK" add -A && git -C "$TUNK" commit -qm "docs"
+UNK_CREATES_BEFORE="$(fq "calls('create')")"
+UNK_OUT="$(cd "$TUNK" && HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" \
+  FAKE_TRACKER_FAIL=visibility ./.agents/handoff/handoff mirror 2>&1)"
+chk_contains "a visibility check that fails reads as public and refuses complete" "$UNK_OUT" "acme/acme-unk"
+chk_contains "and cites ADR 0020" "$UNK_OUT" "ADR 0020"
+chk "and nothing is sent" "$UNK_CREATES_BEFORE" "$(fq "calls('create')")"
+ST="$ST_SAVE"
+
+printf '\nprojection: complete resolves through a group tracker rule too (ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+RULES_COMPLETE_CFG='{ "topology": "cross-repo", "schema": 4,
+  "groups": ["fleet2"],
+  "_generated": { "repos": [ { "alias": "acme-rc", "group": "fleet2", "origin": "github.com/acme/acme-rc" } ] },
+  "trackerRules": { "fleet2": { "kind": "issues", "system": "github", "projection": "complete" } } }'
+TRC="$(mkboard)"
+TRCB="$TRC/.agents/handoff"
+tr_cfg "$TRCB" "$RULES_COMPLETE_CFG"
+trh "$TRC" new rc-one --title "Rule complete" --audience acme-rc > /dev/null
+inject_sections "$TRCB/rc-one-handoff.md"
+git -C "$TRC" add -A && git -C "$TRC" commit -qm "docs"
+trh "$TRC" mirror > /dev/null
+RC_BODY="$(fq "[i for i in in_repo('acme/acme-rc') if 'rc-one-handoff' in i['body']][0]['body']")"
+chk_contains "a rule-derived complete tracker still sends Decisions" "$RC_BODY" "DECISIONS-TEXT"
+chk_contains "and Ruled out" "$RC_BODY" "RULED-OUT-TEXT"
+ST="$ST_SAVE"
+
+printf '\na restricted document stays unmirrored under projection: complete too (ADR 0012, ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+TRS="$(mkboard)"
+tr_cfg "$TRS/.agents/handoff" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/acme-restr", "refPattern": "#[0-9]+", "projection": "complete" } }'
+trh "$TRS" new r-secret --title "Restricted" --sensitivity restricted > /dev/null
+git -C "$TRS" add -A && git -C "$TRS" commit -qm "docs"
+RS_OUT="$(trh "$TRS" mirror)"
+chk_contains "a restricted doc is skipped even under complete" "$RS_OUT" "skip r-secret-handoff — restricted"
+chk "and never reaches the tracker" "0" "$(fq "len(by('r-secret-handoff'))")"
+ST="$ST_SAVE"
+
+printf '\na credential planted in Ruled out refuses that document under complete, naming the rule, not the value (ADR 0005, ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+LEAKKEY="AKIA""IOSFODNN7EXAMPLE"
+TLK="$(mkboard)"
+TLKB="$TLK/.agents/handoff"
+tr_cfg "$TLKB" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/acme-leak", "refPattern": "#[0-9]+", "projection": "complete" } }'
+trh "$TLK" new l-leak --title "Leaky ruled-out" > /dev/null
+python3 - "$TLKB/l-leak-handoff.md" "$LEAKKEY" << 'PY'
+import sys
+p, key = sys.argv[1], sys.argv[2]
+t = open(p).read()
+head = "## Ruled out\n"
+assert head in t
+t = t.replace(head, head + "\n- tried a static key — deploy key %s did not work\n" % key, 1)
+open(p, "w").write(t)
+PY
+git -C "$TLK" add -A && git -C "$TLK" commit -qm "docs"
+LK_OUT="$(trh "$TLK" mirror)"
+chk_contains "the credential in Ruled out refuses the doc, naming the rule" "$LK_OUT" "aws-access-key-id"
+chk "the refusal never prints the value" "no" "$(has "$LK_OUT" "$LEAKKEY")"
+chk "and nothing of it is sent" "0" "$(fq "len(by('l-leak-handoff'))")"
+ST="$ST_SAVE"
+
+printf '\nthe verifier accepts complete and warns on an unknown projection value (ADR 0020)\n'
+TVPG="$(mkboard)"
+tr_cfg "$TVPG/.agents/handoff" '{ "topology": "cross-repo", "schema": 4,
+  "_generated": { "repos": [ { "alias": "acme-vp-good" } ] },
+  "trackers": { "acme-vp-good": { "kind": "issues", "system": "github", "repo": "acme/vp-good", "refPattern": "#[0-9]+", "projection": "complete" } } }'
+VIDS_GOOD="$(vids "$TVPG")"
+chk "complete triggers no projection warning" "no" "$(has "$VIDS_GOOD" "warn:board.trackers.projection")"
+TVPB="$(mkboard)"
+tr_cfg "$TVPB/.agents/handoff" '{ "topology": "cross-repo", "schema": 4,
+  "_generated": { "repos": [ { "alias": "acme-vp-bad" } ] },
+  "trackers": { "acme-vp-bad": { "kind": "issues", "system": "github", "repo": "acme/vp-bad", "refPattern": "#[0-9]+", "projection": "everything" } } }'
+VIDS_BAD="$(vids "$TVPB")"
+chk_contains "an unknown projection value warns" "$VIDS_BAD" "warn:board.trackers.projection"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

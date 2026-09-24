@@ -4759,7 +4759,7 @@ except Exception: print("")')"
 # sends anything, so a public tracker without allowPublic refuses the whole run instead of stopping
 # it half-way through. The listing of already-mirrored issues is kept, for the person who decides.
 mirror_preflight() { # aliases -> 0, or dies
-  local alias repo existing already
+  local alias repo existing already proj
   # ADR 0018 — the board's own remote first, before any tracker (ADR 0013) is even asked, then the
   # host account — before any tracker's config is even read, let alone asked for anything.
   board_visibility_gate "$DIR"
@@ -4769,6 +4769,14 @@ mirror_preflight() { # aliases -> 0, or dies
     repo="$(require_tracker mirror)" || exit 3
     tracker_adapter > /dev/null || exit 3
     tracker_is_public "$repo" || continue
+    # ADR 0020 — `complete` carries the whole record (Decisions, Ruled out, Evidence) and stays
+    # private, full stop: refused on a public tracker even when allowPublic is set and every doc is
+    # share: public. Checked here, in the same preflight and before board_allows_public, so a public
+    # complete tracker never gets as far as ADR 0013's opt-in.
+    proj="$(tracker_setting projection)"
+    if [ "$proj" = complete ]; then
+      die "trackers.${alias:-external} ($repo) is public (or its visibility could not be confirmed), and projection: complete never leaves this board on a public tracker (ADR 0020) — this holds even with allowPublic set. Set projection to full or summary for $repo, or move this tracker to a private repository. Nothing was sent."
+    fi
     board_allows_public && continue
     # Refuse the WHOLE run, before any create, update or close — and list what is already out
     # there, because closing an issue hides nothing and a person has to decide what to do with it.
@@ -4945,12 +4953,20 @@ if dtype == "orchestrator":
         rows.append("- and %d more item%s not shared publicly" % (hidden, "" if hidden == 1 else "s"))
     parts.append("## Children\n\n" + "\n".join(rows))
 else:
-    # ADR 0017 — a summary unless the tracker opted into more. `## Ruled out`, notes and evidence
-    # are in neither list, so they never leave the board.
-    names = ("Current state", "Context", "Verify") if projection == "full" else ("Current state",)
+    # ADR 0017 — a summary unless the tracker opted into more; ADR 0020 — `complete` adds Decisions,
+    # Ruled out and Evidence on top of `full`. Never Activity (it gains a line on every checkpoint,
+    # which would rewrite the issue body and notify every watcher on every run) and never `note`.
+    if projection == "complete":
+        names = ("Current state", "Context", "Verify", "Decisions", "Ruled out")
+    elif projection == "full":
+        names = ("Current state", "Context", "Verify")
+    else:
+        names = ("Current state",)
     for name in names:
         if section(name):
             parts.append("## %s\n\n%s" % (name, section(name)))
+    if projection == "complete" and meta.get("verified_by"):
+        parts.append("## Evidence\n\n%s" % meta["verified_by"])
 parts.append("---\n_Managed by the handoff mirror from `%s` — edits made here are overwritten on the next run._\n\n<!-- handoff:%s -->" % (marker, marker))
 labels = ["handoff-mirror", "status:%s" % meta.get("status", "open")]
 if dtype == "orchestrator":

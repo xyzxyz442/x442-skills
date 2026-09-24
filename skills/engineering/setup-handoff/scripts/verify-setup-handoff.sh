@@ -639,9 +639,9 @@ for alias, e in sorted(t.items()):
     if not isinstance(e, dict):
         continue
     s = lambda k: e.get(k) if isinstance(e.get(k), str) else ""
-    print("ENTRY\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s" % (
+    print("ENTRY\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s" % (
         alias, s("kind"), s("refPattern"), s("repo"), s("system"),
-        "1" if e.get("allowPublic") is True else "0"))
+        "1" if e.get("allowPublic") is True else "0", s("projection")))
     if "/" in s("repo"):
         system = s("system") or "github"
         host = "github.com" if system == "github" else system
@@ -654,7 +654,7 @@ elif len(owners) > 1:
     print("OWNER\x1ftrackers %s" % " ".join(sorted(owners)))
 PY
   )"
-  while IFS=$'\x1f' read -r kind a b c dd ee ff; do
+  while IFS=$'\x1f' read -r kind a b c dd ee ff gg; do
     case "$kind" in
       REG) REG_ALIASES="$a" ;;
       LEGACY) warn board.external.legacy "external is set on a cross-repository board, where it routes nothing — declare a tracker per repository under trackers instead (ADR 0017)" ;;
@@ -673,6 +673,12 @@ PY
         [ -z "$ee" ] || [ -f "$HD/scripts/tracker-$ee.sh" ] \
           || warn board.trackers.adapter "no adapter for trackers.$a system '$ee' at scripts/tracker-$ee.sh — re-run setup-handoff, or check the system name"
         [ "$ff" = 1 ] && TRK_PUBLIC="${TRK_PUBLIC:+$TRK_PUBLIC, }$a"
+        # ADR 0017 / ADR 0020 — the three levels the mirror understands; anything else is a typo
+        # nobody caught, silently read as the cheapest projection (summary) by the CLI itself.
+        case "$gg" in
+          "" | summary | full | complete) ;;
+          *) warn board.trackers.projection "trackers.$a projection is \"$gg\" — use summary, full, or complete (ADR 0017, ADR 0020)" ;;
+        esac
         if [ "$TOPO" = "cross-repo" ]; then
           case " $REG_ALIASES " in
             *" $a "*) ;;
