@@ -555,7 +555,7 @@ shell in its siblings' sessions. Reading it needs `python3`; a board still on th
   **same-owner child** needs nothing from the parent, so the parent's members never learn its name.
   A **cross-owner child** additionally needs the parent's opt-in: the parent's own `handoff.json`
   lists the child under `acceptChildren`, and a `restricted` document still never crosses even
-  then. The verifier checks both halves offline.
+  then. `move` enforces both halves; the verifier does not check them yet.
 - **A host account is recorded per developer (ADR 0018).** `handoff.local.json` may set
   `hostAccount`; `mirror` and `export --to-issue` refuse when the `gh` account currently active
   differs from it, rather than writing under whichever account happens to be signed in. It never
