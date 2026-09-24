@@ -16,10 +16,11 @@
     {
       "id": "draft",
       "type": "database",
-      "label": "Draft board",
-      "sublabel": "Alice only, never mirrors",
+      "label": "Personal board",
+      "sublabel": "Alice's, a child board",
       "pos": [40, 90],
-      "size": [170, 64]
+      "size": [170, 64],
+      "tag": "child"
     },
     {
       "id": "alice",
@@ -105,12 +106,12 @@
     },
     {
       "kind": "security-group",
-      "label": "Shared board, private repo",
+      "label": "Dedicated board, private remote",
       "wraps": ["sec-app", "sec-platform"]
     },
     {
       "kind": "region",
-      "label": "Other owner, optional",
+      "label": "Other owner, separate trust boundary",
       "wraps": ["lib-board"]
     }
   ],
@@ -148,13 +149,13 @@
       "id": "mirror-app",
       "from": "sec-app",
       "to": "issues-app",
-      "label": "mirror"
+      "label": "mirror (tracker rule)"
     },
     {
       "id": "mirror-platform",
       "from": "sec-platform",
       "to": "issues-platform",
-      "label": "mirror"
+      "label": "mirror (tracker rule)"
     },
     {
       "id": "cross-owner",
@@ -173,7 +174,7 @@
       "items": [
         "Leases keep Alice and Bob apart; the board's remote makes that hold across machines",
         "Bob hands back with --for-review --reviewer alice",
-        "Alice's draft reaches the team only by handoff move"
+        "Alice's personal board moves work in free, out only by naming the target (ADR 0018)"
       ]
     },
     {
@@ -181,7 +182,7 @@
       "title": "Groups are sections",
       "items": [
         "Each group has its own section and sub-index; members see only theirs",
-        "The board root INDEX.md rolls every section up",
+        "One tracker rule mirrors every registered member into its own repo",
         "Sections organise work; everyone who can clone the board reads all of it"
       ]
     },

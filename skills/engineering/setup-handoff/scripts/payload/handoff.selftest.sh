@@ -1584,14 +1584,16 @@ chk "the doc travels with its lease" "yes" \
 chk "the generated index travels too, so the next fast-forward is not blocked" "yes" \
   "$(git -C "$SB" ls-files --error-unmatch INDEX.md > /dev/null 2>&1 && echo yes || echo no)"
 
-printf '\nboard_generated_dirty — every GENERATED spelling across all three layouts, together\n'
+printf '\nboard_generated_dirty — every GENERATED spelling, scoped to its own section\n'
 # Regression test. board_generated_dirty used to list only INDEX.md and */INDEX.md — the flat
 # board and the subfolder layout — and never INDEX-<group>.md, which is what sec_index() writes
 # under LAYOUT=prefix. A regenerated prefix sub-index was then left behind by lease_commit_push,
-# so the next board_sync_or_die fast-forward refused it and sent the board's bookkeeping down the
-# claim path instead of the fast path. All three layouts plus the TRACKER-DRIFT sibling are
-# asserted together, from one call, so a future edit that widens one spelling and forgets another
-# fails loudly instead of the three quietly drifting apart again.
+# so the next board_sync_or_die fast-forward refused it. Each layout's spellings are asserted, so a
+# future edit that widens one and forgets another fails loudly.
+#
+# Since ADR 0019 a lease commit carries only its OWN section's generated files: the roll-up and
+# every other section's index stay out of it, which is what stops unrelated claims in different
+# groups contending on one file. So each layout is asserted from inside a section, both ways.
 #
 # The board must be a SHARED board — the root of its own git worktree, per ADR 0002 — not a board
 # nested inside a larger repo (mkboard's shape). `git status --porcelain` always reports paths
@@ -1601,28 +1603,30 @@ printf '\nboard_generated_dirty — every GENERATED spelling across all three la
 # gates it), so mkshared is the fixture that actually matches production.
 GDB="$(mkshared)"
 mkdir -p "$GDB/widgets"
-: > "$GDB/INDEX.md"                 # flat layout
+: > "$GDB/INDEX.md"                 # flat layout, and the roll-up on a grouped board
 : > "$GDB/widgets/INDEX.md"         # subfolder layout
-: > "$GDB/INDEX-widgets.md"         # prefix layout — the spelling the fix added
+: > "$GDB/INDEX-widgets.md"         # prefix layout — the spelling the original fix added
+: > "$GDB/INDEX-gadgets.md"         # another section's prefix sub-index
 : > "$GDB/TRACKER-DRIFT.md"         # flat drift file
 : > "$GDB/widgets/TRACKER-DRIFT.md" # subfolder drift file
 : > "$GDB/TRACKER-DRIFT-widgets.md" # prefix drift file
 : > "$GDB/INDEX-widgets.md.bak"     # decoy: a near-miss name that must NOT be swept in
-GDB_OUT="$(DIR="$GDB" && board_generated_dirty)"
-chk "flat sub-index reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX.md' && echo yes || echo no)"
-chk "subfolder sub-index reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/INDEX.md' && echo yes || echo no)"
-chk "prefix sub-index reported (the bug this test guards)" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md' && echo yes || echo no)"
-chk "flat TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT.md' && echo yes || echo no)"
-chk "subfolder TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/TRACKER-DRIFT.md' && echo yes || echo no)"
-chk "prefix TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT-widgets.md' && echo yes || echo no)"
-chk "a near-miss name is not swept in" "no" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md.bak' && echo yes || echo no)"
+gdb_has() { printf '%s\n' "$1" | grep -qxF "$2" && echo yes || echo no; }
+GDB_FLAT="$(DIR="$GDB" LAYOUT="" GROUP="" && board_generated_dirty)"
+GDB_SUB="$(DIR="$GDB" LAYOUT=subfolder GROUP=widgets && board_generated_dirty)"
+GDB_PRE="$(DIR="$GDB" LAYOUT=prefix GROUP=widgets && board_generated_dirty)"
+chk "flat board — its index is reported" "yes" "$(gdb_has "$GDB_FLAT" INDEX.md)"
+chk "flat board — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_FLAT" TRACKER-DRIFT.md)"
+chk "flat board — a grouped spelling is not" "no" "$(gdb_has "$GDB_FLAT" widgets/INDEX.md)"
+chk "subfolder section — its sub-index is reported" "yes" "$(gdb_has "$GDB_SUB" widgets/INDEX.md)"
+chk "subfolder section — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_SUB" widgets/TRACKER-DRIFT.md)"
+chk "subfolder section — the roll-up is not (ADR 0019)" "no" "$(gdb_has "$GDB_SUB" INDEX.md)"
+chk "prefix section — its sub-index is reported (the bug the original test guards)" "yes" \
+  "$(gdb_has "$GDB_PRE" INDEX-widgets.md)"
+chk "prefix section — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_PRE" TRACKER-DRIFT-widgets.md)"
+chk "prefix section — another section's sub-index is not (ADR 0019)" "no" "$(gdb_has "$GDB_PRE" INDEX-gadgets.md)"
+chk "prefix section — the roll-up is not (ADR 0019)" "no" "$(gdb_has "$GDB_PRE" INDEX.md)"
+chk "a near-miss name is not swept in" "no" "$(gdb_has "$GDB_PRE" INDEX-widgets.md.bak)"
 trash "$GDB" 2> /dev/null
 
 printf '\nshared board — expiry is stamped from the commit, not the claiming clock\n'
@@ -1683,6 +1687,110 @@ chk "the losing commit is rolled back, so the next fetch still fast-forwards" ""
   "$(git -C "$SB4" log --oneline | grep -c 'claim lost-case' | grep -v '^0$')"
 chk "and the rollback used no hard reset — the doc it wrote is still on disk" "yes" \
   "$([ -f "$SB4/lost-case-handoff.md" ] && echo yes || echo no)"
+# ADR 0019: a rejected push is retried, but boundedly — a remote that keeps refusing is an outage,
+# and a claim that spun on it forever would hide one. The hook counts every push it refuses.
+printf 'x\n' > "$SB4.pushes"
+cat > "$SB4_REMOTE/hooks/pre-receive" << HOOK
+#!/bin/sh
+printf 'x\n' >> "$SB4.pushes"
+exit 1
+HOOK
+: > "$SB4.pushes"
+"$SB4/handoff" claim lost-case "retries then gives up" > /dev/null 2>&1
+chk "a claim whose push keeps being refused tries exactly three times" "3" \
+  "$(wc -l < "$SB4.pushes" | tr -d ' ')"
+
+printf '\ndedicated board — a lease commit touches only its own group (ADR 0019)\n'
+# Every lease commit used to regenerate the board-root roll-up and stage it, so two claims of
+# unrelated handoffs in DIFFERENT groups contended on the same file. The roll-up now belongs to
+# `handoff index` alone; a lease commit carries its own section's sub-index and nothing wider.
+mkshared_grouped() { # -> board dir: a subfolder-layout board with groups alpha and beta
+  local b
+  b="$(mkshared)"
+  printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4,\n  "groupLayout": "subfolder",\n  "groups": ["alpha", "beta"]\n}\n' > "$b/handoff.json"
+  HANDOFF_GROUP=alpha "$b/handoff" new a-work --title "Alpha work" --audience acme-api > /dev/null
+  HANDOFF_GROUP=alpha "$b/handoff" new a-more --title "More alpha work" --audience acme-api > /dev/null
+  HANDOFF_GROUP=beta "$b/handoff" new b-work --title "Beta work" --audience acme-api > /dev/null
+  "$b/handoff" index > /dev/null
+  git -C "$b" add -A
+  git -C "$b" commit -qm "grouped board"
+  git -C "$b" push -q
+  printf '%s' "$b"
+}
+# A second machine: a clone of the same remote, as a different session.
+mkclone() { # board -> clone dir
+  local c
+  c="$(mktemp -d)/clone"
+  git clone -q "$(git -C "$1" remote get-url origin)" "$c"
+  git -C "$c" config user.email "other@example.com"
+  git -C "$c" config user.name "other"
+  printf '%s' "$c"
+}
+GS="$(mkshared_grouped)"
+GS_ROLLUP="$(git -C "$GS" rev-parse HEAD:INDEX.md)"
+GS_BETA="$(git -C "$GS" rev-parse HEAD:beta/INDEX.md)"
+HANDOFF_GROUP=alpha "$GS/handoff" claim a-work "scoped" > /dev/null 2>&1
+chk "the claim landed" "yes" \
+  "$(git -C "$GS" ls-files --error-unmatch alpha/.locks/a-work-handoff/owner > /dev/null 2>&1 && echo yes || echo no)"
+chk "the roll-up INDEX.md is not part of a lease commit" "$GS_ROLLUP" "$(git -C "$GS" rev-parse HEAD:INDEX.md)"
+chk "another group's sub-index is not part of it either" "$GS_BETA" "$(git -C "$GS" rev-parse HEAD:beta/INDEX.md)"
+chk "the claiming group's own sub-index is" "yes" \
+  "$(git -C "$GS" show --name-only --format= HEAD | grep -qxF 'alpha/INDEX.md' && echo yes || echo no)"
+chk "and the claim leaves no generated file behind in the worktree" "" \
+  "$(git -C "$GS" status --porcelain)"
+chk "the roll-up is still regenerated by handoff index" "yes" \
+  "$("$GS/handoff" index > /dev/null && [ -n "$(git -C "$GS" status --porcelain -- INDEX.md)" ] && echo yes || echo no)"
+git -C "$GS" checkout -q -- INDEX.md
+
+printf '\ndedicated board — a lost race is retried, never merged (ADR 0019)\n'
+# The race is staged for real: a pre-push hook on machine one lets machine two claim first, so
+# machine one's push is a genuine non-fast-forward rejection against a remote that moved.
+remote_leases() { # board -> the lease keys committed on its remote, space-separated
+  git -C "$1" ls-tree -r --name-only origin/HEAD | sed -n 's|^.*\.locks/\([^/]*\)/owner$|\1|p' | sort | tr '\n' ' ' | sed 's/ $//'
+}
+race_hook() { # board clone group id -> installs a one-shot pre-push hook that claims first
+  cat > "$1/.git/hooks/pre-push" << HOOK
+#!/bin/sh
+[ -f "$1.raced" ] && exit 0
+: > "$1.raced"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+HANDOFF_SESSION_ID=machine-two HANDOFF_GROUP=$3 "$2/handoff" claim $4 "machine two" > /dev/null 2>&1
+exit 0
+HOOK
+  chmod +x "$1/.git/hooks/pre-push"
+}
+GR="$(mkshared_grouped)"
+GR2="$(mkclone "$GR")"
+race_hook "$GR" "$GR2" beta b-work
+GR_OUT="$(HANDOFF_GROUP=alpha "$GR/handoff" claim a-work "machine one" 2>&1)"
+chk_contains "a claim that lost the push race to unrelated work retries and wins" "$GR_OUT" "Claimed a-work-handoff"
+git -C "$GR" fetch -q
+chk "both leases are on the remote" "a-work-handoff b-work-handoff" \
+  "$(remote_leases "$GR")"
+chk "and machine one is not left behind its remote" "" "$(git -C "$GR" status -sb | grep -o 'ahead\|behind')"
+
+GRS="$(mkshared_grouped)"
+GRS2="$(mkclone "$GRS")"
+race_hook "$GRS" "$GRS2" alpha a-work
+GRS_OUT="$(HANDOFF_GROUP=alpha "$GRS/handoff" claim a-work "machine one" 2>&1)"
+chk_contains "a race for the SAME handoff still refuses the loser" "$GRS_OUT" "their push landed before yours"
+chk "after re-syncing, the loser sees the lease as held" "held" \
+  "$(cd "$GRS" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=alpha . ./handoff && lock_state a-work-handoff | cut -d'|' -f1)"
+chk "held by the winner, not by the loser" "1" \
+  "$(grep -c 'session=machine-two' "$GRS/alpha/.locks/a-work-handoff/owner" 2> /dev/null)"
+
+GRL="$(mkshared_grouped)"
+GRL2="$(mkclone "$GRL")"
+HANDOFF_GROUP=alpha "$GRL/handoff" claim a-work "to release" > /dev/null 2>&1
+git -C "$GRL2" pull -q --ff-only
+race_hook "$GRL" "$GRL2" beta b-work
+GRL_OUT="$(HANDOFF_GROUP=alpha "$GRL/handoff" release a-work --status open "stopping" 2>&1)"
+chk "a release that lost the push race retries instead of warning" "" \
+  "$(printf '%s' "$GRL_OUT" | grep -o 'push did not land')"
+git -C "$GRL" fetch -q
+chk "and the released lease is gone from the remote" "b-work-handoff" \
+  "$(remote_leases "$GRL")"
+trash "$GS" "$GR" "$GR2" "$GRS" "$GRS2" "$GRL" "$GRL2" 2> /dev/null
 
 printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
 # The registry carries no path at all. Resolution goes through the per-machine location map, which
@@ -2028,6 +2136,96 @@ chk_contains "an id already on the target refuses" "$(mvh "$MVA" move mv-clash -
 chk_contains "--id gives it a new id on the target" \
   "$(mvh "$MVA" move mv-clash --to "$MVB" --id mv-clash-2)" "mv-clash-2-handoff"
 chk "under that id" "yes" "$([ -f "$MVB/mv-clash-2-handoff.md" ] && echo yes || echo no)"
+
+printf '\nmove — a child board narrows a trust boundary (ADR 0018)\n'
+# A child declares its parent in its own committed config. Work moves INTO it freely and OUT of it
+# only by naming the target — even under one owner, since leaving a narrower board widens who
+# reads the work. A child under ANOTHER owner counts only when the parent accepts it too, and a
+# restricted doc still never crosses owners, accepted or not.
+set_board_key() { # board key json-value -> set it in the board's committed handoff.json
+  python3 - "$1/handoff.json" "$2" "$3" << 'PY'
+import json, sys
+p, k, v = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(p))
+d[k] = json.loads(v)
+json.dump(d, open(p, "w"), indent=2)
+PY
+  git -C "$1" commit -qam "board config: $2"
+  git -C "$1" push -q
+}
+CBP="$(mkremote "git@github.com:acme/team-board.git")"     # the parent
+CBC="$(mkremote "git@github.com:acme/dev-a-board.git")"    # a child under the same owner
+CBS="$(mkremote "git@github.com:acme/sibling-board.git")"  # another board of that owner
+CBX="$(mkremote "git@github.com:dev-a/handoff-board.git")" # a child under another owner
+set_board_key "$CBC" parent '"github.com/acme/team-board"'
+set_board_key "$CBX" parent '"github.com/acme/team-board"'
+
+mvh "$CBP" new cb-in --title "Into a child" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-in "moving" > /dev/null
+chk_contains "moving into a same-owner child proceeds" "$(mvh "$CBP" move cb-in --to "$CBC")" "Moved cb-in-handoff"
+
+mvh "$CBC" new cb-out --title "Out of a child" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-out "moving" > /dev/null
+CB_OUT="$(mvh "$CBC" move cb-out --to "$CBP")"
+chk_contains "moving out of a child refuses, even to its parent under the same owner" "$CB_OUT" "child board"
+chk "and moves nothing" "no" "$([ -f "$CBP/cb-out-handoff.md" ] && echo yes || echo no)"
+chk_contains "naming the target proceeds" \
+  "$(mvh "$CBC" move cb-out --to "$CBP" --to-remote github.com/acme)" "Moved cb-out-handoff"
+
+mvh "$CBC" new cb-side --title "Sideways" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-side "moving" > /dev/null
+chk_contains "moving out of a child to any other board refuses too" \
+  "$(mvh "$CBC" move cb-side --to "$CBS")" "child board"
+
+mvh "$CBC" new cb-secret --title "Restricted in a child" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$CBC" claim cb-secret "moving" > /dev/null
+chk_contains "a restricted doc leaves a same-owner child when named — it never leaves the owner" \
+  "$(mvh "$CBC" move cb-secret --to "$CBP" --to-remote github.com/acme)" "Moved cb-secret-handoff"
+
+CBL="$(mkshared)"
+git -C "$CBL" remote remove origin
+mvh "$CBC" new cb-local --title "To a local board" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-local "moving" > /dev/null
+chk_contains "moving out of a child onto a board with no remote proceeds — it widens nothing" \
+  "$(mvh "$CBC" move cb-local --to "$CBL")" "Moved cb-local-handoff"
+
+mvh "$CBP" new cb-x --title "To a cross-owner child" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-x "moving" > /dev/null
+chk_contains "a cross-owner child the parent has not accepted is a separate boundary" \
+  "$(mvh "$CBP" move cb-x --to "$CBX")" "refusing to move cb-x-handoff across a trust boundary"
+set_board_key "$CBP" acceptChildren '["github.com/dev-a/handoff-board"]'
+chk_contains "once the parent accepts it, moving into it proceeds unnamed" \
+  "$(mvh "$CBP" move cb-x --to "$CBX")" "Moved cb-x-handoff"
+
+mvh "$CBP" new cb-xs --title "Restricted to a cross-owner child" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$CBP" claim cb-xs "moving" > /dev/null
+chk_contains "a restricted doc never enters a cross-owner child, accepted and named or not" \
+  "$(mvh "$CBP" move cb-xs --to "$CBX" --to-remote github.com/dev-a)" "restricted"
+chk "and stays put" "yes" "$([ -f "$CBP/cb-xs-handoff.md" ] && echo yes || echo no)"
+
+CBY="$(mkremote "git@github.com:dev-b/handoff-board.git")" # accepted by the parent, but never declared it
+set_board_key "$CBP" acceptChildren '["github.com/dev-a/handoff-board", "github.com/dev-b/handoff-board"]'
+mvh "$CBP" new cb-y --title "To a board that never declared its parent" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-y "moving" > /dev/null
+chk_contains "an acceptance the child never declared links nothing" \
+  "$(mvh "$CBP" move cb-y --to "$CBY")" "refusing to move cb-y-handoff across a trust boundary"
+
+mvh "$CBX" new cb-back --title "Back out of a cross-owner child" --audience acme-api > /dev/null
+mvh "$CBX" claim cb-back "moving" > /dev/null
+chk_contains "moving out of a cross-owner child refuses unnamed" "$(mvh "$CBX" move cb-back --to "$CBP")" "child board"
+chk_contains "and proceeds when the target is named" \
+  "$(mvh "$CBX" move cb-back --to "$CBP" --to-remote github.com/acme)" "Moved cb-back-handoff"
+
+# The host account never defines or merges a boundary (ADR 0018) — `move`'s trust check must not
+# even ask about it. Proof by construction: HANDOFF_HOST_ACCOUNT is set here with NO tracker
+# adapter reachable from this board (mkremote/mkshared never copy tracker-github.sh), so if move
+# called host_account_guard by mistake it would refuse ("could not confirm which account is
+# active") -- it does not, and the move proceeds exactly as the unnamed same-owner case above.
+mvh "$CBP" new cb-acct --title "Move ignores the host account" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-acct "moving" > /dev/null
+CB_ACCT_OUT="$(cd "$CBP" && HANDOFF_SESSION_ID="$MV_ME" HANDOFF_HOST_ACCOUNT=dev-a ./handoff move cb-acct --to "$CBC" 2>&1)"
+chk_contains "move proceeds regardless of a recorded host account" "$CB_ACCT_OUT" "Moved cb-acct-handoff"
+chk "and never says it could not confirm an account" "0" "$(printf '%s' "$CB_ACCT_OUT" | grep -c 'could not confirm')"
 
 printf '\nx\n' >> "$MVA/mv-base-handoff.md"
 mvh "$MVA" claim mv-base "moving" > /dev/null
@@ -2770,8 +2968,11 @@ printf '{}' > "$RV_PUB"
 printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "allowPublic": true } }\n' > "$RVB/handoff.json"
 rvh new r-open --title "Shared work" --reviewer erin --share public > /dev/null
 rvh new r-quiet --title "Unshared work" --reviewer frank > /dev/null
+# Public is scoped to the TRACKER's repo (acme/backlog) alone, via FAKE_TRACKER_PUBLIC_REPOS —
+# not the board's own remote (acme/acme-api, RV's mkboard origin), which ADR 0018 checks
+# separately and would otherwise refuse this run for an unrelated reason.
 (cd "$RV" && HANDOFF_SESSION_ID="rv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
-  FAKE_TRACKER_STATE="$RV_PUB" FAKE_TRACKER_VISIBILITY=public ./.agents/handoff/handoff mirror > /dev/null 2>&1)
+  FAKE_TRACKER_STATE="$RV_PUB" FAKE_TRACKER_PUBLIC_REPOS=acme/backlog ./.agents/handoff/handoff mirror > /dev/null 2>&1)
 chk "on a public repo a share: public doc still carries its assignee" "['erin']" \
   "$(python3 -c 'import json,sys
 db = json.load(open(sys.argv[1]))
@@ -2784,6 +2985,319 @@ chk "so no handle for it was ever sent" "0" \
   "$(python3 -c 'import json,sys
 db = json.load(open(sys.argv[1]))
 print(len([c for c in db["calls"] if "frank" in json.dumps(c[1])]))' "$RV_PUB")"
+
+printf '\nmirror also checks the BOARD'"'"'s own remote, not only its trackers (ADR 0018)\n'
+# Distinct from ADR 0013 above: that gate asks about the TRACKER's repository; this one asks about
+# the board's own remote, and is checked FIRST, before any tracker pass sends anything. The tracker
+# stays private throughout, so any refusal or warning here can only be about the board.
+#
+# Only a DEDICATED board has a remote of its own. An in-repo board's remote is the code
+# repository's, whose audience that repository already chose — an open-source project's board is
+# public by design (ADR 0013) — so it is never refused here. That case is asserted last.
+mkdedicated() { # url -> a dedicated board whose origin is configured as <url>, pushing to a bare dir
+  local b bare
+  b="$(mkshared)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$b/handoff.json"
+  printf '%s' "$b"
+}
+bvrun() { # board state extra-env... -- args -> the board CLI with the fake adapter
+  local b="$1" st="$2"
+  shift 2
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  (cd "$b" && env ${envs[@]+"${envs[@]}"} HANDOFF_SESSION_ID="bv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$st" ./handoff "$@") 2>&1
+}
+bvcalls() { # state op [repo] -> how many times the fake tracker was asked for that op
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {}
+print(len([c for c in db.get("calls", []) if c[0] == sys.argv[2] and (len(sys.argv) < 4 or c[1].get("repo") == sys.argv[3])]))' "$@"
+}
+bvissues() { # state doc-id -> issues carrying that doc's marker
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {}
+print(len([i for i in db.get("issues", []) if "/" + sys.argv[2] + " -->" in i["body"]]))' "$1" "$2"
+}
+
+BV="$(mkdedicated "git@github.com:acme/team-board.git")"
+BV_STATE="$(mktemp)"
+printf '{}' > "$BV_STATE"
+bvrun "$BV" "$BV_STATE" -- new bv-open --title "Open work" > /dev/null
+BV_OUT1="$(bvrun "$BV" "$BV_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/team-board -- mirror)"
+BV_RC1=$?
+chk_contains "mirror refuses when a dedicated board's OWN remote is public" "$BV_OUT1" "acme/team-board"
+chk_contains "and cites ADR 0018" "$BV_OUT1" "ADR 0018"
+chk "and exits non-zero" "1" "$([ "$BV_RC1" != 0 ] && echo 1 || echo 0)"
+chk "the tracker's create op is never called" "0" "$(bvcalls "$BV_STATE" create)"
+chk "not even a list call reaches the tracker" "0" "$(bvcalls "$BV_STATE" list)"
+chk "the tracker's own visibility is never asked either — the board refuses first" "0" \
+  "$(bvcalls "$BV_STATE" visibility acme/backlog)"
+
+BV_OUT3="$(bvrun "$BV" "$BV_STATE" -- mirror)"
+chk "a private board remote (the default) prints no ADR 0018 warning" "0" "$(printf '%s' "$BV_OUT3" | grep -c 'ADR 0018')"
+chk "and the doc reaches the tracker" "1" "$(bvissues "$BV_STATE" bv-open-handoff)"
+
+# A board remote on any host but github.com can never be asked, so it reads "unknown" — the same
+# outcome as a FAILED call: warn, never refuse.
+BV2="$(mkdedicated "https://git.example.com/acme/other.git")"
+BV2_STATE="$(mktemp)"
+printf '{}' > "$BV2_STATE"
+bvrun "$BV2" "$BV2_STATE" -- new bv2-open --title "Open work" > /dev/null
+BV2_OUT="$(bvrun "$BV2" "$BV2_STATE" -- mirror)"
+BV2_RC=$?
+chk_contains "an unconfirmable board remote (non-github here) only warns" "$BV2_OUT" "git.example.com/acme/other"
+chk_contains "and the warning cites ADR 0018" "$BV2_OUT" "ADR 0018"
+chk "mirror still proceeds — exit 0" "0" "$BV2_RC"
+chk "and the doc actually reaches the tracker" "1" "$(bvissues "$BV2_STATE" bv2-open-handoff)"
+
+# `claim` never checks visibility (ADR 0018) — it stays a plain git operation, even on a dedicated
+# board whose remote is public.
+BV4="$(mkdedicated "git@github.com:acme/public-board.git")"
+BV4_STATE="$(mktemp)"
+printf '{}' > "$BV4_STATE"
+bvrun "$BV4" "$BV4_STATE" -- new bv4-work --title "Claim me" > /dev/null
+BV4_CLAIM="$(bvrun "$BV4" "$BV4_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/public-board -- claim bv4-work "working")"
+chk_contains "claim succeeds on a dedicated board whose own remote is public" "$BV4_CLAIM" "Claimed bv4-work"
+chk "claim never calls the adapter's visibility op" "0" "$(bvcalls "$BV4_STATE" visibility)"
+
+# An IN-REPO board inside a public code repository: its remote is the repository's, not the
+# board's, so the board gate stays out of it and ADR 0013's tracker gate is all that applies.
+BV5="$(mkboard)"
+BV5B="$BV5/.agents/handoff"
+BV5_STATE="$(mktemp)"
+printf '{}' > "$BV5_STATE"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog5" } }\n' > "$BV5B/handoff.json"
+bv5h() { (cd "$BV5" && HANDOFF_SESSION_ID="bv5-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$BV5_STATE" FAKE_TRACKER_PUBLIC_REPOS="acme/acme-api" ./.agents/handoff/handoff "$@") 2>&1; }
+bv5h new bv5-open --title "Open work" > /dev/null
+BV5_OUT="$(bv5h mirror)"
+chk "an in-repo board in a public code repository is not refused by the board gate" "0" \
+  "$(printf '%s' "$BV5_OUT" | grep -c 'ADR 0018')"
+chk "and its doc reaches its (private) tracker" "1" "$(bvissues "$BV5_STATE" bv5-open-handoff)"
+
+printf '\nmirror and export --to-issue also check the host account (ADR 0018) — never the board\n'
+# Distinct from every block above: this is a per-DEVELOPER safety check, never a trust boundary.
+# hostAccount in handoff.local.json (ADR 0010's per-developer file, read the same way `handle` is,
+# ADR 0016) names which account must be active; the fake adapter's new `whoami` op answers with
+# $FAKE_TRACKER_LOGIN. mkdedicated/bvrun/bvcalls/bvissues are reused from the board-visibility
+# block above.
+
+# Recorded via handoff.local.json IN THE BOARD REPO DIR (a dedicated board's repo root is the
+# board itself), matching only up to case — GitHub logins are case-insensitive.
+HA="$(mkdedicated "git@github.com:acme/ha-board.git")"
+HA_STATE="$(mktemp)"
+printf '{}' > "$HA_STATE"
+mkdir -p "$HA/.agents"
+printf '{ "hostAccount": "Dev-A" }\n' > "$HA/.agents/handoff.local.json"
+bvrun "$HA" "$HA_STATE" -- new ha-open --title "Open work" > /dev/null
+HA_OUT1="$(bvrun "$HA" "$HA_STATE" FAKE_TRACKER_LOGIN=dev-a -- mirror)"
+chk "matching host account (handoff.local.json, case-only difference): mirror proceeds" "0" "$?"
+chk "and the doc reaches the tracker" "1" "$(bvissues "$HA_STATE" ha-open-handoff)"
+
+# Recorded via HANDOFF_HOST_ACCOUNT instead, matching exactly.
+HA2="$(mkdedicated "git@github.com:acme/ha-board2.git")"
+HA2_STATE="$(mktemp)"
+printf '{}' > "$HA2_STATE"
+bvrun "$HA2" "$HA2_STATE" -- new ha2-open --title "Open work" > /dev/null
+bvrun "$HA2" "$HA2_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-a -- mirror > /dev/null
+chk "matching host account (env var): the doc reaches the tracker" "1" "$(bvissues "$HA2_STATE" ha2-open-handoff)"
+
+# Mismatch: refused, non-zero, message names both, and nothing at all reaches the tracker.
+HA3="$(mkdedicated "git@github.com:acme/ha-board3.git")"
+HA3_STATE="$(mktemp)"
+printf '{}' > "$HA3_STATE"
+bvrun "$HA3" "$HA3_STATE" -- new ha3-open --title "Open work" > /dev/null
+HA_OUT3="$(bvrun "$HA3" "$HA3_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- mirror)"
+HA_RC3=$?
+chk "mismatched host account: mirror refuses" "1" "$([ "$HA_RC3" != 0 ] && echo 1 || echo 0)"
+chk_contains "names the recorded account" "$HA_OUT3" "dev-a"
+chk_contains "and the active one" "$HA_OUT3" "dev-b"
+chk_contains "cites ADR 0018" "$HA_OUT3" "ADR 0018"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA3_STATE" create)"
+chk "not even a list call" "0" "$(bvcalls "$HA3_STATE" list)"
+
+# whoami itself failing (an unconfirmable active account): refused too, same as a mismatch.
+HA4="$(mkdedicated "git@github.com:acme/ha-board4.git")"
+HA4_STATE="$(mktemp)"
+printf '{}' > "$HA4_STATE"
+bvrun "$HA4" "$HA4_STATE" -- new ha4-open --title "Open work" > /dev/null
+HA_OUT4="$(bvrun "$HA4" "$HA4_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_FAIL=whoami -- mirror)"
+HA_RC4=$?
+chk "an unconfirmable active account: mirror refuses" "1" "$([ "$HA_RC4" != 0 ] && echo 1 || echo 0)"
+chk_contains "and says it could not confirm" "$HA_OUT4" "could not confirm"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA4_STATE" create)"
+
+# No hostAccount recorded at all: proceeds exactly as before this ADR, and asks the adapter nothing.
+HA5="$(mkdedicated "git@github.com:acme/ha-board5.git")"
+HA5_STATE="$(mktemp)"
+printf '{}' > "$HA5_STATE"
+bvrun "$HA5" "$HA5_STATE" -- new ha5-open --title "Open work" > /dev/null
+HA_OUT5="$(bvrun "$HA5" "$HA5_STATE" -- mirror)"
+chk "no hostAccount recorded: mirror proceeds" "0" "$?"
+chk "and zero whoami calls — nothing was asked" "0" "$(bvcalls "$HA5_STATE" whoami)"
+
+# export --to-issue takes the same guard, before any issue is created — single doc first.
+HA6="$(mkdedicated "git@github.com:acme/ha-board6.git")"
+HA6_STATE="$(mktemp)"
+printf '{}' > "$HA6_STATE"
+bvrun "$HA6" "$HA6_STATE" -- new ha6-work --title "Delegate me" > /dev/null
+HA_OUT6="$(bvrun "$HA6" "$HA6_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- export ha6-work --to-issue)"
+HA_RC6=$?
+chk "export --to-issue mismatch: refused" "1" "$([ "$HA_RC6" != 0 ] && echo 1 || echo 0)"
+chk_contains "cites ADR 0018 too" "$HA_OUT6" "ADR 0018"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA6_STATE" create)"
+
+# ...and the bundle path — cheap to add given the same fixtures, so it is.
+HA7="$(mkdedicated "git@github.com:acme/ha-board7.git")"
+HA7_STATE="$(mktemp)"
+printf '{}' > "$HA7_STATE"
+bvrun "$HA7" "$HA7_STATE" -- new ha7-kid --title "Child work" > /dev/null
+bvrun "$HA7" "$HA7_STATE" -- new ha7-parent --orchestrator --children ha7-kid --title "Bundle" > /dev/null
+HA_OUT7="$(bvrun "$HA7" "$HA7_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- export ha7-parent --to-issue)"
+HA_RC7=$?
+chk "export --to-issue bundle mismatch: refused" "1" "$([ "$HA_RC7" != 0 ] && echo 1 || echo 0)"
+chk "no create call reaches the tracker (parent or child)" "0" "$(bvcalls "$HA7_STATE" create)"
+
+printf '\ncross-board waits have a recognised form (ADR 0018) — list resolves them read-only\n'
+# `blocked_on: external — HOST/OWNER/REPO#ID` is the recognised form (several joined by "; "). When
+# the developer's own `boards` map (handoff.local.json — the same per-developer file as
+# hostAccount/handle above) names a clone of that board on this machine AND that clone's own git
+# remote really normalizes to the key the reference names, `list` appends the resolved status to the
+# entry. Everything else about blocked_on stays exactly as free text, untouched. mkdedicated/bvrun
+# are reused from the board-visibility block above.
+
+# A DEDICATED, grouped (subfolder-layout) board, built the same way mkdedicated builds a flat one —
+# reused below for the "lives in a group section" case, so that case costs nothing extra to add.
+mkdedicated_grouped() { # url -> a dedicated board, subfolder layout, groups alpha/beta
+  local b bare
+  b="$(mkshared_grouped)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '%s' "$b"
+}
+
+XA="$(mkdedicated "git@github.com:acme/board-a.git")"
+XA_STATE="$(mktemp)"
+printf '{}' > "$XA_STATE"
+XB="$(mkdedicated "git@github.com:acme/team-board.git")"
+XB_STATE="$(mktemp)"
+printf '{}' > "$XB_STATE"
+bvrun "$XB" "$XB_STATE" -- new b-dep --title "B's own work" > /dev/null
+
+mkdir -p "$XA/.agents"
+printf '{ "boards": { "github.com/acme/team-board": "%s" } }\n' "$XB" > "$XA/.agents/handoff.local.json"
+
+bvrun "$XA" "$XA_STATE" -- new a-blocked --title "Blocked on B" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XA_LIST1="$(bvrun "$XA" "$XA_STATE" -- list)"
+# The entry displays exactly as typed (no "-handoff" suffix here — only the lookup normalizes it),
+# with the resolved status appended.
+chk_contains "a mapped, matching board resolves the reference in list" "$XA_LIST1" "github.com/acme/team-board#b-dep → open"
+
+# B closes its side — A's next list picks up the change. Still read-only: nothing above wrote to B.
+bvrun "$XB" "$XB_STATE" -- claim b-dep "closing it out" > /dev/null
+bvrun "$XB" "$XB_STATE" -- release b-dep --status done --verified-by "read the code" > /dev/null
+XA_LIST2="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "closing the blocker on B is reflected on A's next list" "$XA_LIST2" "github.com/acme/team-board#b-dep → done"
+
+# The reference's id resolves the same whether the "-handoff" suffix is spelled out or not.
+bvrun "$XA" "$XA_STATE" -- new a-blocked2 --title "Blocked on B, suffix spelled out" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked2 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked2 --status blocked --blocked-on "external: github.com/acme/team-board#b-dep-handoff" > /dev/null
+XA_LIST3="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "the -handoff suffix spelled out resolves the same as its bare id" "$XA_LIST3" "github.com/acme/team-board#b-dep-handoff → done"
+
+# B is mapped, but the mapped path's own remote does NOT match the key it is filed under — the
+# mapping is not trusted, so the entry stays plain text.
+XC="$(mkdedicated "git@github.com:acme/not-team-board.git")"
+XD="$(mkdedicated "git@github.com:acme/board-d.git")"
+XD_STATE="$(mktemp)"
+printf '{}' > "$XD_STATE"
+mkdir -p "$XD/.agents"
+printf '{ "boards": { "github.com/acme/team-board": "%s" } }\n' "$XC" > "$XD/.agents/handoff.local.json"
+bvrun "$XD" "$XD_STATE" -- new d-blocked --title "Blocked, wrong mapping" > /dev/null
+bvrun "$XD" "$XD_STATE" -- claim d-blocked "starting" > /dev/null
+bvrun "$XD" "$XD_STATE" -- release d-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XD_LIST="$(bvrun "$XD" "$XD_STATE" -- list)"
+chk_contains "a mismatched mapping still shows the plain reference" "$XD_LIST" "external — github.com/acme/team-board#b-dep"
+chk "but never gets an arrow — the mapping is not trusted" "0" "$(printf '%s' "$XD_LIST" | grep -c 'team-board#b-dep →')"
+
+# B is not mapped at all — plain text, exactly as before this feature.
+XE="$(mkdedicated "git@github.com:acme/board-e.git")"
+XE_STATE="$(mktemp)"
+printf '{}' > "$XE_STATE"
+bvrun "$XE" "$XE_STATE" -- new e-blocked --title "Blocked, unmapped" > /dev/null
+bvrun "$XE" "$XE_STATE" -- claim e-blocked "starting" > /dev/null
+bvrun "$XE" "$XE_STATE" -- release e-blocked --status blocked --blocked-on "external: github.com/acme/team-board#b-dep" > /dev/null
+XE_LIST="$(bvrun "$XE" "$XE_STATE" -- list)"
+chk_contains "an unmapped board's reference is left exactly as plain text" "$XE_LIST" "external — github.com/acme/team-board#b-dep"
+chk "no arrow at all" "0" "$(printf '%s' "$XE_LIST" | grep -c '→')"
+# Ordinary free-text blockers were never shown by `list`, and the cross-board form must not start
+# showing them: only a row carrying a recognised reference gains the blocker column.
+(cd "$XA" && ./handoff new xa-plain --title "Waits on a person" --audience acme-api > /dev/null 2>&1)
+(cd "$XA" && HANDOFF_SESSION_ID=xa-plain ./handoff claim xa-plain "x" > /dev/null 2>&1 \
+  && HANDOFF_SESSION_ID=xa-plain ./handoff release xa-plain --status blocked --blocked-on "external: the platform team — CHG-4471" > /dev/null 2>&1)
+chk "a free-text blocker is still not shown by list" "0" \
+  "$(cd "$XA" && ./handoff list 2>&1 | grep 'xa-plain-handoff' | grep -c '⛔')"
+
+# The id is absent on the (correctly mapped) board.
+bvrun "$XA" "$XA_STATE" -- new a-blocked3 --title "Blocked on a phantom id" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked3 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked3 --status blocked --blocked-on "external: github.com/acme/team-board#no-such-id" > /dev/null
+XA_LIST4="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "an id absent from the mapped board reads as such" "$XA_LIST4" "github.com/acme/team-board#no-such-id → not on that board"
+
+# Two entries joined by "; " — each is resolved on its own.
+bvrun "$XB" "$XB_STATE" -- new b-dep2 --title "B's second open item" > /dev/null
+bvrun "$XA" "$XA_STATE" -- new a-blocked4 --title "Blocked on two things" > /dev/null
+bvrun "$XA" "$XA_STATE" -- claim a-blocked4 "starting" > /dev/null
+bvrun "$XA" "$XA_STATE" -- release a-blocked4 --status blocked \
+  --blocked-on "external: github.com/acme/team-board#b-dep2; external: github.com/acme/team-board#no-such-id" > /dev/null
+XA_LIST5="$(bvrun "$XA" "$XA_STATE" -- list)"
+chk_contains "the first of two joined entries resolves" "$XA_LIST5" "team-board#b-dep2 → open"
+chk_contains "and the second resolves independently" "$XA_LIST5" "team-board#no-such-id → not on that board"
+
+# A grouped (subfolder) board — the doc lives in a group section, not at B's root.
+XG="$(mkdedicated_grouped "git@github.com:acme/grouped-board.git")"
+XF="$(mkdedicated "git@github.com:acme/board-f.git")"
+XF_STATE="$(mktemp)"
+printf '{}' > "$XF_STATE"
+mkdir -p "$XF/.agents"
+printf '{ "boards": { "github.com/acme/grouped-board": "%s" } }\n' "$XG" > "$XF/.agents/handoff.local.json"
+bvrun "$XF" "$XF_STATE" -- new f-blocked --title "Blocked on a grouped board" > /dev/null
+bvrun "$XF" "$XF_STATE" -- claim f-blocked "starting" > /dev/null
+bvrun "$XF" "$XF_STATE" -- release f-blocked --status blocked --blocked-on "external: github.com/acme/grouped-board#a-work" > /dev/null
+XF_LIST="$(bvrun "$XF" "$XF_STATE" -- list)"
+chk_contains "a doc living in a mapped board's group section still resolves" "$XF_LIST" "grouped-board#a-work → open"
+
+# --- no network, ever: A's list must never fetch/pull/ls-remote/clone, on itself or on B ----
+REALGIT="$(command -v git)"
+GITLOG="$(mktemp)"
+GITSHIM="$(mktemp -d)"
+cat > "$GITSHIM/git" << SHIM
+#!/bin/sh
+case " \$* " in
+  *" fetch "*|*" pull "*|*" ls-remote "*|*" clone "*) echo "\$@" >> "$GITLOG" ;;
+esac
+exec "$REALGIT" "\$@"
+SHIM
+chmod +x "$GITSHIM/git"
+XB_PORCELAIN_BEFORE="$(git -C "$XB" status --porcelain)"
+(cd "$XA" && PATH="$GITSHIM:$PATH" HANDOFF_SESSION_ID="bv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$XA_STATE" ./handoff list > /dev/null 2>&1)
+chk "list never invokes fetch/pull/ls-remote/clone, on A or on B" "" "$(cat "$GITLOG")"
+chk "and B's own worktree is untouched by A's list" "$XB_PORCELAIN_BEFORE" "$(git -C "$XB" status --porcelain)"
 
 # --- the banner says whether it is YOUR review ------------------------------
 # Before this field every reader saw one marker, so "somebody should look" and "you should look"
@@ -3105,8 +3619,17 @@ pb_ext() { # json fragment appended to the external block
 pbh() { # visibility subcommand... -> the board CLI against a tracker reporting that visibility
   local v="$1"
   shift
-  (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
-    FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY="$v" ./.agents/handoff/handoff "$@") 2>&1
+  # "public" is scoped to the TRACKER's own repo (acme/open) via FAKE_TRACKER_PUBLIC_REPOS, not a
+  # blanket FAKE_TRACKER_VISIBILITY — that would also make the board's OWN remote (acme/acme-api,
+  # PB's mkboard origin) read public, which ADR 0018 checks separately and refuses for a different
+  # reason, breaking these ADR 0013 (tracker-only) assertions.
+  if [ "$v" = public ]; then
+    (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+      FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/open ./.agents/handoff/handoff "$@") 2>&1
+  else
+    (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+      FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY="$v" ./.agents/handoff/handoff "$@") 2>&1
+  fi
 }
 pb_ext ''
 pbh private new p-shared --title "Shared work" --share public > /dev/null
@@ -3307,6 +3830,126 @@ for d in dm-a dm-b dm-c; do
 done
 chk "claim does not warn once every prerequisite landed" "" \
   "$(hb "$DM" claim dm-after "go" | grep 'prerequisites')"
+
+printf '\nmachine references are rewritten on a board with a remote (ADR 0020)\n'
+# A board is "in-repo with a remote" from `mkboard` above -- its docs travel with that repo's own
+# commits. `hbenv` runs the CLI with fake HOME/WORKSPACE_ROOT so the rewrite is exercised against
+# paths that are never the real machine's.
+hbenv() { # repo HOME WORKSPACE_ROOT subcommand... -> stdout+stderr merged
+  local r="$1" h="$2" w="$3"
+  shift 3
+  (cd "$r" && HOME="$h" WORKSPACE_ROOT="$w" ./.agents/handoff/handoff "$@") 2>&1
+}
+# A board that IS a git repo (so board_remote's own-worktree check has something to walk) but
+# carries no `origin` -- the "no remote" fixture ADR 0020 says must never be touched.
+mkboard_no_origin() { # -> path to a repo with no remote at all
+  local r
+  r="$(mktemp -d)"
+  git -C "$r" init -q
+  git -C "$r" config user.email "test@example.com"
+  git -C "$r" config user.name "test"
+  printf 'x\n' > "$r/README.md"
+  git -C "$r" add -A
+  git -C "$r" commit -qm "initial commit"
+  mkdir -p "$r/.agents/handoff/scripts" "$r/.agents/handoff/templates" "$r/.agents/handoff/archive"
+  cp "$SRC/handoff" "$r/.agents/handoff/handoff"
+  cp "$SRC/config.sh" "$r/.agents/handoff/scripts/config.sh"
+  cp "$TPL"/handoff-*-template.md "$r/.agents/handoff/templates/"
+  chmod +x "$r/.agents/handoff/handoff"
+  printf '%s' "$r"
+}
+MR_HOME="/Users/mr-test-home"
+MR_WS="/Users/mr-test-home/workspace"
+MR="$(mkboard)"
+MRB="$MR/.agents/handoff"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-one --title "Machine refs" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-one "start" > /dev/null
+MRD="$MRB/mr-one-handoff.md"
+MR_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-one \
+  "touched $MR_HOME/proj/x.txt and $MR_WS/svc-a/y" > /dev/null 2> "$MR_ERR")
+chk_contains "checkpoint rewrites a home path to ~" "$(cat "$MRD")" "~/proj/x.txt"
+chk_contains "checkpoint rewrites a workspace path to the literal token" "$(cat "$MRD")" '$WORKSPACE_ROOT/svc-a/y'
+chk "the raw home path does not survive in the doc" "no" "$(grep -qF "$MR_HOME/proj" "$MRD" && echo yes || echo no)"
+chk "the raw workspace path does not survive in the doc" "no" "$(grep -qF "$MR_WS/svc-a" "$MRD" && echo yes || echo no)"
+chk_contains "stderr names the workspace-path rule" "$(cat "$MR_ERR")" "workspace-path"
+chk_contains "stderr names the home-path rule" "$(cat "$MR_ERR")" "home-path"
+chk "stderr never carries the matched path" "no" "$(grep -qF "$MR_HOME/proj" "$MR_ERR" && echo yes || echo no)"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-two --title "Warn-only refs" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-two "start" > /dev/null
+MR2D="$MRB/mr-two-handoff.md"
+MR2_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-two \
+  "sibling ${MR_HOME}2/z also localhost:5433 127.0.0.1:8080 db.local /Users/someone-else/a" \
+  > /dev/null 2> "$MR2_ERR")
+chk_contains "a longer-prefix sibling is left alone, not rewritten" "$(cat "$MR2D")" "${MR_HOME}2/z"
+chk_contains "localhost:PORT is left in the doc" "$(cat "$MR2D")" "localhost:5433"
+chk_contains "127.0.0.1:PORT is left in the doc" "$(cat "$MR2D")" "127.0.0.1:8080"
+chk_contains "a *.local hostname is left in the doc" "$(cat "$MR2D")" "db.local"
+chk_contains "another user's home path is left in the doc" "$(cat "$MR2D")" "/Users/someone-else/a"
+chk_contains "stderr flags local-port" "$(cat "$MR2_ERR")" "local-port"
+chk_contains "stderr flags local-host" "$(cat "$MR2_ERR")" "local-host"
+chk_contains "stderr flags other-home-path" "$(cat "$MR2_ERR")" "other-home-path"
+chk "stderr never carries the matched port" "no" "$(grep -qF "5433" "$MR2_ERR" && echo yes || echo no)"
+chk "stderr never carries the matched username" "no" "$(grep -qF "someone-else" "$MR2_ERR" && echo yes || echo no)"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-verify --title "Verify field" > /dev/null
+MRVD="$MRB/mr-verify-handoff.md"
+set_field "$MRVD" verify "\"cat $MR_HOME/x\""
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-verify "start" > /dev/null
+MRV_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-verify \
+  > /dev/null 2> "$MRV_ERR")
+chk "the verify: line is left byte-for-byte, home path and all" "\"cat $MR_HOME/x\"" \
+  "$(sed -n 's/^verify: //p' "$MRVD" | head -1)"
+chk_contains "stderr reports it as home-path-in-verify, not home-path" "$(cat "$MRV_ERR")" "home-path-in-verify"
+
+printf '\nmachine references are left alone on a board with no remote (ADR 0020)\n'
+NR="$(mkboard_no_origin)"
+NRB="$NR/.agents/handoff"
+hbenv "$NR" "$MR_HOME" "$MR_WS" new nr-one --title "No remote" > /dev/null
+hbenv "$NR" "$MR_HOME" "$MR_WS" claim nr-one "start" > /dev/null
+NRD="$NRB/nr-one-handoff.md"
+NR_ERR="$(mktemp)"
+(cd "$NR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint nr-one \
+  "touched $MR_HOME/proj/x.txt and $MR_WS/svc-a/y" > /dev/null 2> "$NR_ERR")
+chk_contains "no board_remote — the raw home path survives untouched" "$(cat "$NRD")" "$MR_HOME/proj/x.txt"
+chk_contains "no board_remote — the raw workspace path survives untouched" "$(cat "$NRD")" "$MR_WS/svc-a/y"
+chk "no board_remote — nothing is printed to stderr" "" "$(cat "$NR_ERR")"
+
+printf '\nmachine references are rewritten by release --verified-by too (ADR 0020)\n'
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-rel --title "Release rewrite" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-rel "start" > /dev/null
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff release mr-rel \
+  --status done --verified-by "ran $MR_HOME/bin/check" > /dev/null 2>&1)
+MRRA="$MRB/archive/mr-rel-handoff.md"
+chk_contains "stored verified_by holds the rewritten path" "$(cat "$MRRA")" "~/bin/check"
+chk "the raw home path does not survive in verified_by" "no" "$(grep -qF "$MR_HOME/bin" "$MRRA" && echo yes || echo no)"
+
+printf '\nmachine references are rewritten in an exported brief, always (ADR 0020)\n'
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-exp --title "Export rewrite" > /dev/null
+MRED="$MRB/mr-exp-handoff.md"
+awk -v add="touched $MR_HOME/proj/export.txt" \
+  '/^## Context$/ { print; print ""; print add; next } { print }' "$MRED" > "$MRED.tmp" && cat "$MRED.tmp" > "$MRED" && rm -f "$MRED.tmp"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff export mr-exp --to "Alice" --no-claim > /dev/null 2>&1)
+EXP_BRIEF="$MRB/briefs/mr-exp-handoff.brief.md"
+chk_contains "the exported brief carries the rewritten home path" "$(cat "$EXP_BRIEF")" "~/proj/export.txt"
+chk "the raw home path does not survive in the brief" "no" "$(grep -qF "$MR_HOME/proj" "$EXP_BRIEF" && echo yes || echo no)"
+
+printf '\nmachine references are rewritten by move, on the staged copy, onto a target with a remote (ADR 0020)\n'
+MVS="$(mkboard)"
+MVT="$(mkboard)"
+hbenv "$MVS" "$MR_HOME" "$MR_WS" new mv-mr --title "Move rewrite" > /dev/null
+MVS_DOC="$MVS/.agents/handoff/mv-mr-handoff.md"
+awk -v add="touched $MR_HOME/proj/move.txt" \
+  '/^## Context$/ { print; print ""; print add; next } { print }' "$MVS_DOC" > "$MVS_DOC.tmp" && cat "$MVS_DOC.tmp" > "$MVS_DOC" && rm -f "$MVS_DOC.tmp"
+hbenv "$MVS" "$MR_HOME" "$MR_WS" claim mv-mr "moving" > /dev/null
+(cd "$MVS" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff move mv-mr --to "$MVT/.agents/handoff" > /dev/null 2>&1)
+MVT_DOC="$MVT/.agents/handoff/mv-mr-handoff.md"
+chk_contains "the moved copy carries the rewritten home path" "$(cat "$MVT_DOC")" "~/proj/move.txt"
+chk "the raw home path does not survive on the target board" "no" "$(grep -qF "$MR_HOME/proj" "$MVT_DOC" && echo yes || echo no)"
 
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it

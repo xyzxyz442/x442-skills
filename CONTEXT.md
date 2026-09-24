@@ -29,12 +29,25 @@ agents, or repositories coordinates through. The board of record is a git reposi
 remote.
 _Avoid_: tracker, backlog, queue
 
-**Shared board**:
-A board owned by no member repository, coordinating several. Distinguished from an
+**Dedicated board**:
+A board in its own repository, owned by no member repository. Distinguished from an
 **in-repo board**, which lives inside the single repository it serves.
+_Avoid_: shared board, standalone board (standalone is a document type)
+
+**Local board**:
+A board with no remote; its material stays on one machine.
+_Avoid_: scratch board, offline board
+
+**Personal board**:
+A board whose audience is one developer — a word for people, never a setting.
+_Avoid_: private board (every board is private), scratch board
+
+**Team board**:
+A board whose audience is a team.
+_Avoid_: shared board
 
 **Group**:
-A named partition of a shared board, holding one set of peer repositories. A board may have
+A named partition of a dedicated board, holding one set of peer repositories. A board may have
 many; a board with one is the ordinary case.
 _Avoid_: team, workspace, namespace
 
@@ -44,15 +57,33 @@ group's layout, not the group itself.
 
 **Trust boundary**:
 The line between organizations whose material must not mix — an employer, a client, a person's
-own projects. One board per trust boundary. Read from a board's git remote host and owner, not
-declared.
+own projects. Read from a board's git remote host and owner, never declared, and never the host
+account used to reach it. One boundary holds one or more boards, and no board spans two; a
+child board narrows a boundary without leaving it.
 _Avoid_: tenant, account
+
+**Child board**:
+A board declaring it is narrower than a **parent board**: work moves into it freely, out of it
+only by naming the target. A child under another owner is linked from both sides and still
+never receives restricted work.
+_Avoid_: sub-board, nested board
+
+**Host account**:
+The host identity a developer uses for one board, recorded per developer. It never defines or
+joins a trust boundary.
+_Avoid_: gh user, credential, identity
 
 **External tracker**:
 The project tracker a handoff's issue is mirrored into — the one declared for its **home**
 repository on the board, where planning lives. A sprint tool is linked by reference and never
 mirrored; an issue tracker the team uses as its backlog can be. Never the board.
 _Avoid_: board, backend, sync target
+
+**Tracker rule**:
+A group-level declaration that each member repository mirrors into its own tracker.
+Distinguished from a **tracker entry**, which names one repository's tracker and overrides a
+rule.
+_Avoid_: default tracker, tracker template
 
 **Home**:
 The repository whose tracker owns a handoff's issue, pinned when the handoff is created and never
@@ -61,9 +92,9 @@ changes freely — a flip relabels the issue, it never moves it.
 _Avoid_: owner repo, target repo, primary repo
 
 **Projection**:
-How much of a handoff its issue carries — `summary` (the current state) by default, or `full`
-(adding context and verification) where a tracker asks for it. Ruled-out options, notes and
-evidence are sent under neither, and stay on the board.
+How much of a handoff its issue carries — `summary` (the current state) by default, `full`
+adding context and verification, or `complete` adding Decisions, Ruled out and Evidence, on a
+private tracker only. Activity is never sent, at any level.
 _Avoid_: sync level, detail level, fidelity
 
 **Board identity**:
@@ -84,9 +115,10 @@ while the handoff is still open. It is reported, never reconciled — status cha
 board, with evidence — and is recorded in a generated file, not on the document.
 _Avoid_: out of sync, conflict, stale mirror
 
-A board a developer keeps for their own drafts is an ordinary board with no role of its own, and
-one that never mirrors.
-_Avoid_: personal board, private board, scratch board
+**Machine reference**:
+A path, host, or port that resolves on one machine only. Rewritten or flagged before it leaves
+one.
+_Avoid_: local path, private path
 
 **Local config**:
 One developer's board and section choices for one checkout, never committed. Outranks the

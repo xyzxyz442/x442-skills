@@ -14,6 +14,9 @@
 #   close     {"repo", "number", "comment"}              -> {}
 #   comments  {"repo", "number"}                         -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                  -> {"visibility": $FAKE_TRACKER_VISIBILITY, default "private"}
+#   whoami    {}                                          -> {"login": $FAKE_TRACKER_LOGIN, default "fake-user"}
+#     ADR 0018's host-account guard. Honours $FAKE_TRACKER_FAIL=whoami like every other op (the
+#     generic check at the top of this file), and is recorded on "calls" like every other op too.
 #
 # Sub-issue links (ADR 0014): "children" holds this issue's linked child NUMBERS. Reporting it on
 # `list` is what tells the CLI this adapter supports links at all — an adapter that omits it is never
@@ -133,6 +136,8 @@ elif op == "visibility":
         out = {"visibility": os.environ.get("FAKE_TRACKER_VISIBILITY", "private")}
 elif op == "comments":
     out = issue(req["number"]).get("comments", [])
+elif op == "whoami":
+    out = {"login": os.environ.get("FAKE_TRACKER_LOGIN", "fake-user")}
 else:
     sys.stderr.write("fake-tracker: unknown op %s\n" % op)
     sys.exit(2)

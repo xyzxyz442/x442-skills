@@ -176,6 +176,46 @@ def root_commit(repo: str) -> "str | None":
         return None
 
 
+def normalize_origin(url: str) -> str:
+    """host/owner/repo from a git remote URL.
+
+    ADR 0020 — a group-level tracker RULE resolves a member's target repository from this value,
+    recorded at registration, never from a live `git remote`. It must therefore match
+    repo_origin_norm() in the payload CLI (handoff) exactly, or the two sides would compute
+    different repositories for the same origin. Same five steps, same order: strip scheme, strip
+    embedded credentials, replace the FIRST ":" (the SSH host/path separator) with "/", strip a
+    trailing ".git", strip trailing slashes.
+    """
+    s = re.sub(r"^[a-zA-Z+][a-zA-Z0-9+.-]*://", "", url)
+    s = re.sub(r"^[^/@]*@", "", s)
+    s = s.replace(":", "/", 1)
+    s = re.sub(r"\.git$", "", s)
+    return s.rstrip("/")
+
+
+def member_origin(repo: str) -> "str | None":
+    """The member's `origin` remote, normalized — or None when it cannot be read.
+
+    ADR 0020: recorded once at registration so a rule-derived tracker resolves without a live
+    checkout — a CI mirror has no member repositories on disk.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        url = out.stdout.strip()
+        if out.returncode != 0 or not url:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    norm = normalize_origin(url)
+    return norm or None
+
+
 def load_layer(
     path: str, errors: list, warnings: list
 ) -> "tuple[dict, str | None, str | None, str | None]":
@@ -384,6 +424,34 @@ def _selftest() -> int:
     assert user_layer_contributes({"g": {}}, None, None, None)
     assert user_layer_contributes({}, "./board", None, None)
 
+    # --- ADR 0020: normalize_origin matches repo_origin_norm() in the payload CLI exactly --------
+    # (same fixtures as handoff.selftest.sh's `repo_origin_norm` block, so a divergence between the
+    # bash and python implementations is caught on either side.)
+    assert (
+        normalize_origin("git@github.com:acme/acme-api.git")
+        == "github.com/acme/acme-api"
+    )
+    assert (
+        normalize_origin("https://github.com/acme/acme-api.git")
+        == "github.com/acme/acme-api"
+    )
+    assert (
+        normalize_origin("https://user:tok@github.com/acme/acme-api.git")
+        == "github.com/acme/acme-api"
+    )
+    assert (
+        normalize_origin("https://github.com/acme/acme-api")
+        == "github.com/acme/acme-api"
+    )
+    assert (
+        normalize_origin("https://github.com/acme/acme-api/")
+        == "github.com/acme/acme-api"
+    )
+    assert ":" not in normalize_origin("git@github.com:acme/acme-api.git")
+    # A path that is not a readable git repo yields no origin — never a guess.
+    with tempfile.TemporaryDirectory() as not_a_repo:
+        assert member_origin(not_a_repo) is None
+
     print("register-cross-repo-handoff resolve selftest OK")
     return 0
 
@@ -506,6 +574,7 @@ def main() -> int:
                     "writable": os.access(p, os.W_OK) if exists else None,
                     "head_ct": head_commit_time(p) if exists and is_git else None,
                     "root_commit": root_commit(p) if exists and is_git else None,
+                    "origin": member_origin(p) if exists and is_git else None,
                 }
             )
             if not exists:

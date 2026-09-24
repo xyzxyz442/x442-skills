@@ -25,6 +25,21 @@ INSTALLER="$HERE/setup-handoff.sh"
 # prompt outright is cheap insurance against that, on a push that must never succeed anyway.
 export GIT_TERMINAL_PROMPT=0
 
+# ADR 0018: setup now asks the board's own remote for its visibility before installing (the same
+# tracker-github.sh adapter the mirror uses). Every board below carries a github.com remote, so
+# without a substitute adapter that check would shell out to the REAL `gh` — exactly the network
+# operation this suite's own safety note above says never happens. HANDOFF_TRACKER_ADAPTER is the
+# same seam the CLI's own tests already fake this adapter with (harness/lib/fake-tracker.sh);
+# exporting it here, once, keeps every existing $INSTALLER call below offline and deterministic —
+# default visibility "private", so none of them is affected.
+FAKE_ADAPTER="$(cd "$HERE/../../../.." && pwd)/harness/lib/fake-tracker.sh"
+[ -f "$FAKE_ADAPTER" ] || {
+  echo "setup-handoff.selftest.sh: cannot find harness/lib/fake-tracker.sh at $FAKE_ADAPTER" >&2
+  exit 1
+}
+export HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER"
+export FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json"
+
 P=0
 F=0
 
@@ -273,6 +288,89 @@ OUT9="$("$INSTALLER" --board-only "$B9" --groups core --with-mirror-workflow 2>&
 WF9="$B9/.github/workflows/handoff-mirror.yml"
 chk_contains "trackers beyond the board's own repo need the named secret" "$(cat "$WF9")" 'GH_TOKEN: ${{ secrets.HANDOFF_TRACKER_TOKEN }}'
 chk_contains "and the ACTION NEEDED line names every tracker repository" "$OUT9" "example-invalid/other-tracker"
+
+# ADR 0020 — a group-level tracker RULE is the same kind of committed policy as `trackers` itself:
+# dropping it on a re-install would silently take a whole group's mirror down.
+seed_tracker_rules() { # board-dir json-object-of-rules
+  python3 -c '
+import json, sys
+path, rules = sys.argv[1], sys.argv[2]
+json.dump({"trackerRules": json.loads(rules)}, open(path, "w"))
+' "$1/handoff.json" "$2"
+}
+B8R="$(mkgitboard)"
+git -C "$B8R" remote add origin "$GH_FAKE_REMOTE"
+seed_tracker_rules "$B8R" '{"fleet": {"kind": "issues", "system": "github", "projection": "summary"}}'
+OUT8R="$("$INSTALLER" --board-only "$B8R" --groups core 2>&1)"
+ST8R=$?
+chk "trackerRules board: installer succeeds" "0" "$ST8R"
+chk "trackerRules survives a re-install" "issues" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackerRules") or {}).get("fleet", {}).get("kind", ""))' "$B8R/handoff.json")"
+chk "the projection setting inside the rule survives too" "summary" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackerRules") or {}).get("fleet", {}).get("projection", ""))' "$B8R/handoff.json")"
+
+printf '\n9. child board links (ADR 0018)\n'
+# A child's parent link and a parent's accepted children are trust-boundary decisions. A re-install
+# that dropped them would turn a child back into an ordinary board — one that moves work out of
+# itself unannounced — or break a cross-owner link both sides agreed to.
+B10="$(mkgitboard)"
+python3 -c 'import json,sys; json.dump({"parent": "github.com/acme/team-board", "acceptChildren": ["github.com/dev-a/handoff-board"]}, open(sys.argv[1], "w"))' "$B10/handoff.json"
+"$INSTALLER" --board-only "$B10" --groups core > /dev/null 2>&1
+chk "a child's parent link survives a re-install" "github.com/acme/team-board" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent", ""))' "$B10/handoff.json")"
+chk "a parent's accepted children survive too" "github.com/dev-a/handoff-board" \
+  "$(python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1])).get("acceptChildren") or []))' "$B10/handoff.json")"
+
+printf '\n10. setup refuses a board whose OWN remote is public (ADR 0018)\n'
+# Distinct from tracker visibility (ADR 0013): this is the board repository itself, checked once,
+# before anything is written.
+B11="$(mkgitboard)"
+git -C "$B11" remote add origin "$GH_FAKE_REMOTE"
+OUT11="$(HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER" FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json" \
+FAKE_TRACKER_VISIBILITY=public "$INSTALLER" --board-only "$B11" --groups core 2>&1)"
+ST11=$?
+chk "a public board remote: installer refuses with a nonzero exit" "nonzero" "$([ "$ST11" -ne 0 ] && echo nonzero || echo zero)"
+chk_contains "and names the remote" "$OUT11" "example-invalid/no-such-board"
+chk_contains "and cites ADR 0018" "$OUT11" "ADR 0018"
+chk "and writes no payload — not even the CLI" "no" "$([ -f "$B11/handoff" ] && echo yes || echo no)"
+chk "nor the board config" "no" "$([ -f "$B11/handoff.json" ] && echo yes || echo no)"
+
+B12="$(mkgitboard)"
+git -C "$B12" remote add origin "$GH_FAKE_REMOTE"
+OUT12="$(HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER" FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json" \
+FAKE_TRACKER_FAIL=visibility "$INSTALLER" --board-only "$B12" --groups core 2>&1)"
+ST12=$?
+chk "an unconfirmable board remote (the visibility call fails): installer still succeeds" "0" "$ST12"
+chk_contains "but warns first" "$OUT12" "could not confirm"
+chk_contains "naming ADR 0018" "$OUT12" "ADR 0018"
+chk "and the board is written all the same" "yes" "$([ -f "$B12/handoff.json" ] && echo yes || echo no)"
+
+B13="$(mkgitboard)"
+git -C "$B13" remote add origin "$GH_FAKE_REMOTE"
+OUT13="$(HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER" FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json" \
+  "$INSTALLER" --board-only "$B13" --groups core 2>&1)"
+# Distinct from "mentions ADR 0018 at all" — section 11 below asserts this SAME install also
+# prints the (unrelated, always-on-a-dedicated-board) hostAccount note, which cites ADR 0018 too.
+# This checks for the WARNING specifically, by its own wording, not the citation.
+chk "a private board remote (the default) prints no ADR 0018 warning" "0" "$(printf '%s' "$OUT13" | grep -c 'warning — could not confirm')"
+
+# An IN-REPO board has no remote of its own: the one git reports is the code repository's, whose
+# audience that repository already chose. An open-source project's board is public by design
+# (ADR 0013), so a public code repository must still take an in-repo board.
+B14="$(mkparentrepo)"
+OUT14="$(HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER" FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json" \
+FAKE_TRACKER_VISIBILITY=public "$INSTALLER" "$B14" --tools claude --primary none 2>&1)"
+ST14=$?
+chk "an in-repo board in a public code repository still installs" "0" "$ST14"
+chk "and is not warned about — its remote is not the board's" "0" "$(printf '%s' "$OUT14" | grep -c 'ADR 0018')"
+
+printf '\n11. host account note (ADR 0018) — dedicated boards only, informational, never a warning\n'
+# OUT13 above (--board-only, a dedicated board by construction) and OUT14 above (an in-repo board)
+# are reused rather than installing twice more — the note's presence/absence is the only new thing
+# being asked of output this suite already captured.
+chk_contains "a dedicated board's install suggests recording hostAccount" "$OUT13" "hostAccount"
+chk_contains "and cites ADR 0018" "$OUT13" "ADR 0018"
+chk "an in-repo install prints no such note" "0" "$(printf '%s' "$OUT14" | grep -c 'hostAccount')"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

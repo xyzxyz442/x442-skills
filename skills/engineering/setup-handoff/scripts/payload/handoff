@@ -182,6 +182,18 @@ HANDOFF_ENVIRONMENTS="${HANDOFF_ENVIRONMENTS:-$HC_ENVIRONMENTS}"
 # Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
 # board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
 REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
+# The host account (ADR 0018): which login this developer must be active as before mirror or
+# export --to-issue send anything. Per-developer, from handoff.local.json only (config.sh already
+# drops it from every committed layer) — env wins for the same one-off-override reason as HANDLE.
+# Empty is the normal state and means the guard asks nothing (host_account_guard, below).
+HOST_ACCOUNT="${HANDOFF_HOST_ACCOUNT:-$HC_HOST_ACCOUNT}"
+# The developer's own map of OTHER boards on this machine (ADR 0018): a JSON object, from
+# handoff.local.json only — config.sh already drops `boards` from every committed layer, same as
+# HOST_ACCOUNT above. Read by `external_ref_status` (below) to resolve a recognised cross-board
+# wait in `list`. No env override: unlike HOST_ACCOUNT this names no one-off, so there is nothing
+# an operator would ever need to override for a single run.
+BOARDS_MAP="${HC_BOARDS:-}"
+[ -n "$BOARDS_MAP" ] || BOARDS_MAP='{}'
 
 # --- group sections (multi-group / multi-workspace boards) -----------------------------
 # LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's
@@ -1378,6 +1390,152 @@ die_on_secret() { # where hits
        If this is a false positive, re-run with: --force-secret \"<why this is safe>\""
 }
 
+# --- machine references (ADR 0020) --------------------------------------------------------
+# A path under $HOME or $WORKSPACE_ROOT, a local port, a *.local hostname: each resolves on the
+# machine that wrote it and means nothing — or means something else — anywhere it is read from. A
+# board with a remote (its docs are pushed) and a tracker or brief (off-machine by definition) can
+# carry one straight into another developer's session or another organization's issue tracker.
+#
+# Deliberately a SEPARATE detector from scan_secrets, not a mode of it (ADR 0020's decision): this
+# answers a portability question, not a credential one, and it REWRITES rather than refusing — a
+# home path costs the owner nothing to lose, so there is no reason to block the write the way a
+# credential match does. Two rules rewrite ($HOME -> ~, $WORKSPACE_ROOT -> a literal token);
+# everything else is reported but left alone, either because it cannot be rewritten losslessly
+# (another user's home, a local port or hostname) or because rewriting it would break a command
+# (`verify:`, below). It never fails and never changes the exit status of its caller.
+#
+# Reports ONE line to stderr naming the rules that fired and how many times, e.g.
+# "handoff: machine references — rewrote home-path ×2; flagged local-port ×1 (ADR 0020)" — never
+# the matched text, for the same reason scan_secrets never echoes a credential. Silent when
+# nothing matched.
+#
+# Container names are NOT detected here — nothing in this detector recognizes a
+# `docker-compose`/Kubernetes service name as a machine reference. Flagged in the ADR review as a
+# gap to close later, not attempted here.
+machine_refs_filter() { # stdin -> stdout (rewritten); report on stderr; never fails, never blocks
+  if ! command -v python3 > /dev/null 2>&1; then
+    cat # no interpreter to rewrite with -- pass the text through rather than lose it
+    return 0
+  fi
+  local py
+  py="$(mktemp)" || {
+    cat
+    return 0
+  }
+  # Written to a FILE, then run as `python3 "$py"` — NOT `python3 - <<'PY' ... PY`. That form
+  # reads the PROGRAM itself from stdin, which consumes the very input this filter exists to
+  # read: sys.stdin.read() below would see nothing but EOF. A temp file keeps this process's
+  # inherited stdin (the caller's piped or redirected text) free for the script to read.
+  cat > "$py" << 'PY'
+import os, re, sys
+
+text = sys.stdin.read()
+home = os.environ.get("HOME", "")
+wsroot = os.environ.get("WORKSPACE_ROOT", "")
+
+
+def valid_root(p):
+    # Only an absolute path longer than "/" is a root worth rewriting under -- an unset or
+    # relative value would otherwise match everywhere, or nowhere usefully.
+    return bool(p) and p.startswith("/") and len(p) > 1
+
+
+home_ok = valid_root(home)
+ws_ok = valid_root(wsroot)
+
+# A rewritten root must be a WHOLE path prefix: followed by "/", whitespace, a quote, a
+# backtick, ")" or end of line/string -- never just any character, or "/Users/alice2" would be
+# rewritten when HOME is "/Users/alice". Zero-width, so it is never consumed by the match.
+BOUND = r"""(?=[/\s'"` )]|$)"""
+ws_re = re.compile(re.escape(wsroot) + BOUND) if ws_ok else None
+home_re = re.compile(re.escape(home) + BOUND) if home_ok else None
+# Warn-only: another user's home directory, a local port, a *.local hostname. Scanned on the
+# ALREADY-rewritten line, so the current user's own home (just turned into "~") is never also
+# reported here -- what is left really is someone else's.
+other_re = re.compile(r"(?:/Users|/home)/[A-Za-z0-9_.-]+(?=/)")
+port_re = re.compile(r"\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):[0-9]{2,5}\b")
+local_host_re = re.compile(r"\b[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.local\b")
+verify_re = re.compile(r"^\s*verify\s*:")
+
+counts = {
+    "workspace-path": 0,
+    "home-path": 0,
+    "other-home-path": 0,
+    "local-port": 0,
+    "local-host": 0,
+    "home-path-in-verify": 0,
+}
+
+# `verify:` holds a shell command inside the quotes YAML frontmatter forces on it (see meta()) --
+# "~" does not expand inside those quotes, so rewriting a home path there would break the
+# command. Detected by position (inside the FIRST frontmatter block) and by key name, never
+# rewritten, only flagged.
+lines = text.split("\n")
+out = []
+fm_delims = 0
+in_fm = False
+for line in lines:
+    is_verify_line = False
+    if line == "---":
+        fm_delims += 1
+        in_fm = fm_delims == 1
+    elif in_fm and verify_re.match(line):
+        is_verify_line = True
+
+    if is_verify_line:
+        if home_ok and home_re.search(line):
+            counts["home-path-in-verify"] += len(home_re.findall(line))
+        out.append(line)
+        continue
+
+    newline = line
+    if ws_ok:
+        newline, n = ws_re.subn("$WORKSPACE_ROOT", newline)
+        counts["workspace-path"] += n
+    if home_ok:
+        newline, n = home_re.subn("~", newline)
+        counts["home-path"] += n
+
+    counts["other-home-path"] += len(other_re.findall(newline))
+    counts["local-port"] += len(port_re.findall(newline))
+    counts["local-host"] += len(local_host_re.findall(newline))
+
+    out.append(newline)
+
+sys.stdout.write("\n".join(out))
+
+rewrote = ["%s ×%d" % (n, counts[n]) for n in ("workspace-path", "home-path") if counts[n]]
+flagged = [
+    "%s ×%d" % (n, counts[n])
+    for n in ("other-home-path", "local-port", "local-host", "home-path-in-verify")
+    if counts[n]
+]
+if rewrote or flagged:
+    clauses = []
+    if rewrote:
+        clauses.append("rewrote " + ", ".join(rewrote))
+    if flagged:
+        clauses.append("flagged " + ", ".join(flagged))
+    sys.stderr.write("handoff: machine references — " + "; ".join(clauses) + " (ADR 0020)\n")
+PY
+  python3 "$py"
+  local rc=$?
+  rm -f "$py"
+  return $rc
+}
+
+# Rewrite a file in place when it carries a machine reference; a no-op (byte-identical, silent)
+# when it does not. The file-vs-filter split mirrors how callers already hold a path (a board doc)
+# or a stream (a rendered mirror body, an exported brief) -- both funnel through the one filter
+# above so the rules and the report line can never drift between the two shapes.
+machine_refs_file() { # path
+  local f="$1" tmp
+  tmp="$(mktemp)" || return 0
+  machine_refs_filter < "$f" > "$tmp"
+  cmp -s "$f" "$tmp" || cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
 # --- sensitivity (ADR 0005) ---------------------------------------------------------------
 # `sensitivity` is a HANDLING FLAG, NOT AN ACCESS BOUNDARY. Board membership is the access
 # boundary: anyone who can read the board can read every document on it, restricted or not. What
@@ -1850,6 +2008,9 @@ cmd_new() {
     log_secret_override "$target" "secret-scan OVERRIDDEN at creation" "$hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
   fi
+  # ADR 0020 — only on a board whose docs are pushed somewhere (board_remote non-empty covers an
+  # in-repo board too: its docs travel with that repo's own commits).
+  [ -n "$(board_remote)" ] && machine_refs_file "$target"
   # Same `if` form as cmd_claim's, for the same reason — here the status is currently swallowed by
   # the two commands below, which is luck, not design.
   if is_restricted "$target"; then restricted_banner "$id"; fi
@@ -2027,6 +2188,9 @@ import_result() {
     echo "⚠️  Inbound secret scan overridden — recorded on $id's activity log."
   fi
 
+  # ADR 0020 — same gate as `new`/plain `import`: only a board whose docs are pushed somewhere.
+  [ -n "$(board_remote)" ] && machine_refs_file "$f"
+
   echo "Imported the reported result into $f."
   echo "Board status is UNCHANGED — the report is a claim, not a verdict."
   echo "Review the PR, reproduce the evidence, then close it yourself:"
@@ -2183,6 +2347,8 @@ cmd_import() {
     cat "$src" >> "$dest"
   fi
   grouped && set_field "$dest" group "$GROUP" # record the section for search; no-op on a flat board
+  # ADR 0020 — same gate as `new`: only a board whose docs are pushed somewhere.
+  [ -n "$(board_remote)" ] && machine_refs_file "$dest"
   echo "Imported $src → $dest (type: $type)."
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
@@ -2691,6 +2857,10 @@ export_one() {               # id doc to outdir branch do_claim force-secret-rea
     die "could not render the brief for $id"
   }
 
+  # ADR 0020 — always, not gated on this board's remote: a brief leaves the machine by
+  # definition, and before the secret scan so a rewritten path can never itself trip it.
+  machine_refs_file "$staged"
+
   local hits=""
   if hits="$(scan_secrets < "$staged")"; then
     if [ -z "$force_secret" ]; then
@@ -2952,6 +3122,17 @@ cmd_list() {
       rvw_h="$(meta "$f" reviewer)"
       extra="$extra  ⇤ review${rvw_h:+ → $rvw_h}"
     fi
+    # A cross-board wait (ADR 0018): when blocked_on names a recognised "external — HOST/OWNER/
+    # REPO#ID" reference and that board is cloned on this machine (via the developer's own `boards`
+    # map), show its current status next to the entry — read-only, never fetched, never copied.
+    # `list` never showed blocked_on before this, and still does not for ordinary free text: the
+    # blocker appears only when it carries at least one recognised cross-board reference, resolved
+    # or not, so a board of free-text blockers lists exactly as it always has.
+    local bo
+    bo="$(meta "$f" blocked_on)"
+    case "$bo" in
+      *'external — '*/*/*'#'*) extra="$extra  ⛔ $(annotate_blocked_on "$bo")" ;;
+    esac
     extra="$extra$dnote"
     printf '%-44s %-9s %-14s %-8s %-8s %s\n' \
       "$base" "$(meta "$f" status)" "$(meta "$f" audience)" "$(doc_env "$f")" "$(meta "$f" severity)" "$lock$extra"
@@ -2990,38 +3171,107 @@ board_sync_or_die() {
   br="$(board_git rev-parse --abbrev-ref HEAD)"
   [ -n "$br" ] && [ "$br" != "HEAD" ] || die "the board is in detached HEAD — check out its branch before claiming."
   board_git rev-parse --verify --quiet '@{upstream}' > /dev/null || return 0 # no upstream yet; the first push sets it
+  drop_generated_indexes
   board_git merge --ff-only --quiet '@{upstream}' && return 0
   die "the board's local history has diverged from its remote, or an uncommitted change is in the way.
        A claim will not merge that for you — sort it out in $DIR, then retry."
 }
 
-# What `cmd_index` regenerates and therefore what a lease commit must carry with it. These are
-# DERIVED files: committing them alongside the lease is safe, and leaving them behind is not —
-# an uncommitted generated file makes the next fast-forward refuse, so the board's own bookkeeping
-# would take the claim path down. Orchestrator docs are included because a claim changes the Lease
-# column of every bundle table the claimed doc appears in.
-board_generated_dirty() { # -> board-relative paths, one per line
+# Every uncommitted change git reports on the board, as a board-relative path. `status --porcelain`
+# rather than `diff`, because a freshly generated INDEX.md on a board whose first claim has not
+# landed yet is UNTRACKED, and `diff` cannot see an untracked file.
+board_changed_paths() { # -> board-relative paths, one per line
   local line rel
-  # `status --porcelain` rather than `diff`, because a freshly generated INDEX.md on a board whose
-  # first claim has not landed yet is UNTRACKED, and `diff` cannot see an untracked file. That was
-  # the whole failure mode: the index would never enter history, and every fast-forward afterwards
-  # would be fighting a file git had never been told about. Every spelling of a generated file is
-  # listed, flat and both grouped layouts: a prefix board's sub-index is INDEX-<group>.md, and while
-  # that one was missing its own regeneration was the uncommitted file the next claim tripped over.
   while IFS= read -r line; do
     rel="${line:3}"
     rel="${rel##* -> }" # a rename (a `done` release archives its doc through git mv)
     rel="${rel%\"}"
     rel="${rel#\"}"
-    [ -n "$rel" ] || continue
+    [ -n "$rel" ] && printf '%s\n' "$rel"
+  done < <(board_git status --porcelain --untracked-files=all)
+}
+
+# Is this path one of the generated index files — any section's sub-index or the board-root
+# roll-up? Every spelling is listed, flat and both grouped layouts: a prefix board's sub-index is
+# INDEX-<group>.md, and while that one was missing its regeneration was the uncommitted file the
+# next claim tripped over.
+is_generated_index() { # board-relative path
+  case "$1" in INDEX.md | INDEX-*.md | */INDEX.md) return 0 ;; esac
+  return 1
+}
+
+# What a lease commit must carry with it. These are DERIVED files: committing them alongside the
+# lease is safe, and leaving them behind is not — an uncommitted generated file makes the next
+# fast-forward refuse, so the board's own bookkeeping would take the claim path down. Orchestrator
+# docs are included because a claim changes the Lease column of every bundle table the claimed doc
+# appears in.
+#
+# Only THIS section's generated files (ADR 0019). Sweeping in every section's index and the
+# board-root roll-up made two claims of unrelated handoffs in different groups rewrite the same
+# files, so every write on the board contended with every other. The roll-up is `handoff index`'s
+# alone now, and another section's files are that section's commits' business.
+board_generated_dirty() { # -> board-relative paths, one per line
+  local rel own_index own_drift
+  own_index="$(sec_index)"
+  own_index="${own_index#"$DIR"/}"
+  own_drift="$(drift_file)"
+  own_drift="${own_drift#"$DIR"/}"
+  while IFS= read -r rel; do
     case "$rel" in
-      INDEX.md | INDEX-*.md | */INDEX.md | TRACKER-DRIFT.md | TRACKER-DRIFT-*.md | */TRACKER-DRIFT.md)
+      "$own_index" | "$own_drift")
         printf '%s\n' "$rel"
         continue
         ;;
+      INDEX.md | INDEX-*.md | */INDEX.md | TRACKER-DRIFT.md | TRACKER-DRIFT-*.md | */TRACKER-DRIFT.md)
+        continue # the roll-up, or another section's — never part of this section's lease commit
+        ;;
     esac
     [ -f "$DIR/$rel" ] && is_orchestrator "$DIR/$rel" && printf '%s\n' "$rel"
-  done < <(board_git status --porcelain --untracked-files=all)
+  done < <(board_changed_paths)
+}
+
+# Drop local changes to generated INDEX files before fast-forwarding onto the remote. They are
+# derived: rebuilding one loses nothing, while a stale local copy — the roll-up a board-level
+# `index` left behind, or a copy a lost race had staged — makes the fast-forward refuse over a file
+# nobody wrote by hand (ADR 0019: generated files are never merged, only rebuilt). Tracker drift
+# reports are left alone: they are only rewritten by a mirror run, so a local one is real news.
+drop_generated_indexes() {
+  local rel
+  while IFS= read -r rel; do
+    is_generated_index "$rel" || continue
+    if board_git cat-file -e "HEAD:$rel"; then
+      board_git checkout --quiet HEAD -- "$rel"
+    else
+      board_git reset --quiet -- "$rel" # never committed: unstage it and let the rebuild rewrite it
+    fi
+  done < <(board_changed_paths)
+}
+
+# ADR 0019: how many times a lease commit is pushed before the remote's refusal is believed. Three,
+# because a lost race among a busy board's agents clears within one or two retries, while a remote
+# that refuses every time is an outage that a longer loop would only hide.
+LEASE_PUSH_ATTEMPTS=3
+
+# After a rejected push: take the remote's new tip, keeping whatever is staged for our own commit.
+lease_resync() { # -> 0 when the local branch now sits on the remote's tip
+  board_git fetch --quiet || return 1
+  drop_generated_indexes
+  board_git merge --ff-only --quiet '@{upstream}'
+}
+
+# ADR 0019: a lease commit regenerates only its own section — the sub-index and the bundle tables
+# that read from it. The board-root roll-up belongs to `handoff index` (or CI) alone; see
+# board_generated_dirty for why. A board with no remote has no lease commit and no race, so it
+# keeps the full regeneration it always had.
+lease_index() {
+  if ! leases_shared; then
+    cmd_index
+    return
+  fi
+  if board_is_grouped && [ -z "$GROUP" ]; then return 0; fi
+  refresh_children_blocks
+  write_section_index
+  echo "Wrote $(sec_index)"
 }
 
 # The compare-and-swap itself. Commit the lease, push it, and let the REMOTE decide who won: a
@@ -3075,11 +3325,35 @@ release_commit_push() { # subject [doc-path]
     echo "    Commit and push $DIR yourself so other machines see the lease is free."
     return 0
   fi
-  if ! board_git push --quiet "$(board_remote)" HEAD; then
-    echo "⚠️  Released locally and committed, but the push did not land (offline?)."
-    echo "    Other machines still see this lease as held until you push $DIR."
-  fi
+  # A rejected push is retried like a claim's (ADR 0019): take the remote's new tip and commit
+  # again on top of it. There is no lease to re-check — this lease was ours and is already gone.
+  local attempt=1
+  until board_git push --quiet "$(board_remote)" HEAD; do
+    if [ "$attempt" -ge "$LEASE_PUSH_ATTEMPTS" ] || ! release_recommit "$1" "$doc"; then
+      echo "⚠️  Released locally and committed, but the push did not land (offline?)."
+      echo "    Other machines still see this lease as held until you push $DIR."
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
   return 0
+}
+
+# Move a release commit that lost its push onto the remote's new tip. On any failure the commit is
+# put back exactly as it was, so the release stays recorded locally and the caller only warns.
+release_recommit() { # subject doc
+  local rel
+  board_git reset --soft --quiet HEAD~1 || return 1
+  if ! lease_resync; then
+    board_git commit --quiet -m "$1"
+    return 1
+  fi
+  lease_index > /dev/null
+  [ -n "$2" ] && [ -e "$2" ] && board_git add -- "$2"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git commit --quiet -m "$1"
 }
 
 warn_open_dependencies() { # doc-path id
@@ -3151,39 +3425,51 @@ cmd_claim() {
     die "$id was just claimed by someone else — re-run 'handoff list'"
   fi
 
-  local me sess exp_new
+  local me sess exp_new attempt=1
   me="$(whoami_id)"
   sess="$(session_id)"
-  exp_new="$(($(now) + TTL_HOURS * 3600))"
-  {
-    echo "owner=$me"
-    echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
-    echo "claimed=$(now)"
-    echo "expires=$exp_new"
-    # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
-    # claimer's TTL rather than its own — two members may configure different ttlHours.
-    echo "ttl_hours=$TTL_HOURS"
-    echo "note=$note"
-  } > "$LOCKS/$key/owner"
-
   if [ "$kind" = "expired" ]; then
     echo "⚠️  Took over an EXPIRED lease from $owner (expired $(human "$exp"))."
     log_activity "$f" "lease taken over from $owner (expired $(human "$exp")) by $me"
   fi
-  cmd_index
 
   # The compare-and-swap. The local `mkdir` above already excluded every other process on THIS
-  # machine; the push is what excludes the other machines. Run it after cmd_index so the generated
+  # machine; the push is what excludes the other machines. The index runs first so the generated
   # files travel in the same commit — see board_generated_dirty for why they cannot be left behind.
-  if leases_shared && ! lease_commit_push "$key" "handoff: claim $id" "$doc_path"; then
+  #
+  # A rejected push is retried (ADR 0019), because on a busy board it usually means someone else
+  # landed UNRELATED work first: the remote moved, not the lease. Each retry takes the remote's
+  # new tip and reads the lease again before writing anything, so losing the race for this very
+  # handoff still refuses exactly as it always has. The generated files are rebuilt on the new tip,
+  # never merged — they are derived, so there is nothing in them to reconcile.
+  while :; do
+    exp_new="$(($(now) + TTL_HOURS * 3600))"
+    {
+      echo "owner=$me"
+      echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
+      echo "claimed=$(now)"
+      echo "expires=$exp_new"
+      # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
+      # claimer's TTL rather than its own — two members may configure different ttlHours.
+      echo "ttl_hours=$TTL_HOURS"
+      echo "note=$note"
+    } > "$LOCKS/$key/owner"
+    lease_index
+    leases_shared || break
+    lease_commit_push "$key" "handoff: claim $id" "$doc_path" && break
+
     lease_rollback "$key"
-    board_git fetch --quiet
-    board_git merge --ff-only --quiet '@{upstream}'
+    local synced=0
+    lease_resync && synced=1
     IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
     [ "$kind" = "held" ] \
       && die "$id was claimed by $owner first — their push landed before yours. Nothing was claimed here. Pick another handoff, or ask $owner."
-    die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
-  fi
+    [ "$synced" = 1 ] && [ "$attempt" -lt "$LEASE_PUSH_ATTEMPTS" ] \
+      || die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
+    attempt=$((attempt + 1))
+    mkdir -p "$LOCKS"
+    mkdir "$LOCKS/$key" 2> /dev/null || die "$id was just claimed by someone else — re-run 'handoff list'"
+  done
 
   echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
   # After the claim, not before: the banner is a HANDLING instruction for whoever is about to do
@@ -3248,14 +3534,281 @@ board_owner_key() { # board-dir -> "host/owner" of its configured origin, or not
   board_origin_norm "$1" | cut -d/ -f1-2
 }
 
-# The trust boundary. Returns 0 when source and target share a host and owner (or the target has
-# no remote), 1 when they differ and the caller named the target's owner. Dies otherwise — and
-# always for a restricted doc, which never crosses, named or not.
+# ADR 0018 — a CHILD board declares, in its own committed config, the board it is narrower than.
+# The parent's members never learn a same-owner child's name, because nothing on the parent says
+# it. A child under ANOTHER owner is the one case the parent must also say yes to, under
+# `acceptChildren`: a declaration made only on the child's side would let any board anywhere name
+# a parent and receive its work unannounced.
+board_config_value() { # board-dir key -> a string value, or one list item per line
+  [ -f "$1/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get(sys.argv[2]) if isinstance(d, dict) else None
+if isinstance(v, str): print(v)
+elif isinstance(v, list):
+    for x in v:
+        if isinstance(x, str): print(x)' "$1/handoff.json" "$2" 2> /dev/null
+}
+
+board_parent() { # board-dir -> host/owner/repo of the parent it declares, or nothing
+  local p
+  p="$(board_config_value "$1" parent | head -1)"
+  [ -n "$p" ] && repo_origin_norm "$p"
+}
+
+board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the parent lists it
+  local c
+  while IFS= read -r c; do
+    [ -n "$c" ] && [ "$(repo_origin_norm "$c")" = "$2" ] && return 0
+  done < <(board_config_value "$1" acceptChildren)
+  return 1
+}
+
+# ADR 0018 — "cross-board waits have a recognised form": `blocked_on: external — HOST/OWNER/REPO#ID`
+# (several may be joined by "; "). The developer's own `boards` map, BOARDS_MAP (from
+# handoff.local.json ONLY — see config.sh), names where such a board sits on THIS machine. No other
+# discovery ever happens: no scanning a workspace, no guessing from a sibling directory. A wrong
+# guess here would read some unrelated repository as though it spoke for another board.
+board_mapped_path() { # host/owner/repo -> the developer's mapped path for that board, or nothing
+  [ -n "${BOARDS_MAP:-}" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(0)
+v = d.get(sys.argv[2]) if isinstance(d, dict) else None
+if isinstance(v, str) and v:
+    sys.stdout.write(v)' "$BOARDS_MAP" "$1" 2> /dev/null
+}
+
+# Resolve one recognised cross-board reference to the status of ID on that board, when — and only
+# when — BOTH hold: the developer's map names a clone of it, AND that clone's OWN git remote really
+# normalizes to the key the reference names (board_origin_norm, defined above). A stale or wrong
+# mapping is never trusted to speak for another board; the second check is what keeps the map a
+# HINT rather than a claim this function takes on faith.
+#
+# Read-only, always — no git network call is made here (no fetch/pull/ls-remote/clone; the
+# worktree is read exactly as it sits on disk, which is also why the answer can be stale between
+# someone else's push and this developer's next pull. Nothing is fetched to make it fresher, and
+# nothing on the mapped board is ever written).
+#
+# Searches every section shape (flat, subfolder, prefix) because THIS board — the one asking — has
+# no way to know how board B is laid out, and sourcing B's own config.sh to find out would run a
+# second board's shell inside this one's process for a read `list` never needed to make. A glob
+# across all three shapes costs nothing B's own CLI would not already pay, and needs no shell at all.
+external_ref_status() { # host/owner/repo id -> status word ("not on that board" when absent), or
+                         # nothing when the reference cannot be trusted (unmapped or mismatched)
+  local key="$1" want="$2" path p st
+  # annotate_blocked_on (the only caller) runs under `set -f` while it splits blocked_on on ";", and
+  # that shell option survives into this command-substitution subshell — globbing MUST be back on
+  # here, or every subfolder/prefix pattern below stays literal and a real doc reads as absent.
+  set +f
+  path="$(board_mapped_path "$key")"
+  [ -n "$path" ] && [ -d "$path" ] || return 0
+  [ "$(board_origin_norm "$path" 2> /dev/null)" = "$key" ] || return 0
+  want="$(norm_id "$want" 2> /dev/null)" || return 0
+  for p in "$path/$want.md" "$path"/*/"$want.md" "$path"/*--"$want.md"; do
+    [ -f "$p" ] || continue
+    printf '%s' "$(meta "$p" status)"
+    return 0
+  done
+  for p in "$path/archive/$want.md" "$path"/*/archive/"$want.md" "$path/archive"/*--"$want.md"; do
+    [ -f "$p" ] || continue
+    st="$(meta "$p" status)"
+    printf '%s' "${st:-done}"
+    return 0
+  done
+  printf 'not on that board'
+}
+
+# Append the resolved status to each recognised entry inside a blocked_on value, leaving everything
+# else untouched — several waits can be joined by "; ", and each is checked on its own so one
+# unrecognised or unresolvable entry never hides another that IS resolvable. Anything that is not
+# "external — HOST/OWNER/REPO#ID" (no "#", a different prefix, ordinary prose) passes through
+# byte-for-byte, which is what keeps `blocked_on`'s free-text cases (ADR 0004) exactly as free as
+# they were before this existed.
+annotate_blocked_on() { # blocked_on-value -> the same value, external refs annotated
+  local raw="$1" entry key id status joined="" first=1
+  [ -n "$raw" ] || return 0
+  local IFS_OLD="$IFS"
+  IFS=';'
+  set -f
+  for entry in $raw; do
+    entry="${entry# }"
+    entry="${entry% }"
+    case "$entry" in
+      'external —'*'#'*)
+        key="${entry#external — }"
+        key="${key%%#*}"
+        id="${entry##*#}"
+        status="$(external_ref_status "$key" "$id")"
+        [ -n "$status" ] && entry="$entry → $status"
+        ;;
+    esac
+    if [ "$first" = 1 ]; then
+      joined="$entry"
+      first=0
+    else
+      joined="$joined; $entry"
+    fi
+  done
+  set +f
+  IFS="$IFS_OLD"
+  printf '%s' "$joined"
+}
+
+# The generic adapter lookup shared by every ADR 0018 check that is not routed through a
+# particular tracker's own config (tracker_adapter() reads external.system for THAT; this asks
+# nothing about any tracker at all, so a board need declare no tracker for board_visibility() or
+# host_account_guard() to still work): HANDOFF_TRACKER_ADAPTER first — the same seam the
+# fake-tracker harness already substitutes with — then the shipped tracker-github.sh. Prints
+# nothing and fails when no adapter resolves; callers treat that as "unknown"/"cannot confirm"
+# rather than dying here, since a board or a developer that never touches GitHub is unaffected.
+board_generic_adapter() { # -> adapter path on stdout, or empty with non-zero
+  local f
+  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ] && [ -f "$HANDOFF_TRACKER_ADAPTER" ]; then
+    printf '%s' "$HANDOFF_TRACKER_ADAPTER"
+    return 0
+  fi
+  for f in "$DIR/scripts/tracker-github.sh" "$_self_dir/tracker-github.sh" "$_self_dir/scripts/tracker-github.sh"; do
+    [ -f "$f" ] && {
+      printf '%s' "$f"
+      return 0
+    }
+  done
+  return 1
+}
+
+# ADR 0018 — the board's OWN remote is a trust boundary too, not only its trackers (ADR 0013).
+# Asked through the same adapter mechanism a tracker uses, but never through tracker config: a
+# board need declare no tracker at all to still have this checked. Only github.com is asked —
+# every other host, a board with no remote, or a failed call reads "unknown" rather than guessing.
+# Never cached. GitHub's `internal` collapses into "private" here, same as ADR 0013.
+# HANDOFF_TRACKER_ADAPTER, the same seam the fake-tracker harness already uses, lets a test
+# substitute the adapter that answers this too — it never widens WHICH provider is asked, only
+# which script speaks for it.
+board_visibility() { # board-dir -> public|private|unknown, printed on stdout
+  local dir="$1" origin provider adapter="" path vis
+  origin="$(board_origin_norm "$dir")"
+  [ -n "$origin" ] || { printf 'unknown'; return 0; }
+  provider="$(repo_provider_of "$origin")"
+  if [ "$provider" != github ]; then
+    printf 'unknown'
+    return 0
+  fi
+  adapter="$(board_generic_adapter)" || adapter=""
+  [ -n "$adapter" ] || { printf 'unknown'; return 0; }
+  path="$(repo_path_of "$origin")"
+  vis="$(printf '{"repo": "%s"}' "$path" | bash "$adapter" visibility 2> /dev/null \
+    | python3 -c 'import json, sys
+try: print(str(json.load(sys.stdin).get("visibility", "")).lower())
+except Exception: print("")' 2> /dev/null)"
+  case "$vis" in
+    public) printf 'public' ;;
+    private | internal) printf 'private' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+board_public_refusal() { # remote -> the refusal sentence
+  printf 'this board'"'"'s own remote (%s) is public, and a board must be private (ADR 0018) — its leases and document history would become readable by anyone, permanently. Nothing was sent. Make the repository private, then re-run.' "$1"
+}
+
+# Called once per run, before any tracker pass sends anything (ADR 0018) — distinct from, and
+# checked before, ADR 0013's per-tracker gate. A board with no remote is skipped silently: nothing
+# widens by staying on one machine. `unknown` warns rather than refuses, so a host with no
+# visibility API (or a call that fails) still lets a board work. `claim` never calls this — it
+# stays a plain git operation, unconditionally, per ADR 0018.
+board_visibility_gate() { # board-dir -> 0, or dies
+  local dir="$1" origin vis
+  # Only a board with a remote of its OWN (a dedicated board, ADR 0018). An in-repo board's remote is
+  # the code repository it lives in, whose audience that repository already decided — an
+  # open-source project's board is public by design (ADR 0013), and refusing it here would break it.
+  handoff_leases_shared "$dir" || return 0
+  origin="$(board_origin_norm "$dir")"
+  [ -n "$origin" ] || return 0
+  vis="$(board_visibility "$dir")"
+  case "$vis" in
+    public) die "$(board_public_refusal "$origin")" ;;
+    unknown) echo "handoff: warning — could not confirm $origin (this board's own remote) is private; continuing (ADR 0018)." >&2 ;;
+  esac
+  return 0
+}
+
+# ADR 0018 — the host account is NEVER a trust boundary (that stays the remote's host and owner,
+# checked above); it is a per-machine safety check that catches sending to a tracker while logged
+# into the wrong account. `hostAccount`, recorded per developer in handoff.local.json (ADR 0010),
+# never the board's own committed handoff.json (config.sh drops it from every committed layer).
+#
+# Nothing is asked and nothing is printed when HOST_ACCOUNT is unset — an existing board, or a
+# developer who never records one, behaves exactly as before this ADR: zero calls to the adapter's
+# whoami op. Called once per run, by mirror_preflight (after board_visibility_gate, before any
+# tracker is asked for anything) and by export --to-issue, both the single-doc and the bundle path
+# (before any issue is created).
+#
+# A recorded account that cannot be confirmed — no adapter resolves, the whoami op fails, or it
+# answers with no login — refuses exactly like a mismatch: writing under an unconfirmed identity is
+# the harm this guard exists to prevent, so "I don't know" and "it's the wrong one" get the same
+# answer. Compared case-insensitively: GitHub logins are.
+host_account_guard() { # -> 0, or dies
+  [ -n "$HOST_ACCOUNT" ] || return 0
+  local adapter active
+  adapter="$(board_generic_adapter)" || adapter=""
+  active=""
+  if [ -n "$adapter" ]; then
+    active="$(printf '{}' | bash "$adapter" whoami 2> /dev/null | python3 -c 'import json, sys
+try:
+    v = json.load(sys.stdin).get("login", "")
+    print(v if isinstance(v, str) else "")
+except Exception:
+    print("")' 2> /dev/null)"
+  fi
+  [ -n "$active" ] \
+    || die "could not confirm which account is active — this board expects the host account $HOST_ACCOUNT (handoff.local.json, ADR 0018), and writing under an unconfirmed identity is refused. Nothing was sent. Check 'gh auth status', then re-run."
+  [ "$(printf '%s' "$active" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$HOST_ACCOUNT" | tr '[:upper:]' '[:lower:]')" ] \
+    || die "this board expects the host account $HOST_ACCOUNT (handoff.local.json, ADR 0018), but the active account is $active — refusing to send anything under the wrong identity. Nothing was sent. Switch first: gh auth switch --user $HOST_ACCOUNT"
+  return 0
+}
+
+# The trust boundary. Returns 0 when the move stays inside one boundary (same host and owner, a
+# target with no remote, or a cross-owner child both sides have linked), 1 when it crosses and the
+# caller named the target's owner. Dies otherwise — and always for a restricted doc, which never
+# crosses owners, named or not.
 move_check_trust() { # doc id target-board to-remote
-  local f="$1" id="$2" to="$3" to_remote="$4" src_key dst_key
+  local f="$1" id="$2" to="$3" to_remote="$4" src_key dst_key src_repo dst_repo src_parent
   src_key="$(board_owner_key "$DIR")"
   dst_key="$(board_owner_key "$to")"
-  [ -n "$dst_key" ] && [ "$src_key" != "$dst_key" ] || return 0
+  # A target with no remote keeps the material on this machine, which widens nothing — even out of
+  # a child board.
+  [ -n "$dst_key" ] || return 0
+  src_repo="$(board_origin_norm "$DIR")"
+  dst_repo="$(board_origin_norm "$to")"
+
+  # Out of a child: it said it is narrower than its parent, so ANY move out of it widens who reads
+  # the work — to the parent itself and under the same owner included (ADR 0018). Naming the target
+  # is the consent; a restricted doc still never leaves its owner.
+  src_parent="$(board_parent "$DIR")"
+  if [ -n "$src_parent" ]; then
+    [ "$src_key" != "$dst_key" ] && is_restricted "$f" \
+      && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
+    [ "$to_remote" = "$dst_key" ] \
+      || die "refusing to move $id out of a child board: this board declares it is narrower than $src_parent, so moving work out of it widens who can read it.
+       If that is intended, name the target: --to-remote $dst_key"
+    return 1
+  fi
+
+  [ "$src_key" != "$dst_key" ] || return 0
+
+  # Into a child under another owner that BOTH sides have linked: the child names this board as its
+  # parent and this board accepts it. Still never a restricted doc — accepting a child does not make
+  # an account this owner does not control part of it.
+  if [ -n "$src_repo" ] && [ "$(board_parent "$to")" = "$src_repo" ] && board_accepts_child "$DIR" "$dst_repo"; then
+    is_restricted "$f" \
+      && die "$id is sensitivity: restricted — it never moves to a board under a different remote ($src_key → $dst_key), even a child board this one accepts, and there is no override. Do the work where it is."
+    return 0
+  fi
+
   is_restricted "$f" \
     && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
   [ "$to_remote" = "$dst_key" ] \
@@ -3418,6 +3971,11 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   stage_dir="$(mktemp -d)" || die "mktemp failed"
   staged="$stage_dir/$id.md"
   move_stage_copy "$f" "$staged" "$src_label" "moved here from $(fold_colons "$src_label") by $(whoami_id)${across}."
+  # ADR 0020 — gated on the TARGET board's remote, not the source's: what matters is whether the
+  # doc is about to be pushed somewhere, and it is about to live on $to. move_import_into below
+  # re-imports this staged copy through the target's own `import`, which applies the same rule
+  # again against the same board -- idempotent once this has already rewritten it.
+  [ -n "$(handoff_board_remote "$to")" ] && machine_refs_file "$staged"
   [ -n "$force_secret" ] && [ -n "$hits" ] \
     && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
   # move_import_into runs in a command substitution, so its `die` exits only that subshell. The rc
@@ -3430,7 +3988,7 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   move_publish_target "$to" "$dest" "$src_label"
 
   move_leave_pointer "$f" "$id" "$dest" "$dst_label"
-  cmd_index > /dev/null
+  lease_index > /dev/null
   release_commit_push "handoff: move $id to $dst_label" "$(arch_file "$id")"
 
   local dependents
@@ -3463,25 +4021,54 @@ tracker_mode() { # -> trackers | legacy | none
 try: d = json.load(open(sys.argv[1]))
 except Exception: print("none"); raise SystemExit(0)
 d = d if isinstance(d, dict) else {}
-if isinstance(d.get("trackers"), dict): print("trackers")
+if isinstance(d.get("trackers"), dict) or isinstance(d.get("trackerRules"), dict): print("trackers")
 elif isinstance(d.get("external"), dict) and sys.argv[2] != "cross-repo": print("legacy")
 else: print("none")' "$DIR/handoff.json" "$TOPOLOGY" 2> /dev/null || printf 'none'
 }
 
+# ADR 0020 — a GROUP can declare a tracker RULE in trackerRules, resolved for a member through the
+# origin recorded at registration (_generated.repos[].origin), never read live: a CI mirror has no
+# member checkouts. A per-repository entry under `trackers` always wins when both exist. A rule
+# never carries allowPublic (stripped defensively below even though the verifier already refuses
+# one that does), so a public member repository under a bare rule still needs a per-repository
+# opt-in (ADR 0013).
 tracker_entry() { # alias -> that home's tracker as a JSON object, or nothing
   [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
   python3 -c 'import json,sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 d = d if isinstance(d, dict) else {}
+alias, topology = sys.argv[2], sys.argv[3]
 t = d.get("trackers")
-if isinstance(t, dict):
-    e = t.get(sys.argv[2])
-elif isinstance(d.get("external"), dict) and sys.argv[3] != "cross-repo":
-    e = d["external"]
-else:
-    e = None
-if isinstance(e, dict): print(json.dumps(e))' "$DIR/handoff.json" "$1" "$TOPOLOGY" 2> /dev/null
+if isinstance(t, dict) and isinstance(t.get(alias), dict):
+    print(json.dumps(t[alias]))
+    raise SystemExit(0)
+if isinstance(d.get("external"), dict) and topology != "cross-repo" and not isinstance(t, dict):
+    print(json.dumps(d["external"]))
+    raise SystemExit(0)
+rules = d.get("trackerRules")
+if not isinstance(rules, dict):
+    raise SystemExit(0)
+repos = (d.get("_generated") or {}).get("repos") or []
+reg = next((r for r in repos if isinstance(r, dict) and r.get("alias") == alias), None)
+group = reg.get("group") if isinstance(reg, dict) else None
+origin = reg.get("origin") if isinstance(reg, dict) else None
+rule = rules.get(group) if group else None
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+# A rule names a SYSTEM and the origin names a HOST: a member on another host is not for this rule to
+# mirror, or its path would be reused on a host it does not live on.
+if not isinstance(rule, dict) or not isinstance(origin, str) or not origin or not on_host(origin, rule.get("system")):
+    raise SystemExit(0)
+def path_of(o):
+    host = o.split("/", 1)[0]
+    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
+entry = dict(rule)
+entry.pop("allowPublic", None)
+entry["repo"] = path_of(origin)
+if entry.get("kind") == "issues" and not entry.get("refPattern"):
+    entry["refPattern"] = "#[0-9]+"
+print(json.dumps(entry))' "$DIR/handoff.json" "$1" "$TOPOLOGY" 2> /dev/null
 }
 
 registered_aliases() { # -> the repository aliases this board's registry lists, one per line
@@ -3523,8 +4110,23 @@ tracker_aliases() { # -> one alias per line, a single empty line (legacy), or no
     trackers)
       python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-for alias, e in sorted((d.get("trackers") or {}).items()):
-    if isinstance(e, dict) and e.get("kind") == "issues": print(alias)' "$DIR/handoff.json" 2> /dev/null
+declared = d.get("trackers") or {}
+aliases = set(a for a, e in declared.items() if isinstance(e, dict) and e.get("kind") == "issues")
+# ADR 0020 — every registered member of a ruled group is a pass too, unless it already has its own
+# declared entry above (which may be a sprint tool, overriding the rule to opt OUT of the mirror).
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and rule.get("kind") == "issues" and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        aliases.add(a)
+for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
       ;;
   esac
 }
@@ -3533,8 +4135,21 @@ tracker_aliases_all() { # -> every alias this board declares a tracker for, spri
   [ "$(tracker_mode)" = trackers ] || return 0
   python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-for alias, e in sorted((d.get("trackers") or {}).items()):
-    if isinstance(e, dict): print(alias)' "$DIR/handoff.json" 2> /dev/null
+declared = d.get("trackers") or {}
+aliases = set(a for a, e in declared.items() if isinstance(e, dict))
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        aliases.add(a)
+for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
 }
 
 # One board per trust boundary (ADR 0011), kept when trackers multiply (ADR 0017): every tracker on a
@@ -3544,15 +4159,35 @@ trackers_trust_check() { # -> 0, or dies naming the owners
   [ "$(tracker_mode)" = trackers ] || return 0
   local board_key owners
   board_key="$(board_owner_key "$DIR" | tr '[:upper:]' '[:lower:]')"
+  # ADR 0020 — a rule-derived entry is a tracker like any other, so it belongs in this trust check
+  # exactly as a declared one does: a member whose origin sits under a different owner refuses the
+  # run, naming both.
   owners="$(python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 keys = set()
-for e in (d.get("trackers") or {}).values():
-    if not isinstance(e, dict) or not isinstance(e.get("repo"), str) or "/" not in e["repo"]:
-        continue
-    system = e.get("system") or "github"
+def add(repo, system):
+    if not isinstance(repo, str) or "/" not in repo: return
+    system = system or "github"
     host = "github.com" if system == "github" else system
-    keys.add(("%s/%s" % (host, e["repo"].split("/")[0])).lower())
+    keys.add(("%s/%s" % (host, repo.split("/")[0])).lower())
+declared = d.get("trackers") or {}
+for e in declared.values():
+    if isinstance(e, dict): add(e.get("repo"), e.get("system"))
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+def path_of(o):
+    host = o.split("/", 1)[0]
+    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        add(path_of(origin), rule.get("system"))
 print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
   [ -n "$owners" ] || return 0
   case "$owners" in
@@ -3561,6 +4196,24 @@ print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
   [ -z "$board_key" ] || [ "$board_key" = "$owners" ] \
     || die "this board's remote is $board_key but its trackers belong to $owners — one board per trust boundary (ADR 0011, ADR 0017). Mirror from a board owned by $owners; nothing was sent."
   return 0
+}
+
+# ADR 0020 — allowPublic is never part of a rule: a rule applies to every member of a group, and a
+# group can hold a public repository nobody meant to publish. Checked once per run, before any
+# tracker is even asked for its visibility (ADR 0013) — a per-repository entry under `trackers` is
+# still free to set allowPublic for the one repository that should actually publish.
+tracker_rules_reject_public() { # -> 0, or dies naming the group(s)
+  [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  local groups
+  groups="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+rules = d.get("trackerRules") if isinstance(d, dict) else None
+if not isinstance(rules, dict): raise SystemExit(0)
+bad = sorted(g for g, r in rules.items() if isinstance(r, dict) and "allowPublic" in r)
+print(" ".join(bad))' "$DIR/handoff.json" 2> /dev/null)"
+  [ -z "$groups" ] \
+    || die "trackerRules sets allowPublic on group(s): $groups — a rule can never opt a group's public repositories into publishing (ADR 0020). Move allowPublic onto a per-repository entry under trackers for the specific repository that should publish, and mark its docs share: public. Nothing was sent."
 }
 
 # ADR 0017 — which board a mirrored issue belongs to. Derived, never stored: the board repository's
@@ -3737,6 +4390,7 @@ export_bundle_to_issue() { # id doc outdir branch do_claim force-secret
 
   repo="$(require_tracker delegate)" || exit 3
   tracker_adapter > /dev/null || exit 3
+  host_account_guard
   kids="$(children_of "$f")"
   [ -n "$kids" ] \
     || die "$id has no children — a bundle with no units is nothing to delegate. Add them with 'handoff children add $id <child>'."
@@ -3892,6 +4546,7 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
   repo="$(require_tracker delegate)" || exit 3
   tracker_adapter > /dev/null || exit 3
+  host_account_guard
   # The publication gate, before the brief is rendered or the lease taken — a refusal leaves nothing.
   if tracker_is_public "$repo"; then
     board_allows_public || die "$(public_refusal "$repo" "opening $id as an issue")"
@@ -4020,7 +4675,9 @@ mirror_survey() { # desired-file gone-file ownrefs-file public(0|1) -> non-zero 
       printf '%s\n' "$(meta "$f" external_ref)" | tr -cd '0-9\n' >> "$ownrefs"
       continue
     fi
-    rendered="$(mirror_render "$f" "$public" "$(tracker_setting projection)")"
+    # ADR 0020 — always, not gated on this board's own remote: a tracker is off-machine by
+    # definition, and before the secret scan so a rewritten path can never itself trip it.
+    rendered="$(mirror_render "$f" "$public" "$(tracker_setting projection)" | machine_refs_filter)"
     if hits="$(printf '%s' "$rendered" | scan_secrets)"; then
       printf 'refuse %s — looks like it contains a credential (%s); nothing of it was sent\n' "$base" "$(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')"
       refused=1
@@ -4267,12 +4924,24 @@ except Exception: print("")')"
 # sends anything, so a public tracker without allowPublic refuses the whole run instead of stopping
 # it half-way through. The listing of already-mirrored issues is kept, for the person who decides.
 mirror_preflight() { # aliases -> 0, or dies
-  local alias repo existing already
+  local alias repo existing already proj
+  # ADR 0018 — the board's own remote first, before any tracker (ADR 0013) is even asked, then the
+  # host account — before any tracker's config is even read, let alone asked for anything.
+  board_visibility_gate "$DIR"
+  host_account_guard
   while IFS= read -r alias; do
     CUR_TRACKER="$alias"
     repo="$(require_tracker mirror)" || exit 3
     tracker_adapter > /dev/null || exit 3
     tracker_is_public "$repo" || continue
+    # ADR 0020 — `complete` carries the whole record (Decisions, Ruled out, Evidence) and stays
+    # private, full stop: refused on a public tracker even when allowPublic is set and every doc is
+    # share: public. Checked here, in the same preflight and before board_allows_public, so a public
+    # complete tracker never gets as far as ADR 0013's opt-in.
+    proj="$(tracker_setting projection)"
+    if [ "$proj" = complete ]; then
+      die "trackers.${alias:-external} ($repo) is public (or its visibility could not be confirmed), and projection: complete never leaves this board on a public tracker (ADR 0020) — this holds even with allowPublic set. Set projection to full or summary for $repo, or move this tracker to a private repository. Nothing was sent."
+    fi
     board_allows_public && continue
     # Refuse the WHOLE run, before any create, update or close — and list what is already out
     # there, because closing an issue hides nothing and a person has to decide what to do with it.
@@ -4327,6 +4996,7 @@ cmd_mirror() {
   fi
   MIRROR_MODE="$(tracker_mode)"
   [ "$MIRROR_MODE" != none ] || die "this board declares no tracker (no trackers block in $DIR/handoff.json; a single-repository board may use external) — nothing to mirror into."
+  tracker_rules_reject_public
   local aliases a known
   aliases="$(tracker_aliases)"
   if [ "$MIRROR_MODE" = trackers ]; then
@@ -4448,12 +5118,20 @@ if dtype == "orchestrator":
         rows.append("- and %d more item%s not shared publicly" % (hidden, "" if hidden == 1 else "s"))
     parts.append("## Children\n\n" + "\n".join(rows))
 else:
-    # ADR 0017 — a summary unless the tracker opted into more. `## Ruled out`, notes and evidence
-    # are in neither list, so they never leave the board.
-    names = ("Current state", "Context", "Verify") if projection == "full" else ("Current state",)
+    # ADR 0017 — a summary unless the tracker opted into more; ADR 0020 — `complete` adds Decisions,
+    # Ruled out and Evidence on top of `full`. Never Activity (it gains a line on every checkpoint,
+    # which would rewrite the issue body and notify every watcher on every run) and never `note`.
+    if projection == "complete":
+        names = ("Current state", "Context", "Verify", "Decisions", "Ruled out")
+    elif projection == "full":
+        names = ("Current state", "Context", "Verify")
+    else:
+        names = ("Current state",)
     for name in names:
         if section(name):
             parts.append("## %s\n\n%s" % (name, section(name)))
+    if projection == "complete" and meta.get("verified_by"):
+        parts.append("## Evidence\n\n%s" % meta["verified_by"])
 parts.append("---\n_Managed by the handoff mirror from `%s` — edits made here are overwritten on the next run._\n\n<!-- handoff:%s -->" % (marker, marker))
 labels = ["handoff-mirror", "status:%s" % meta.get("status", "open")]
 if dtype == "orchestrator":
@@ -4795,7 +5473,9 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
     log_secret_override "$f" "checkpoint secret-scan OVERRIDDEN" "$hits" "$force_secret"
   fi
   log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
-  cmd_index > /dev/null
+  # ADR 0020 — after the doc is fully updated, before it is committed/pushed below.
+  [ -n "$(board_remote)" ] && machine_refs_file "$f"
+  lease_index > /dev/null
   release_commit_push "handoff: checkpoint $id" "$f"
   echo "Checkpointed $id — Current state published, lease kept."
 }
@@ -4825,7 +5505,12 @@ finish_release() { # id status
   local rf
   rf="$(doc_of "$1" 2> /dev/null)"
   [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
-  cmd_index
+  # ADR 0020 — every release path (coordination, standalone, orchestrator) funnels through here,
+  # so this one call covers all of them: after the doc is fully updated, before it is
+  # committed/pushed below. Runs whether the doc is still live or was just archived — $rf already
+  # points wherever it landed.
+  [ -n "$rf" ] && [ -n "$(board_remote)" ] && machine_refs_file "$rf"
+  lease_index
   # Optimistic by design: this records something that already happened, so a failure to reach the
   # remote is a warning and the release still stands. See release_commit_push.
   release_commit_push "$_release_subject" "$rf"

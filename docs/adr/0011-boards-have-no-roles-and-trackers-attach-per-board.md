@@ -1,5 +1,5 @@
 ---
-status: accepted — refined by ADR 0017
+status: accepted — refined by ADR 0017, 0018 and 0020
 date: 2026-09-16
 ---
 

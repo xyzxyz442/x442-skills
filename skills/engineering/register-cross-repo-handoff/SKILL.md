@@ -1,13 +1,13 @@
 ---
 name: x442-register-cross-repo-handoff
-description: Use when several repos should coordinate handoffs together — a fleet, a monorepo's packages, or "these projects share a handoff board / group / workspace". Declare groups of peer repos in an .agents/handoff.json cascade, then sync to scaffold a standalone shared board (owned by no repo) and wire every member to its own sub-indexed section. Chains after setup-handoff.
+description: Use when several repos should coordinate handoffs together — a fleet, a monorepo's packages, or "these projects share a handoff board / group / workspace". Declare groups of peer repos in an .agents/handoff.json cascade, then sync to scaffold a dedicated board (owned by no repo) and wire every member to its own sub-indexed section. Chains after setup-handoff.
 ---
 
 # Register a cross-repo handoff fleet
 
 Coordinate handoffs across a **group (or several groups) of peer repos** without seeding the board
 from any one project. You declare the groups and their members in an `.agents/handoff.json` manifest
-at a workspace directory; the sync scaffolds a standalone shared board and wires every member repo
+at a workspace directory; the sync scaffolds a dedicated board and wires every member repo
 to its own **sub-indexed section** of that board.
 
 This is the multi-repo counterpart to [setup-handoff](../setup-handoff/SKILL.md), which installs a
@@ -112,7 +112,7 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 - Resolves the cascade with `scripts/manifest/resolve.py` (read-only; the same brain the verifier
   uses, so they cannot disagree).
 - Scaffolds each distinct board via `setup-handoff.sh --board-only <path> --groups … --layout …
-[--remote <url>]` — a standalone board owned by no repo. The board is **git-initialised
+[--remote <url>]` — a dedicated board owned by no repo. The board is **git-initialised
   non-optionally**: it is the board of record, and one that was never a repository has no history,
   no blame, and no recovery for documents that exist nowhere else. Declare its remote as
   `boardRemote` in the manifest and the sync passes it through; without one the board is versioned
@@ -124,7 +124,15 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
   tool config where nobody reading the board would see it.
 - Splices the peer-listing block with `scripts/manifest/render.py`.
 - Projects the resolved manifest into each board's `handoff.json`, under `_generated`, via
-  `scripts/manifest/registry.py` — see **Brief repo identity** below.
+  `scripts/manifest/registry.py` — see **Brief repo identity** below. Each member's `origin` (its
+  git remote, when one resolves) is recorded there too, at registration time — never read again at
+  run time. A **tracker rule** declared on the group in the board's `handoff.json` resolves its
+  mirror target from that recorded origin, so a CI mirror needs no member checkouts, and a member
+  whose origin sits elsewhere is not mirrored by the rule at all
+  ([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+  A member added or moved after registration is stale until the next sync. See
+  [`setup-handoff`](../setup-handoff/SKILL.md#a-tracker-rule-for-a-group-instead-of-a-repository) for
+  the rule's shape.
 - Records the wired members under `_generated` in `<scope>/.agents/handoff.json` so a later `--prune` can report members
   that have left scope.
 
@@ -147,7 +155,7 @@ repo's own group already filled in.
 
 The board root `INDEX.md` is a **roll-up** across every section; each group also has its own
 sub-index. The session board and edit gate a repo sees are filtered to its own group, so groups on
-a shared board never collide, and ids may repeat across groups without clashing.
+a dedicated board never collide, and ids may repeat across groups without clashing.
 
 ## Brief repo identity — `_generated.repos`
 
@@ -225,9 +233,13 @@ in the board's `.locations.json`), the second wants a manifest change and a re-s
 
 ## The board's remote
 
-A board with a remote is **shared**; a board without one is merely **versioned**. The difference is
-not cosmetic — it is what decides whether `claim` can exclude another machine at all, because the
-lease primitive is `git push` acting as a compare-and-swap (ADR 0002).
+A board with a remote lets `claim` exclude another machine, because the lease primitive is
+`git push` acting as a compare-and-swap. A board with no remote is a **local board** — versioned,
+but reaching only this machine. The difference is not cosmetic
+([ADR 0002](../../../docs/adr/0002-board-of-record-is-a-git-repo.md);
+[ADR 0018](../../../docs/adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
+And that remote must itself be private: setup refuses to scaffold a dedicated board whose remote is
+already public (ADR 0018).
 
 ```json
 {
@@ -250,9 +262,9 @@ people most often want from it is not a fleet — it is **a senior and a junior 
 code**, where one plans and reviews and the other executes. That is the same install, read
 differently, and nothing else in this repo says so.
 
-What makes it work is the remote, not the grouping. A board with a remote is shared, and `claim` can
-only exclude another _machine_ when there is a remote to push against (ADR 0002). A board without
-one is merely versioned, and two people on it will silently clobber each other.
+What makes it work is the remote, not the grouping. `claim` can only exclude another _machine_ when
+there is a remote to push against (ADR 0002). A **local board** — no remote — is merely versioned,
+and two people on it will silently clobber each other.
 
 ```text
 setup-handoff.sh --board-only ../workspace/.agents/handoff --remote git@github.com:acme/acme-handoff-board.git
@@ -308,11 +320,11 @@ the protocol — do not add them to it. Export a brief instead, and see
 ## Usage record
 
 [docs/cross-repo-handoff-usage-record.md](../../../docs/cross-repo-handoff-usage-record.md) records a
-real four-repo install on a shared board — the manifest used, the hook commands generated, the
+real four-repo install on a dedicated board — the manifest used, the hook commands generated, the
 subfolder/prefix path table, how several groups stay isolated on one board, and the gotchas found.
 
 ## Verification harness
 
 `harness/register-cross-repo-handoff-workspace/` stands up a fixture workspace (groups sub-indexed
-on a shared board plus a group on its own board, under both layouts) and grades the result with the
+on a dedicated board plus a group on its own board, under both layouts) and grades the result with the
 read-only `verify-cross-repo-handoff.sh`. See [docs/harness-structure.md](../../../docs/harness-structure.md).
