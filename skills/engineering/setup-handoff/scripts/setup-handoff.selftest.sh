@@ -329,7 +329,10 @@ B13="$(mkgitboard)"
 git -C "$B13" remote add origin "$GH_FAKE_REMOTE"
 OUT13="$(HANDOFF_TRACKER_ADAPTER="$FAKE_ADAPTER" FAKE_TRACKER_STATE="$(mktemp -d)/tracker.json" \
   "$INSTALLER" --board-only "$B13" --groups core 2>&1)"
-chk "a private board remote (the default) prints no ADR 0018 warning" "0" "$(printf '%s' "$OUT13" | grep -c 'ADR 0018')"
+# Distinct from "mentions ADR 0018 at all" — section 11 below asserts this SAME install also
+# prints the (unrelated, always-on-a-dedicated-board) hostAccount note, which cites ADR 0018 too.
+# This checks for the WARNING specifically, by its own wording, not the citation.
+chk "a private board remote (the default) prints no ADR 0018 warning" "0" "$(printf '%s' "$OUT13" | grep -c 'warning — could not confirm')"
 
 # An IN-REPO board has no remote of its own: the one git reports is the code repository's, whose
 # audience that repository already chose. An open-source project's board is public by design
@@ -340,6 +343,14 @@ FAKE_TRACKER_VISIBILITY=public "$INSTALLER" "$B14" --tools claude --primary none
 ST14=$?
 chk "an in-repo board in a public code repository still installs" "0" "$ST14"
 chk "and is not warned about — its remote is not the board's" "0" "$(printf '%s' "$OUT14" | grep -c 'ADR 0018')"
+
+printf '\n11. host account note (ADR 0018) — dedicated boards only, informational, never a warning\n'
+# OUT13 above (--board-only, a dedicated board by construction) and OUT14 above (an in-repo board)
+# are reused rather than installing twice more — the note's presence/absence is the only new thing
+# being asked of output this suite already captured.
+chk_contains "a dedicated board's install suggests recording hostAccount" "$OUT13" "hostAccount"
+chk_contains "and cites ADR 0018" "$OUT13" "ADR 0018"
+chk "an in-repo install prints no such note" "0" "$(printf '%s' "$OUT14" | grep -c 'hostAccount')"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

@@ -142,6 +142,16 @@ setup_board_visibility_gate() { # remote-url
   return 0
 }
 
+# Informational only, never a warning and never a failure: a DEDICATED board (its own repository,
+# `remote-url` non-empty) is exactly where the host account recorded per developer matters (ADR
+# 0018) — mirror and export --to-issue refuse when the active account differs from it. Printed once
+# per install that touches such a board; no file is written for it, and an in-repo board (whose
+# remote is its code repository's, not the board's) never sees this note.
+note_host_account() { # remote-url
+  [ -n "${1:-}" ] || return 0
+  echo "setup-handoff: this is a dedicated board. Each developer should record their own hostAccount in .agents/handoff.local.json (ADR 0018) — mirror and export --to-issue refuse when the active account differs. Consider a git 'includeIf' rule too, so pushes from this board use that account."
+}
+
 # --- downgrade guard -------------------------------------------------------------------
 # install_file is deliberately version-blind: byte-compare, then copy. That is correct for one
 # writer and wrong for a SHARED board, where the writer may be on a stale checkout. Nothing looks
@@ -775,6 +785,9 @@ if [ -n "$BOARD_ONLY" ]; then
   # ADR 0018, before anything is written: --remote names the board's home, or a re-run finds one
   # already configured at $HDEST (joining/re-installing an existing board).
   setup_board_visibility_gate "${BOARD_REMOTE:-$(setup_own_remote "$HDEST")}"
+  # --board-only always scaffolds a dedicated board (its own repository) — every install through
+  # this branch qualifies for the note; the argument only needs to be non-empty.
+  note_host_account "dedicated"
   # Before anything is written: if a remote is declared and no board is here yet, this machine is
   # JOINING an existing board, not creating one. The payload install below is byte-comparing and
   # idempotent, so it lands cleanly on top of whatever the clone brought.
@@ -962,6 +975,9 @@ fi
 # Only when $HDEST is already its own repository (a dedicated board on a re-run). The common
 # single-repo case nests the board inside $REPO, whose remote is not the board's to judge.
 setup_board_visibility_gate "$(setup_own_remote "$HDEST")"
+# Dedicated here means either signal: an existing board that already has its own remote (a
+# re-run/join), or --remote naming one this install is about to give it.
+note_host_account "${BOARD_REMOTE:-$(setup_own_remote "$HDEST")}"
 
 # --- install the payload --------------------------------------------------------------
 mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"

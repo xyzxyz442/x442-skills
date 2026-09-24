@@ -2216,6 +2216,17 @@ chk_contains "moving out of a cross-owner child refuses unnamed" "$(mvh "$CBX" m
 chk_contains "and proceeds when the target is named" \
   "$(mvh "$CBX" move cb-back --to "$CBP" --to-remote github.com/acme)" "Moved cb-back-handoff"
 
+# The host account never defines or merges a boundary (ADR 0018) — `move`'s trust check must not
+# even ask about it. Proof by construction: HANDOFF_HOST_ACCOUNT is set here with NO tracker
+# adapter reachable from this board (mkremote/mkshared never copy tracker-github.sh), so if move
+# called host_account_guard by mistake it would refuse ("could not confirm which account is
+# active") -- it does not, and the move proceeds exactly as the unnamed same-owner case above.
+mvh "$CBP" new cb-acct --title "Move ignores the host account" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-acct "moving" > /dev/null
+CB_ACCT_OUT="$(cd "$CBP" && HANDOFF_SESSION_ID="$MV_ME" HANDOFF_HOST_ACCOUNT=dev-a ./handoff move cb-acct --to "$CBC" 2>&1)"
+chk_contains "move proceeds regardless of a recorded host account" "$CB_ACCT_OUT" "Moved cb-acct-handoff"
+chk "and never says it could not confirm an account" "0" "$(printf '%s' "$CB_ACCT_OUT" | grep -c 'could not confirm')"
+
 printf '\nx\n' >> "$MVA/mv-base-handoff.md"
 mvh "$MVA" claim mv-base "moving" > /dev/null
 printf 'key %s\n' "$AWSKEY" >> "$MVA/mv-base-handoff.md"
@@ -3072,6 +3083,89 @@ BV5_OUT="$(bv5h mirror)"
 chk "an in-repo board in a public code repository is not refused by the board gate" "0" \
   "$(printf '%s' "$BV5_OUT" | grep -c 'ADR 0018')"
 chk "and its doc reaches its (private) tracker" "1" "$(bvissues "$BV5_STATE" bv5-open-handoff)"
+
+printf '\nmirror and export --to-issue also check the host account (ADR 0018) — never the board\n'
+# Distinct from every block above: this is a per-DEVELOPER safety check, never a trust boundary.
+# hostAccount in handoff.local.json (ADR 0010's per-developer file, read the same way `handle` is,
+# ADR 0016) names which account must be active; the fake adapter's new `whoami` op answers with
+# $FAKE_TRACKER_LOGIN. mkdedicated/bvrun/bvcalls/bvissues are reused from the board-visibility
+# block above.
+
+# Recorded via handoff.local.json IN THE BOARD REPO DIR (a dedicated board's repo root is the
+# board itself), matching only up to case — GitHub logins are case-insensitive.
+HA="$(mkdedicated "git@github.com:acme/ha-board.git")"
+HA_STATE="$(mktemp)"
+printf '{}' > "$HA_STATE"
+mkdir -p "$HA/.agents"
+printf '{ "hostAccount": "Dev-A" }\n' > "$HA/.agents/handoff.local.json"
+bvrun "$HA" "$HA_STATE" -- new ha-open --title "Open work" > /dev/null
+HA_OUT1="$(bvrun "$HA" "$HA_STATE" FAKE_TRACKER_LOGIN=dev-a -- mirror)"
+chk "matching host account (handoff.local.json, case-only difference): mirror proceeds" "0" "$?"
+chk "and the doc reaches the tracker" "1" "$(bvissues "$HA_STATE" ha-open-handoff)"
+
+# Recorded via HANDOFF_HOST_ACCOUNT instead, matching exactly.
+HA2="$(mkdedicated "git@github.com:acme/ha-board2.git")"
+HA2_STATE="$(mktemp)"
+printf '{}' > "$HA2_STATE"
+bvrun "$HA2" "$HA2_STATE" -- new ha2-open --title "Open work" > /dev/null
+bvrun "$HA2" "$HA2_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-a -- mirror > /dev/null
+chk "matching host account (env var): the doc reaches the tracker" "1" "$(bvissues "$HA2_STATE" ha2-open-handoff)"
+
+# Mismatch: refused, non-zero, message names both, and nothing at all reaches the tracker.
+HA3="$(mkdedicated "git@github.com:acme/ha-board3.git")"
+HA3_STATE="$(mktemp)"
+printf '{}' > "$HA3_STATE"
+bvrun "$HA3" "$HA3_STATE" -- new ha3-open --title "Open work" > /dev/null
+HA_OUT3="$(bvrun "$HA3" "$HA3_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- mirror)"
+HA_RC3=$?
+chk "mismatched host account: mirror refuses" "1" "$([ "$HA_RC3" != 0 ] && echo 1 || echo 0)"
+chk_contains "names the recorded account" "$HA_OUT3" "dev-a"
+chk_contains "and the active one" "$HA_OUT3" "dev-b"
+chk_contains "cites ADR 0018" "$HA_OUT3" "ADR 0018"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA3_STATE" create)"
+chk "not even a list call" "0" "$(bvcalls "$HA3_STATE" list)"
+
+# whoami itself failing (an unconfirmable active account): refused too, same as a mismatch.
+HA4="$(mkdedicated "git@github.com:acme/ha-board4.git")"
+HA4_STATE="$(mktemp)"
+printf '{}' > "$HA4_STATE"
+bvrun "$HA4" "$HA4_STATE" -- new ha4-open --title "Open work" > /dev/null
+HA_OUT4="$(bvrun "$HA4" "$HA4_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_FAIL=whoami -- mirror)"
+HA_RC4=$?
+chk "an unconfirmable active account: mirror refuses" "1" "$([ "$HA_RC4" != 0 ] && echo 1 || echo 0)"
+chk_contains "and says it could not confirm" "$HA_OUT4" "could not confirm"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA4_STATE" create)"
+
+# No hostAccount recorded at all: proceeds exactly as before this ADR, and asks the adapter nothing.
+HA5="$(mkdedicated "git@github.com:acme/ha-board5.git")"
+HA5_STATE="$(mktemp)"
+printf '{}' > "$HA5_STATE"
+bvrun "$HA5" "$HA5_STATE" -- new ha5-open --title "Open work" > /dev/null
+HA_OUT5="$(bvrun "$HA5" "$HA5_STATE" -- mirror)"
+chk "no hostAccount recorded: mirror proceeds" "0" "$?"
+chk "and zero whoami calls — nothing was asked" "0" "$(bvcalls "$HA5_STATE" whoami)"
+
+# export --to-issue takes the same guard, before any issue is created — single doc first.
+HA6="$(mkdedicated "git@github.com:acme/ha-board6.git")"
+HA6_STATE="$(mktemp)"
+printf '{}' > "$HA6_STATE"
+bvrun "$HA6" "$HA6_STATE" -- new ha6-work --title "Delegate me" > /dev/null
+HA_OUT6="$(bvrun "$HA6" "$HA6_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- export ha6-work --to-issue)"
+HA_RC6=$?
+chk "export --to-issue mismatch: refused" "1" "$([ "$HA_RC6" != 0 ] && echo 1 || echo 0)"
+chk_contains "cites ADR 0018 too" "$HA_OUT6" "ADR 0018"
+chk "no create call reaches the tracker" "0" "$(bvcalls "$HA6_STATE" create)"
+
+# ...and the bundle path — cheap to add given the same fixtures, so it is.
+HA7="$(mkdedicated "git@github.com:acme/ha-board7.git")"
+HA7_STATE="$(mktemp)"
+printf '{}' > "$HA7_STATE"
+bvrun "$HA7" "$HA7_STATE" -- new ha7-kid --title "Child work" > /dev/null
+bvrun "$HA7" "$HA7_STATE" -- new ha7-parent --orchestrator --children ha7-kid --title "Bundle" > /dev/null
+HA_OUT7="$(bvrun "$HA7" "$HA7_STATE" HANDOFF_HOST_ACCOUNT=dev-a FAKE_TRACKER_LOGIN=dev-b -- export ha7-parent --to-issue)"
+HA_RC7=$?
+chk "export --to-issue bundle mismatch: refused" "1" "$([ "$HA_RC7" != 0 ] && echo 1 || echo 0)"
+chk "no create call reaches the tracker (parent or child)" "0" "$(bvcalls "$HA7_STATE" create)"
 
 # --- the banner says whether it is YOUR review ------------------------------
 # Before this field every reader saw one marker, so "somebody should look" and "you should look"

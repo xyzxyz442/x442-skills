@@ -18,6 +18,12 @@
 #   comments  {"repo", "number"}                                 -> [{"author", "body", "created_at"}]
 #   visibility {"repo"}                                          -> {"visibility": "public"|"private"|"internal"}
 #     A failure exits non-zero; the CLI treats that — and anything unrecognised — as public (ADR 0013).
+#   whoami    {}                                                  -> {"login": "<active gh account>"}
+#     ADR 0018's host-account guard: which account `gh` is actually logged into right now, asked
+#     before mirror or export --to-issue send anything to a board that records a hostAccount. Reads
+#     `gh api user --jq .login` — see https://cli.github.com/manual/gh_api. A failure exits non-zero;
+#     the CLI treats that as "cannot confirm" and refuses, the same as a mismatch (ADR 0018 — writing
+#     under an unconfirmed identity is the harm the guard exists to prevent).
 #
 # An update request names the label prefixes the mirror manages in "managed". Only labels carrying
 # one of them are reconciled; a label a person added by hand is left alone.
@@ -43,7 +49,7 @@
 #   https://docs.github.com/en/repositories/creating-and-managing-repositories/about-repositories#about-repository-visibility
 #     — internal repositories are visible only to members of the owning enterprise
 set -uo pipefail
-op="${1:?usage: tracker-github.sh list|create|update|close|comments|visibility}"
+op="${1:?usage: tracker-github.sh list|create|update|close|comments|visibility|whoami}"
 command -v gh > /dev/null 2>&1 || {
   echo "tracker-github: the gh CLI is not installed — https://cli.github.com, then gh auth login" >&2
   exit 2
@@ -71,10 +77,13 @@ for k in ("title", "body", "labels", "children"):
   echo "tracker-github: unreadable request" >&2
   exit 2
 }
-[ -n "$repo" ] || {
-  echo "tracker-github: request names no repo" >&2
-  exit 2
-}
+# whoami names no repo at all — it asks about the logged-in account, not any repository.
+if [ "$op" != whoami ]; then
+  [ -n "$repo" ] || {
+    echo "tracker-github: request names no repo" >&2
+    exit 2
+  }
+fi
 
 body_file() { # -> path of a temp file holding the request body
   local f
@@ -260,6 +269,11 @@ json.dump({"visibility": str(json.load(sys.stdin).get("visibility", "")).lower()
 out = [{"author": (c.get("author") or {}).get("login", ""), "body": c.get("body", ""),
         "created_at": c.get("createdAt", "")} for c in json.load(sys.stdin).get("comments", [])]
 json.dump(out, sys.stdout)'
+    ;;
+  whoami)
+    # No --repo: this is `gh`'s own logged-in identity, not scoped to any repository.
+    login="$(quiet_gh api user --jq .login)" || exit 1
+    printf '{"login": "%s"}' "$login"
     ;;
   *)
     echo "tracker-github: unknown operation $op" >&2

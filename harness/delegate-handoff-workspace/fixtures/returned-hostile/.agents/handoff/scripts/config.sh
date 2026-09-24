@@ -225,6 +225,10 @@ cfg.update(read_json(os.path.join(board, "handoff.json")))
 # handle set there would tell every member they are the same person. Dropped rather than merely
 # overridden, so that a value committed by accident is inert instead of being a default nobody set.
 cfg.pop("handle", None)
+# `hostAccount` is per-developer for the same reason (ADR 0018): it names which login THIS
+# developer must be active as before mirror/export --to-issue send anything, and a value committed
+# at the board layer would assign every member the same account. Dropped, not merely overridden.
+cfg.pop("hostAccount", None)
 
 if repo:
     # The repo scope names identity from the repo's point of view: `repo` is "who am I on this
@@ -240,6 +244,8 @@ if repo:
                 continue  # this layer's documented keys, applied last — see below
             if key == "handle":
                 continue  # per-machine identity — handoff.local.json only (ADR 0016)
+            if key == "hostAccount":
+                continue  # per-machine identity — handoff.local.json only (ADR 0018)
             cfg["board" if key == "boardPath" else key] = val
         # The documented keys go on LAST so a superseded spelling can never beat the live one.
         # merge-hooks.py carries a legacy `boardPath` forward alongside the `board` that replaced
@@ -272,6 +278,12 @@ if repo:
     # authorised by it and nothing is written from it, so an inaccurate value costs one wrong marker.
     if "handle" in local:
         cfg["handle"] = local["handle"]
+    # The host account (ADR 0018): which login THIS developer must be active as before mirror or
+    # export --to-issue send anything. Never a trust boundary — that stays the remote's host and
+    # owner — it is a per-machine safety check, so it belongs beside `handle` for the same reason:
+    # per-developer identity, never board-wide policy or team identity.
+    if "hostAccount" in local:
+        cfg["hostAccount"] = local["hostAccount"]
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
@@ -303,6 +315,7 @@ emit("HC_TTL_HOURS", cfg.get("ttlHours") or 4)
 emit("HC_ALLOW_VERIFY_CMD", cfg.get("allowVerifyCmd") or False)
 emit("HC_BOARD_PATH", cfg.get("board") or "")
 emit("HC_HANDLE", cfg.get("handle") or "")
+emit("HC_HOST_ACCOUNT", cfg.get("hostAccount") or "")
 emit("HC_ENVIRONMENTS", ",".join(str(e) for e in envs))
 PY
 }
@@ -328,6 +341,7 @@ _handoff_config_legacy_nopython() {
   printf 'HC_TTL_HOURS=%s\n' "$(printf %q "${ttl:-4}")"
   printf 'HC_ALLOW_VERIFY_CMD=%s\n' "$(printf %q "${allow:-0}")"
   printf 'HC_BOARD_PATH=%s\n' "''"
+  printf 'HC_HOST_ACCOUNT=%s\n' "''"
   printf 'HC_ENVIRONMENTS=%s\n' "$(printf %q "dev,staging,prod")"
 }
 

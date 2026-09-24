@@ -182,6 +182,11 @@ HANDOFF_ENVIRONMENTS="${HANDOFF_ENVIRONMENTS:-$HC_ENVIRONMENTS}"
 # Identity: env wins (a one-off override), then the repo's own config, then the board's. A SHARED
 # board's config carries no repoName — identity is per-consumer, which is why the repo scope exists.
 REPO_NAME="${HANDOFF_REPO:-$HC_REPO_NAME}"
+# The host account (ADR 0018): which login this developer must be active as before mirror or
+# export --to-issue send anything. Per-developer, from handoff.local.json only (config.sh already
+# drops it from every committed layer) — env wins for the same one-off-override reason as HANDLE.
+# Empty is the normal state and means the guard asks nothing (host_account_guard, below).
+HOST_ACCOUNT="${HANDOFF_HOST_ACCOUNT:-$HC_HOST_ACCOUNT}"
 
 # --- group sections (multi-group / multi-workspace boards) -----------------------------
 # LAYOUT is board-global (every consumer of a shared board must agree); GROUP is the calling repo's
@@ -3384,6 +3389,28 @@ board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the p
   return 1
 }
 
+# The generic adapter lookup shared by every ADR 0018 check that is not routed through a
+# particular tracker's own config (tracker_adapter() reads external.system for THAT; this asks
+# nothing about any tracker at all, so a board need declare no tracker for board_visibility() or
+# host_account_guard() to still work): HANDOFF_TRACKER_ADAPTER first — the same seam the
+# fake-tracker harness already substitutes with — then the shipped tracker-github.sh. Prints
+# nothing and fails when no adapter resolves; callers treat that as "unknown"/"cannot confirm"
+# rather than dying here, since a board or a developer that never touches GitHub is unaffected.
+board_generic_adapter() { # -> adapter path on stdout, or empty with non-zero
+  local f
+  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ] && [ -f "$HANDOFF_TRACKER_ADAPTER" ]; then
+    printf '%s' "$HANDOFF_TRACKER_ADAPTER"
+    return 0
+  fi
+  for f in "$DIR/scripts/tracker-github.sh" "$_self_dir/tracker-github.sh" "$_self_dir/scripts/tracker-github.sh"; do
+    [ -f "$f" ] && {
+      printf '%s' "$f"
+      return 0
+    }
+  done
+  return 1
+}
+
 # ADR 0018 — the board's OWN remote is a trust boundary too, not only its trackers (ADR 0013).
 # Asked through the same adapter mechanism a tracker uses, but never through tracker config: a
 # board need declare no tracker at all to still have this checked. Only github.com is asked —
@@ -3393,7 +3420,7 @@ board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the p
 # substitute the adapter that answers this too — it never widens WHICH provider is asked, only
 # which script speaks for it.
 board_visibility() { # board-dir -> public|private|unknown, printed on stdout
-  local dir="$1" origin provider adapter="" f path vis
+  local dir="$1" origin provider adapter="" path vis
   origin="$(board_origin_norm "$dir")"
   [ -n "$origin" ] || { printf 'unknown'; return 0; }
   provider="$(repo_provider_of "$origin")"
@@ -3401,16 +3428,7 @@ board_visibility() { # board-dir -> public|private|unknown, printed on stdout
     printf 'unknown'
     return 0
   fi
-  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ] && [ -f "$HANDOFF_TRACKER_ADAPTER" ]; then
-    adapter="$HANDOFF_TRACKER_ADAPTER"
-  else
-    for f in "$DIR/scripts/tracker-github.sh" "$_self_dir/tracker-github.sh" "$_self_dir/scripts/tracker-github.sh"; do
-      [ -f "$f" ] && {
-        adapter="$f"
-        break
-      }
-    done
-  fi
+  adapter="$(board_generic_adapter)" || adapter=""
   [ -n "$adapter" ] || { printf 'unknown'; return 0; }
   path="$(repo_path_of "$origin")"
   vis="$(printf '{"repo": "%s"}' "$path" | bash "$adapter" visibility 2> /dev/null \
@@ -3446,6 +3464,41 @@ board_visibility_gate() { # board-dir -> 0, or dies
     public) die "$(board_public_refusal "$origin")" ;;
     unknown) echo "handoff: warning — could not confirm $origin (this board's own remote) is private; continuing (ADR 0018)." >&2 ;;
   esac
+  return 0
+}
+
+# ADR 0018 — the host account is NEVER a trust boundary (that stays the remote's host and owner,
+# checked above); it is a per-machine safety check that catches sending to a tracker while logged
+# into the wrong account. `hostAccount`, recorded per developer in handoff.local.json (ADR 0010),
+# never the board's own committed handoff.json (config.sh drops it from every committed layer).
+#
+# Nothing is asked and nothing is printed when HOST_ACCOUNT is unset — an existing board, or a
+# developer who never records one, behaves exactly as before this ADR: zero calls to the adapter's
+# whoami op. Called once per run, by mirror_preflight (after board_visibility_gate, before any
+# tracker is asked for anything) and by export --to-issue, both the single-doc and the bundle path
+# (before any issue is created).
+#
+# A recorded account that cannot be confirmed — no adapter resolves, the whoami op fails, or it
+# answers with no login — refuses exactly like a mismatch: writing under an unconfirmed identity is
+# the harm this guard exists to prevent, so "I don't know" and "it's the wrong one" get the same
+# answer. Compared case-insensitively: GitHub logins are.
+host_account_guard() { # -> 0, or dies
+  [ -n "$HOST_ACCOUNT" ] || return 0
+  local adapter active
+  adapter="$(board_generic_adapter)" || adapter=""
+  active=""
+  if [ -n "$adapter" ]; then
+    active="$(printf '{}' | bash "$adapter" whoami 2> /dev/null | python3 -c 'import json, sys
+try:
+    v = json.load(sys.stdin).get("login", "")
+    print(v if isinstance(v, str) else "")
+except Exception:
+    print("")' 2> /dev/null)"
+  fi
+  [ -n "$active" ] \
+    || die "could not confirm which account is active — this board expects the host account $HOST_ACCOUNT (handoff.local.json, ADR 0018), and writing under an unconfirmed identity is refused. Nothing was sent. Check 'gh auth status', then re-run."
+  [ "$(printf '%s' "$active" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$HOST_ACCOUNT" | tr '[:upper:]' '[:lower:]')" ] \
+    || die "this board expects the host account $HOST_ACCOUNT (handoff.local.json, ADR 0018), but the active account is $active — refusing to send anything under the wrong identity. Nothing was sent. Switch first: gh auth switch --user $HOST_ACCOUNT"
   return 0
 }
 
@@ -3968,6 +4021,7 @@ export_bundle_to_issue() { # id doc outdir branch do_claim force-secret
 
   repo="$(require_tracker delegate)" || exit 3
   tracker_adapter > /dev/null || exit 3
+  host_account_guard
   kids="$(children_of "$f")"
   [ -n "$kids" ] \
     || die "$id has no children — a bundle with no units is nothing to delegate. Add them with 'handoff children add $id <child>'."
@@ -4123,6 +4177,7 @@ export_to_issue() { # id doc outdir branch do_claim force-secret
   [ -z "$existing" ] || die "$id is already linked to $existing — it is not delegated to a second ticket. Nothing was sent."
   repo="$(require_tracker delegate)" || exit 3
   tracker_adapter > /dev/null || exit 3
+  host_account_guard
   # The publication gate, before the brief is rendered or the lease taken — a refusal leaves nothing.
   if tracker_is_public "$repo"; then
     board_allows_public || die "$(public_refusal "$repo" "opening $id as an issue")"
@@ -4499,8 +4554,10 @@ except Exception: print("")')"
 # it half-way through. The listing of already-mirrored issues is kept, for the person who decides.
 mirror_preflight() { # aliases -> 0, or dies
   local alias repo existing already
-  # ADR 0018 — the board's own remote first, before any tracker (ADR 0013) is even asked.
+  # ADR 0018 — the board's own remote first, before any tracker (ADR 0013) is even asked, then the
+  # host account — before any tracker's config is even read, let alone asked for anything.
   board_visibility_gate "$DIR"
+  host_account_guard
   while IFS= read -r alias; do
     CUR_TRACKER="$alias"
     repo="$(require_tracker mirror)" || exit 3
