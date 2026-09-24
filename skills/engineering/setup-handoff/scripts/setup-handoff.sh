@@ -365,6 +365,11 @@ if isinstance(ext, dict):
 trk = existing.get("trackers")
 if isinstance(trk, dict):
     cfg["trackers"] = trk
+# ADR 0020 — a GROUP-level tracker rule is the same kind of committed policy as `trackers` itself:
+# dropping it on a re-install would silently take a whole group's mirror down.
+rules = existing.get("trackerRules")
+if isinstance(rules, dict):
+    cfg["trackerRules"] = rules
 # ADR 0018 — a child board's parent link, and the cross-owner children a parent accepts, are trust
 # boundary decisions. Dropping them would turn a child back into an ordinary board that moves work
 # out of itself unannounced, or break a cross-owner link both sides agreed to.

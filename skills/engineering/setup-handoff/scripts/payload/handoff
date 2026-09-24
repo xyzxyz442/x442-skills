@@ -3858,25 +3858,54 @@ tracker_mode() { # -> trackers | legacy | none
 try: d = json.load(open(sys.argv[1]))
 except Exception: print("none"); raise SystemExit(0)
 d = d if isinstance(d, dict) else {}
-if isinstance(d.get("trackers"), dict): print("trackers")
+if isinstance(d.get("trackers"), dict) or isinstance(d.get("trackerRules"), dict): print("trackers")
 elif isinstance(d.get("external"), dict) and sys.argv[2] != "cross-repo": print("legacy")
 else: print("none")' "$DIR/handoff.json" "$TOPOLOGY" 2> /dev/null || printf 'none'
 }
 
+# ADR 0020 — a GROUP can declare a tracker RULE in trackerRules, resolved for a member through the
+# origin recorded at registration (_generated.repos[].origin), never read live: a CI mirror has no
+# member checkouts. A per-repository entry under `trackers` always wins when both exist. A rule
+# never carries allowPublic (stripped defensively below even though the verifier already refuses
+# one that does), so a public member repository under a bare rule still needs a per-repository
+# opt-in (ADR 0013).
 tracker_entry() { # alias -> that home's tracker as a JSON object, or nothing
   [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
   python3 -c 'import json,sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 d = d if isinstance(d, dict) else {}
+alias, topology = sys.argv[2], sys.argv[3]
 t = d.get("trackers")
-if isinstance(t, dict):
-    e = t.get(sys.argv[2])
-elif isinstance(d.get("external"), dict) and sys.argv[3] != "cross-repo":
-    e = d["external"]
-else:
-    e = None
-if isinstance(e, dict): print(json.dumps(e))' "$DIR/handoff.json" "$1" "$TOPOLOGY" 2> /dev/null
+if isinstance(t, dict) and isinstance(t.get(alias), dict):
+    print(json.dumps(t[alias]))
+    raise SystemExit(0)
+if isinstance(d.get("external"), dict) and topology != "cross-repo" and not isinstance(t, dict):
+    print(json.dumps(d["external"]))
+    raise SystemExit(0)
+rules = d.get("trackerRules")
+if not isinstance(rules, dict):
+    raise SystemExit(0)
+repos = (d.get("_generated") or {}).get("repos") or []
+reg = next((r for r in repos if isinstance(r, dict) and r.get("alias") == alias), None)
+group = reg.get("group") if isinstance(reg, dict) else None
+origin = reg.get("origin") if isinstance(reg, dict) else None
+rule = rules.get(group) if group else None
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+# A rule names a SYSTEM and the origin names a HOST: a member on another host is not for this rule to
+# mirror, or its path would be reused on a host it does not live on.
+if not isinstance(rule, dict) or not isinstance(origin, str) or not origin or not on_host(origin, rule.get("system")):
+    raise SystemExit(0)
+def path_of(o):
+    host = o.split("/", 1)[0]
+    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
+entry = dict(rule)
+entry.pop("allowPublic", None)
+entry["repo"] = path_of(origin)
+if entry.get("kind") == "issues" and not entry.get("refPattern"):
+    entry["refPattern"] = "#[0-9]+"
+print(json.dumps(entry))' "$DIR/handoff.json" "$1" "$TOPOLOGY" 2> /dev/null
 }
 
 registered_aliases() { # -> the repository aliases this board's registry lists, one per line
@@ -3918,8 +3947,23 @@ tracker_aliases() { # -> one alias per line, a single empty line (legacy), or no
     trackers)
       python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-for alias, e in sorted((d.get("trackers") or {}).items()):
-    if isinstance(e, dict) and e.get("kind") == "issues": print(alias)' "$DIR/handoff.json" 2> /dev/null
+declared = d.get("trackers") or {}
+aliases = set(a for a, e in declared.items() if isinstance(e, dict) and e.get("kind") == "issues")
+# ADR 0020 — every registered member of a ruled group is a pass too, unless it already has its own
+# declared entry above (which may be a sprint tool, overriding the rule to opt OUT of the mirror).
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and rule.get("kind") == "issues" and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        aliases.add(a)
+for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
       ;;
   esac
 }
@@ -3928,8 +3972,21 @@ tracker_aliases_all() { # -> every alias this board declares a tracker for, spri
   [ "$(tracker_mode)" = trackers ] || return 0
   python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
-for alias, e in sorted((d.get("trackers") or {}).items()):
-    if isinstance(e, dict): print(alias)' "$DIR/handoff.json" 2> /dev/null
+declared = d.get("trackers") or {}
+aliases = set(a for a, e in declared.items() if isinstance(e, dict))
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        aliases.add(a)
+for a in sorted(aliases): print(a)' "$DIR/handoff.json" 2> /dev/null
 }
 
 # One board per trust boundary (ADR 0011), kept when trackers multiply (ADR 0017): every tracker on a
@@ -3939,15 +3996,35 @@ trackers_trust_check() { # -> 0, or dies naming the owners
   [ "$(tracker_mode)" = trackers ] || return 0
   local board_key owners
   board_key="$(board_owner_key "$DIR" | tr '[:upper:]' '[:lower:]')"
+  # ADR 0020 — a rule-derived entry is a tracker like any other, so it belongs in this trust check
+  # exactly as a declared one does: a member whose origin sits under a different owner refuses the
+  # run, naming both.
   owners="$(python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 keys = set()
-for e in (d.get("trackers") or {}).values():
-    if not isinstance(e, dict) or not isinstance(e.get("repo"), str) or "/" not in e["repo"]:
-        continue
-    system = e.get("system") or "github"
+def add(repo, system):
+    if not isinstance(repo, str) or "/" not in repo: return
+    system = system or "github"
     host = "github.com" if system == "github" else system
-    keys.add(("%s/%s" % (host, e["repo"].split("/")[0])).lower())
+    keys.add(("%s/%s" % (host, repo.split("/")[0])).lower())
+declared = d.get("trackers") or {}
+for e in declared.values():
+    if isinstance(e, dict): add(e.get("repo"), e.get("system"))
+rules = d.get("trackerRules") or {}
+repos = (d.get("_generated") or {}).get("repos") or []
+def path_of(o):
+    host = o.split("/", 1)[0]
+    return o.split("/", 1)[1] if host in ("github.com", "gitlab.com", "bitbucket.org") else o
+HOSTS = {"github": "github.com", "gitlab": "gitlab.com", "bitbucket": "bitbucket.org"}
+def on_host(o, system): return o.split("/", 1)[0].lower() == HOSTS.get(system or "github", system or "")
+for r in repos:
+    if not isinstance(r, dict): continue
+    a = r.get("alias")
+    if not a or a in declared: continue
+    rule = rules.get(r.get("group"))
+    origin = r.get("origin")
+    if isinstance(rule, dict) and isinstance(origin, str) and origin and on_host(origin, rule.get("system")):
+        add(path_of(origin), rule.get("system"))
 print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
   [ -n "$owners" ] || return 0
   case "$owners" in
@@ -3956,6 +4033,24 @@ print(" ".join(sorted(keys)))' "$DIR/handoff.json" 2> /dev/null)"
   [ -z "$board_key" ] || [ "$board_key" = "$owners" ] \
     || die "this board's remote is $board_key but its trackers belong to $owners — one board per trust boundary (ADR 0011, ADR 0017). Mirror from a board owned by $owners; nothing was sent."
   return 0
+}
+
+# ADR 0020 — allowPublic is never part of a rule: a rule applies to every member of a group, and a
+# group can hold a public repository nobody meant to publish. Checked once per run, before any
+# tracker is even asked for its visibility (ADR 0013) — a per-repository entry under `trackers` is
+# still free to set allowPublic for the one repository that should actually publish.
+tracker_rules_reject_public() { # -> 0, or dies naming the group(s)
+  [ -f "$DIR/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  local groups
+  groups="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+rules = d.get("trackerRules") if isinstance(d, dict) else None
+if not isinstance(rules, dict): raise SystemExit(0)
+bad = sorted(g for g, r in rules.items() if isinstance(r, dict) and "allowPublic" in r)
+print(" ".join(bad))' "$DIR/handoff.json" 2> /dev/null)"
+  [ -z "$groups" ] \
+    || die "trackerRules sets allowPublic on group(s): $groups — a rule can never opt a group's public repositories into publishing (ADR 0020). Move allowPublic onto a per-repository entry under trackers for the specific repository that should publish, and mark its docs share: public. Nothing was sent."
 }
 
 # ADR 0017 — which board a mirrored issue belongs to. Derived, never stored: the board repository's
@@ -4728,6 +4823,7 @@ cmd_mirror() {
   fi
   MIRROR_MODE="$(tracker_mode)"
   [ "$MIRROR_MODE" != none ] || die "this board declares no tracker (no trackers block in $DIR/handoff.json; a single-repository board may use external) — nothing to mirror into."
+  tracker_rules_reject_public
   local aliases a known
   aliases="$(tracker_aliases)"
   if [ "$MIRROR_MODE" = trackers ]; then

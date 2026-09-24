@@ -289,6 +289,26 @@ WF9="$B9/.github/workflows/handoff-mirror.yml"
 chk_contains "trackers beyond the board's own repo need the named secret" "$(cat "$WF9")" 'GH_TOKEN: ${{ secrets.HANDOFF_TRACKER_TOKEN }}'
 chk_contains "and the ACTION NEEDED line names every tracker repository" "$OUT9" "example-invalid/other-tracker"
 
+# ADR 0020 — a group-level tracker RULE is the same kind of committed policy as `trackers` itself:
+# dropping it on a re-install would silently take a whole group's mirror down.
+seed_tracker_rules() { # board-dir json-object-of-rules
+  python3 -c '
+import json, sys
+path, rules = sys.argv[1], sys.argv[2]
+json.dump({"trackerRules": json.loads(rules)}, open(path, "w"))
+' "$1/handoff.json" "$2"
+}
+B8R="$(mkgitboard)"
+git -C "$B8R" remote add origin "$GH_FAKE_REMOTE"
+seed_tracker_rules "$B8R" '{"fleet": {"kind": "issues", "system": "github", "projection": "summary"}}'
+OUT8R="$("$INSTALLER" --board-only "$B8R" --groups core 2>&1)"
+ST8R=$?
+chk "trackerRules board: installer succeeds" "0" "$ST8R"
+chk "trackerRules survives a re-install" "issues" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackerRules") or {}).get("fleet", {}).get("kind", ""))' "$B8R/handoff.json")"
+chk "the projection setting inside the rule survives too" "summary" \
+  "$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("trackerRules") or {}).get("fleet", {}).get("projection", ""))' "$B8R/handoff.json")"
+
 printf '\n9. child board links (ADR 0018)\n'
 # A child's parent link and a parent's accepted children are trust-boundary decisions. A re-install
 # that dropped them would turn a child back into an ordinary board — one that moves work out of

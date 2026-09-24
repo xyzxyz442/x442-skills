@@ -95,14 +95,21 @@ def build(resolved: dict, board: str) -> "tuple[str, list[str]]":
             # board_repo_entry, which reads the board's own .locations.json and, failing that,
             # discovers the checkout and caches it there, ADR 0010). Schema 1 files still READ — their path is
             # accepted as a hint that has to prove itself against this root commit.
-            entries.append(
-                {
-                    "group": g["group"],
-                    "alias": m["alias"],
-                    "audience": m["audience"],
-                    "rootCommit": m["root_commit"],
-                }
-            )
+            entry = {
+                "group": g["group"],
+                "alias": m["alias"],
+                "audience": m["audience"],
+                "rootCommit": m["root_commit"],
+            }
+            # ADR 0020 — a group-level tracker RULE resolves a member's target repository from
+            # THIS field, recorded once here at registration, never from a live `git remote`: a CI
+            # mirror has no member checkouts to read one from. Omitted (not null) when the member's
+            # origin could not be read, so the rule-derived resolver's presence check ("isinstance
+            # str") is the same test whether the key is absent or explicitly empty.
+            origin = m.get("origin")
+            if isinstance(origin, str) and origin:
+                entry["origin"] = origin
+            entries.append(entry)
 
     for (group, aud), wheres in sorted(by_audience.items()):
         if len(wheres) > 1:
@@ -197,6 +204,29 @@ def _selftest() -> int:
             )
             assert json.loads(text2)[GENERATED_KEY]["repos"] == [], kw
             assert len(warns2) == 1 and reason in warns2[0], (kw, warns2)
+
+        # ---- ADR 0020: origin is recorded when the git remote resolves, omitted otherwise -------
+        # (never inferred later — a rule-derived tracker reads this field, never a live `git
+        # remote`, so a CI mirror with no member checkouts still resolves it.)
+        text_o, warns_o = build(
+            resolved(
+                board,
+                [
+                    {
+                        "group": "g",
+                        "members": [
+                            member("a", "acme-api", origin="github.com/acme/acme-api"),
+                            member("b", "acme-b"),
+                        ],
+                    }
+                ],
+            ),
+            board,
+        )
+        repos_o = {e["alias"]: e for e in json.loads(text_o)[GENERATED_KEY]["repos"]}
+        assert repos_o["a"]["origin"] == "github.com/acme/acme-api", repos_o["a"]
+        assert "origin" not in repos_o["b"], repos_o["b"]
+        assert not warns_o, warns_o
 
         # ---- audience clashes are scoped to a GROUP -------------------------------------------
         # Two groups sharing one board may each have their own "api": the CLI only ever resolves

@@ -482,5 +482,129 @@ chk_contains "an unregistered home from the environment is named" "$EV_OUT" "acm
 chk "but the doc is still written" "acme-typo" "$(sed -n 's/^home: //p' "$TEVB/e-one-handoff.md")"
 ST="$ST_SAVE"
 
+printf '\ntracker rules synthesize a per-repository entry from a group (ADR 0020)\n'
+RULES_CFG='{ "topology": "cross-repo", "schema": 4,
+  "groups": ["fleet"],
+  "_generated": { "repos": [
+    { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" },
+    { "alias": "acme-web", "group": "fleet", "origin": "github.com/acme/acme-web" },
+    { "alias": "acme-noorigin", "group": "fleet" },
+    { "alias": "acme-lab", "group": "fleet", "origin": "gitlab.com/acme/acme-lab" } ] },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github", "projection": "summary" } } }'
+TRU="$(mkboard)"
+TRUB="$TRU/.agents/handoff"
+tr_cfg "$TRUB" "$RULES_CFG"
+chk "trackerRules alone puts the board in trackers mode" "trackers" "$(tr_fn "$TRU" tracker_mode)"
+chk "a rule synthesizes repo for a registered member" "acme/acme-api" "$(tr_fn "$TRU" 'CUR_TRACKER=acme-api; tracker_setting repo')"
+chk "refPattern defaults for a synthesized issues entry" "#[0-9]+" "$(tr_fn "$TRU" 'CUR_TRACKER=acme-api; tracker_setting refPattern')"
+chk "a second member under the same rule needs no config" "acme/acme-web" "$(tr_fn "$TRU" 'CUR_TRACKER=acme-web; tracker_setting repo')"
+chk "a member with no recorded origin resolves to nothing" "" "$(tr_fn "$TRU" 'CUR_TRACKER=acme-noorigin; tracker_setting repo')"
+# A rule names a SYSTEM, and a member's origin names a HOST. A GitLab member under a github rule must
+# never have its path reused as a GitHub repository — that would mirror into whatever repository
+# happens to hold the same path on a host the member does not live on.
+chk "a member whose origin is on another host than the rule's system resolves to nothing" "" \
+  "$(tr_fn "$TRU" 'CUR_TRACKER=acme-lab; tracker_setting repo')"
+chk "mirror aliases include every registered member with a rule and a matching origin" "acme-api acme-web" "$(tr_fn "$TRU" tracker_aliases | tr '\n' ' ' | sed 's/ $//')"
+
+printf '\nmirror --dry-run plans through a rule-derived tracker; a second member needs no config (ADR 0020)\n'
+# A fresh tracker state: acme/acme-api and acme/acme-web already carry issues mirrored by OTHER
+# boards earlier in this suite (a different board id), and a second board's pass into the same
+# repo is refused by design (ADR 0017) — exactly what the "Public" block above isolates against.
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+trh "$TRU" new u-api --title "Api" --audience acme-api > /dev/null
+trh "$TRU" new u-web --title "Web" --audience acme-web > /dev/null
+trh "$TRU" new u-none --title "No origin" --audience acme-noorigin > /dev/null
+git -C "$TRU" add -A && git -C "$TRU" commit -qm "docs"
+DRY_OUT="$(trh "$TRU" mirror --dry-run)"
+chk_contains "the dry run plans an issue for the first member" "$DRY_OUT" "create u-api-handoff"
+chk_contains "and for the second member, added under the same rule with no config change" "$DRY_OUT" "create u-web-handoff"
+chk_contains "a member with no origin is named, never silently dropped" "$DRY_OUT" "u-none-handoff — home acme-noorigin has no issue tracker"
+ST="$ST_SAVE"
+
+printf '\na per-repository entry overrides its group rule for that member only (ADR 0020)\n'
+OVERRIDE_CFG='{ "topology": "cross-repo", "schema": 4,
+  "groups": ["fleet"],
+  "_generated": { "repos": [
+    { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" },
+    { "alias": "acme-web", "group": "fleet", "origin": "github.com/acme/acme-web" } ] },
+  "trackers": { "acme-api": { "kind": "issues", "system": "github", "repo": "override/acme-api", "refPattern": "TIX-[0-9]+" } },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github" } } }'
+TOV="$(mkboard)"
+tr_cfg "$TOV/.agents/handoff" "$OVERRIDE_CFG"
+chk "the per-repo entry wins for the member it names" "override/acme-api" "$(tr_fn "$TOV" 'CUR_TRACKER=acme-api; tracker_setting repo')"
+chk "and keeps its own refPattern, not the rule default" "TIX-[0-9]+" "$(tr_fn "$TOV" 'CUR_TRACKER=acme-api; tracker_setting refPattern')"
+chk "the rule still applies to the member it does not name" "acme/acme-web" "$(tr_fn "$TOV" 'CUR_TRACKER=acme-web; tracker_setting repo')"
+
+printf '\nallowPublic is never part of a rule — mirror refuses, naming the group (ADR 0020)\n'
+PUB_RULE_CFG='{ "topology": "cross-repo", "schema": 4,
+  "groups": ["fleet"],
+  "_generated": { "repos": [ { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" } ] },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github", "allowPublic": true } } }'
+TPR="$(mkboard)"
+tr_cfg "$TPR/.agents/handoff" "$PUB_RULE_CFG"
+trh "$TPR" new p-one --title "One" --audience acme-api > /dev/null
+git -C "$TPR" add -A && git -C "$TPR" commit -qm "docs"
+PR_CREATES_BEFORE="$(fq "calls('create')")"
+PR_OUT="$(trh "$TPR" mirror)"
+chk_contains "mirror refuses a rule that sets allowPublic, naming the group" "$PR_OUT" "fleet"
+chk_contains "and cites ADR 0020" "$PR_OUT" "ADR 0020"
+chk "nothing was sent" "$PR_CREATES_BEFORE" "$(fq "calls('create')")"
+DRY_PR_OUT="$(trh "$TPR" mirror --dry-run)"
+chk_contains "a dry run refuses too, before anything is planned" "$DRY_PR_OUT" "fleet"
+
+printf '\na rule-derived tracker on a public repo still needs a per-repository opt-in (ADR 0013, ADR 0020)\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+PUBM_CFG='{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "_generated": { "repos": [ { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" } ] },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github" } } }'
+TPM="$(mkboard)"
+tr_cfg "$TPM/.agents/handoff" "$PUBM_CFG"
+trh "$TPM" new m-one --title "One" --audience acme-api > /dev/null
+git -C "$TPM" add -A && git -C "$TPM" commit -qm "docs"
+CREATES_BEFORE="$(fq "calls('create')")"
+PUBM_OUT="$(cd "$TPM" && HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" \
+  FAKE_TRACKER_PUBLIC_REPOS="acme/acme-api" ./.agents/handoff/handoff mirror 2>&1)"
+chk_contains "a public repo under a bare rule refuses — no allowPublic anywhere" "$PUBM_OUT" "acme/acme-api is public"
+chk "nothing is sent" "$CREATES_BEFORE" "$(fq "calls('create')")"
+
+# The same repo, with a per-repository entry that opts in AND a doc marked share: public.
+PUBM_CFG2='{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "_generated": { "repos": [ { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" } ] },
+  "trackers": { "acme-api": { "kind": "issues", "system": "github", "repo": "acme/acme-api", "refPattern": "#[0-9]+", "allowPublic": true } },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github" } } }'
+tr_cfg "$TPM/.agents/handoff" "$PUBM_CFG2"
+trh "$TPM" new m-pub --title "Public" --audience acme-api --share public > /dev/null
+git -C "$TPM" add -A && git -C "$TPM" commit -qm "share"
+(cd "$TPM" && HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" \
+  FAKE_TRACKER_PUBLIC_REPOS="acme/acme-api" ./.agents/handoff/handoff mirror > /dev/null 2>&1)
+chk "a per-repo allowPublic plus a doc marked share: public is sent" "1" \
+  "$(fq "len([i for i in in_repo('acme/acme-api') if 'm-pub-handoff' in i['body']])")"
+ST="$ST_SAVE"
+
+printf '\nthe one-owner check applies to rule-derived trackers too (ADR 0011, ADR 0017, ADR 0020)\n'
+OWNER_CFG='{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "_generated": { "repos": [
+    { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" },
+    { "alias": "zeta-web", "group": "fleet", "origin": "github.com/zeta/acme-web" } ] },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github" } } }'
+TOW="$(mkboard)"
+tr_cfg "$TOW/.agents/handoff" "$OWNER_CFG"
+OWNER_OUT="$(tr_fn "$TOW" trackers_trust_check)"
+chk_contains "a member whose origin belongs to another owner refuses, naming acme" "$OWNER_OUT" "github.com/acme"
+chk_contains "and naming zeta" "$OWNER_OUT" "github.com/zeta"
+
+printf '\nthe verifier checks tracker rules offline (ADR 0020)\n'
+TVR="$(mkboard)"
+tr_cfg "$TVR/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "_generated": { "repos": [ { "alias": "acme-api", "group": "fleet", "origin": "github.com/acme/acme-api" } ] },
+  "trackerRules": { "fleet": { "kind": "issues", "system": "github", "allowPublic": true }, "ghost": { "kind": "issues", "system": "github" }, "bad": "not-an-object" } }'
+VIDS_R="$(vids "$TVR")"
+chk_contains "a rule with allowPublic fails" "$VIDS_R" "fail:board.trackerRules.allowPublic"
+chk_contains "a rule naming an undeclared group warns" "$VIDS_R" "warn:board.trackerRules.group"
+chk_contains "a malformed rule fails shape" "$VIDS_R" "fail:board.trackerRules.shape"
+chk "trackerRules is a recognised config key" "no" "$(has "$VIDS_R" "warn:board.config.unknown_keys")"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

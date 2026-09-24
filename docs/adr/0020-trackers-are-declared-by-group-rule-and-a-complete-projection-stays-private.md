@@ -35,7 +35,9 @@ refused on any public tracker. This refines ADR 0011, 0013, and 0017.
 - **A tracker rule** is a committed, group-level declaration in the board's config: every
   repository registered in that group mirrors into its own origin repository with the rule's
   system and projection. The target is resolved from the origin recorded when the repository is
-  registered, never read at run time, so a CI mirror needs no member checkouts. Adding a
+  registered, never read at run time, so a CI mirror needs no member checkouts. A rule applies
+  only to a member whose recorded origin is on the host its system names; a member elsewhere is
+  not mirrored, since its path would otherwise be reused on a host it does not live on. Adding a
   repository to the group is the decision, visible in review. A per-repository **tracker
   entry** overrides the rule.
 - **`allowPublic` is never part of a rule.** It is accepted only on a per-repository entry, so

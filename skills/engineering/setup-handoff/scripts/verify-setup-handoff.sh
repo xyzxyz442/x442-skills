@@ -296,7 +296,7 @@ if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command 
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
        "board","boardPath","environments","layout","boardRemote","locations","repo",
-       "schema","_generated","external","trackers"}
+       "schema","_generated","external","trackers","trackerRules"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -683,6 +683,50 @@ PY
     esac
   done <<< "$TRK_REPORT"
   [ "$TRK_PRESENT" = 1 ] && ok board.trackers "a tracker per repository:$TRK_ALIASES"
+fi
+
+# ADR 0020 — a GROUP-LEVEL rule: every member of the group mirrors under it unless a per-repository
+# entry overrides. Checked offline from the same committed handoff.json, right after `trackers`
+# above so the two checks read side by side. `allowPublic` inside a rule is a hard FAIL, not a
+# warning — ADR 0020 says a rule can never opt a group's public repositories into publishing, and
+# the CLI itself refuses to mirror through one (tracker_rules_reject_public).
+if [ -f "$HD/handoff.json" ] && command -v python3 > /dev/null 2>&1; then
+  RULES_REPORT="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+if not isinstance(d, dict): raise SystemExit(0)
+rules = d.get("trackerRules")
+if not isinstance(rules, dict) or not rules: raise SystemExit(0)
+print("ANY\x1f")
+groups = d.get("groups") or []
+if isinstance(groups, dict): groups = list(groups)
+groups = set(str(g) for g in groups)
+for name, r in sorted(rules.items()):
+    if not isinstance(r, dict):
+        print("SHAPE\x1f%s\x1fnot an object" % name)
+        continue
+    system = r.get("system") if isinstance(r.get("system"), str) else ""
+    if not system:
+        print("SHAPE\x1f%s\x1fnames no system" % name)
+    if "allowPublic" in r:
+        print("PUBLIC\x1f%s" % name)
+    if groups and name not in groups:
+        print("GROUP\x1f%s" % name)' "$HD/handoff.json" 2> /dev/null)"
+  RULES_ANY=0 RULES_SHAPE_BAD="" RULES_PUBLIC_BAD="" RULES_GROUP_WARN=""
+  while IFS=$'\x1f' read -r kind name detail; do
+    case "$kind" in
+      ANY) RULES_ANY=1 ;;
+      SHAPE) RULES_SHAPE_BAD="${RULES_SHAPE_BAD:+$RULES_SHAPE_BAD, }$name ($detail)" ;;
+      PUBLIC) RULES_PUBLIC_BAD="${RULES_PUBLIC_BAD:+$RULES_PUBLIC_BAD, }$name" ;;
+      GROUP) RULES_GROUP_WARN="${RULES_GROUP_WARN:+$RULES_GROUP_WARN, }$name" ;;
+    esac
+  done <<< "$RULES_REPORT"
+  if [ "$RULES_ANY" = 1 ]; then
+    [ -z "$RULES_SHAPE_BAD" ] && ok board.trackerRules.shape "every tracker rule is an object naming a system" \
+      || bad board.trackerRules.shape "malformed tracker rule(s): $RULES_SHAPE_BAD"
+    [ -z "$RULES_PUBLIC_BAD" ] || bad board.trackerRules.allowPublic "trackerRules sets allowPublic on group(s): $RULES_PUBLIC_BAD — a rule can never opt a group's public repositories into publishing (ADR 0020); move it onto a per-repository entry under trackers"
+    [ -z "$RULES_GROUP_WARN" ] || warn board.trackerRules.group "trackerRules names group(s) this board does not declare: $RULES_GROUP_WARN"
+  fi
 fi
 
 # The audit half of the write-path scanner (ADR 0005). The rules are LIFTED OUT OF THE SHIPPED CLI
