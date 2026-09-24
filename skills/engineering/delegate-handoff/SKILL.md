@@ -113,6 +113,14 @@ recorded on the doc's Activity log next to the rules that fired. This closes the
 exist: the CLI checked a returned brief for a pasted credential but spliced document sections
 verbatim into an outbound one with no check at all.
 
+**Export also rewrites machine references before the brief is written.** A path under your home
+directory becomes `~`; a path under the workspace root becomes a portable token. Another user's
+home path, a local port, or a `*.local` hostname is warned about instead of rewritten, since the
+executor is a different machine by definition
+([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+This is a portability check, not the secret guard — read what you are about to send anyway; see
+[What to send](#3-what-to-send) below.
+
 ### Delegating through an issue
 
 When the executor works from the team's issue tracker rather than a file you hand them, and the
@@ -123,12 +131,14 @@ board declares one for this handoff's **home** repository (`trackers` in its `ha
 handoff export ID --to-issue
 ```
 
-It renders the same brief — same restricted refusal, same outbound secret scan, same claim — and
-opens it as an issue in the home repository's tracker, recording the issue as the doc's `external_ref` and
-`delegated_to: issue #N`. It refuses a doc that is already linked to a ticket. On a **public**
-repository it refuses unless the board allows it
+It renders the same brief — same restricted refusal, same outbound secret scan, same machine-reference
+rewrite, same claim — and opens it as an issue in the home repository's tracker, recording the issue
+as the doc's `external_ref` and `delegated_to: issue #N`. It refuses a doc that is already linked to
+a ticket. On a **public** repository it refuses unless the board allows it
 (`allowPublic` on that tracker) and the doc is marked `share: public` (ADR 0013) — the brief would be
-readable by anyone, permanently. The executor answers with **one comment** holding a
+readable by anyone, permanently. It also refuses when the `gh` account currently active differs from
+the `hostAccount` recorded for you in `.agents/handoff.local.json` (ADR 0018) — the same check
+`mirror` runs. The executor answers with **one comment** holding a
 `result_status:` line and the filled Result block; the import in step 5 reads it from there.
 
 **A bundle goes out as a bundle** (ADR 0015), provided it is one tracker's bundle: a parent whose

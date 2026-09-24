@@ -63,6 +63,13 @@ handoff claim <id> "what you're doing"
   lease for** — the hook blocks it, and trying is a sign you skipped the claim.
 - A **stale** lease (past its TTL) is reclaimable: claiming takes it over and logs the takeover.
 - The lease auto-renews while you keep editing and auto-reaps if you crash — you do not babysit it.
+- A lease commit touches only its own group's generated index, so two claims in different groups
+  never contend on the same push. When two claims in the _same_ group do race, the loser fetches,
+  confirms the lease is genuinely still free, rebuilds the generated files from what it fetched, and
+  retries — up to three times — before it reports who won and asks you to re-run it. `release` and
+  `checkpoint` retry the same way before falling back to today's warning; `claim` stays strict and
+  refuses once the retries are spent, rather than half-taking a lease
+  ([ADR 0019](../../../docs/adr/0019-a-lease-commit-touches-only-its-group-and-a-lost-race-retries.md)).
 
 ## Restricted work stays in this session
 
@@ -225,6 +232,14 @@ the `external:` prefix is for: `--blocked-on "external: platform team — CHG-44
 bundle child waits on such a team, and naming the change request in the blocker is what makes the
 wait auditable later.
 
+**Waiting on another board is the same prefix, in a recognised shape:**
+`blocked_on: external — HOST/OWNER/REPO#ID`. `depends_on` still cannot cross boards — that other
+board is a different trust boundary — but when you also have that board cloned on this machine,
+`handoff list` shows its current status next to the wait: read-only, status only, never fetched. It
+reads that only from your own `boards` map in `.agents/handoff.local.json`, and only when the
+mapped clone's own remote actually matches the reference
+([ADR 0018](../../../docs/adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
+
 ```text
 handoff new prod-backfill --title "…" --env prod --after schema-change
 ```
@@ -326,8 +341,28 @@ closed with a one-line reason. A board whose tracker is a sprint tool is never m
 
 **An issue carries a summary, not the whole handoff.** By default a tracker receives the title, the
 labels and `## Current state`; `## Context` and `## Verify` go out only where that tracker asked for
-`projection: full`, and `## Ruled out`, your notes and your evidence never leave the board. Write
+`projection: full`. A **private** tracker can opt into `projection: complete`, which also carries
+Decisions, Ruled out and Evidence — never Activity, and refused outright wherever the board cannot
+confirm the tracker is private
+([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+Short of `complete`, your ruled-out options, notes and evidence never leave the board. Write
 `## Current state` as the line you would want a teammate to read in their own repository's issues.
+
+**A large team declares this once per group, not once per repository.** A `trackerRules` entry on
+the group mirrors every registered member into its own origin repository, and a per-repository
+`trackers` entry still overrides it for the one repo that needs to differ (ADR 0020) — see
+[`setup-handoff`](../setup-handoff/SKILL.md#a-tracker-rule-for-a-group-instead-of-a-repository).
+
+**Machine references never survive the trip.** A path under your home directory becomes `~`; a
+path under the workspace root becomes a portable token. Another user's home path, a local port, or
+a `*.local` hostname is warned about instead of rewritten. This runs on every mirrored issue body,
+just as it does on every exported brief — never inside a `verify:` command, where the rewrite would
+corrupt the command.
+
+**A host account is recorded per developer.** `mirror` refuses when the `gh` account currently
+active differs from the `hostAccount` recorded in `.agents/handoff.local.json`, rather than writing
+under whichever account happens to be signed in — see
+[`setup-handoff`](../setup-handoff/SKILL.md#notes) (ADR 0018).
 
 **Who acts next is a label, not a move.** `audience` becomes an `audience:ALIAS` label on the issue,
 and the issue stays in its home repository for its whole life — one number, one history, one place a
@@ -398,6 +433,13 @@ The doc lands on the target unclaimed, and an archived one-line pointer stays be
 proceeds. A different owner is refused and both remotes are named. Move only if the user confirms
 the material belongs there, then name the target with `--to-remote HOST/OWNER`. A
 `sensitivity: restricted` handoff never crosses a differing remote, even when named.
+
+**Moving out of a declared child needs the target named, even under the same owner.** A board that
+declares `parent` (its own committed `handoff.json`) is narrower than that parent by design — work
+moves into it freely, but moving it back out is refused unless you name the target explicitly. The
+one exception is a target with no remote: staying on this machine widens nothing. Moving in the
+other direction, from the parent into the child, proceeds like any same-owner move
+([ADR 0018](../../../docs/adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
 
 ## When the board refuses to let you write
 

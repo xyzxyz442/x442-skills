@@ -25,7 +25,7 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
 1. **Universal payload (tool-agnostic, always installed)** under `.agents/handoff/`: the
    `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
    `templates/` (the doc scaffolds), `.locks/` (gitignored on a board with no remote, committed on
-   one that has it — see **A shared board is a git repo**), a committed `handoff.json` (topology,
+   one that has it — see **A board is a git repo**), a committed `handoff.json` (topology,
    policy, and the tooling-owned `_generated` block), and the `<!-- handoff -->` routing block
    appended to `AGENTS.md`. Because every tool's
    entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
@@ -258,25 +258,25 @@ discipline.
 
 ## Cross-repo read-only access (optional)
 
-In cross-repo topology the shared board lives outside each repo. The installer wires Claude's
-`additionalDirectories` so the current repo can read/execute the shared `handoff` script; run the
+In cross-repo topology the dedicated board lives outside each repo. The installer wires Claude's
+`additionalDirectories` so the current repo can read/execute the board's `handoff` script; run the
 installer in each sibling so every one is wired. `audience` (which repo acts next) is what keeps a
 backend and a frontend agent apart — the lock only settles the genuine both-repos race.
 
-For a whole fleet — several repos, or several **groups** of repos sub-indexed on one shared board —
-drive this installer from a manifest with
+For a whole fleet — several repos, or several **groups** of repos sub-indexed on one dedicated
+board — drive this installer from a manifest with
 [`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md) instead of running it by
 hand per repo; a worked install is recorded in
 [docs/cross-repo-handoff-usage-record.md](../../../docs/cross-repo-handoff-usage-record.md).
 
-**Per-repo identity (shared board).** The shared board config is repo-neutral — it carries no
-repo name, so no sibling's install clobbers another's identity. Each consuming repo records its own
-identity in its own `.agents/handoff.json` (`repo`, `group`, `board`), written by `merge-hooks.py`
-at install time. It is deliberately **not** baked into the hook command: a command string goes
-stale on a rename and nothing on the board can see that it has. `hooks.sh`/`handoff` prefer
-`$HANDOFF_REPO` over that config when it is set, and the `AGENTS.md` routing block is
+**Per-repo identity (dedicated board).** The dedicated board's config is repo-neutral — it carries
+no repo name, so no sibling's install clobbers another's identity. Each consuming repo records its
+own identity in its own `.agents/handoff.json` (`repo`, `group`, `board`), written by
+`merge-hooks.py` at install time. It is deliberately **not** baked into the hook command: a command
+string goes stale on a rename and nothing on the board can see that it has. `hooks.sh`/`handoff`
+prefer `$HANDOFF_REPO` over that config when it is set, and the `AGENTS.md` routing block is
 path-substituted to the real board location. On a
-shared board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
+dedicated board `handoff new` requires an explicit `--audience`. Single-repo installs are unchanged.
 
 ## Per-repository trackers
 
@@ -296,11 +296,17 @@ Declare one entry per registered repository alias in the board's committed `hand
 ```
 
 - **`projection`** decides how much of a handoff its issue carries. `summary`, the default, sends the
-  title, the labels and `## Current state`. `full` adds `## Context` and `## Verify`. `## Ruled out`,
-  notes and evidence are sent under neither and stay on the board.
+  title, the labels and `## Current state`. `full` adds `## Context` and `## Verify`. **`complete`**
+  further adds Decisions, Ruled out and Evidence — never Activity, which would rewrite the issue
+  body and notify every watcher on each checkpoint — and it is refused outright on any tracker the
+  board cannot confirm is private, and can never carry a `restricted` document
+  ([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+  Short of `complete`, `## Ruled out`, notes and evidence are never sent and stay on the board.
 - **One owner per board.** Every `repo` here shares one host and owner, and a board with a remote
-  shares it too. Anything else refuses and names both owners — a board is one trust boundary
-  (ADR 0011), and another organization's work belongs on its own board.
+  shares it too. Anything else refuses and names both owners — the trust boundary is read from a
+  board's remote host and owner, never declared
+  ([ADR 0018](../../../docs/adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)),
+  and another organization's work belongs on its own board.
 - **`allowPublic` is per tracker**, and it is still only half of what a public repository needs: each
   document also carries `share: public` (ADR 0013). Visibility is asked on every run, for every
   tracker, before any of them is sent anything.
@@ -308,6 +314,34 @@ Declare one entry per registered repository alias in the board's committed `hand
   for that reason.
 - A `sprints` entry stays reference-only: `handoff new --ref` validates against it and no mirror ever
   writes to it.
+- **A host account is recorded per developer**, in `.agents/handoff.local.json`, and never defines or
+  merges a trust boundary — it only says which credential a `mirror` or `export --to-issue` run may
+  use. Both refuse when the account currently signed in to `gh` differs from the one recorded,
+  rather than writing under whichever account happens to be active. Setup can suggest a git
+  `includeIf` credential rule so the right account is picked up automatically per directory
+  (ADR 0018).
+
+### A tracker rule, for a group instead of a repository
+
+A team registering over a hundred repos in project groups does not want a hundred hand-written
+`trackers` entries that all say the same thing. Declare a **tracker rule** once, in the board's
+committed `handoff.json`, keyed by group name, and every repository registered in that group
+mirrors into its own origin repository under it:
+
+```json
+"trackerRules": {
+  "app": { "kind": "issues", "system": "github", "projection": "summary" }
+}
+```
+
+- **The target is resolved from the origin recorded when the repository was registered**, never read
+  at run time — a CI mirror needs no member checkouts. A rule applies only to a member whose
+  recorded origin is on the host the rule's `system` names.
+- **A per-repository `trackers` entry still overrides the rule** for the one repository that needs to
+  differ.
+- **`allowPublic` is never accepted inside a rule** — only on a per-repository entry — so one rule
+  cannot opt a whole group's public repositories into publishing
+  ([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
 
 **Upgrading a board that still declares `external`:**
 
@@ -322,9 +356,12 @@ Declare one entry per registered repository alias in the board's committed `hand
   backfills each handoff's `home` from its audience and names anything it could not resolve.
 
 **One board mirrors into a tracker.** Each issue records the identity of the board that wrote it, so
-a second board mirroring into the same repository refuses and names the first. Several maintainers
-therefore share one board — each keeping a draft board of their own that never mirrors, and moving
-work onto the shared board with `handoff move ID --to BOARD` when it is ready.
+a second board mirroring into the same repository refuses and names the first — ownership follows
+board identity, not who the board belongs to; "a developer's own board never mirrors" is withdrawn
+([ADR 0020](../../../docs/adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+Several maintainers therefore typically still keep one team board — each keeping a personal board of
+their own, declared as its child — and move work onto it with `handoff move ID --to BOARD` when it
+is ready.
 
 ## Mirroring on a schedule (optional)
 
@@ -450,10 +487,12 @@ sit above every config layer: `HANDOFF_BOARD_PATH` (which board) and `HANDOFF_BI
 board named by either and not found is a hard error, never a silent fallback to a different board.
 
 **`<board>/handoff.json`** is board-global — `topology`, `groups`, `groupLayout`, `ttlHours`,
-`allowVerifyCmd`, `environments`, plus `repoName` on a single-repo board only, and the tooling-owned
-`_generated` block (the projected repo registry and the payload version stamp).
+`allowVerifyCmd`, `environments`, `trackers`, `trackerRules`, `parent` (the board this one is a
+child of), `acceptChildren` (the cross-owner children this board accepts back), plus `repoName` on a
+single-repo board only, and the tooling-owned `_generated` block (the projected repo registry and
+the payload version stamp).
 **`<repo>/.agents/handoff.json`** is per-consumer and written only for cross-repo installs — `repo`,
-`group`, `board`. A shared board is read by every member repo, so no member's identity may live in
+`group`, `board`. A dedicated board is read by every member repo, so no member's identity may live in
 the board file; the last installer would clobber the rest. The full key table ships in the board's
 own [`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the
 documentation.
@@ -468,9 +507,11 @@ have hand-edited.
 
 Three behaviours worth knowing before you re-run the installer:
 
-- **`ttlHours`, `environments`, `external` and `trackers` survive a re-install.** Lease policy is a committed team decision; an install must
-  not quietly revert it. The installer owns wiring facts (`topology`, `groups`, `groupLayout`,
-  `repoName`) and rewrites those every time; it leaves policy alone.
+- **`ttlHours`, `environments`, `external`, `trackers`, `trackerRules`, `parent` and
+  `acceptChildren` survive a re-install.** Lease policy and trust-boundary declarations are
+  committed team decisions; an install must not quietly revert them. The installer owns wiring
+  facts (`topology`, `groups`, `groupLayout`, `repoName`) and rewrites those every time; it leaves
+  policy alone.
 - **`allowVerifyCmd` does not survive.** It follows `--allow-verify-cmd` on each run, because it
   permits `release --run-verify` to execute a command from a doc — a security opt-in nobody
   re-affirmed is not one to inherit.
@@ -482,10 +523,10 @@ Three behaviours worth knowing before you re-run the installer:
   asset forever and re-running fixed nothing. Duplicated or unbalanced markers are refused rather
   than clobbered — fix those by hand.
 
-The config is **parsed, never sourced.** A shared board's config file is written by every member's
-installer and read by every member's hooks, so sourcing it would let one repo execute shell in its
-siblings' sessions. Reading it needs `python3`; a board still on the pre-JSON shell `config` keeps
-working and migrates on its next install.
+The config is **parsed, never sourced.** A dedicated board's config file is written by every
+member's installer and read by every member's hooks, so sourcing it would let one repo execute
+shell in its siblings' sessions. Reading it needs `python3`; a board still on the pre-JSON shell
+`config` keeps working and migrates on its next install.
 
 ## Notes
 
@@ -493,7 +534,7 @@ working and migrates on its next install.
   it **denies handoff-doc edits** with an actionable reason and never blocks ordinary files — the
   opposite of the reference's silent no-op. Combined with the install-time preflight, a broken
   enforcement surfaces instead of vanishing.
-- **A shared board is a git repo (ADR 0002).** `--board-only` git-initialises the board it
+- **A board is a git repo (ADR 0002).** `--board-only` git-initialises the board it
   scaffolds — non-optionally, because the board of record holds documents that exist nowhere else,
   and one that was never a repository has no history, no blame, and no recovery. `--remote <url>`
   gives it a remote; without one it says plainly that it is versioned but still reaches one
@@ -501,6 +542,28 @@ working and migrates on its next install.
   `git push` — real mutual exclusion across machines, no server. A board without one keeps
   ignoring `.locks/` and touches the network on no path at all. A nested (in-repo) board is left
   alone: its history belongs to the repo containing it.
+- **A dedicated board's own remote must be private (ADR 0018).** Setup refuses to scaffold or
+  `--board-only` a board whose `--remote` is already public, and every `mirror` run checks the
+  board's own remote alongside its trackers; a host with no visibility API warns rather than
+  refuses. An in-repo board is not checked — its code repository already chose that repository's
+  audience, and an open-source project's board is public by design (ADR 0013).
+- **A child board narrows its parent without a role (ADR 0018).** Declare `parent` (the parent
+  board's remote) by hand in the child's own committed `handoff.json` — there is no installer flag
+  for it, the same as `ttlHours` or `trackers`. Work moves into a declared child freely; moving it
+  back out refuses unless the target is named explicitly, even under the same owner — the one
+  exception is a target with no remote, since staying on this machine widens nothing. A
+  **same-owner child** needs nothing from the parent, so the parent's members never learn its name.
+  A **cross-owner child** additionally needs the parent's opt-in: the parent's own `handoff.json`
+  lists the child under `acceptChildren`, and a `restricted` document still never crosses even
+  then. The verifier checks both halves offline.
+- **A host account is recorded per developer (ADR 0018).** `handoff.local.json` may set
+  `hostAccount`; `mirror` and `export --to-issue` refuse when the `gh` account currently active
+  differs from it, rather than writing under whichever account happens to be signed in. It never
+  defines or merges a trust boundary — that is read from the remote alone. Setup can suggest a git
+  `includeIf` credential rule so the right account is picked up per directory.
+- **A developer's own boards are recorded too.** `handoff.local.json` may carry a `boards` map
+  (remote → local clone path) so `list` can show a cross-board wait's live status — see
+  [`run-handoff`](../run-handoff/SKILL.md#the-fields-that-carry-the-graph-the-stage-and-the-evidence).
 - **Self-maintaining leases.** `sessionstart` auto-reaps expired leases; `posttool-edit`
   auto-touches the current session's leases so active work never expires mid-flight. `touch`/`reap`
   remain manual escape hatches.

@@ -11,9 +11,10 @@ Two diagrams give the shape of it:
 
 - **[The lifecycle](diagrams/handoff-lifecycle.html)** — filed, claimed, in progress, and every way
   a claim ends: released open, blocked, delegated, handed back for review, or closed with evidence.
-- **[The topology](diagrams/handoff-topology.html)** — a team working one shared board split into
-  group sections, a draft board feeding it, each section mirrored into its home repositories'
-  trackers, and an optional shared library owned by someone else, on a board of its own.
+- **[The topology](diagrams/handoff-topology.html)** — a team working one dedicated board split into
+  group sections, a personal board declared as its child, each section mirrored into its home
+  repositories' trackers by a tracker rule, and a library owned by someone else, on a board of its
+  own in a separate trust boundary.
 
 The suite is five skills, but you meet them in an order. If you want to know whether the board fits
 your problem at all, start with [Recommended use-cases](#recommended-use-cases). Otherwise read the
@@ -231,8 +232,17 @@ handoff mirror --repo acme-web     # just one of them
 ```
 
 An issue carries the title, the labels and `## Current state`. `## Context` and `## Verify` go out
-only where that tracker asked for `"projection": "full"`, and your ruled-out options, notes and
-evidence never leave the board — the board is the record, the issue is the window into it.
+only where that tracker asked for `"projection": "full"`. A private tracker can opt into
+`"projection": "complete"`, which also carries Decisions, Ruled out and Evidence — never
+Activity, and refused outright on any tracker the board cannot confirm is private
+([ADR 0020](../adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+Short of `complete`, your ruled-out options, notes and evidence never leave the board — the board
+is the record, the issue is the window into it.
+
+A team with many repos in groups declares this once per **group**, as a tracker rule, instead of
+by hand in every repository: every member registered in that group mirrors into its own origin
+repository under the rule, and a per-repository entry still overrides it where one repo needs to
+differ (ADR 0020).
 
 It is **one way**. Issues carry a hidden marker, the board is never written from the tracker, and an
 edit made in the tracker is overwritten on the next run. Intake was rejected deliberately: letting a
@@ -258,26 +268,65 @@ hand-back, or — when that team really owns the work — file it as its own han
 repository (`handoff new ID --home acme-web --after THIS_ID`), so it appears in the tracker they
 actually watch.
 
+### What leaves this machine, and how
+
+Four checks apply wherever material crosses onto another machine — a board's own push, a mirror
+run, or an exported brief:
+
+- **A board's own remote must be private.** Setup refuses to scaffold a dedicated board whose own
+  remote is already public, and every `mirror` run checks the board's own remote alongside its
+  trackers; a host with no visibility API warns rather than refuses. An in-repo board is not
+  checked — its code repository already chose that repository's audience
+  ([ADR 0018](../adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
+- **A host account is recorded per developer**, in `.agents/handoff.local.json`, and never defines
+  a trust boundary on its own — one account can reach several owners. `mirror` and
+  `export --to-issue` refuse when the active `gh` account differs from the one recorded, instead of
+  writing under whichever account happens to be signed in.
+- **`complete` is the projection that leaves nothing out** — see above — and it is opt-in per
+  tracker, private-tracker only, and never carries a `restricted` document.
+- **Machine references are rewritten before they leave.** A path under your home directory becomes
+  `~`; a path under the workspace root becomes a portable token. Another user's home path, a local
+  port, or a `*.local` hostname is warned about instead of rewritten, since none of those can be
+  made portable automatically. This runs on any board with a remote, and always in a mirrored issue
+  body and an exported brief — never inside a `verify:` command, where the rewrite would corrupt the
+  command
+  ([ADR 0020](../adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+
+None of this replaces the secret guard — a rotation plan naming hosts, commits and a validity
+window holds no credential and passes that scan untouched. These checks answer a different
+question: not _is this a secret_, but _does this belong where it is about to go_.
+
 ---
 
 ## Situation 4b — several maintainers, one project
 
 One board mirrors into a tracker. Each issue records which board wrote it, and a second board
 mirroring into the same repository refuses rather than opening duplicates — two boards writing one
-tracker is two sources of truth, and leases on one board do not restrain the other.
+tracker is two sources of truth, and leases on one board do not restrain the other. That ownership
+follows **board identity** — the first board to claim a tracker — not who the board belongs to;
+"a developer's own board never mirrors" was the old rule of thumb and is withdrawn
+([ADR 0020](../adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
 
-So a team shares **one board** — a private repository everyone clones — and each maintainer keeps a
-**draft board** of their own for work that is not ready to be seen:
+So a team keeps a **team board** — a private repository everyone clones — and each maintainer keeps
+a **personal board** of their own for work that is not ready to be seen. Declare the personal board
+as a **child** of the team board and work moves into it freely; moving it back out needs the target
+named explicitly, even under the same owner, unless the target has no remote:
 
 ```text
-handoff new spike-rate-limits --title "Spike — rate limits"     # on your draft board
+handoff new spike-rate-limits --title "Spike — rate limits"     # on your personal board
 handoff move spike-rate-limits --to ../workspace/.agents/handoff
 ```
 
-A draft board never mirrors. It holds one person's thinking; the shared board holds what the team
-coordinates on; the repositories' issues hold what everyone else needs to see. A board also stays
-inside one organization — its trackers must all share one owner, and its own remote too — so work
-for another organization gets its own board rather than a section on yours.
+A personal board still coordinates only what its owner claims to mirror; in practice the team
+board is the one that has already claimed the team's trackers, so that is where finished work goes.
+The personal board holds one person's thinking; the team board holds what the team coordinates on;
+the repositories' issues hold what everyone else needs to see.
+
+**The trust boundary is read from a board's remote — its host and owner — never declared and never
+the host account used to reach it.** One boundary holds one or more boards, and no board spans two;
+a board's trackers must all share its own owner, so work for another organization gets its own
+board rather than a section on yours
+([ADR 0018](../adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
 
 ---
 
@@ -335,6 +384,13 @@ handoff release prod-backfill --status blocked --blocked-on "external: platform 
   purpose, as above.
 - The `external:` prefix is how you wait on a team that is not on the board — infrastructure, a
   vendor, another company. Put the change request in the text, so the wait can be audited later.
+- **Waiting on another board is the same prefix, with a recognised shape**:
+  `blocked_on: external — HOST/OWNER/REPO#ID`. `depends_on` still cannot cross boards — that other
+  board is a different trust boundary — but when it is one you also have cloned on this machine,
+  `list` shows its current status next to the wait: read-only, status only, never fetched. It reads
+  that only from your own `boards` map in `.agents/handoff.local.json`, and only when the mapped
+  clone's own remote actually matches the reference — nothing scans your disk looking for it
+  ([ADR 0018](../adr/0018-a-trust-boundary-is-its-remote-owner-and-a-child-board-narrows-it.md)).
 
 If the work is planned under a ticket in a sprint tool, point at it rather than copying the plan:
 
@@ -365,7 +421,7 @@ the ones it was shaped around. Each names what to reach for first.
 | A security fix that must not leave this session                    | Restricted handoff                         | `new --sensitivity restricted`                             |
 | A long session near its context limit                              | Standalone compaction brief                | `new --standalone`, `show`                                 |
 | Teammates who live in their repository's issues                    | One-way mirror into the home tracker       | `mirror --dry-run`, `mirror`                               |
-| Several maintainers, each with half-formed ideas                   | Draft board per person, one shared board   | `move --to`                                                |
+| Several maintainers, each with half-formed ideas                   | Personal board per person, one team board  | `move --to`                                                |
 | A team whose repositories fall into separate groups                | One board, one section per group           | `register-cross-repo-handoff`, `HANDOFF_GROUP`             |
 | A change that needs a shared library owned by another organization | Its own board; wait on it as external      | `--blocked-on "external: …"`, `export`, `move --to-remote` |
 
@@ -438,8 +494,19 @@ not with a group.
 
 Inside the app section it is Situation 2: Bob claims a child, hands it back with
 `--for-review --reviewer alice`, and Alice closes it with her own evidence. Alice sketches ideas on
-her own draft board and moves one across when the team should see it. Each section mirrors into its
-own repositories' issues, by each handoff's home.
+her own personal board, declared as this board's child, and moves one across — naming the
+target — when the team should see it. Each section mirrors into its own repositories' issues, by
+each handoff's home.
+
+At this size — over a hundred repos across the two groups is routine — nobody hand-writes a
+tracker entry per repository. A **tracker rule** declared once per group mirrors every registered
+member into its own origin repository, with a per-repository entry still able to override it where
+one repo needs to differ
+([ADR 0020](../adr/0020-trackers-are-declared-by-group-rule-and-a-complete-projection-stays-private.md)).
+And a lease commit only ever regenerates its own group's index, so Bob claiming in `app` and Carol
+claiming in `platform` never contend on the same push; if two claims in the same group do race, the
+loser fetches, rebuilds, and retries automatically, up to three times, before it asks a person
+([ADR 0019](../adr/0019-a-lease-commit-touches-only-its-group-and-a-lost-race-retries.md)).
 
 Now the app needs a fix in `acme-lib`, a shared library another organization owns. That library is
 **a different trust boundary**, and the board refuses to pretend otherwise: every tracker on a board

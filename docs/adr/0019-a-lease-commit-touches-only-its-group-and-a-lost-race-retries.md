@@ -51,7 +51,7 @@ ADR 0002.
 
 ## Consequences
 
-- The roll-up index can lag between `index` runs — the verifier reports that as a warning, not
-  a failure.
+- The roll-up index can lag between `index` runs. Nothing treats that as a failure: the verifier
+  does not check index freshness, and `handoff index` or CI brings the roll-up up to date.
 - A payload version bump.
 - A harness case for two concurrent claims.
