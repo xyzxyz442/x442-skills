@@ -118,7 +118,7 @@ except Exception: print("")' 2> /dev/null)"
 }
 
 # The remote a board OWNS: its origin when the board directory is the root of its own repository,
-# and nothing otherwise. `git -C` inside a nested board answers for the ENCLOSING repository, whose
+# and nothing otherwise. `git -C` inside an in-repo board answers for the ENCLOSING repository, whose
 # audience that repository already decided — an open-source project's in-repo board is public by
 # design (ADR 0013), so only a dedicated board's own remote is checked here.
 setup_own_remote() { # board-dir -> its own origin url, or nothing

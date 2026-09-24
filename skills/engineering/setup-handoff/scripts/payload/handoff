@@ -3722,7 +3722,7 @@ board_public_refusal() { # remote -> the refusal sentence
 # stays a plain git operation, unconditionally, per ADR 0018.
 board_visibility_gate() { # board-dir -> 0, or dies
   local dir="$1" origin vis
-  # Only a board with a remote of its OWN (ADR 0002's shared board). An in-repo board's remote is
+  # Only a board with a remote of its OWN (a dedicated board, ADR 0018). An in-repo board's remote is
   # the code repository it lives in, whose audience that repository already decided — an
   # open-source project's board is public by design (ADR 0013), and refusing it here would break it.
   handoff_leases_shared "$dir" || return 0
