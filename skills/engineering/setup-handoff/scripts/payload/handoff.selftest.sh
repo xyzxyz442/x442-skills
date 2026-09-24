@@ -3895,6 +3895,22 @@ chk_contains "stderr flags other-home-path" "$(cat "$MR2_ERR")" "other-home-path
 chk "stderr never carries the matched port" "no" "$(grep -qF "5433" "$MR2_ERR" && echo yes || echo no)"
 chk "stderr never carries the matched username" "no" "$(grep -qF "someone-else" "$MR2_ERR" && echo yes || echo no)"
 
+# A dotted FILENAME is not a hostname. "handoff.local.json" names a config file, and flagging it
+# made every note that mentions the file carry a warning nobody could act on — which is how a
+# warning comes to be ignored. A hostname that ends a sentence must still be caught.
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-file --title "Filename, not a host" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-file "start" > /dev/null
+MRF_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-file \
+  "record it in .agents/handoff.local.json and settings.local.yml" > /dev/null 2> "$MRF_ERR")
+chk "a dotted filename with .local in it is not flagged as a host" "0" "$(grep -c 'local-host' "$MRF_ERR")"
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-dot --title "Host at the end of a sentence" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-dot "start" > /dev/null
+MRD_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-dot \
+  "then reach db2.local." > /dev/null 2> "$MRD_ERR")
+chk_contains "a hostname ending a sentence is still flagged" "$(cat "$MRD_ERR")" "local-host"
+
 hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-verify --title "Verify field" > /dev/null
 MRVD="$MRB/mr-verify-handoff.md"
 set_field "$MRVD" verify "\"cat $MR_HOME/x\""

@@ -1454,7 +1454,9 @@ home_re = re.compile(re.escape(home) + BOUND) if home_ok else None
 # reported here -- what is left really is someone else's.
 other_re = re.compile(r"(?:/Users|/home)/[A-Za-z0-9_.-]+(?=/)")
 port_re = re.compile(r"\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):[0-9]{2,5}\b")
-local_host_re = re.compile(r"\b[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.local\b")
+# ".local" must END the name: "handoff.local.json" is a file, not a host. A trailing sentence period
+# is not a further name part, so "db.local." is still a host.
+local_host_re = re.compile(r"\b[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.local(?![A-Za-z0-9_-]|\.[A-Za-z0-9])")
 verify_re = re.compile(r"^\s*verify\s*:")
 
 counts = {
