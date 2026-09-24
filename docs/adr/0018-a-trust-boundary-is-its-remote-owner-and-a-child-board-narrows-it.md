@@ -51,9 +51,10 @@ name — without inventing a role a board can hold. This refines ADR 0002, 0005,
   readers.
 - **A child board declares its parent** (the parent board's remote) in its committed config.
   Moving into a child proceeds; moving out of a child refuses unless the target is named
-  explicitly, even within one owner. A **same-owner child** is declared by the child alone, so
-  the parent's members never learn its name. A personal board under its team board's owner is a
-  same-owner child.
+  explicitly, even within one owner. A target with no remote is the one exception, as in ADR 0011:
+  the work stays on this machine, which widens nothing. A **same-owner child** is declared by the
+  child alone, so the parent's members never learn its name. A personal board under its team
+  board's owner is a same-owner child.
 - **A cross-owner child is an opt-in declared on both sides**: the child declares its parent,
   and the parent's committed config lists the child as accepted. With both, normal documents
   move from parent to child without naming the target. `restricted` documents are still refused

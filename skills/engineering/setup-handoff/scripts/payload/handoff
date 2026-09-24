@@ -3353,14 +3353,75 @@ board_owner_key() { # board-dir -> "host/owner" of its configured origin, or not
   board_origin_norm "$1" | cut -d/ -f1-2
 }
 
-# The trust boundary. Returns 0 when source and target share a host and owner (or the target has
-# no remote), 1 when they differ and the caller named the target's owner. Dies otherwise — and
-# always for a restricted doc, which never crosses, named or not.
+# ADR 0018 — a CHILD board declares, in its own committed config, the board it is narrower than.
+# The parent's members never learn a same-owner child's name, because nothing on the parent says
+# it. A child under ANOTHER owner is the one case the parent must also say yes to, under
+# `acceptChildren`: a declaration made only on the child's side would let any board anywhere name
+# a parent and receive its work unannounced.
+board_config_value() { # board-dir key -> a string value, or one list item per line
+  [ -f "$1/handoff.json" ] && command -v python3 > /dev/null 2>&1 || return 0
+  python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+v = d.get(sys.argv[2]) if isinstance(d, dict) else None
+if isinstance(v, str): print(v)
+elif isinstance(v, list):
+    for x in v:
+        if isinstance(x, str): print(x)' "$1/handoff.json" "$2" 2> /dev/null
+}
+
+board_parent() { # board-dir -> host/owner/repo of the parent it declares, or nothing
+  local p
+  p="$(board_config_value "$1" parent | head -1)"
+  [ -n "$p" ] && repo_origin_norm "$p"
+}
+
+board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the parent lists it
+  local c
+  while IFS= read -r c; do
+    [ -n "$c" ] && [ "$(repo_origin_norm "$c")" = "$2" ] && return 0
+  done < <(board_config_value "$1" acceptChildren)
+  return 1
+}
+
+# The trust boundary. Returns 0 when the move stays inside one boundary (same host and owner, a
+# target with no remote, or a cross-owner child both sides have linked), 1 when it crosses and the
+# caller named the target's owner. Dies otherwise — and always for a restricted doc, which never
+# crosses owners, named or not.
 move_check_trust() { # doc id target-board to-remote
-  local f="$1" id="$2" to="$3" to_remote="$4" src_key dst_key
+  local f="$1" id="$2" to="$3" to_remote="$4" src_key dst_key src_repo dst_repo src_parent
   src_key="$(board_owner_key "$DIR")"
   dst_key="$(board_owner_key "$to")"
-  [ -n "$dst_key" ] && [ "$src_key" != "$dst_key" ] || return 0
+  # A target with no remote keeps the material on this machine, which widens nothing — even out of
+  # a child board.
+  [ -n "$dst_key" ] || return 0
+  src_repo="$(board_origin_norm "$DIR")"
+  dst_repo="$(board_origin_norm "$to")"
+
+  # Out of a child: it said it is narrower than its parent, so ANY move out of it widens who reads
+  # the work — to the parent itself and under the same owner included (ADR 0018). Naming the target
+  # is the consent; a restricted doc still never leaves its owner.
+  src_parent="$(board_parent "$DIR")"
+  if [ -n "$src_parent" ]; then
+    [ "$src_key" != "$dst_key" ] && is_restricted "$f" \
+      && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
+    [ "$to_remote" = "$dst_key" ] \
+      || die "refusing to move $id out of a child board: this board declares it is narrower than $src_parent, so moving work out of it widens who can read it.
+       If that is intended, name the target: --to-remote $dst_key"
+    return 1
+  fi
+
+  [ "$src_key" != "$dst_key" ] || return 0
+
+  # Into a child under another owner that BOTH sides have linked: the child names this board as its
+  # parent and this board accepts it. Still never a restricted doc — accepting a child does not make
+  # an account this owner does not control part of it.
+  if [ -n "$src_repo" ] && [ "$(board_parent "$to")" = "$src_repo" ] && board_accepts_child "$DIR" "$dst_repo"; then
+    is_restricted "$f" \
+      && die "$id is sensitivity: restricted — it never moves to a board under a different remote ($src_key → $dst_key), even a child board this one accepts, and there is no override. Do the work where it is."
+    return 0
+  fi
+
   is_restricted "$f" \
     && die "$id is sensitivity: restricted — it never moves to a board under a different remote (${src_key:-no remote} → $dst_key), and there is no override. Do the work where it is."
   [ "$to_remote" = "$dst_key" ] \

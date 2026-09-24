@@ -274,5 +274,17 @@ WF9="$B9/.github/workflows/handoff-mirror.yml"
 chk_contains "trackers beyond the board's own repo need the named secret" "$(cat "$WF9")" 'GH_TOKEN: ${{ secrets.HANDOFF_TRACKER_TOKEN }}'
 chk_contains "and the ACTION NEEDED line names every tracker repository" "$OUT9" "example-invalid/other-tracker"
 
+printf '\n9. child board links (ADR 0018)\n'
+# A child's parent link and a parent's accepted children are trust-boundary decisions. A re-install
+# that dropped them would turn a child back into an ordinary board — one that moves work out of
+# itself unannounced — or break a cross-owner link both sides agreed to.
+B10="$(mkgitboard)"
+python3 -c 'import json,sys; json.dump({"parent": "github.com/acme/team-board", "acceptChildren": ["github.com/dev-a/handoff-board"]}, open(sys.argv[1], "w"))' "$B10/handoff.json"
+"$INSTALLER" --board-only "$B10" --groups core > /dev/null 2>&1
+chk "a child's parent link survives a re-install" "github.com/acme/team-board" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent", ""))' "$B10/handoff.json")"
+chk "a parent's accepted children survive too" "github.com/dev-a/handoff-board" \
+  "$(python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1])).get("acceptChildren") or []))' "$B10/handoff.json")"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

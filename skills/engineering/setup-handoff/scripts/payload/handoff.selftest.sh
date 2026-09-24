@@ -2137,6 +2137,85 @@ chk_contains "--id gives it a new id on the target" \
   "$(mvh "$MVA" move mv-clash --to "$MVB" --id mv-clash-2)" "mv-clash-2-handoff"
 chk "under that id" "yes" "$([ -f "$MVB/mv-clash-2-handoff.md" ] && echo yes || echo no)"
 
+printf '\nmove — a child board narrows a trust boundary (ADR 0018)\n'
+# A child declares its parent in its own committed config. Work moves INTO it freely and OUT of it
+# only by naming the target — even under one owner, since leaving a narrower board widens who
+# reads the work. A child under ANOTHER owner counts only when the parent accepts it too, and a
+# restricted doc still never crosses owners, accepted or not.
+set_board_key() { # board key json-value -> set it in the board's committed handoff.json
+  python3 - "$1/handoff.json" "$2" "$3" << 'PY'
+import json, sys
+p, k, v = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(p))
+d[k] = json.loads(v)
+json.dump(d, open(p, "w"), indent=2)
+PY
+  git -C "$1" commit -qam "board config: $2"
+  git -C "$1" push -q
+}
+CBP="$(mkremote "git@github.com:acme/team-board.git")"     # the parent
+CBC="$(mkremote "git@github.com:acme/dev-a-board.git")"    # a child under the same owner
+CBS="$(mkremote "git@github.com:acme/sibling-board.git")"  # another board of that owner
+CBX="$(mkremote "git@github.com:dev-a/handoff-board.git")" # a child under another owner
+set_board_key "$CBC" parent '"github.com/acme/team-board"'
+set_board_key "$CBX" parent '"github.com/acme/team-board"'
+
+mvh "$CBP" new cb-in --title "Into a child" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-in "moving" > /dev/null
+chk_contains "moving into a same-owner child proceeds" "$(mvh "$CBP" move cb-in --to "$CBC")" "Moved cb-in-handoff"
+
+mvh "$CBC" new cb-out --title "Out of a child" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-out "moving" > /dev/null
+CB_OUT="$(mvh "$CBC" move cb-out --to "$CBP")"
+chk_contains "moving out of a child refuses, even to its parent under the same owner" "$CB_OUT" "child board"
+chk "and moves nothing" "no" "$([ -f "$CBP/cb-out-handoff.md" ] && echo yes || echo no)"
+chk_contains "naming the target proceeds" \
+  "$(mvh "$CBC" move cb-out --to "$CBP" --to-remote github.com/acme)" "Moved cb-out-handoff"
+
+mvh "$CBC" new cb-side --title "Sideways" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-side "moving" > /dev/null
+chk_contains "moving out of a child to any other board refuses too" \
+  "$(mvh "$CBC" move cb-side --to "$CBS")" "child board"
+
+mvh "$CBC" new cb-secret --title "Restricted in a child" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$CBC" claim cb-secret "moving" > /dev/null
+chk_contains "a restricted doc leaves a same-owner child when named — it never leaves the owner" \
+  "$(mvh "$CBC" move cb-secret --to "$CBP" --to-remote github.com/acme)" "Moved cb-secret-handoff"
+
+CBL="$(mkshared)"
+git -C "$CBL" remote remove origin
+mvh "$CBC" new cb-local --title "To a local board" --audience acme-api > /dev/null
+mvh "$CBC" claim cb-local "moving" > /dev/null
+chk_contains "moving out of a child onto a board with no remote proceeds — it widens nothing" \
+  "$(mvh "$CBC" move cb-local --to "$CBL")" "Moved cb-local-handoff"
+
+mvh "$CBP" new cb-x --title "To a cross-owner child" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-x "moving" > /dev/null
+chk_contains "a cross-owner child the parent has not accepted is a separate boundary" \
+  "$(mvh "$CBP" move cb-x --to "$CBX")" "refusing to move cb-x-handoff across a trust boundary"
+set_board_key "$CBP" acceptChildren '["github.com/dev-a/handoff-board"]'
+chk_contains "once the parent accepts it, moving into it proceeds unnamed" \
+  "$(mvh "$CBP" move cb-x --to "$CBX")" "Moved cb-x-handoff"
+
+mvh "$CBP" new cb-xs --title "Restricted to a cross-owner child" --audience acme-api --sensitivity restricted > /dev/null
+mvh "$CBP" claim cb-xs "moving" > /dev/null
+chk_contains "a restricted doc never enters a cross-owner child, accepted and named or not" \
+  "$(mvh "$CBP" move cb-xs --to "$CBX" --to-remote github.com/dev-a)" "restricted"
+chk "and stays put" "yes" "$([ -f "$CBP/cb-xs-handoff.md" ] && echo yes || echo no)"
+
+CBY="$(mkremote "git@github.com:dev-b/handoff-board.git")" # accepted by the parent, but never declared it
+set_board_key "$CBP" acceptChildren '["github.com/dev-a/handoff-board", "github.com/dev-b/handoff-board"]'
+mvh "$CBP" new cb-y --title "To a board that never declared its parent" --audience acme-api > /dev/null
+mvh "$CBP" claim cb-y "moving" > /dev/null
+chk_contains "an acceptance the child never declared links nothing" \
+  "$(mvh "$CBP" move cb-y --to "$CBY")" "refusing to move cb-y-handoff across a trust boundary"
+
+mvh "$CBX" new cb-back --title "Back out of a cross-owner child" --audience acme-api > /dev/null
+mvh "$CBX" claim cb-back "moving" > /dev/null
+chk_contains "moving out of a cross-owner child refuses unnamed" "$(mvh "$CBX" move cb-back --to "$CBP")" "child board"
+chk_contains "and proceeds when the target is named" \
+  "$(mvh "$CBX" move cb-back --to "$CBP" --to-remote github.com/acme)" "Moved cb-back-handoff"
+
 printf '\nx\n' >> "$MVA/mv-base-handoff.md"
 mvh "$MVA" claim mv-base "moving" > /dev/null
 printf 'key %s\n' "$AWSKEY" >> "$MVA/mv-base-handoff.md"

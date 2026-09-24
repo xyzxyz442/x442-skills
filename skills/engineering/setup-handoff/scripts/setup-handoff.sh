@@ -291,6 +291,15 @@ if isinstance(ext, dict):
 trk = existing.get("trackers")
 if isinstance(trk, dict):
     cfg["trackers"] = trk
+# ADR 0018 — a child board's parent link, and the cross-owner children a parent accepts, are trust
+# boundary decisions. Dropping them would turn a child back into an ordinary board that moves work
+# out of itself unannounced, or break a cross-owner link both sides agreed to.
+par = existing.get("parent")
+if isinstance(par, str) and par:
+    cfg["parent"] = par
+acc = existing.get("acceptChildren")
+if isinstance(acc, list) and all(isinstance(v, str) for v in acc):
+    cfg["acceptChildren"] = acc
 if isinstance(ext, dict) and not isinstance(trk, dict):
     if existing.get("topology") == "cross-repo":
         sys.stderr.write(
