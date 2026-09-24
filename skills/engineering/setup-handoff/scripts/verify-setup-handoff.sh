@@ -296,7 +296,7 @@ if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command 
 import json,sys
 known={"topology","repoName","group","groups","groupLayout","ttlHours","allowVerifyCmd",
        "board","boardPath","environments","layout","boardRemote","locations","repo",
-       "schema","_generated","external","trackers","trackerRules"}
+       "schema","_generated","external","trackers","trackerRules","parent","acceptChildren"}
 try: d=json.load(open(sys.argv[1]))
 except Exception: sys.exit(2)
 if not isinstance(d, dict): sys.exit(2)
@@ -305,6 +305,62 @@ print(",".join(sorted(set(d)-known)))' "$BOARD_CFG" 2> /dev/null)"
   if [ "$RC" -eq 0 ]; then
     [ -n "$UNKNOWN" ] && warn board.config.unknown_keys "$BOARD_CFG_NAME has unknown key(s): $UNKNOWN" || ok board.config.unknown_keys "$BOARD_CFG_NAME keys all recognised"
   fi
+fi
+# ADR 0018 — child-board links and per-developer keys, checked offline. A board names the board it
+# is narrower than under `parent`, and a parent names the cross-owner children it accepts under
+# `acceptChildren`. What can be checked here is this board's own half: the shape, that a board is
+# not its own parent, and that a same-owner child is not listed (accepting one would name it to
+# every member of this board, which is what a same-owner child's one-sided declaration avoids).
+# The other board's half cannot be read offline, so a cross-owner parent is a warning that says so.
+if [ -n "$BOARD_CFG" ] && [ "$(basename "$BOARD_CFG")" != "config" ] && command -v python3 > /dev/null 2>&1; then
+  _own_remote=""
+  _own_name="$(git -C "$HD" remote 2> /dev/null | head -1)"
+  [ -n "$_own_name" ] && _own_remote="$(git -C "$HD" config --get "remote.$_own_name.url" 2> /dev/null)"
+  while IFS='|' read -r _lvl _id _msg; do
+    case "$_lvl" in
+      ok) ok "$_id" "$_msg" ;;
+      warn) warn "$_id" "$_msg" ;;
+      fail) bad "$_id" "$_msg" ;;
+    esac
+  done < <(python3 -c '
+import json, re, sys
+def norm(u):
+    s = re.sub(r"^[a-zA-Z+][a-zA-Z0-9+.-]*://", "", u)
+    s = re.sub(r"^[^/@]*@", "", s)
+    s = s.replace(":", "/", 1)
+    s = re.sub(r"\.git$", "", s)
+    return re.sub(r"/*$", "", s)
+def is_remote(v):
+    return isinstance(v, str) and len([p for p in norm(v).split("/") if p]) >= 3
+def owner(v):
+    return "/".join(norm(v).split("/")[:2]).lower()
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+if not isinstance(d, dict): raise SystemExit(0)
+own = sys.argv[2]
+own_norm = norm(own).lower() if own else ""
+if "parent" in d:
+    p = d["parent"]
+    if not is_remote(p):
+        print("fail|board.parent.shape|parent must name the parent board remote as host/owner/repo (ADR 0018)")
+    elif own and norm(p).lower() == own_norm:
+        print("fail|board.parent.self|parent names this board itself — a board cannot be narrower than itself (ADR 0018)")
+    elif own and owner(p) != owner(own):
+        print("warn|board.parent.cross_owner|parent %s is under another owner — it must list this board under acceptChildren, which the verifier cannot read offline (ADR 0018)" % norm(p))
+    else:
+        print("ok|board.parent|child of %s" % norm(p))
+if "acceptChildren" in d:
+    a = d["acceptChildren"]
+    items = a if isinstance(a, list) else [a]
+    if not isinstance(a, list) or not all(is_remote(x) for x in items):
+        print("fail|board.acceptChildren.shape|acceptChildren must be a list of child board remotes as host/owner/repo (ADR 0018)")
+    same = sorted(norm(x) for x in items if is_remote(x) and own and owner(x) == owner(own))
+    if same:
+        print("warn|board.acceptChildren.same_owner|acceptChildren lists %s under this board own owner — a same-owner child needs no acceptance, and listing it names it to every member (ADR 0018)" % ", ".join(same))
+dev = sorted(k for k in ("hostAccount", "boards", "handle") if k in d)
+if dev:
+    print("warn|board.config.per_developer_key|%s set in the committed board config, where it is ignored — it belongs in each developer .agents/handoff.local.json (ADR 0010, ADR 0018)" % ", ".join(dev))
+' "$BOARD_CFG" "$_own_remote" 2> /dev/null)
 fi
 if [ "$TOPO" = "cross-repo" ]; then
   # A shared board lives outside the worktree and owns its own .gitignore, so a consumer `.locks/`
@@ -340,12 +396,29 @@ if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2
 try: d = json.load(open(sys.argv[1]))
 except Exception: raise SystemExit(0)
 if isinstance(d, dict):
-    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "handle", "userLayer"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
+    print(",".join(sorted(set(d) - {"board", "boardPath", "group", "handle", "userLayer", "hostAccount", "boards"})))' "$ROOT/.agents/handoff.local.json" 2> /dev/null)"
   if [ -n "$LOCAL_EXTRA" ]; then
-    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group, handle and userLayer are one developer's to choose; board-wide keys belong in the committed config"
+    warn repo.local_config.keys ".agents/handoff.local.json sets $LOCAL_EXTRA, which it cannot — only board, group, handle, hostAccount, boards and userLayer are one developer's to choose; board-wide keys belong in the committed config"
   else
     ok repo.local_config.keys ".agents/handoff.local.json sets only per-developer keys"
   fi
+fi
+# ADR 0018 — the two per-developer keys with a shape to get wrong. A hostAccount is a host login,
+# so it holds no whitespace or colon; boards maps a board remote to a local clone path. Either one
+# malformed is ignored by the CLI, which would otherwise look like a guard that is not there.
+if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
+  while IFS='|' read -r _id _msg; do
+    [ -n "$_id" ] && warn "$_id" "$_msg"
+  done < <(python3 -c 'import json, re, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+if not isinstance(d, dict): raise SystemExit(0)
+h = d.get("hostAccount")
+if "hostAccount" in d and not (isinstance(h, str) and h and not re.search(r"[\s:]", h)):
+    print("repo.local_config.hostAccount|hostAccount must be a single host login with no whitespace or colon (ADR 0018)")
+b = d.get("boards")
+if "boards" in d and not (isinstance(b, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in b.items())):
+    print("repo.local_config.boards|boards must map a board remote (host/owner/repo) to a local clone path (ADR 0018)")' "$ROOT/.agents/handoff.local.json" 2> /dev/null)
 fi
 # What could be committed by accident (ADR 0010). Warnings, never failures: each describes a risk,
 # not a broken install. The list comes from ignore-needs.sh, the same one setup suggests from.

@@ -604,6 +604,40 @@ VIDS_R="$(vids "$TVR")"
 chk_contains "a rule with allowPublic fails" "$VIDS_R" "fail:board.trackerRules.allowPublic"
 chk_contains "a rule naming an undeclared group warns" "$VIDS_R" "warn:board.trackerRules.group"
 chk_contains "a malformed rule fails shape" "$VIDS_R" "fail:board.trackerRules.shape"
+
+printf '\nthe verifier checks child-board links and per-developer keys offline (ADR 0018)\n'
+# mkboard's origin is github.com/acme/board, so "same owner" below means github.com/acme.
+TVC="$(mkboard)"
+tr_cfg "$TVC/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "parent": "github.com/acme/team-board", "acceptChildren": ["github.com/dev-a/handoff-board"] }'
+printf '{ "hostAccount": "dev-a", "boards": { "github.com/acme/team-board": "/nonexistent/team-board" } }\n' \
+  > "$TVC/.agents/handoff.local.json"
+VIDS_C="$(vids "$TVC")"
+chk "parent and acceptChildren are recognised board keys" "no" "$(has "$VIDS_C" "warn:board.config.unknown_keys")"
+chk_contains "a same-owner parent passes" "$VIDS_C" "pass:board.parent"
+chk "a cross-owner accepted child is not warned about" "no" "$(has "$VIDS_C" "warn:board.acceptChildren.same_owner")"
+chk "hostAccount and boards are per-developer keys handoff.local.json may set" "no" \
+  "$(has "$VIDS_C" "warn:repo.local_config.keys")"
+
+TVD="$(mkboard)"
+tr_cfg "$TVD/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"],
+  "parent": "github.com/acme/board", "acceptChildren": ["github.com/acme/sibling-board", 7],
+  "hostAccount": "dev-a", "boards": {} }'
+printf '{ "hostAccount": "dev a", "boards": ["not-a-map"] }\n' > "$TVD/.agents/handoff.local.json"
+VIDS_D="$(vids "$TVD")"
+chk_contains "a board naming itself as its parent fails" "$VIDS_D" "fail:board.parent.self"
+chk_contains "an acceptChildren entry that is not a board remote fails" "$VIDS_D" "fail:board.acceptChildren.shape"
+chk_contains "accepting a same-owner child warns — it names the child to every member" "$VIDS_D" "warn:board.acceptChildren.same_owner"
+chk_contains "a per-developer key in the committed board config warns — it is ignored there" "$VIDS_D" "warn:board.config.per_developer_key"
+chk_contains "a hostAccount with whitespace warns" "$VIDS_D" "warn:repo.local_config.hostAccount"
+chk_contains "a boards value that is not a map warns" "$VIDS_D" "warn:repo.local_config.boards"
+
+TVE="$(mkboard)"
+tr_cfg "$TVE/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"], "parent": "github.com/globex/team-board" }'
+chk_contains "a cross-owner parent warns that the other side cannot be checked offline" "$(vids "$TVE")" "warn:board.parent.cross_owner"
+TVF="$(mkboard)"
+tr_cfg "$TVF/.agents/handoff" '{ "topology": "cross-repo", "schema": 4, "groups": ["fleet"], "parent": "team-board" }'
+chk_contains "a parent that is not a board remote fails" "$(vids "$TVF")" "fail:board.parent.shape"
 chk "trackerRules is a recognised config key" "no" "$(has "$VIDS_R" "warn:board.config.unknown_keys")"
 
 # --- projection: complete (ADR 0020) ----------------------------------------------------------
