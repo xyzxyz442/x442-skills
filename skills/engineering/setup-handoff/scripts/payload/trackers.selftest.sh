@@ -805,5 +805,18 @@ tr_cfg "$TVPB/.agents/handoff" '{ "topology": "cross-repo", "schema": 4,
 VIDS_BAD="$(vids "$TVPB")"
 chk_contains "an unknown projection value warns" "$VIDS_BAD" "warn:board.trackers.projection"
 
+printf '\nmachine references are rewritten in the mirrored issue body, always (ADR 0020)\n'
+TMR="$(mkboard)"
+tr_cfg "$TMR/.agents/handoff" '{ "external": { "kind": "issues", "system": "github", "repo": "acme/mr-track", "refPattern": "#[0-9]+" } }'
+TMR_HOME="/Users/mr-test-home"
+(cd "$TMR" && HOME="$TMR_HOME" ./.agents/handoff/handoff new mr-issue --title "Mirror rewrite" > /dev/null)
+TMRD="$TMR/.agents/handoff/mr-issue-handoff.md"
+awk -v add="touched $TMR_HOME/proj/mirror.txt" \
+  '/^## Current state$/ { print; print ""; print add; next } { print }' "$TMRD" > "$TMRD.tmp" && cat "$TMRD.tmp" > "$TMRD" && rm -f "$TMRD.tmp"
+git -C "$TMR" add -A && git -C "$TMR" commit -qm "mirror-rewrite doc"
+(cd "$TMR" && HOME="$TMR_HOME" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" FAKE_TRACKER_STATE="$ST" ./.agents/handoff/handoff mirror > /dev/null 2>&1)
+chk "mirror rewrites the home path to ~ before it reaches the tracker" "1" "$(fq "len(by('~/proj/mirror.txt'))")"
+chk "the raw home path never reaches the tracker" "0" "$(fq "len([i for i in db['issues'] if '${TMR_HOME}/proj' in i['body']])")"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

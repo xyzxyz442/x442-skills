@@ -51,9 +51,12 @@ refused on any public tracker. This refines ADR 0011, 0013, and 0017.
   decides who may read.
 - **Machine references are rewritten on any board with a remote**: a path under the home
   directory becomes `~`, a path under the workspace root becomes the workspace-root token;
-  local ports, `*.local` hostnames and container names are warned about, never rewritten. The
-  detector runs on each CLI write (`new`, `checkpoint`, `release`, `import`), on `move`, and on
-  `mirror` and `export`. It reports which rule matched, never the matched text. It applies
+  another user's home path, local ports and `*.local` hostnames are warned about, never
+  rewritten. A home path inside a `verify:` command is only warned about, since `~` does not
+  expand inside the quotes that field requires. Container names are not detected: nothing in a
+  doc marks a word as one. The detector runs on each CLI write (`new`, `checkpoint`, `release`,
+  `import`), on `move`, and on `mirror` and `export`. It reports which rule matched, never the
+  matched text. It applies
   regardless of audience because the rewrite loses nothing for the owner; a local board is
   untouched. It is a separate detector beside the secret guard, not a mode of it — it answers a
   portability question, not a credential one.

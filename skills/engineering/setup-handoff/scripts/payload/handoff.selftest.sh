@@ -3831,6 +3831,126 @@ done
 chk "claim does not warn once every prerequisite landed" "" \
   "$(hb "$DM" claim dm-after "go" | grep 'prerequisites')"
 
+printf '\nmachine references are rewritten on a board with a remote (ADR 0020)\n'
+# A board is "in-repo with a remote" from `mkboard` above -- its docs travel with that repo's own
+# commits. `hbenv` runs the CLI with fake HOME/WORKSPACE_ROOT so the rewrite is exercised against
+# paths that are never the real machine's.
+hbenv() { # repo HOME WORKSPACE_ROOT subcommand... -> stdout+stderr merged
+  local r="$1" h="$2" w="$3"
+  shift 3
+  (cd "$r" && HOME="$h" WORKSPACE_ROOT="$w" ./.agents/handoff/handoff "$@") 2>&1
+}
+# A board that IS a git repo (so board_remote's own-worktree check has something to walk) but
+# carries no `origin` -- the "no remote" fixture ADR 0020 says must never be touched.
+mkboard_no_origin() { # -> path to a repo with no remote at all
+  local r
+  r="$(mktemp -d)"
+  git -C "$r" init -q
+  git -C "$r" config user.email "test@example.com"
+  git -C "$r" config user.name "test"
+  printf 'x\n' > "$r/README.md"
+  git -C "$r" add -A
+  git -C "$r" commit -qm "initial commit"
+  mkdir -p "$r/.agents/handoff/scripts" "$r/.agents/handoff/templates" "$r/.agents/handoff/archive"
+  cp "$SRC/handoff" "$r/.agents/handoff/handoff"
+  cp "$SRC/config.sh" "$r/.agents/handoff/scripts/config.sh"
+  cp "$TPL"/handoff-*-template.md "$r/.agents/handoff/templates/"
+  chmod +x "$r/.agents/handoff/handoff"
+  printf '%s' "$r"
+}
+MR_HOME="/Users/mr-test-home"
+MR_WS="/Users/mr-test-home/workspace"
+MR="$(mkboard)"
+MRB="$MR/.agents/handoff"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-one --title "Machine refs" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-one "start" > /dev/null
+MRD="$MRB/mr-one-handoff.md"
+MR_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-one \
+  "touched $MR_HOME/proj/x.txt and $MR_WS/svc-a/y" > /dev/null 2> "$MR_ERR")
+chk_contains "checkpoint rewrites a home path to ~" "$(cat "$MRD")" "~/proj/x.txt"
+chk_contains "checkpoint rewrites a workspace path to the literal token" "$(cat "$MRD")" '$WORKSPACE_ROOT/svc-a/y'
+chk "the raw home path does not survive in the doc" "no" "$(grep -qF "$MR_HOME/proj" "$MRD" && echo yes || echo no)"
+chk "the raw workspace path does not survive in the doc" "no" "$(grep -qF "$MR_WS/svc-a" "$MRD" && echo yes || echo no)"
+chk_contains "stderr names the workspace-path rule" "$(cat "$MR_ERR")" "workspace-path"
+chk_contains "stderr names the home-path rule" "$(cat "$MR_ERR")" "home-path"
+chk "stderr never carries the matched path" "no" "$(grep -qF "$MR_HOME/proj" "$MR_ERR" && echo yes || echo no)"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-two --title "Warn-only refs" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-two "start" > /dev/null
+MR2D="$MRB/mr-two-handoff.md"
+MR2_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-two \
+  "sibling ${MR_HOME}2/z also localhost:5433 127.0.0.1:8080 db.local /Users/someone-else/a" \
+  > /dev/null 2> "$MR2_ERR")
+chk_contains "a longer-prefix sibling is left alone, not rewritten" "$(cat "$MR2D")" "${MR_HOME}2/z"
+chk_contains "localhost:PORT is left in the doc" "$(cat "$MR2D")" "localhost:5433"
+chk_contains "127.0.0.1:PORT is left in the doc" "$(cat "$MR2D")" "127.0.0.1:8080"
+chk_contains "a *.local hostname is left in the doc" "$(cat "$MR2D")" "db.local"
+chk_contains "another user's home path is left in the doc" "$(cat "$MR2D")" "/Users/someone-else/a"
+chk_contains "stderr flags local-port" "$(cat "$MR2_ERR")" "local-port"
+chk_contains "stderr flags local-host" "$(cat "$MR2_ERR")" "local-host"
+chk_contains "stderr flags other-home-path" "$(cat "$MR2_ERR")" "other-home-path"
+chk "stderr never carries the matched port" "no" "$(grep -qF "5433" "$MR2_ERR" && echo yes || echo no)"
+chk "stderr never carries the matched username" "no" "$(grep -qF "someone-else" "$MR2_ERR" && echo yes || echo no)"
+
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-verify --title "Verify field" > /dev/null
+MRVD="$MRB/mr-verify-handoff.md"
+set_field "$MRVD" verify "\"cat $MR_HOME/x\""
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-verify "start" > /dev/null
+MRV_ERR="$(mktemp)"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint mr-verify \
+  > /dev/null 2> "$MRV_ERR")
+chk "the verify: line is left byte-for-byte, home path and all" "\"cat $MR_HOME/x\"" \
+  "$(sed -n 's/^verify: //p' "$MRVD" | head -1)"
+chk_contains "stderr reports it as home-path-in-verify, not home-path" "$(cat "$MRV_ERR")" "home-path-in-verify"
+
+printf '\nmachine references are left alone on a board with no remote (ADR 0020)\n'
+NR="$(mkboard_no_origin)"
+NRB="$NR/.agents/handoff"
+hbenv "$NR" "$MR_HOME" "$MR_WS" new nr-one --title "No remote" > /dev/null
+hbenv "$NR" "$MR_HOME" "$MR_WS" claim nr-one "start" > /dev/null
+NRD="$NRB/nr-one-handoff.md"
+NR_ERR="$(mktemp)"
+(cd "$NR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff checkpoint nr-one \
+  "touched $MR_HOME/proj/x.txt and $MR_WS/svc-a/y" > /dev/null 2> "$NR_ERR")
+chk_contains "no board_remote — the raw home path survives untouched" "$(cat "$NRD")" "$MR_HOME/proj/x.txt"
+chk_contains "no board_remote — the raw workspace path survives untouched" "$(cat "$NRD")" "$MR_WS/svc-a/y"
+chk "no board_remote — nothing is printed to stderr" "" "$(cat "$NR_ERR")"
+
+printf '\nmachine references are rewritten by release --verified-by too (ADR 0020)\n'
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-rel --title "Release rewrite" > /dev/null
+hbenv "$MR" "$MR_HOME" "$MR_WS" claim mr-rel "start" > /dev/null
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff release mr-rel \
+  --status done --verified-by "ran $MR_HOME/bin/check" > /dev/null 2>&1)
+MRRA="$MRB/archive/mr-rel-handoff.md"
+chk_contains "stored verified_by holds the rewritten path" "$(cat "$MRRA")" "~/bin/check"
+chk "the raw home path does not survive in verified_by" "no" "$(grep -qF "$MR_HOME/bin" "$MRRA" && echo yes || echo no)"
+
+printf '\nmachine references are rewritten in an exported brief, always (ADR 0020)\n'
+hbenv "$MR" "$MR_HOME" "$MR_WS" new mr-exp --title "Export rewrite" > /dev/null
+MRED="$MRB/mr-exp-handoff.md"
+awk -v add="touched $MR_HOME/proj/export.txt" \
+  '/^## Context$/ { print; print ""; print add; next } { print }' "$MRED" > "$MRED.tmp" && cat "$MRED.tmp" > "$MRED" && rm -f "$MRED.tmp"
+(cd "$MR" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff export mr-exp --to "Alice" --no-claim > /dev/null 2>&1)
+EXP_BRIEF="$MRB/briefs/mr-exp-handoff.brief.md"
+chk_contains "the exported brief carries the rewritten home path" "$(cat "$EXP_BRIEF")" "~/proj/export.txt"
+chk "the raw home path does not survive in the brief" "no" "$(grep -qF "$MR_HOME/proj" "$EXP_BRIEF" && echo yes || echo no)"
+
+printf '\nmachine references are rewritten by move, on the staged copy, onto a target with a remote (ADR 0020)\n'
+MVS="$(mkboard)"
+MVT="$(mkboard)"
+hbenv "$MVS" "$MR_HOME" "$MR_WS" new mv-mr --title "Move rewrite" > /dev/null
+MVS_DOC="$MVS/.agents/handoff/mv-mr-handoff.md"
+awk -v add="touched $MR_HOME/proj/move.txt" \
+  '/^## Context$/ { print; print ""; print add; next } { print }' "$MVS_DOC" > "$MVS_DOC.tmp" && cat "$MVS_DOC.tmp" > "$MVS_DOC" && rm -f "$MVS_DOC.tmp"
+hbenv "$MVS" "$MR_HOME" "$MR_WS" claim mv-mr "moving" > /dev/null
+(cd "$MVS" && HOME="$MR_HOME" WORKSPACE_ROOT="$MR_WS" ./.agents/handoff/handoff move mv-mr --to "$MVT/.agents/handoff" > /dev/null 2>&1)
+MVT_DOC="$MVT/.agents/handoff/mv-mr-handoff.md"
+chk_contains "the moved copy carries the rewritten home path" "$(cat "$MVT_DOC")" "~/proj/move.txt"
+chk "the raw home path does not survive on the target board" "no" "$(grep -qF "$MR_HOME/proj" "$MVT_DOC" && echo yes || echo no)"
+
 printf '\nunknown flags are refused, not swallowed\n'
 # Four commands used to absorb an argument they did not recognize. `new` and `import` discarded it
 # (`*) shift ;;`) and reported success, so a typo'd flag created a doc with defaults and nothing

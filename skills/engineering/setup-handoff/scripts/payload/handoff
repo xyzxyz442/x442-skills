@@ -1390,6 +1390,152 @@ die_on_secret() { # where hits
        If this is a false positive, re-run with: --force-secret \"<why this is safe>\""
 }
 
+# --- machine references (ADR 0020) --------------------------------------------------------
+# A path under $HOME or $WORKSPACE_ROOT, a local port, a *.local hostname: each resolves on the
+# machine that wrote it and means nothing — or means something else — anywhere it is read from. A
+# board with a remote (its docs are pushed) and a tracker or brief (off-machine by definition) can
+# carry one straight into another developer's session or another organization's issue tracker.
+#
+# Deliberately a SEPARATE detector from scan_secrets, not a mode of it (ADR 0020's decision): this
+# answers a portability question, not a credential one, and it REWRITES rather than refusing — a
+# home path costs the owner nothing to lose, so there is no reason to block the write the way a
+# credential match does. Two rules rewrite ($HOME -> ~, $WORKSPACE_ROOT -> a literal token);
+# everything else is reported but left alone, either because it cannot be rewritten losslessly
+# (another user's home, a local port or hostname) or because rewriting it would break a command
+# (`verify:`, below). It never fails and never changes the exit status of its caller.
+#
+# Reports ONE line to stderr naming the rules that fired and how many times, e.g.
+# "handoff: machine references — rewrote home-path ×2; flagged local-port ×1 (ADR 0020)" — never
+# the matched text, for the same reason scan_secrets never echoes a credential. Silent when
+# nothing matched.
+#
+# Container names are NOT detected here — nothing in this detector recognizes a
+# `docker-compose`/Kubernetes service name as a machine reference. Flagged in the ADR review as a
+# gap to close later, not attempted here.
+machine_refs_filter() { # stdin -> stdout (rewritten); report on stderr; never fails, never blocks
+  if ! command -v python3 > /dev/null 2>&1; then
+    cat # no interpreter to rewrite with -- pass the text through rather than lose it
+    return 0
+  fi
+  local py
+  py="$(mktemp)" || {
+    cat
+    return 0
+  }
+  # Written to a FILE, then run as `python3 "$py"` — NOT `python3 - <<'PY' ... PY`. That form
+  # reads the PROGRAM itself from stdin, which consumes the very input this filter exists to
+  # read: sys.stdin.read() below would see nothing but EOF. A temp file keeps this process's
+  # inherited stdin (the caller's piped or redirected text) free for the script to read.
+  cat > "$py" << 'PY'
+import os, re, sys
+
+text = sys.stdin.read()
+home = os.environ.get("HOME", "")
+wsroot = os.environ.get("WORKSPACE_ROOT", "")
+
+
+def valid_root(p):
+    # Only an absolute path longer than "/" is a root worth rewriting under -- an unset or
+    # relative value would otherwise match everywhere, or nowhere usefully.
+    return bool(p) and p.startswith("/") and len(p) > 1
+
+
+home_ok = valid_root(home)
+ws_ok = valid_root(wsroot)
+
+# A rewritten root must be a WHOLE path prefix: followed by "/", whitespace, a quote, a
+# backtick, ")" or end of line/string -- never just any character, or "/Users/alice2" would be
+# rewritten when HOME is "/Users/alice". Zero-width, so it is never consumed by the match.
+BOUND = r"""(?=[/\s'"` )]|$)"""
+ws_re = re.compile(re.escape(wsroot) + BOUND) if ws_ok else None
+home_re = re.compile(re.escape(home) + BOUND) if home_ok else None
+# Warn-only: another user's home directory, a local port, a *.local hostname. Scanned on the
+# ALREADY-rewritten line, so the current user's own home (just turned into "~") is never also
+# reported here -- what is left really is someone else's.
+other_re = re.compile(r"(?:/Users|/home)/[A-Za-z0-9_.-]+(?=/)")
+port_re = re.compile(r"\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):[0-9]{2,5}\b")
+local_host_re = re.compile(r"\b[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\.local\b")
+verify_re = re.compile(r"^\s*verify\s*:")
+
+counts = {
+    "workspace-path": 0,
+    "home-path": 0,
+    "other-home-path": 0,
+    "local-port": 0,
+    "local-host": 0,
+    "home-path-in-verify": 0,
+}
+
+# `verify:` holds a shell command inside the quotes YAML frontmatter forces on it (see meta()) --
+# "~" does not expand inside those quotes, so rewriting a home path there would break the
+# command. Detected by position (inside the FIRST frontmatter block) and by key name, never
+# rewritten, only flagged.
+lines = text.split("\n")
+out = []
+fm_delims = 0
+in_fm = False
+for line in lines:
+    is_verify_line = False
+    if line == "---":
+        fm_delims += 1
+        in_fm = fm_delims == 1
+    elif in_fm and verify_re.match(line):
+        is_verify_line = True
+
+    if is_verify_line:
+        if home_ok and home_re.search(line):
+            counts["home-path-in-verify"] += len(home_re.findall(line))
+        out.append(line)
+        continue
+
+    newline = line
+    if ws_ok:
+        newline, n = ws_re.subn("$WORKSPACE_ROOT", newline)
+        counts["workspace-path"] += n
+    if home_ok:
+        newline, n = home_re.subn("~", newline)
+        counts["home-path"] += n
+
+    counts["other-home-path"] += len(other_re.findall(newline))
+    counts["local-port"] += len(port_re.findall(newline))
+    counts["local-host"] += len(local_host_re.findall(newline))
+
+    out.append(newline)
+
+sys.stdout.write("\n".join(out))
+
+rewrote = ["%s ×%d" % (n, counts[n]) for n in ("workspace-path", "home-path") if counts[n]]
+flagged = [
+    "%s ×%d" % (n, counts[n])
+    for n in ("other-home-path", "local-port", "local-host", "home-path-in-verify")
+    if counts[n]
+]
+if rewrote or flagged:
+    clauses = []
+    if rewrote:
+        clauses.append("rewrote " + ", ".join(rewrote))
+    if flagged:
+        clauses.append("flagged " + ", ".join(flagged))
+    sys.stderr.write("handoff: machine references — " + "; ".join(clauses) + " (ADR 0020)\n")
+PY
+  python3 "$py"
+  local rc=$?
+  rm -f "$py"
+  return $rc
+}
+
+# Rewrite a file in place when it carries a machine reference; a no-op (byte-identical, silent)
+# when it does not. The file-vs-filter split mirrors how callers already hold a path (a board doc)
+# or a stream (a rendered mirror body, an exported brief) -- both funnel through the one filter
+# above so the rules and the report line can never drift between the two shapes.
+machine_refs_file() { # path
+  local f="$1" tmp
+  tmp="$(mktemp)" || return 0
+  machine_refs_filter < "$f" > "$tmp"
+  cmp -s "$f" "$tmp" || cat "$tmp" > "$f"
+  rm -f "$tmp"
+}
+
 # --- sensitivity (ADR 0005) ---------------------------------------------------------------
 # `sensitivity` is a HANDLING FLAG, NOT AN ACCESS BOUNDARY. Board membership is the access
 # boundary: anyone who can read the board can read every document on it, restricted or not. What
@@ -1862,6 +2008,9 @@ cmd_new() {
     log_secret_override "$target" "secret-scan OVERRIDDEN at creation" "$hits" "$force_secret"
     echo "⚠️  Secret scan overridden — recorded on the doc's activity log."
   fi
+  # ADR 0020 — only on a board whose docs are pushed somewhere (board_remote non-empty covers an
+  # in-repo board too: its docs travel with that repo's own commits).
+  [ -n "$(board_remote)" ] && machine_refs_file "$target"
   # Same `if` form as cmd_claim's, for the same reason — here the status is currently swallowed by
   # the two commands below, which is luck, not design.
   if is_restricted "$target"; then restricted_banner "$id"; fi
@@ -2039,6 +2188,9 @@ import_result() {
     echo "⚠️  Inbound secret scan overridden — recorded on $id's activity log."
   fi
 
+  # ADR 0020 — same gate as `new`/plain `import`: only a board whose docs are pushed somewhere.
+  [ -n "$(board_remote)" ] && machine_refs_file "$f"
+
   echo "Imported the reported result into $f."
   echo "Board status is UNCHANGED — the report is a claim, not a verdict."
   echo "Review the PR, reproduce the evidence, then close it yourself:"
@@ -2195,6 +2347,8 @@ cmd_import() {
     cat "$src" >> "$dest"
   fi
   grouped && set_field "$dest" group "$GROUP" # record the section for search; no-op on a flat board
+  # ADR 0020 — same gate as `new`: only a board whose docs are pushed somewhere.
+  [ -n "$(board_remote)" ] && machine_refs_file "$dest"
   echo "Imported $src → $dest (type: $type)."
   echo "🔒 Before committing: redact secrets/keys/passwords/PII — this doc goes into git history."
   cmd_index
@@ -2702,6 +2856,10 @@ export_one() {               # id doc to outdir branch do_claim force-secret-rea
     rm -f "$staged"
     die "could not render the brief for $id"
   }
+
+  # ADR 0020 — always, not gated on this board's remote: a brief leaves the machine by
+  # definition, and before the secret scan so a rewritten path can never itself trip it.
+  machine_refs_file "$staged"
 
   local hits=""
   if hits="$(scan_secrets < "$staged")"; then
@@ -3813,6 +3971,11 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   stage_dir="$(mktemp -d)" || die "mktemp failed"
   staged="$stage_dir/$id.md"
   move_stage_copy "$f" "$staged" "$src_label" "moved here from $(fold_colons "$src_label") by $(whoami_id)${across}."
+  # ADR 0020 — gated on the TARGET board's remote, not the source's: what matters is whether the
+  # doc is about to be pushed somewhere, and it is about to live on $to. move_import_into below
+  # re-imports this staged copy through the target's own `import`, which applies the same rule
+  # again against the same board -- idempotent once this has already rewritten it.
+  [ -n "$(handoff_board_remote "$to")" ] && machine_refs_file "$staged"
   [ -n "$force_secret" ] && [ -n "$hits" ] \
     && log_secret_override "$staged" "move secret-scan OVERRIDDEN" "$hits" "$force_secret"
   # move_import_into runs in a command substitution, so its `die` exits only that subshell. The rc
@@ -4512,7 +4675,9 @@ mirror_survey() { # desired-file gone-file ownrefs-file public(0|1) -> non-zero 
       printf '%s\n' "$(meta "$f" external_ref)" | tr -cd '0-9\n' >> "$ownrefs"
       continue
     fi
-    rendered="$(mirror_render "$f" "$public" "$(tracker_setting projection)")"
+    # ADR 0020 — always, not gated on this board's own remote: a tracker is off-machine by
+    # definition, and before the secret scan so a rewritten path can never itself trip it.
+    rendered="$(mirror_render "$f" "$public" "$(tracker_setting projection)" | machine_refs_filter)"
     if hits="$(printf '%s' "$rendered" | scan_secrets)"; then
       printf 'refuse %s — looks like it contains a credential (%s); nothing of it was sent\n' "$base" "$(printf '%s' "$hits" | tr '\n' ' ' | sed 's/ $//')"
       refused=1
@@ -5308,6 +5473,8 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
     log_secret_override "$f" "checkpoint secret-scan OVERRIDDEN" "$hits" "$force_secret"
   fi
   log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
+  # ADR 0020 — after the doc is fully updated, before it is committed/pushed below.
+  [ -n "$(board_remote)" ] && machine_refs_file "$f"
   lease_index > /dev/null
   release_commit_push "handoff: checkpoint $id" "$f"
   echo "Checkpointed $id — Current state published, lease kept."
@@ -5338,6 +5505,11 @@ finish_release() { # id status
   local rf
   rf="$(doc_of "$1" 2> /dev/null)"
   [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
+  # ADR 0020 — every release path (coordination, standalone, orchestrator) funnels through here,
+  # so this one call covers all of them: after the doc is fully updated, before it is
+  # committed/pushed below. Runs whether the doc is still live or was just archived — $rf already
+  # points wherever it landed.
+  [ -n "$rf" ] && [ -n "$(board_remote)" ] && machine_refs_file "$rf"
   lease_index
   # Optimistic by design: this records something that already happened, so a failure to reach the
   # remote is a warning and the release still stands. See release_commit_push.
