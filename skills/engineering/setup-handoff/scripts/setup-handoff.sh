@@ -78,6 +78,70 @@ install_file() {
   if [ ! -f "$d" ] || ! cmp -s "$s" "$d"; then cp "$s" "$d"; fi
 }
 
+# --- ADR 0018: refuse to install into a board whose own remote is already public ------------
+# Mirrors the CLI's board_visibility (payload/handoff): only a github.com remote can be asked, via
+# the same tracker-github.sh adapter the mirror uses, and never cached. Any other host, no remote,
+# or a failed call reads "unknown" and only warns — most hosts have no visibility API for setup to
+# ask, and setup must still work for them.
+#
+# HANDOFF_TRACKER_ADAPTER, the same env var the CLI's own tests already fake this adapter with
+# (harness/lib/fake-tracker.sh), lets setup-handoff.selftest.sh substitute it here too, so this
+# check never makes a network call in a test run.
+setup_board_visibility() { # remote-url -> public|private|unknown
+  local url="$1" repo adapter vis
+  case "$url" in
+    *github.com[:/]*) ;;
+    *)
+      printf 'unknown'
+      return 0
+      ;;
+  esac
+  repo="$(printf '%s' "$url" | sed -e 's#.*github\.com[:/]##' -e 's#\.git$##' -e 's#/*$##')"
+  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ] && [ -f "$HANDOFF_TRACKER_ADAPTER" ]; then
+    adapter="$HANDOFF_TRACKER_ADAPTER"
+  else
+    adapter="$PAYLOAD/tracker-github.sh"
+  fi
+  [ -f "$adapter" ] || {
+    printf 'unknown'
+    return 0
+  }
+  vis="$(printf '{"repo": "%s"}' "$repo" | bash "$adapter" visibility 2> /dev/null \
+    | python3 -c 'import json, sys
+try: print(str(json.load(sys.stdin).get("visibility", "")).lower())
+except Exception: print("")' 2> /dev/null)"
+  case "$vis" in
+    public) printf 'public' ;;
+    private | internal) printf 'private' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+# The remote a board OWNS: its origin when the board directory is the root of its own repository,
+# and nothing otherwise. `git -C` inside a nested board answers for the ENCLOSING repository, whose
+# audience that repository already decided — an open-source project's in-repo board is public by
+# design (ADR 0013), so only a dedicated board's own remote is checked here.
+setup_own_remote() { # board-dir -> its own origin url, or nothing
+  local d="$1" top
+  [ -d "$d" ] || return 0
+  top="$(git -C "$d" rev-parse --show-toplevel 2> /dev/null)" || return 0
+  [ "$(cd "$top" && pwd -P)" = "$(cd "$d" && pwd -P)" ] || return 0
+  git -C "$d" remote get-url origin 2> /dev/null || true
+}
+
+# Run BEFORE anything this install would write, so a refusal leaves nothing new behind. A board
+# with no remote (empty $1) is skipped silently.
+setup_board_visibility_gate() { # remote-url
+  local url="${1:-}" vis
+  [ -n "$url" ] || return 0
+  vis="$(setup_board_visibility "$url")"
+  case "$vis" in
+    public) die "this board's remote ($url) is public, and setup refuses to install into a public board — a board must be private (ADR 0018). Nothing was written. Make the repository private, then re-run." ;;
+    unknown) echo "setup-handoff: warning — could not confirm $url (this board's remote) is private; continuing (ADR 0018)." ;;
+  esac
+  return 0
+}
+
 # --- downgrade guard -------------------------------------------------------------------
 # install_file is deliberately version-blind: byte-compare, then copy. That is correct for one
 # writer and wrong for a SHARED board, where the writer may be on a stale checkout. Nothing looks
@@ -708,6 +772,9 @@ PY
 # cross-repo sync stands up before it wires the member repos that point at it. Idempotent.
 if [ -n "$BOARD_ONLY" ]; then
   case "$BOARD_ONLY" in /*) HDEST="$BOARD_ONLY" ;; *) HDEST="$(pwd)/$BOARD_ONLY" ;; esac
+  # ADR 0018, before anything is written: --remote names the board's home, or a re-run finds one
+  # already configured at $HDEST (joining/re-installing an existing board).
+  setup_board_visibility_gate "${BOARD_REMOTE:-$(setup_own_remote "$HDEST")}"
   # Before anything is written: if a remote is declared and no board is here yet, this machine is
   # JOINING an existing board, not creating one. The payload install below is byte-comparing and
   # idempotent, so it lands cleanly on top of whatever the clone brought.
@@ -890,6 +957,11 @@ with open(sys.argv[2], "w") as fh:
     fh.write("\n")
 PY
 fi
+
+# --- ADR 0018: the board's own remote, before any of the payload below is written ------
+# Only when $HDEST is already its own repository (a dedicated board on a re-run). The common
+# single-repo case nests the board inside $REPO, whose remote is not the board's to judge.
+setup_board_visibility_gate "$(setup_own_remote "$HDEST")"
 
 # --- install the payload --------------------------------------------------------------
 mkdir -p "$HDEST/archive" "$HDEST/scripts" "$HDEST/templates" "$HDEST/briefs"

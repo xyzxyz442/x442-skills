@@ -2957,8 +2957,11 @@ printf '{}' > "$RV_PUB"
 printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog", "allowPublic": true } }\n' > "$RVB/handoff.json"
 rvh new r-open --title "Shared work" --reviewer erin --share public > /dev/null
 rvh new r-quiet --title "Unshared work" --reviewer frank > /dev/null
+# Public is scoped to the TRACKER's repo (acme/backlog) alone, via FAKE_TRACKER_PUBLIC_REPOS —
+# not the board's own remote (acme/acme-api, RV's mkboard origin), which ADR 0018 checks
+# separately and would otherwise refuse this run for an unrelated reason.
 (cd "$RV" && HANDOFF_SESSION_ID="rv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
-  FAKE_TRACKER_STATE="$RV_PUB" FAKE_TRACKER_VISIBILITY=public ./.agents/handoff/handoff mirror > /dev/null 2>&1)
+  FAKE_TRACKER_STATE="$RV_PUB" FAKE_TRACKER_PUBLIC_REPOS=acme/backlog ./.agents/handoff/handoff mirror > /dev/null 2>&1)
 chk "on a public repo a share: public doc still carries its assignee" "['erin']" \
   "$(python3 -c 'import json,sys
 db = json.load(open(sys.argv[1]))
@@ -2971,6 +2974,104 @@ chk "so no handle for it was ever sent" "0" \
   "$(python3 -c 'import json,sys
 db = json.load(open(sys.argv[1]))
 print(len([c for c in db["calls"] if "frank" in json.dumps(c[1])]))' "$RV_PUB")"
+
+printf '\nmirror also checks the BOARD'"'"'s own remote, not only its trackers (ADR 0018)\n'
+# Distinct from ADR 0013 above: that gate asks about the TRACKER's repository; this one asks about
+# the board's own remote, and is checked FIRST, before any tracker pass sends anything. The tracker
+# stays private throughout, so any refusal or warning here can only be about the board.
+#
+# Only a DEDICATED board has a remote of its own. An in-repo board's remote is the code
+# repository's, whose audience that repository already chose — an open-source project's board is
+# public by design (ADR 0013) — so it is never refused here. That case is asserted last.
+mkdedicated() { # url -> a dedicated board whose origin is configured as <url>, pushing to a bare dir
+  local b bare
+  b="$(mkshared)"
+  bare="$(dirname "$b")/origin.git"
+  git -C "$b" remote set-url origin "$1"
+  git -C "$b" config "url.$bare.insteadOf" "$1"
+  printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog" } }\n' > "$b/handoff.json"
+  printf '%s' "$b"
+}
+bvrun() { # board state extra-env... -- args -> the board CLI with the fake adapter
+  local b="$1" st="$2"
+  shift 2
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  (cd "$b" && env ${envs[@]+"${envs[@]}"} HANDOFF_SESSION_ID="bv-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+    FAKE_TRACKER_STATE="$st" ./handoff "$@") 2>&1
+}
+bvcalls() { # state op [repo] -> how many times the fake tracker was asked for that op
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {}
+print(len([c for c in db.get("calls", []) if c[0] == sys.argv[2] and (len(sys.argv) < 4 or c[1].get("repo") == sys.argv[3])]))' "$@"
+}
+bvissues() { # state doc-id -> issues carrying that doc's marker
+  python3 -c 'import json,sys
+try: db = json.load(open(sys.argv[1]))
+except Exception: db = {}
+print(len([i for i in db.get("issues", []) if "/" + sys.argv[2] + " -->" in i["body"]]))' "$1" "$2"
+}
+
+BV="$(mkdedicated "git@github.com:acme/team-board.git")"
+BV_STATE="$(mktemp)"
+printf '{}' > "$BV_STATE"
+bvrun "$BV" "$BV_STATE" -- new bv-open --title "Open work" > /dev/null
+BV_OUT1="$(bvrun "$BV" "$BV_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/team-board -- mirror)"
+BV_RC1=$?
+chk_contains "mirror refuses when a dedicated board's OWN remote is public" "$BV_OUT1" "acme/team-board"
+chk_contains "and cites ADR 0018" "$BV_OUT1" "ADR 0018"
+chk "and exits non-zero" "1" "$([ "$BV_RC1" != 0 ] && echo 1 || echo 0)"
+chk "the tracker's create op is never called" "0" "$(bvcalls "$BV_STATE" create)"
+chk "not even a list call reaches the tracker" "0" "$(bvcalls "$BV_STATE" list)"
+chk "the tracker's own visibility is never asked either — the board refuses first" "0" \
+  "$(bvcalls "$BV_STATE" visibility acme/backlog)"
+
+BV_OUT3="$(bvrun "$BV" "$BV_STATE" -- mirror)"
+chk "a private board remote (the default) prints no ADR 0018 warning" "0" "$(printf '%s' "$BV_OUT3" | grep -c 'ADR 0018')"
+chk "and the doc reaches the tracker" "1" "$(bvissues "$BV_STATE" bv-open-handoff)"
+
+# A board remote on any host but github.com can never be asked, so it reads "unknown" — the same
+# outcome as a FAILED call: warn, never refuse.
+BV2="$(mkdedicated "https://git.example.com/acme/other.git")"
+BV2_STATE="$(mktemp)"
+printf '{}' > "$BV2_STATE"
+bvrun "$BV2" "$BV2_STATE" -- new bv2-open --title "Open work" > /dev/null
+BV2_OUT="$(bvrun "$BV2" "$BV2_STATE" -- mirror)"
+BV2_RC=$?
+chk_contains "an unconfirmable board remote (non-github here) only warns" "$BV2_OUT" "git.example.com/acme/other"
+chk_contains "and the warning cites ADR 0018" "$BV2_OUT" "ADR 0018"
+chk "mirror still proceeds — exit 0" "0" "$BV2_RC"
+chk "and the doc actually reaches the tracker" "1" "$(bvissues "$BV2_STATE" bv2-open-handoff)"
+
+# `claim` never checks visibility (ADR 0018) — it stays a plain git operation, even on a dedicated
+# board whose remote is public.
+BV4="$(mkdedicated "git@github.com:acme/public-board.git")"
+BV4_STATE="$(mktemp)"
+printf '{}' > "$BV4_STATE"
+bvrun "$BV4" "$BV4_STATE" -- new bv4-work --title "Claim me" > /dev/null
+BV4_CLAIM="$(bvrun "$BV4" "$BV4_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/public-board -- claim bv4-work "working")"
+chk_contains "claim succeeds on a dedicated board whose own remote is public" "$BV4_CLAIM" "Claimed bv4-work"
+chk "claim never calls the adapter's visibility op" "0" "$(bvcalls "$BV4_STATE" visibility)"
+
+# An IN-REPO board inside a public code repository: its remote is the repository's, not the
+# board's, so the board gate stays out of it and ADR 0013's tracker gate is all that applies.
+BV5="$(mkboard)"
+BV5B="$BV5/.agents/handoff"
+BV5_STATE="$(mktemp)"
+printf '{}' > "$BV5_STATE"
+printf '{ "external": { "kind": "issues", "system": "github", "refPattern": "#[0-9]+", "repo": "acme/backlog5" } }\n' > "$BV5B/handoff.json"
+bv5h() { (cd "$BV5" && HANDOFF_SESSION_ID="bv5-sess" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+  FAKE_TRACKER_STATE="$BV5_STATE" FAKE_TRACKER_PUBLIC_REPOS="acme/acme-api" ./.agents/handoff/handoff "$@") 2>&1; }
+bv5h new bv5-open --title "Open work" > /dev/null
+BV5_OUT="$(bv5h mirror)"
+chk "an in-repo board in a public code repository is not refused by the board gate" "0" \
+  "$(printf '%s' "$BV5_OUT" | grep -c 'ADR 0018')"
+chk "and its doc reaches its (private) tracker" "1" "$(bvissues "$BV5_STATE" bv5-open-handoff)"
 
 # --- the banner says whether it is YOUR review ------------------------------
 # Before this field every reader saw one marker, so "somebody should look" and "you should look"
@@ -3292,8 +3393,17 @@ pb_ext() { # json fragment appended to the external block
 pbh() { # visibility subcommand... -> the board CLI against a tracker reporting that visibility
   local v="$1"
   shift
-  (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
-    FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY="$v" ./.agents/handoff/handoff "$@") 2>&1
+  # "public" is scoped to the TRACKER's own repo (acme/open) via FAKE_TRACKER_PUBLIC_REPOS, not a
+  # blanket FAKE_TRACKER_VISIBILITY — that would also make the board's OWN remote (acme/acme-api,
+  # PB's mkboard origin) read public, which ADR 0018 checks separately and refuses for a different
+  # reason, breaking these ADR 0013 (tracker-only) assertions.
+  if [ "$v" = public ]; then
+    (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+      FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_PUBLIC_REPOS=acme/open ./.agents/handoff/handoff "$@") 2>&1
+  else
+    (cd "$PB" && HANDOFF_SESSION_ID="$MI_SESS" HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
+      FAKE_TRACKER_STATE="$MI_STATE" FAKE_TRACKER_VISIBILITY="$v" ./.agents/handoff/handoff "$@") 2>&1
+  fi
 }
 pb_ext ''
 pbh private new p-shared --title "Shared work" --share public > /dev/null

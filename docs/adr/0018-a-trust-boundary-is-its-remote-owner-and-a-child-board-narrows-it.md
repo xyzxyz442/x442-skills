@@ -68,8 +68,11 @@ name — without inventing a role a board can hold. This refines ADR 0002, 0005,
   org, both reached with one account, stay two boundaries.
 - **Board remotes are private.** Setup refuses a board whose remote is public; each `mirror`
   pass checks the board's own remote along with its trackers; an `unknown` answer warns rather
-  than refuses for a board, so hosts without a visibility API still work; the verifier warns.
-  `claim` does not check — it stays a plain git operation.
+  than refuses for a board, so hosts without a visibility API still work. The verifier stays
+  offline (ADR 0013) and does not ask. `claim` does not check — it stays a plain git operation.
+  This applies to a board with a remote of its own: an in-repo board's remote is its code
+  repository's, whose audience that repository already chose — an open-source project's board is
+  public by design (ADR 0013).
 - **A host account is recorded per developer** in `handoff.local.json` (ADR 0010's
   per-developer file). `mirror` and `export --to-issue` refuse when the active account differs.
   Setup suggests a git `includeIf` credential rule. The account never defines or merges a
@@ -105,6 +108,6 @@ name — without inventing a role a board can hold. This refines ADR 0002, 0005,
 
 - Board config gains a parent declaration and an accepted-children list (board config, not the
   document schema — no schema bump); `handoff.local.json` gains the host account; `move`'s
-  trust check gains the child rules; setup gains the board-visibility check; the verifier gains
-  parent/child, board-visibility and host-account checks; `list` gains read-only cross-board
+  trust check gains the child rules; setup and `mirror` gain the board-visibility check; the
+  verifier gains offline parent/child and host-account checks; `list` gains read-only cross-board
   status. An existing board behaves exactly as before until it declares a parent.

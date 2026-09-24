@@ -3384,6 +3384,71 @@ board_accepts_child() { # parent-board-dir child-host/owner/repo -> 0 when the p
   return 1
 }
 
+# ADR 0018 — the board's OWN remote is a trust boundary too, not only its trackers (ADR 0013).
+# Asked through the same adapter mechanism a tracker uses, but never through tracker config: a
+# board need declare no tracker at all to still have this checked. Only github.com is asked —
+# every other host, a board with no remote, or a failed call reads "unknown" rather than guessing.
+# Never cached. GitHub's `internal` collapses into "private" here, same as ADR 0013.
+# HANDOFF_TRACKER_ADAPTER, the same seam the fake-tracker harness already uses, lets a test
+# substitute the adapter that answers this too — it never widens WHICH provider is asked, only
+# which script speaks for it.
+board_visibility() { # board-dir -> public|private|unknown, printed on stdout
+  local dir="$1" origin provider adapter="" f path vis
+  origin="$(board_origin_norm "$dir")"
+  [ -n "$origin" ] || { printf 'unknown'; return 0; }
+  provider="$(repo_provider_of "$origin")"
+  if [ "$provider" != github ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if [ -n "${HANDOFF_TRACKER_ADAPTER:-}" ] && [ -f "$HANDOFF_TRACKER_ADAPTER" ]; then
+    adapter="$HANDOFF_TRACKER_ADAPTER"
+  else
+    for f in "$DIR/scripts/tracker-github.sh" "$_self_dir/tracker-github.sh" "$_self_dir/scripts/tracker-github.sh"; do
+      [ -f "$f" ] && {
+        adapter="$f"
+        break
+      }
+    done
+  fi
+  [ -n "$adapter" ] || { printf 'unknown'; return 0; }
+  path="$(repo_path_of "$origin")"
+  vis="$(printf '{"repo": "%s"}' "$path" | bash "$adapter" visibility 2> /dev/null \
+    | python3 -c 'import json, sys
+try: print(str(json.load(sys.stdin).get("visibility", "")).lower())
+except Exception: print("")' 2> /dev/null)"
+  case "$vis" in
+    public) printf 'public' ;;
+    private | internal) printf 'private' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+board_public_refusal() { # remote -> the refusal sentence
+  printf 'this board'"'"'s own remote (%s) is public, and a board must be private (ADR 0018) — its leases and document history would become readable by anyone, permanently. Nothing was sent. Make the repository private, then re-run.' "$1"
+}
+
+# Called once per run, before any tracker pass sends anything (ADR 0018) — distinct from, and
+# checked before, ADR 0013's per-tracker gate. A board with no remote is skipped silently: nothing
+# widens by staying on one machine. `unknown` warns rather than refuses, so a host with no
+# visibility API (or a call that fails) still lets a board work. `claim` never calls this — it
+# stays a plain git operation, unconditionally, per ADR 0018.
+board_visibility_gate() { # board-dir -> 0, or dies
+  local dir="$1" origin vis
+  # Only a board with a remote of its OWN (ADR 0002's shared board). An in-repo board's remote is
+  # the code repository it lives in, whose audience that repository already decided — an
+  # open-source project's board is public by design (ADR 0013), and refusing it here would break it.
+  handoff_leases_shared "$dir" || return 0
+  origin="$(board_origin_norm "$dir")"
+  [ -n "$origin" ] || return 0
+  vis="$(board_visibility "$dir")"
+  case "$vis" in
+    public) die "$(board_public_refusal "$origin")" ;;
+    unknown) echo "handoff: warning — could not confirm $origin (this board's own remote) is private; continuing (ADR 0018)." >&2 ;;
+  esac
+  return 0
+}
+
 # The trust boundary. Returns 0 when the move stays inside one boundary (same host and owner, a
 # target with no remote, or a cross-owner child both sides have linked), 1 when it crosses and the
 # caller named the target's owner. Dies otherwise — and always for a restricted doc, which never
@@ -4434,6 +4499,8 @@ except Exception: print("")')"
 # it half-way through. The listing of already-mirrored issues is kept, for the person who decides.
 mirror_preflight() { # aliases -> 0, or dies
   local alias repo existing already
+  # ADR 0018 — the board's own remote first, before any tracker (ADR 0013) is even asked.
+  board_visibility_gate "$DIR"
   while IFS= read -r alias; do
     CUR_TRACKER="$alias"
     repo="$(require_tracker mirror)" || exit 3
