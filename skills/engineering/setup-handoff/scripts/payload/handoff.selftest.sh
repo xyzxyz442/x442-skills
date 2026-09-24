@@ -1584,14 +1584,16 @@ chk "the doc travels with its lease" "yes" \
 chk "the generated index travels too, so the next fast-forward is not blocked" "yes" \
   "$(git -C "$SB" ls-files --error-unmatch INDEX.md > /dev/null 2>&1 && echo yes || echo no)"
 
-printf '\nboard_generated_dirty — every GENERATED spelling across all three layouts, together\n'
+printf '\nboard_generated_dirty — every GENERATED spelling, scoped to its own section\n'
 # Regression test. board_generated_dirty used to list only INDEX.md and */INDEX.md — the flat
 # board and the subfolder layout — and never INDEX-<group>.md, which is what sec_index() writes
 # under LAYOUT=prefix. A regenerated prefix sub-index was then left behind by lease_commit_push,
-# so the next board_sync_or_die fast-forward refused it and sent the board's bookkeeping down the
-# claim path instead of the fast path. All three layouts plus the TRACKER-DRIFT sibling are
-# asserted together, from one call, so a future edit that widens one spelling and forgets another
-# fails loudly instead of the three quietly drifting apart again.
+# so the next board_sync_or_die fast-forward refused it. Each layout's spellings are asserted, so a
+# future edit that widens one and forgets another fails loudly.
+#
+# Since ADR 0019 a lease commit carries only its OWN section's generated files: the roll-up and
+# every other section's index stay out of it, which is what stops unrelated claims in different
+# groups contending on one file. So each layout is asserted from inside a section, both ways.
 #
 # The board must be a SHARED board — the root of its own git worktree, per ADR 0002 — not a board
 # nested inside a larger repo (mkboard's shape). `git status --porcelain` always reports paths
@@ -1601,28 +1603,30 @@ printf '\nboard_generated_dirty — every GENERATED spelling across all three la
 # gates it), so mkshared is the fixture that actually matches production.
 GDB="$(mkshared)"
 mkdir -p "$GDB/widgets"
-: > "$GDB/INDEX.md"                 # flat layout
+: > "$GDB/INDEX.md"                 # flat layout, and the roll-up on a grouped board
 : > "$GDB/widgets/INDEX.md"         # subfolder layout
-: > "$GDB/INDEX-widgets.md"         # prefix layout — the spelling the fix added
+: > "$GDB/INDEX-widgets.md"         # prefix layout — the spelling the original fix added
+: > "$GDB/INDEX-gadgets.md"         # another section's prefix sub-index
 : > "$GDB/TRACKER-DRIFT.md"         # flat drift file
 : > "$GDB/widgets/TRACKER-DRIFT.md" # subfolder drift file
 : > "$GDB/TRACKER-DRIFT-widgets.md" # prefix drift file
 : > "$GDB/INDEX-widgets.md.bak"     # decoy: a near-miss name that must NOT be swept in
-GDB_OUT="$(DIR="$GDB" && board_generated_dirty)"
-chk "flat sub-index reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX.md' && echo yes || echo no)"
-chk "subfolder sub-index reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/INDEX.md' && echo yes || echo no)"
-chk "prefix sub-index reported (the bug this test guards)" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md' && echo yes || echo no)"
-chk "flat TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT.md' && echo yes || echo no)"
-chk "subfolder TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'widgets/TRACKER-DRIFT.md' && echo yes || echo no)"
-chk "prefix TRACKER-DRIFT reported" "yes" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'TRACKER-DRIFT-widgets.md' && echo yes || echo no)"
-chk "a near-miss name is not swept in" "no" \
-  "$(printf '%s\n' "$GDB_OUT" | grep -qxF 'INDEX-widgets.md.bak' && echo yes || echo no)"
+gdb_has() { printf '%s\n' "$1" | grep -qxF "$2" && echo yes || echo no; }
+GDB_FLAT="$(DIR="$GDB" LAYOUT="" GROUP="" && board_generated_dirty)"
+GDB_SUB="$(DIR="$GDB" LAYOUT=subfolder GROUP=widgets && board_generated_dirty)"
+GDB_PRE="$(DIR="$GDB" LAYOUT=prefix GROUP=widgets && board_generated_dirty)"
+chk "flat board — its index is reported" "yes" "$(gdb_has "$GDB_FLAT" INDEX.md)"
+chk "flat board — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_FLAT" TRACKER-DRIFT.md)"
+chk "flat board — a grouped spelling is not" "no" "$(gdb_has "$GDB_FLAT" widgets/INDEX.md)"
+chk "subfolder section — its sub-index is reported" "yes" "$(gdb_has "$GDB_SUB" widgets/INDEX.md)"
+chk "subfolder section — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_SUB" widgets/TRACKER-DRIFT.md)"
+chk "subfolder section — the roll-up is not (ADR 0019)" "no" "$(gdb_has "$GDB_SUB" INDEX.md)"
+chk "prefix section — its sub-index is reported (the bug the original test guards)" "yes" \
+  "$(gdb_has "$GDB_PRE" INDEX-widgets.md)"
+chk "prefix section — its TRACKER-DRIFT is reported" "yes" "$(gdb_has "$GDB_PRE" TRACKER-DRIFT-widgets.md)"
+chk "prefix section — another section's sub-index is not (ADR 0019)" "no" "$(gdb_has "$GDB_PRE" INDEX-gadgets.md)"
+chk "prefix section — the roll-up is not (ADR 0019)" "no" "$(gdb_has "$GDB_PRE" INDEX.md)"
+chk "a near-miss name is not swept in" "no" "$(gdb_has "$GDB_PRE" INDEX-widgets.md.bak)"
 trash "$GDB" 2> /dev/null
 
 printf '\nshared board — expiry is stamped from the commit, not the claiming clock\n'
@@ -1683,6 +1687,110 @@ chk "the losing commit is rolled back, so the next fetch still fast-forwards" ""
   "$(git -C "$SB4" log --oneline | grep -c 'claim lost-case' | grep -v '^0$')"
 chk "and the rollback used no hard reset — the doc it wrote is still on disk" "yes" \
   "$([ -f "$SB4/lost-case-handoff.md" ] && echo yes || echo no)"
+# ADR 0019: a rejected push is retried, but boundedly — a remote that keeps refusing is an outage,
+# and a claim that spun on it forever would hide one. The hook counts every push it refuses.
+printf 'x\n' > "$SB4.pushes"
+cat > "$SB4_REMOTE/hooks/pre-receive" << HOOK
+#!/bin/sh
+printf 'x\n' >> "$SB4.pushes"
+exit 1
+HOOK
+: > "$SB4.pushes"
+"$SB4/handoff" claim lost-case "retries then gives up" > /dev/null 2>&1
+chk "a claim whose push keeps being refused tries exactly three times" "3" \
+  "$(wc -l < "$SB4.pushes" | tr -d ' ')"
+
+printf '\nshared board — a lease commit touches only its own group (ADR 0019)\n'
+# Every lease commit used to regenerate the board-root roll-up and stage it, so two claims of
+# unrelated handoffs in DIFFERENT groups contended on the same file. The roll-up now belongs to
+# `handoff index` alone; a lease commit carries its own section's sub-index and nothing wider.
+mkshared_grouped() { # -> board dir: a subfolder-layout board with groups alpha and beta
+  local b
+  b="$(mkshared)"
+  printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4,\n  "groupLayout": "subfolder",\n  "groups": ["alpha", "beta"]\n}\n' > "$b/handoff.json"
+  HANDOFF_GROUP=alpha "$b/handoff" new a-work --title "Alpha work" --audience acme-api > /dev/null
+  HANDOFF_GROUP=alpha "$b/handoff" new a-more --title "More alpha work" --audience acme-api > /dev/null
+  HANDOFF_GROUP=beta "$b/handoff" new b-work --title "Beta work" --audience acme-api > /dev/null
+  "$b/handoff" index > /dev/null
+  git -C "$b" add -A
+  git -C "$b" commit -qm "grouped board"
+  git -C "$b" push -q
+  printf '%s' "$b"
+}
+# A second machine: a clone of the same remote, as a different session.
+mkclone() { # board -> clone dir
+  local c
+  c="$(mktemp -d)/clone"
+  git clone -q "$(git -C "$1" remote get-url origin)" "$c"
+  git -C "$c" config user.email "other@example.com"
+  git -C "$c" config user.name "other"
+  printf '%s' "$c"
+}
+GS="$(mkshared_grouped)"
+GS_ROLLUP="$(git -C "$GS" rev-parse HEAD:INDEX.md)"
+GS_BETA="$(git -C "$GS" rev-parse HEAD:beta/INDEX.md)"
+HANDOFF_GROUP=alpha "$GS/handoff" claim a-work "scoped" > /dev/null 2>&1
+chk "the claim landed" "yes" \
+  "$(git -C "$GS" ls-files --error-unmatch alpha/.locks/a-work-handoff/owner > /dev/null 2>&1 && echo yes || echo no)"
+chk "the roll-up INDEX.md is not part of a lease commit" "$GS_ROLLUP" "$(git -C "$GS" rev-parse HEAD:INDEX.md)"
+chk "another group's sub-index is not part of it either" "$GS_BETA" "$(git -C "$GS" rev-parse HEAD:beta/INDEX.md)"
+chk "the claiming group's own sub-index is" "yes" \
+  "$(git -C "$GS" show --name-only --format= HEAD | grep -qxF 'alpha/INDEX.md' && echo yes || echo no)"
+chk "and the claim leaves no generated file behind in the worktree" "" \
+  "$(git -C "$GS" status --porcelain)"
+chk "the roll-up is still regenerated by handoff index" "yes" \
+  "$("$GS/handoff" index > /dev/null && [ -n "$(git -C "$GS" status --porcelain -- INDEX.md)" ] && echo yes || echo no)"
+git -C "$GS" checkout -q -- INDEX.md
+
+printf '\nshared board — a lost race is retried, never merged (ADR 0019)\n'
+# The race is staged for real: a pre-push hook on machine one lets machine two claim first, so
+# machine one's push is a genuine non-fast-forward rejection against a remote that moved.
+remote_leases() { # board -> the lease keys committed on its remote, space-separated
+  git -C "$1" ls-tree -r --name-only origin/HEAD | sed -n 's|^.*\.locks/\([^/]*\)/owner$|\1|p' | sort | tr '\n' ' ' | sed 's/ $//'
+}
+race_hook() { # board clone group id -> installs a one-shot pre-push hook that claims first
+  cat > "$1/.git/hooks/pre-push" << HOOK
+#!/bin/sh
+[ -f "$1.raced" ] && exit 0
+: > "$1.raced"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+HANDOFF_SESSION_ID=machine-two HANDOFF_GROUP=$3 "$2/handoff" claim $4 "machine two" > /dev/null 2>&1
+exit 0
+HOOK
+  chmod +x "$1/.git/hooks/pre-push"
+}
+GR="$(mkshared_grouped)"
+GR2="$(mkclone "$GR")"
+race_hook "$GR" "$GR2" beta b-work
+GR_OUT="$(HANDOFF_GROUP=alpha "$GR/handoff" claim a-work "machine one" 2>&1)"
+chk_contains "a claim that lost the push race to unrelated work retries and wins" "$GR_OUT" "Claimed a-work-handoff"
+git -C "$GR" fetch -q
+chk "both leases are on the remote" "a-work-handoff b-work-handoff" \
+  "$(remote_leases "$GR")"
+chk "and machine one is not left behind its remote" "" "$(git -C "$GR" status -sb | grep -o 'ahead\|behind')"
+
+GRS="$(mkshared_grouped)"
+GRS2="$(mkclone "$GRS")"
+race_hook "$GRS" "$GRS2" alpha a-work
+GRS_OUT="$(HANDOFF_GROUP=alpha "$GRS/handoff" claim a-work "machine one" 2>&1)"
+chk_contains "a race for the SAME handoff still refuses the loser" "$GRS_OUT" "their push landed before yours"
+chk "after re-syncing, the loser sees the lease as held" "held" \
+  "$(cd "$GRS" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=alpha . ./handoff && lock_state a-work-handoff | cut -d'|' -f1)"
+chk "held by the winner, not by the loser" "1" \
+  "$(grep -c 'session=machine-two' "$GRS/alpha/.locks/a-work-handoff/owner" 2> /dev/null)"
+
+GRL="$(mkshared_grouped)"
+GRL2="$(mkclone "$GRL")"
+HANDOFF_GROUP=alpha "$GRL/handoff" claim a-work "to release" > /dev/null 2>&1
+git -C "$GRL2" pull -q --ff-only
+race_hook "$GRL" "$GRL2" beta b-work
+GRL_OUT="$(HANDOFF_GROUP=alpha "$GRL/handoff" release a-work --status open "stopping" 2>&1)"
+chk "a release that lost the push race retries instead of warning" "" \
+  "$(printf '%s' "$GRL_OUT" | grep -o 'push did not land')"
+git -C "$GRL" fetch -q
+chk "and the released lease is gone from the remote" "b-work-handoff" \
+  "$(remote_leases "$GRL")"
+trash "$GS" "$GR" "$GR2" "$GRS" "$GRS2" "$GRL" "$GRL2" 2> /dev/null
 
 printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
 # The registry carries no path at all. Resolution goes through the per-machine location map, which

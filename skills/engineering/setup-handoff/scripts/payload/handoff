@@ -2990,38 +2990,107 @@ board_sync_or_die() {
   br="$(board_git rev-parse --abbrev-ref HEAD)"
   [ -n "$br" ] && [ "$br" != "HEAD" ] || die "the board is in detached HEAD — check out its branch before claiming."
   board_git rev-parse --verify --quiet '@{upstream}' > /dev/null || return 0 # no upstream yet; the first push sets it
+  drop_generated_indexes
   board_git merge --ff-only --quiet '@{upstream}' && return 0
   die "the board's local history has diverged from its remote, or an uncommitted change is in the way.
        A claim will not merge that for you — sort it out in $DIR, then retry."
 }
 
-# What `cmd_index` regenerates and therefore what a lease commit must carry with it. These are
-# DERIVED files: committing them alongside the lease is safe, and leaving them behind is not —
-# an uncommitted generated file makes the next fast-forward refuse, so the board's own bookkeeping
-# would take the claim path down. Orchestrator docs are included because a claim changes the Lease
-# column of every bundle table the claimed doc appears in.
-board_generated_dirty() { # -> board-relative paths, one per line
+# Every uncommitted change git reports on the board, as a board-relative path. `status --porcelain`
+# rather than `diff`, because a freshly generated INDEX.md on a board whose first claim has not
+# landed yet is UNTRACKED, and `diff` cannot see an untracked file.
+board_changed_paths() { # -> board-relative paths, one per line
   local line rel
-  # `status --porcelain` rather than `diff`, because a freshly generated INDEX.md on a board whose
-  # first claim has not landed yet is UNTRACKED, and `diff` cannot see an untracked file. That was
-  # the whole failure mode: the index would never enter history, and every fast-forward afterwards
-  # would be fighting a file git had never been told about. Every spelling of a generated file is
-  # listed, flat and both grouped layouts: a prefix board's sub-index is INDEX-<group>.md, and while
-  # that one was missing its own regeneration was the uncommitted file the next claim tripped over.
   while IFS= read -r line; do
     rel="${line:3}"
     rel="${rel##* -> }" # a rename (a `done` release archives its doc through git mv)
     rel="${rel%\"}"
     rel="${rel#\"}"
-    [ -n "$rel" ] || continue
+    [ -n "$rel" ] && printf '%s\n' "$rel"
+  done < <(board_git status --porcelain --untracked-files=all)
+}
+
+# Is this path one of the generated index files — any section's sub-index or the board-root
+# roll-up? Every spelling is listed, flat and both grouped layouts: a prefix board's sub-index is
+# INDEX-<group>.md, and while that one was missing its regeneration was the uncommitted file the
+# next claim tripped over.
+is_generated_index() { # board-relative path
+  case "$1" in INDEX.md | INDEX-*.md | */INDEX.md) return 0 ;; esac
+  return 1
+}
+
+# What a lease commit must carry with it. These are DERIVED files: committing them alongside the
+# lease is safe, and leaving them behind is not — an uncommitted generated file makes the next
+# fast-forward refuse, so the board's own bookkeeping would take the claim path down. Orchestrator
+# docs are included because a claim changes the Lease column of every bundle table the claimed doc
+# appears in.
+#
+# Only THIS section's generated files (ADR 0019). Sweeping in every section's index and the
+# board-root roll-up made two claims of unrelated handoffs in different groups rewrite the same
+# files, so every write on the board contended with every other. The roll-up is `handoff index`'s
+# alone now, and another section's files are that section's commits' business.
+board_generated_dirty() { # -> board-relative paths, one per line
+  local rel own_index own_drift
+  own_index="$(sec_index)"
+  own_index="${own_index#"$DIR"/}"
+  own_drift="$(drift_file)"
+  own_drift="${own_drift#"$DIR"/}"
+  while IFS= read -r rel; do
     case "$rel" in
-      INDEX.md | INDEX-*.md | */INDEX.md | TRACKER-DRIFT.md | TRACKER-DRIFT-*.md | */TRACKER-DRIFT.md)
+      "$own_index" | "$own_drift")
         printf '%s\n' "$rel"
         continue
         ;;
+      INDEX.md | INDEX-*.md | */INDEX.md | TRACKER-DRIFT.md | TRACKER-DRIFT-*.md | */TRACKER-DRIFT.md)
+        continue # the roll-up, or another section's — never part of this section's lease commit
+        ;;
     esac
     [ -f "$DIR/$rel" ] && is_orchestrator "$DIR/$rel" && printf '%s\n' "$rel"
-  done < <(board_git status --porcelain --untracked-files=all)
+  done < <(board_changed_paths)
+}
+
+# Drop local changes to generated INDEX files before fast-forwarding onto the remote. They are
+# derived: rebuilding one loses nothing, while a stale local copy — the roll-up a board-level
+# `index` left behind, or a copy a lost race had staged — makes the fast-forward refuse over a file
+# nobody wrote by hand (ADR 0019: generated files are never merged, only rebuilt). Tracker drift
+# reports are left alone: they are only rewritten by a mirror run, so a local one is real news.
+drop_generated_indexes() {
+  local rel
+  while IFS= read -r rel; do
+    is_generated_index "$rel" || continue
+    if board_git cat-file -e "HEAD:$rel"; then
+      board_git checkout --quiet HEAD -- "$rel"
+    else
+      board_git reset --quiet -- "$rel" # never committed: unstage it and let the rebuild rewrite it
+    fi
+  done < <(board_changed_paths)
+}
+
+# ADR 0019: how many times a lease commit is pushed before the remote's refusal is believed. Three,
+# because a lost race among a busy board's agents clears within one or two retries, while a remote
+# that refuses every time is an outage that a longer loop would only hide.
+LEASE_PUSH_ATTEMPTS=3
+
+# After a rejected push: take the remote's new tip, keeping whatever is staged for our own commit.
+lease_resync() { # -> 0 when the local branch now sits on the remote's tip
+  board_git fetch --quiet || return 1
+  drop_generated_indexes
+  board_git merge --ff-only --quiet '@{upstream}'
+}
+
+# ADR 0019: a lease commit regenerates only its own section — the sub-index and the bundle tables
+# that read from it. The board-root roll-up belongs to `handoff index` (or CI) alone; see
+# board_generated_dirty for why. A board with no remote has no lease commit and no race, so it
+# keeps the full regeneration it always had.
+lease_index() {
+  if ! leases_shared; then
+    cmd_index
+    return
+  fi
+  if board_is_grouped && [ -z "$GROUP" ]; then return 0; fi
+  refresh_children_blocks
+  write_section_index
+  echo "Wrote $(sec_index)"
 }
 
 # The compare-and-swap itself. Commit the lease, push it, and let the REMOTE decide who won: a
@@ -3075,11 +3144,35 @@ release_commit_push() { # subject [doc-path]
     echo "    Commit and push $DIR yourself so other machines see the lease is free."
     return 0
   fi
-  if ! board_git push --quiet "$(board_remote)" HEAD; then
-    echo "⚠️  Released locally and committed, but the push did not land (offline?)."
-    echo "    Other machines still see this lease as held until you push $DIR."
-  fi
+  # A rejected push is retried like a claim's (ADR 0019): take the remote's new tip and commit
+  # again on top of it. There is no lease to re-check — this lease was ours and is already gone.
+  local attempt=1
+  until board_git push --quiet "$(board_remote)" HEAD; do
+    if [ "$attempt" -ge "$LEASE_PUSH_ATTEMPTS" ] || ! release_recommit "$1" "$doc"; then
+      echo "⚠️  Released locally and committed, but the push did not land (offline?)."
+      echo "    Other machines still see this lease as held until you push $DIR."
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
   return 0
+}
+
+# Move a release commit that lost its push onto the remote's new tip. On any failure the commit is
+# put back exactly as it was, so the release stays recorded locally and the caller only warns.
+release_recommit() { # subject doc
+  local rel
+  board_git reset --soft --quiet HEAD~1 || return 1
+  if ! lease_resync; then
+    board_git commit --quiet -m "$1"
+    return 1
+  fi
+  lease_index > /dev/null
+  [ -n "$2" ] && [ -e "$2" ] && board_git add -- "$2"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && board_git add -- "$DIR/$rel"
+  done < <(board_generated_dirty)
+  board_git commit --quiet -m "$1"
 }
 
 warn_open_dependencies() { # doc-path id
@@ -3151,39 +3244,51 @@ cmd_claim() {
     die "$id was just claimed by someone else — re-run 'handoff list'"
   fi
 
-  local me sess exp_new
+  local me sess exp_new attempt=1
   me="$(whoami_id)"
   sess="$(session_id)"
-  exp_new="$(($(now) + TTL_HOURS * 3600))"
-  {
-    echo "owner=$me"
-    echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
-    echo "claimed=$(now)"
-    echo "expires=$exp_new"
-    # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
-    # claimer's TTL rather than its own — two members may configure different ttlHours.
-    echo "ttl_hours=$TTL_HOURS"
-    echo "note=$note"
-  } > "$LOCKS/$key/owner"
-
   if [ "$kind" = "expired" ]; then
     echo "⚠️  Took over an EXPIRED lease from $owner (expired $(human "$exp"))."
     log_activity "$f" "lease taken over from $owner (expired $(human "$exp")) by $me"
   fi
-  cmd_index
 
   # The compare-and-swap. The local `mkdir` above already excluded every other process on THIS
-  # machine; the push is what excludes the other machines. Run it after cmd_index so the generated
+  # machine; the push is what excludes the other machines. The index runs first so the generated
   # files travel in the same commit — see board_generated_dirty for why they cannot be left behind.
-  if leases_shared && ! lease_commit_push "$key" "handoff: claim $id" "$doc_path"; then
+  #
+  # A rejected push is retried (ADR 0019), because on a busy board it usually means someone else
+  # landed UNRELATED work first: the remote moved, not the lease. Each retry takes the remote's
+  # new tip and reads the lease again before writing anything, so losing the race for this very
+  # handoff still refuses exactly as it always has. The generated files are rebuilt on the new tip,
+  # never merged — they are derived, so there is nothing in them to reconcile.
+  while :; do
+    exp_new="$(($(now) + TTL_HOURS * 3600))"
+    {
+      echo "owner=$me"
+      echo "session=$sess" # raw id — the enforcement gate matches this against the tool payload
+      echo "claimed=$(now)"
+      echo "expires=$exp_new"
+      # The reader recomputes expiry from this lease's COMMIT time on a shared board, so it needs the
+      # claimer's TTL rather than its own — two members may configure different ttlHours.
+      echo "ttl_hours=$TTL_HOURS"
+      echo "note=$note"
+    } > "$LOCKS/$key/owner"
+    lease_index
+    leases_shared || break
+    lease_commit_push "$key" "handoff: claim $id" "$doc_path" && break
+
     lease_rollback "$key"
-    board_git fetch --quiet
-    board_git merge --ff-only --quiet '@{upstream}'
+    local synced=0
+    lease_resync && synced=1
     IFS='|' read -r kind owner exp <<< "$(lock_state "$key")"
     [ "$kind" = "held" ] \
       && die "$id was claimed by $owner first — their push landed before yours. Nothing was claimed here. Pick another handoff, or ask $owner."
-    die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
-  fi
+    [ "$synced" = 1 ] && [ "$attempt" -lt "$LEASE_PUSH_ATTEMPTS" ] \
+      || die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
+    attempt=$((attempt + 1))
+    mkdir -p "$LOCKS"
+    mkdir "$LOCKS/$key" 2> /dev/null || die "$id was just claimed by someone else — re-run 'handoff list'"
+  done
 
   echo "🔒 Claimed $id as $me for ${TTL_HOURS}h (until $(human "$exp_new")). Release it when you stop."
   # After the claim, not before: the banner is a HANDLING instruction for whoever is about to do
@@ -3430,7 +3535,7 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
   move_publish_target "$to" "$dest" "$src_label"
 
   move_leave_pointer "$f" "$id" "$dest" "$dst_label"
-  cmd_index > /dev/null
+  lease_index > /dev/null
   release_commit_push "handoff: move $id to $dst_label" "$(arch_file "$id")"
 
   local dependents
@@ -4795,7 +4900,7 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
     log_secret_override "$f" "checkpoint secret-scan OVERRIDDEN" "$hits" "$force_secret"
   fi
   log_activity "$f" "checkpoint by $(whoami_id) — lease kept."
-  cmd_index > /dev/null
+  lease_index > /dev/null
   release_commit_push "handoff: checkpoint $id" "$f"
   echo "Checkpointed $id — Current state published, lease kept."
 }
@@ -4825,7 +4930,7 @@ finish_release() { # id status
   local rf
   rf="$(doc_of "$1" 2> /dev/null)"
   [ "${2:-}" = "done" ] && [ -n "$rf" ] && [ "$(meta "$rf" review)" = "pending" ] && set_field "$rf" review done
-  cmd_index
+  lease_index
   # Optimistic by design: this records something that already happened, so a failure to reach the
   # remote is a warning and the release still stands. See release_commit_push.
   release_commit_push "$_release_subject" "$rf"
