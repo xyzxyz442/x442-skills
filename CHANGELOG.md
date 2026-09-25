@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.15.0](https://github.com/xyzxyz442/x442-skills/compare/v0.14.0...v0.15.0) (2026-09-25)
+
+### 🚀 Features
+
+- **feature:** add child boards to the move trust check ([a77c40c](https://github.com/xyzxyz442/x442-skills/commit/a77c40c5e57cfe35d89f6be8592c62d0e028a979))
+- **feature:** add the complete projection for private trackers ([cc2af85](https://github.com/xyzxyz442/x442-skills/commit/cc2af85ecb6d5c799baa7388e54113e5ca457fbe))
+- **feature:** check child-board links and per-developer keys offline ([a64fc36](https://github.com/xyzxyz442/x442-skills/commit/a64fc366d37b3d7fb3766181fb02d7f8786ed0d8))
+- **feature:** declare trackers for a whole group with a tracker rule ([0e03f97](https://github.com/xyzxyz442/x442-skills/commit/0e03f9763ad7d47a3305e96f5ea30b168d0431a6))
+- **feature:** refuse a dedicated board whose own remote is public ([f870fdb](https://github.com/xyzxyz442/x442-skills/commit/f870fdb8c91a0ac61129e629048c654b7ddf7232))
+- **feature:** refuse to mirror or export under the wrong host account ([2935761](https://github.com/xyzxyz442/x442-skills/commit/293576176f88b92bb696c8a7b824868e6e38cc23))
+- **feature:** rewrite machine references before they leave the machine ([e6a5595](https://github.com/xyzxyz442/x442-skills/commit/e6a5595247baca3b780656b55079c640c63dbbd9))
+- **feature:** route each handoff to its home repository's tracker ([a68e856](https://github.com/xyzxyz442/x442-skills/commit/a68e85624cf1882e802ae16cfa0141b1fc854389))
+- **feature:** scope lease commits to their group and retry a lost race ([6b26a0f](https://github.com/xyzxyz442/x442-skills/commit/6b26a0f816f5755a74980dc94eaeb28eb2a6aecb))
+- **feature:** show a cross-board wait's status in list ([53c57fb](https://github.com/xyzxyz442/x442-skills/commit/53c57fb73fec9277d7c745139c22883762e13a59))
+- **feature:** verify trackers and homes offline ([de47f37](https://github.com/xyzxyz442/x442-skills/commit/de47f37f397db75902035b73ef9671d0b03ff77d))
+- **setup:** keep per-repository trackers across a re-install ([948abf9](https://github.com/xyzxyz442/x442-skills/commit/948abf9cf9e396b44f266c0d0b73a3d9f668a850))
+
+### 🐞 Bug Fixes
+
+- **bug:** name a handoff by its id in mirror output ([f8f36d3](https://github.com/xyzxyz442/x442-skills/commit/f8f36d37fe059e34f18801d01bc0f80514610dc5))
+- **bug:** name the tracker a refused reference belongs to ([5914e7a](https://github.com/xyzxyz442/x442-skills/commit/5914e7a8a9d9bff73ef25b9c486a8e2c3515127a))
+- **bug:** never let a derived home refuse a write ([e9faa33](https://github.com/xyzxyz442/x442-skills/commit/e9faa33f6b1a737142e4176469a8d44f0ac8b5a9))
+- **bug:** refuse a board identity a shallow clone cannot support ([d18b1ef](https://github.com/xyzxyz442/x442-skills/commit/d18b1ef8b9764f9e117d13c8816c0e0adef2c55c))
+- **bug:** stop flagging a .local filename as a local hostname ([feb2f4e](https://github.com/xyzxyz442/x442-skills/commit/feb2f4eb0c40406bbe707c1715d7db90b72903ae))
+- **config:** update args for code-review-graph to include sentence-transformers ([7586a64](https://github.com/xyzxyz442/x442-skills/commit/7586a64b1ffdf318cff559af32ab31fd54775965))
+
+### 📚 Documentation
+
+- **docs:** design per-repository trackers for a shared board ([520f238](https://github.com/xyzxyz442/x442-skills/commit/520f238b2e309b613c03960ee80a1549c8181dc5))
+- **docs:** document board kinds, tracker rules and machine references ([1cef72f](https://github.com/xyzxyz442/x442-skills/commit/1cef72fdf32a6f50316890f4b25083947d947bf6))
+- **docs:** plan per-repository trackers and correct the design ([7e410e2](https://github.com/xyzxyz442/x442-skills/commit/7e410e2ba82f862311e2444637230fc23facb8b8))
+- **docs:** record board kinds, lease-commit scoping, and tracker rules ([5306d32](https://github.com/xyzxyz442/x442-skills/commit/5306d3294d95f61b1a20f561842e10b503a85ef8))
+- **docs:** record per-repository trackers in ADR 0017 and the glossary ([727481a](https://github.com/xyzxyz442/x442-skills/commit/727481a4e0d4119958ddcf8c421a13156821a7cf))
+- **docs:** refresh the handoff usage guide and diagrams ([87b945e](https://github.com/xyzxyz442/x442-skills/commit/87b945eb200f64a1f523bc71e7b1cb486d735d67))
+- **docs:** stop claiming the verifier checks child-board links ([1edfed2](https://github.com/xyzxyz442/x442-skills/commit/1edfed2d9ae0527e3a1b35249f6be55a7d2ac6f7))
+
+### 🧼 Code Refactoring
+
+- **refactor:** share the tracker-rule helpers across the CLI ([6ad0a76](https://github.com/xyzxyz442/x442-skills/commit/6ad0a7611986a77847bd5a9575cf6b34158517e3))
+- **refactor:** use the glossary's board terms in new code ([7bc4ca6](https://github.com/xyzxyz442/x442-skills/commit/7bc4ca6c5c79278a472b795062817166d0f0189c))
+
 ## [0.14.0](https://github.com/xyzxyz442/x442-skills/compare/v0.13.0...v0.14.0) (2026-09-20)
 
 ### 🚀 Features
