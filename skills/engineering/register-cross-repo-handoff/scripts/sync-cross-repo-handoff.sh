@@ -94,7 +94,7 @@ PY
 
 # --- emit a shell-parseable plan (bash never parses JSON) -----------------------------------------
 # BOARD<TAB>path<TAB>groups_csv<TAB>layout<TAB>remote
-# MEMBER<TAB>group<TAB>board<TAB>board_groups_csv<TAB>layout<TAB>alias<TAB>audience<TAB>repo<TAB>exists<TAB>has_agents
+# MEMBER<TAB>group<TAB>board<TAB>board_groups_csv<TAB>layout<TAB>alias<TAB>audience<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire
 PLAN="$(
   python3 - "$RESOLVED" << 'PY'
 import json, sys
@@ -108,6 +108,7 @@ for g in d["groups"]:
         print("\t".join([
             "MEMBER", g["group"], g["board"], bg, g["layout"], m["alias"], m["audience"],
             m["path"], "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0",
+            "1" if m.get("wire", True) else "0",
         ]))
 PY
 )"
@@ -159,11 +160,17 @@ done <<< "$PLAN"
 
 # --- 2. wire each member repo + 3. render its AGENTS.md block ------------------------------------
 note "== members =="
-while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exists has_agents; do
+while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exists has_agents wire; do
   [ "$kind" = "MEMBER" ] || continue
   if [ "$exists" != 1 ]; then
     note "  [skip] $group/$alias — $repo is not on disk"
     RC=1
+    continue
+  fi
+  # "wire": false — registered for its root commit and origin (step 1b), never wired: the board's
+  # own repository homing a bundle is the case. Not an error, so RC stays as it is.
+  if [ "${wire:-1}" != 1 ]; then
+    note "  [registry only] $group/$alias — \"wire\": false, so it is registered but not wired"
     continue
   fi
   if [ "$has_agents" != 1 ]; then

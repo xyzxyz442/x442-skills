@@ -82,6 +82,12 @@ Start from [`assets/handoff.example.json`](assets/handoff.example.json):
 - **`repos[]`** — `alias` (required, namespaced), `path` (required), `audience` (optional, defaults
   to the alias — the acts-next routing name), `notes` (optional). `{ "alias": "x", "remove": true }`
   drops a member from the group.
+- **`"wire": false`** (optional, per member) — registers the repository for its root commit and
+  origin but never wires it, and keeps it out of every member's peer list. Use it for a
+  repository that must be a handoff's **home** without being a member — typically the board's own
+  repository, so a bundle whose children span several members can carry its issue on the board
+  repository (ADR 0017: a home names a registered repository). The sync reports it as
+  `[registry only]`, not as an error.
 
 ## Procedure
 

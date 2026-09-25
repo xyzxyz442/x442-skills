@@ -311,11 +311,19 @@ def load_layer(
                 if isinstance(e.get("audience"), str) and e.get("audience")
                 else alias
             )
+            # "wire": false registers a repository for its root commit and origin without wiring
+            # it — the board's own repository, homing a bundle, is the case (it has no AGENTS.md
+            # and is not a peer). A non-boolean is refused rather than read as truthy.
+            wire = e.get("wire", True)
+            if not isinstance(wire, bool):
+                errors.append(f'{rwhere}: "wire" must be true or false (got {wire!r})')
+                continue
             repos.append(
                 {
                     "alias": alias,
                     "raw_path": raw,
                     "audience": audience,
+                    "wire": wire,
                     "notes": (
                         e.get("notes", "") if isinstance(e.get("notes"), str) else ""
                     ),
@@ -452,6 +460,36 @@ def _selftest() -> int:
     with tempfile.TemporaryDirectory() as not_a_repo:
         assert member_origin(not_a_repo) is None
 
+    # --- "wire": false — a member registered for its root commit and origin, never wired ------------
+    # A board's own repository can be a handoff's home (a bundle whose issue belongs on the board),
+    # but it is not a member repo: it has no AGENTS.md and must never be wired. It still needs a
+    # registry entry, because a home names a registered repository.
+    with tempfile.TemporaryDirectory() as td:
+        mf = os.path.join(td, "handoff.json")
+        with open(mf, "w") as fh:
+            json.dump(
+                {
+                    "version": 1,
+                    "groups": {
+                        "g": {
+                            "repos": [
+                                {"alias": "board", "path": "./board", "wire": False},
+                                {"alias": "api", "path": "./api"},
+                                {"alias": "odd", "path": "./odd", "wire": "no"},
+                            ]
+                        }
+                    },
+                },
+                fh,
+            )
+        errs, warns = [], []
+        got, _, _, _ = load_layer(mf, errs, warns)
+        wires = {r["alias"]: r["wire"] for r in got["g"]["repos"]}
+        assert wires.get("board") is False, wires
+        assert wires.get("api") is True, "wire defaults to true"
+        assert "odd" not in wires, "a non-boolean wire is refused, not guessed"
+        assert any("wire" in e for e in errs), errs
+
     print("register-cross-repo-handoff resolve selftest OK")
     return 0
 
@@ -567,6 +605,7 @@ def main() -> int:
                     "alias": r["alias"],
                     "audience": r["audience"],
                     "notes": r["notes"],
+                    "wire": r.get("wire", True),
                     "path": p,
                     "exists": exists,
                     "is_git": is_git,

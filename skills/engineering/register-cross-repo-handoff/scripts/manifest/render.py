@@ -34,7 +34,10 @@ def render(
     g = next((x for x in data.get("groups", []) if x["group"] == group), None)
     if g is None:
         return ""
-    members = sorted(g["members"], key=lambda m: m["alias"])
+    # A registry-only member ("wire": false) never acts next, so it is not listed as a peer.
+    members = sorted(
+        (m for m in g["members"] if m.get("wire", True)), key=lambda m: m["alias"]
+    )
     rows = [
         "| Repo | Acts-next name (`audience:`) | What lives there |",
         "| ---- | --------------------------- | ---------------- |",
@@ -131,6 +134,26 @@ def _selftest() -> int:
             pass
         else:
             raise AssertionError(f"must refuse malformed input: {bad!r}")
+
+    # A registry-only member ("wire": false — e.g. the board's own repository, homing a bundle) is
+    # not a peer: it never acts next, so it appears in neither the table nor the peer list.
+    rdata = {
+        "groups": [
+            {
+                "group": "g",
+                "layout": "",
+                "members": [
+                    {"alias": "api", "audience": "api", "notes": "", "wire": True},
+                    {"alias": "board", "audience": "board", "notes": "", "wire": False},
+                    {"alias": "web", "audience": "web", "notes": ""},
+                ],
+            }
+        ]
+    }
+    out = render(rdata, "{{PEER_TABLE}}\nPEERS {{PEERS}}", "g", "../workspace", "api")
+    assert "`board`" not in out, out
+    assert "`web`" in out, "a member with no wire key is wired, as before"
+    assert "PEERS `web`" in out, out
 
     print("render selftest OK")
     return 0

@@ -264,13 +264,15 @@ PY
 
 echo
 section "3. member repos"
-# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents
-while IFS=$'\t' read -r group board alias repo exists has_agents; do
+# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire
+while IFS=$'\t' read -r group board alias repo exists has_agents wire; do
   [ -n "$alias" ] || continue
   if [ "$exists" != 1 ]; then
     fail member.exists "$group/$alias — $repo not on disk"
     continue
   fi
+  # "wire": false — registered, never wired, so it owes no AGENTS.md and no tool config.
+  [ "${wire:-1}" = 1 ] || continue
   if [ "$has_agents" != 1 ]; then
     fail member.agents_md "$group/$alias — no AGENTS.md"
     continue
@@ -329,7 +331,8 @@ d = json.load(open(sys.argv[1]))
 for g in d["groups"]:
     for m in g["members"]:
         print("\t".join([g["group"], g["board"], m["alias"], m["path"],
-                         "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0"]))
+                         "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0",
+                         "1" if m.get("wire", True) else "0"]))
 PY
 )
 
