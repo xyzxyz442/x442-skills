@@ -456,10 +456,124 @@ def _grade_local_wiring_member(fixture: Path) -> list:
         shutil.rmtree(sandbox, ignore_errors=True)
 
 
+def _run_sync(work: Path, env: dict, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", str(SYNC), "--scope", str(work), "--tools", "claude"]
+        + ["--primary", "claude", *extra],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _grade_flat(fixture: Path) -> list:
+    """A flat board — no sections — synced as flat, and never re-laid out once it holds handoffs.
+
+    The regression: a manifest could not say "flat", so the sync planned `--layout subfolder` for a
+    flat board whose documents all sat at its root, and the resolver's error did not stop the plan.
+    """
+    tag = "[flat]"
+    sandbox = Path(tempfile.mkdtemp(prefix="x442-xrh-flat-"))
+    try:
+        work = sandbox / "work"
+        shutil.copytree(fixture, work, symlinks=True)
+        manifest = work / ".handoff-repos.json"
+        m = json.loads(manifest.read_text(encoding="utf-8"))
+        # A flat board hosts one group, so this pass keeps only auth-suite.
+        m["layout"] = "flat"
+        m["groups"] = {"auth-suite": m["groups"]["auth-suite"]}
+        manifest.write_text(json.dumps(m, indent=2) + "\n", encoding="utf-8")
+        members = ("api", "web")
+        for name in members:
+            gc.git_init_commit(work / name, f"{name} baseline")
+        env = _sandbox_home(sandbox)
+        board = work / ".agents/handoff"
+
+        sync = _run_sync(work, env)
+        exps = [
+            gc.expectation(
+                f"{tag} sync-cross-repo-handoff.sh completes (exit 0)",
+                sync.returncode == 0,
+                (sync.stdout + sync.stderr).strip()[-300:],
+            )
+        ]
+        _, summary_exp = _run_verify(work, env)
+        summary_exp["text"] = f"{tag} {summary_exp['text']}"
+        exps.append(summary_exp)
+
+        cfg = _board_config(board)
+        exps.append(
+            gc.expectation(
+                f"{tag} board config records no sections",
+                cfg.get("groups") == [] and cfg.get("groupLayout") == "",
+                f"groups={cfg.get('groups')!r} layout={cfg.get('groupLayout')!r}",
+            )
+        )
+        for name in members:
+            got_group = _member_group(work / name)
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} records no section",
+                    got_group == "",
+                    f".agents/handoff.json group={got_group or 'unset'}",
+                )
+            )
+            agents = (work / name / "AGENTS.md").read_text(encoding="utf-8")
+            block_ok = (
+                "Peers in the `auth-suite` group" in agents
+                and "HANDOFF_GROUP=" not in agents
+            )
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} AGENTS.md carries the flat block",
+                    block_ok,
+                    f"flat block present, no HANDOFF_GROUP: {block_ok}",
+                )
+            )
+
+        for name in members:
+            gc.git_init_commit(work / name, "post-sync baseline")
+        _run_sync(work, env)
+        for name in members:
+            e = gc.git_diff_empty(work / name)
+            e["text"] = f"{tag} {name}: {e['text']}"
+            exps.append(e)
+
+        # Now the board holds a handoff at its root. A manifest that says anything but "flat" must
+        # stop the sync — dry run included — and leave the board's config exactly as it was.
+        (board / "live-work-handoff.md").write_text("---\nid: live-work-handoff\n---\n")
+        before = (board / "handoff.json").read_text(encoding="utf-8")
+        for lay, why in (("subfolder", "never re-lays out"), ("", '"flat"')):
+            m["layout"] = lay
+            manifest.write_text(json.dumps(m, indent=2) + "\n", encoding="utf-8")
+            for extra in (("--dry-run",), ()):
+                run = _run_sync(work, env, *extra)
+                out = run.stdout + run.stderr
+                mode = "dry run" if extra else "sync"
+                exps.append(
+                    gc.expectation(
+                        f"{tag} layout {lay!r}: the {mode} refuses and plans nothing",
+                        run.returncode != 0 and why in out and "would:" not in out,
+                        f"exit {run.returncode}; {out.strip()[-240:]}",
+                    )
+                )
+        exps.append(
+            gc.expectation(
+                f"{tag} a refused sync leaves the board config untouched",
+                (board / "handoff.json").read_text(encoding="utf-8") == before,
+                "handoff.json byte-identical after the refused runs",
+            )
+        )
+        return exps
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
 def grade_fleet(fixture: Path) -> list:
     exps = []
     for layout in ("subfolder", "prefix"):
         exps.extend(_grade_fleet_layout(fixture, layout))
+    exps.extend(_grade_flat(fixture))
     exps.extend(_grade_local_wiring_member(fixture))
     return exps
 

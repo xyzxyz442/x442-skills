@@ -53,7 +53,8 @@ _Avoid_: team, workspace, namespace
 
 **Section**:
 Where a group's documents physically live on the board — a subfolder or an id prefix. A
-group's layout, not the group itself.
+group's layout, not the group itself. A **flat** board has no sections: its one group's documents
+sit at the board root.
 
 **Trust boundary**:
 The line between organizations whose material must not mix — an employer, a client, a person's

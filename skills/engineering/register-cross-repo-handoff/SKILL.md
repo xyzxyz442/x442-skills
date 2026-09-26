@@ -74,8 +74,14 @@ Start from [`assets/handoff.example.json`](assets/handoff.example.json):
   it (`auth-suite` + `infra` above); a group with its own `board` gets a separate physical board
   (`legacy`). Paths resolve relative to the declaring manifest, so committed relatives are portable.
 - **`layout`** (optional) — `subfolder` (default) puts each section in `<board>/<group>/`; `prefix`
-  puts it in `<board>/<group>--<id>-handoff.md`. Recorded in the board config; the CLI and hooks
-  branch on it.
+  puts it in `<board>/<group>--<id>-handoff.md`; `flat` gives the board no sections at all, so every
+  doc sits at the board root and members are wired with no `HANDOFF_GROUP`. A flat board hosts one
+  group — nothing would isolate a second. Recorded in the board config; the CLI and hooks branch on
+  it.
+- **Adopting an existing board** — declare the layout it already has. The sync never re-lays out a
+  board that holds handoffs: it rewrites config, not documents, so a layout change would strand
+  every doc outside the sections the CLI reads. It refuses instead and names the layout to declare.
+  Moving documents between layouts is a migration, done by hand.
 - **group key** — a namespaced name (`^[a-z0-9][a-z0-9._-]*$`); it is the section name and the
   `HANDOFF_GROUP` identity wired into each member. `{ "remove": true }` as a group value
   un-inherits an inherited group.
@@ -93,8 +99,10 @@ Start from [`assets/handoff.example.json`](assets/handoff.example.json):
 
 1. **Author the manifest** at the workspace root (copy the example, edit groups + paths).
 2. **Preview**: `scripts/sync-cross-repo-handoff.sh --scope <workspace> --dry-run` — prints the
-   boards it would scaffold and the repos it would wire; writes nothing. Resolve errors (a missing
-   repo, a bad path) are surfaced here.
+   boards it would scaffold and the repos it would wire; writes nothing. A member that is not on
+   disk is reported `[excluded]` and skipped while the rest of the fleet goes ahead. Any other
+   manifest error — a bad `layout`, a board it would re-lay out — stops the run before anything is
+   planned, dry run included.
 3. **Sync**: drop `--dry-run`. Choose tools + primary the same way setup-handoff does:
    `--tools claude,gemini,copilot --primary claude` (or `--primary none` for advisory-only). The
    sync scaffolds each board `--board-only`, wires each member (`--topology cross-repo --group …`),

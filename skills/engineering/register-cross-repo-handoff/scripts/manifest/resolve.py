@@ -52,7 +52,11 @@ USER_LAYER_WARNING = (
     ".agents/handoff.local.json — or move these groups into the workspace manifest."
 )
 DEFAULT_LAYOUT = "subfolder"
-VALID_LAYOUTS = ("subfolder", "prefix")
+# "flat" is a board with no sections: its config carries no groups and an empty groupLayout, which is
+# exactly how the payload CLI reads "flat". It hosts one group, since nothing would isolate a second.
+VALID_LAYOUTS = ("subfolder", "prefix", "flat")
+# Directories on a board that never hold a handoff document.
+NON_DOC_DIRS = {".git", ".locks", "templates", "scripts", "briefs", "img"}
 
 
 def _escapes(rel: str) -> bool:
@@ -216,6 +220,44 @@ def member_origin(repo: str) -> "str | None":
     return norm or None
 
 
+def board_current_layout(board: str) -> "str | None":
+    """The layout an existing board is laid out in, or None when it has no readable config.
+
+    Read the way the payload CLI reads it: groupLayout alone decides, and empty means flat. Config
+    files are tried newest name first — handoff.json, then config.json, then the KEY=value `config`.
+    """
+    raw = None
+    for name in ("handoff.json", "config.json"):
+        try:
+            with open(os.path.join(board, name)) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            raw = data.get("groupLayout") or ""
+            break
+    if raw is None:
+        try:
+            with open(os.path.join(board, "config")) as fh:
+                raw = ""
+                for line in fh:
+                    key, _, val = line.strip().partition("=")
+                    if key == "HANDOFF_GROUP_LAYOUT":
+                        raw = val.strip().strip("\"'")
+        except OSError:
+            return None
+    return raw if raw in ("subfolder", "prefix") else "flat"
+
+
+def board_holds_docs(board: str) -> bool:
+    """True when any handoff document — live or archived, in any section — sits on the board."""
+    for root, dirs, files in os.walk(board):
+        dirs[:] = [d for d in dirs if d not in NON_DOC_DIRS]
+        if any(f.endswith("-handoff.md") for f in files):
+            return True
+    return False
+
+
 def load_layer(
     path: str, errors: list, warnings: list
 ) -> "tuple[dict, str | None, str | None, str | None]":
@@ -251,6 +293,7 @@ def load_layer(
     if layout is not None and layout not in VALID_LAYOUTS:
         errors.append(
             f"{path}: layout must be one of {list(VALID_LAYOUTS)} (got {layout!r})"
+            + (' — a board with no sections is "flat"' if layout == "" else "")
         )
         layout = None
     default_board = data.get("board") if isinstance(data.get("board"), str) else None
@@ -490,6 +533,44 @@ def _selftest() -> int:
         assert "odd" not in wires, "a non-boolean wire is refused, not guessed"
         assert any("wire" in e for e in errs), errs
 
+    # --- a board's current layout is read the way the payload CLI reads it ---------------------
+    # A flat board used to be unsayable in the manifest, so the sync re-laid it out as subfolder
+    # while its documents stayed at the root. The resolver now reports what the board already is.
+    with tempfile.TemporaryDirectory() as td:
+        assert (
+            board_current_layout(td) is None
+        ), "no config: a new board, nothing to keep"
+        with open(os.path.join(td, "config"), "w") as fh:
+            fh.write("HANDOFF_GROUP_LAYOUT='prefix'\n")
+        assert board_current_layout(td) == "prefix", "the legacy KEY=value config"
+        with open(os.path.join(td, "handoff.json"), "w") as fh:
+            json.dump({"groups": [], "groupLayout": ""}, fh)
+        assert board_current_layout(td) == "flat", "empty groupLayout is flat"
+        with open(os.path.join(td, "handoff.json"), "w") as fh:
+            json.dump({"groups": ["g"], "groupLayout": "subfolder"}, fh)
+        assert board_current_layout(td) == "subfolder", "handoff.json wins over config"
+
+        assert not board_holds_docs(td), "an empty board holds nothing"
+        os.makedirs(os.path.join(td, "templates"))
+        with open(os.path.join(td, "templates", "x-handoff.md"), "w") as fh:
+            fh.write("")
+        assert not board_holds_docs(td), "a template is not a document"
+        os.makedirs(os.path.join(td, "g", "archive"))
+        with open(os.path.join(td, "g", "archive", "old-handoff.md"), "w") as fh:
+            fh.write("")
+        assert board_holds_docs(td), "an archived doc in a section still counts"
+
+    # --- "flat" is a layout; an empty string is not, and says what to write instead -------------
+    with tempfile.TemporaryDirectory() as td:
+        mf = os.path.join(td, "handoff.json")
+        for lay, ok in (("flat", True), ("", False)):
+            with open(mf, "w") as fh:
+                json.dump({"layout": lay, "groups": {"g": {"repos": []}}}, fh)
+            errs = []
+            _, _, _, got_lay = load_layer(mf, errs, [])
+            assert (got_lay == lay) is ok and (not errs) is ok, (lay, got_lay, errs)
+        assert '"flat"' in errs[0], errs
+
     print("register-cross-repo-handoff resolve selftest OK")
     return 0
 
@@ -504,6 +585,7 @@ def main() -> int:
     frm = os.path.realpath(args.frm) if args.frm else scope
 
     errors: list = []
+    excluded: list = []
     warnings: list = []
     shadowed: list = []
     tombstones: list = []
@@ -617,7 +699,9 @@ def main() -> int:
                 }
             )
             if not exists:
-                errors.append(
+                # Not an error: one mistyped member must not stop the rest of the fleet, so the
+                # sync skips it and carries on. `errors` is reserved for what stops the sync.
+                excluded.append(
                     f"{g['manifest']}: {gname}/{r['alias']} -> {p} does not exist — excluded"
                 )
         groups_out.append(
@@ -654,6 +738,32 @@ def main() -> int:
         elif remote:
             b["remote"] = remote
 
+    # The sync re-lays a board out by rewriting its config, but it never moves a document. Changing
+    # the layout of a board that holds handoffs would strand every one of them outside the sections
+    # the CLI looks in, so it is refused: that is a migration, done by hand, not a sync.
+    for b in boards.values():
+        if layout == "flat" and len(b["groups"]) > 1:
+            errors.append(
+                f"board {b['path']}: a flat board has no sections, so it hosts one group "
+                f"(got {', '.join(sorted(b['groups']))}) — give each group its own board, or use "
+                f'"subfolder" or "prefix"'
+            )
+        current = board_current_layout(b["path"]) if b["exists"] else None
+        b["current_layout"] = current
+        if current is None or current == layout:
+            continue
+        if board_holds_docs(b["path"]):
+            errors.append(
+                f"board {b['path']} is laid out {current!r} but the manifest declares {layout!r} "
+                f"(from {layout_from or 'the default'}) — the sync never re-lays out a board that "
+                f'holds handoffs. Declare "layout": "{current}" to keep it as it is.'
+            )
+        else:
+            warnings.append(
+                f"board {b['path']} is laid out {current!r} and holds no handoffs — "
+                f"the sync will re-lay it out as {layout!r}"
+            )
+
     json.dump(
         {
             "scope": scope,
@@ -666,12 +776,15 @@ def main() -> int:
             "shadowed": shadowed,
             "tombstones": tombstones,
             "warnings": warnings,
+            "excluded": excluded,
             "errors": errors,
         },
         sys.stdout,
         indent=2,
     )
     sys.stdout.write("\n")
+    # An excluded member is non-fatal, so it does not fail the resolve; the verifier fails it on its
+    # own (member.exists) and the sync skips it.
     return 1 if errors else 0
 
 

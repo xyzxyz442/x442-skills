@@ -21,6 +21,7 @@ RESOLVE="$SKILL_DIR/scripts/manifest/resolve.py"
 RENDER="$SKILL_DIR/scripts/manifest/render.py"
 REGISTRY="$SKILL_DIR/scripts/manifest/registry.py"
 BLOCK_TMPL="$SKILL_DIR/assets/agents-cross-repo-handoff.md"
+BLOCK_TMPL_FLAT="$SKILL_DIR/assets/agents-cross-repo-handoff-flat.md"
 SETUP_HANDOFF="$(cd "$SKILL_DIR/../setup-handoff" 2> /dev/null && pwd)/scripts/setup-handoff.sh"
 
 die() {
@@ -70,16 +71,28 @@ command -v python3 > /dev/null 2>&1 || die "python3 is required"
 # --- resolve the cascade once; reuse the JSON for both the plan and the AGENTS.md render ----------
 RESOLVED="$(mktemp)"
 trap 'rm -f "$RESOLVED"' EXIT
-if ! python3 "$RESOLVE" --scope "$SCOPE" --from "$FROM" > "$RESOLVED"; then
-  # resolve returns non-zero when a declared repo is missing; surface the errors, keep going with the
-  # repos that DO resolve (a typo in one entry must not block the rest of the fleet).
-  python3 - "$RESOLVED" << 'PY'
+python3 "$RESOLVE" --scope "$SCOPE" --from "$FROM" > "$RESOLVED"
+# A member that is not on disk is `excluded`: reported, skipped below, and the rest of the fleet goes
+# ahead (a typo in one entry must not block it). Anything in `errors` means the manifest itself is
+# wrong — a bad layout, a board it would re-lay out — and a plan built on it would do the wrong thing,
+# so nothing is planned, not even under --dry-run. No JSON at all means resolve.py itself crashed.
+python3 - "$RESOLVED" << 'PY'
 import json, sys
-d = json.load(open(sys.argv[1]))
+try:
+    d = json.load(open(sys.argv[1]))
+except ValueError:
+    sys.exit(2)
+for e in d.get("excluded", []):
+    print(f"  [excluded] {e}", file=sys.stderr)
 for e in d.get("errors", []):
     print(f"  [error] {e}", file=sys.stderr)
+sys.exit(1 if d.get("errors") else 0)
 PY
-fi
+case $? in
+  0) ;;
+  1) die "the manifest has errors — fix them and re-run; nothing was planned or written" ;;
+  *) die "resolve.py produced no resolution (see its output above); nothing was planned or written" ;;
+esac
 # surface warnings + shadow/tombstone reports
 python3 - "$RESOLVED" << 'PY'
 import json, sys
@@ -114,9 +127,17 @@ PY
 )"
 
 RC=0
+# setup-handoff's section flags for a layout. A flat board has no sections, so both flags are passed
+# EMPTY — an explicit clear, not an omission, which setup-handoff would read as "keep what is there".
+# The plan carries the word "flat" rather than an empty column: `read` with a tab IFS collapses
+# consecutive tabs, so an empty field would shift every column after it.
+section_groups() { if [ "$1" = flat ]; then printf ''; else printf '%s' "$2"; fi; }
+section_layout() { if [ "$1" = flat ]; then printf ''; else printf '%s' "$1"; fi; }
+
 run() { # echo + run, or just echo under --dry-run
   if [ "$DRYRUN" = 1 ]; then
-    note "  would: $*"
+    # %q so an explicitly empty flag value (a flat board's --groups '') reads as passed, not missing
+    note "  would: $(printf '%q ' "$@")"
   else
     "$@"
   fi
@@ -130,10 +151,11 @@ while IFS=$'\t' read -r kind path groups layout remote; do
   # --remote is passed through, not applied here: setup-handoff owns the board's git substrate, so
   # the init/remote/.gitignore decisions live in ONE place rather than being re-derived per caller.
   # A board with no declared remote is still git-initialised; it just says so.
+  sgroups="$(section_groups "$layout" "$groups")" slayout="$(section_layout "$layout")"
   if [ -n "$remote" ]; then
-    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout" --remote "$remote"
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$sgroups" --layout "$slayout" --remote "$remote"
   else
-    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$groups" --layout "$layout"
+    run bash "$SETUP_HANDOFF" --board-only "$path" --groups "$sgroups" --layout "$slayout"
   fi
 done <<< "$PLAN"
 
@@ -179,16 +201,24 @@ while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exis
     continue
   fi
   note "wire $group/$alias ($repo) -> $board"
-  run bash "$SETUP_HANDOFF" "$repo" --tools "$TOOLS" --primary "$PRIMARY" \
-    --topology cross-repo --handoff-dir "$board" \
-    --group "$group" --groups "$bgroups" --layout "$layout"
+  # A flat board has no section to scope a member to, so it gets no --group at all.
+  tmpl="$BLOCK_TMPL"
+  if [ "$layout" = flat ]; then
+    tmpl="$BLOCK_TMPL_FLAT"
+    run bash "$SETUP_HANDOFF" "$repo" --tools "$TOOLS" --primary "$PRIMARY" \
+      --topology cross-repo --handoff-dir "$board" --groups "" --layout ""
+  else
+    run bash "$SETUP_HANDOFF" "$repo" --tools "$TOOLS" --primary "$PRIMARY" \
+      --topology cross-repo --handoff-dir "$board" \
+      --group "$group" --groups "$bgroups" --layout "$layout"
+  fi
   # the path this repo uses to reach the board (matches setup-handoff's own HDPATH)
   board_rel="$(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$board" "$repo")"
   if [ "$DRYRUN" = 1 ]; then
-    python3 "$RENDER" --file "$repo/AGENTS.md" --template "$BLOCK_TMPL" \
+    python3 "$RENDER" --file "$repo/AGENTS.md" --template "$tmpl" \
       --group "$group" --self "$alias" --board-rel "$board_rel" --dry-run < "$RESOLVED"
   else
-    python3 "$RENDER" --file "$repo/AGENTS.md" --template "$BLOCK_TMPL" \
+    python3 "$RENDER" --file "$repo/AGENTS.md" --template "$tmpl" \
       --group "$group" --self "$alias" --board-rel "$board_rel" < "$RESOLVED" || RC=1
   fi
 done <<< "$PLAN"

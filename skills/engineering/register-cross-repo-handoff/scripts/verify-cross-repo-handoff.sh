@@ -240,15 +240,18 @@ while IFS=$'\t' read -r path groups layout; do
   if hc="$(board_config "$path")" && [ -n "$hc" ]; then
     eval "$hc"
     if [ "$HC_TOPOLOGY" = "cross-repo" ]; then pass board.topology "board $path is cross-repo"; else fail board.topology "board $path topology is '${HC_TOPOLOGY:-unset}', not cross-repo"; fi
-    want="$(printf '%s' "$groups" | tr ',' '\n' | sort | paste -sd, -)"
+    # A flat board records no sections: empty groups and an empty groupLayout, as the sync writes it.
+    want="$(printf '%s' "$groups" | tr ',' '\n' | sort | paste -sd, -)" want_layout="$layout"
+    [ "$layout" = flat ] && want="" want_layout=""
     got="$(printf '%s' "$HC_GROUPS" | tr ',' '\n' | sort | paste -sd, -)"
-    if [ "$want" = "$got" ]; then pass board.groups "board $path hosts groups: $want"; else fail board.groups "board $path groups drift (config: '${got:-unset}', manifest: '$want') — re-run the sync"; fi
-    if [ "$HC_GROUP_LAYOUT" = "$layout" ]; then pass board.layout "board $path layout=$layout"; else fail board.layout "board $path layout drift (config: '${HC_GROUP_LAYOUT:-unset}', manifest: '$layout')"; fi
+    if [ "$want" = "$got" ]; then pass board.groups "board $path hosts groups: ${want:-none (flat)}"; else fail board.groups "board $path groups drift (config: '${got:-unset}', manifest: '${want:-none (flat)}') — re-run the sync"; fi
+    if [ "${HC_GROUP_LAYOUT:-}" = "$want_layout" ]; then pass board.layout "board $path layout=$layout"; else fail board.layout "board $path layout drift (config: '${HC_GROUP_LAYOUT:-unset}', manifest: '$layout')"; fi
   else
     fail board.config "board $path config could not be read — $(cfg_reason "no handoff.json and no legacy config file") — re-run the sync"
   fi
   # sub-index + roll-up presence (generated on first CLI use; absence is a warn, not a fail)
   [ -f "$path/INDEX.md" ] || warn board.rollup_index "board $path has no roll-up INDEX.md yet (created on first handoff command)"
+  [ "$layout" = flat ] && continue # no sections, so no sub-indexes: the roll-up is the only index
   for g in $(printf '%s' "$groups" | tr ',' ' '); do
     if [ "$layout" = "prefix" ]; then sidx="$path/INDEX-$g.md"; else sidx="$path/$g/INDEX.md"; fi
     [ -f "$sidx" ] || warn board.subindex "group $g has no sub-index yet ($sidx — created on first handoff command)"
@@ -264,8 +267,8 @@ PY
 
 echo
 section "3. member repos"
-# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire
-while IFS=$'\t' read -r group board alias repo exists has_agents wire; do
+# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire<TAB>layout
+while IFS=$'\t' read -r group board alias repo exists has_agents wire layout; do
   [ -n "$alias" ] || continue
   if [ "$exists" != 1 ]; then
     fail member.exists "$group/$alias — $repo not on disk"
@@ -290,8 +293,10 @@ raise SystemExit(0 if isinstance(d, dict) and d.get("localWiring") is True else 
   if [ "$local_wiring" = 1 ] && ! grep -q 'cross-repo-handoff:begin' "$repo/AGENTS.md" 2> /dev/null; then
     pass member.agents_block "$group/$alias has no AGENTS.md block by design (localWiring) — the board README carries the protocol"
   elif grep -q 'cross-repo-handoff:begin' "$repo/AGENTS.md" 2> /dev/null; then
-    # the block must name this repo's own group
-    if sed -n '/cross-repo-handoff:begin/,/cross-repo-handoff:end/p' "$repo/AGENTS.md" | grep -q "\`$group\` section"; then
+    # the block must name this repo's own group — as its section, or on a flat board as its group
+    scope_phrase="\`$group\` section"
+    [ "$layout" = flat ] && scope_phrase="Peers in the \`$group\` group"
+    if sed -n '/cross-repo-handoff:begin/,/cross-repo-handoff:end/p' "$repo/AGENTS.md" | grep -qF "$scope_phrase"; then
       pass member.agents_block "$group/$alias AGENTS.md block present + scoped to $group"
     else
       fail member.agents_block "$group/$alias AGENTS.md block does not name the $group section — re-run the sync"
@@ -316,7 +321,14 @@ raise SystemExit(0 if isinstance(d, dict) and d.get("localWiring") is True else 
   fi
   if hc="$(board_config "$board" "$repo")" && [ -n "$hc" ]; then
     eval "$hc"
-    if [ "$HC_GROUP" = "$group" ]; then
+    if [ "$layout" = flat ]; then
+      # A flat board has no sections; a leftover group in the member's config is a stale scope.
+      if [ -z "${HC_GROUP:-}" ]; then
+        pass member.section "$group/$alias files to the flat board, unscoped"
+      else
+        fail member.section "$group/$alias still records section '$HC_GROUP' on a flat board — remove \"group\" from $repo/.agents/handoff.json"
+      fi
+    elif [ "$HC_GROUP" = "$group" ]; then
       pass member.section "$group/$alias resolves to section $group"
     else
       fail member.section "$group/$alias resolves to section '${HC_GROUP:-unset}', not $group — re-run the sync"
@@ -332,7 +344,7 @@ for g in d["groups"]:
     for m in g["members"]:
         print("\t".join([g["group"], g["board"], m["alias"], m["path"],
                          "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0",
-                         "1" if m.get("wire", True) else "0"]))
+                         "1" if m.get("wire", True) else "0", g["layout"]]))
 PY
 )
 
