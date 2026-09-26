@@ -5,10 +5,11 @@ any repo for AI coding assistants (Claude Code, Antigravity, Gemini CLI, GitHub 
 a personal-first workshop: I build, dogfood, and iterate on skills here, and may polish a few up
 for sharing later.
 
-> **Status:** ten skills under `skills/engineering/` — the project-setup chain
+> **Status:** eleven skills under `skills/engineering/` — the project-setup chain
 > ([`initial-project`](skills/engineering/initial-project/SKILL.md),
 > [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_),
-> the **graph suite** ([`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md),
+> [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md) _(beta)_, the
+> **graph suite** ([`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md),
 > [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md),
 > [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md)), and the
 > **handoff suite** ([`setup-handoff`](skills/engineering/setup-handoff/SKILL.md),
@@ -16,8 +17,8 @@ for sharing later.
 > [`delegate-handoff`](skills/engineering/delegate-handoff/SKILL.md),
 > [`repair-handoff`](skills/engineering/repair-handoff/SKILL.md),
 > [`register-cross-repo-handoff`](skills/engineering/register-cross-repo-handoff/SKILL.md)) — all
-> five _experimental_. `skills/productivity/` holds
-> [`release-announcement`](skills/productivity/release-announcement/SKILL.md) _(experimental)_, and
+> five _beta_. `skills/productivity/` holds
+> [`release-announcement`](skills/productivity/release-announcement/SKILL.md) _(beta)_, and
 > the non-promoted `skills/personal/` holds the **delegate suite**
 > ([`register-delegate-agents`](skills/personal/register-delegate-agents/SKILL.md),
 > [`setup-delegate-agent`](skills/personal/setup-delegate-agent/SKILL.md),
@@ -73,13 +74,14 @@ The design these skills share — and what they wire into the repos they touch:
     │   ├── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
     │   ├── repair-graph-hooks/     # SKILL.md only  (reuses setup-graph-hooks scripts)
     │   ├── register-cross-repo-graph/  # SKILL.md + scripts/ + assets/
-    │   ├── setup-handoff/          # SKILL.md + scripts/ + assets/  (experimental)
-    │   ├── run-handoff/            # SKILL.md only  (experimental)
-    │   ├── delegate-handoff/       # SKILL.md only  (experimental)
-    │   ├── repair-handoff/         # SKILL.md only  (reuses setup-handoff scripts)
-    │   └── register-cross-repo-handoff/  # SKILL.md + scripts/ + assets/  (experimental)
+    │   ├── setup-secret-guard/     # SKILL.md + scripts/ + assets/  (beta)
+    │   ├── setup-handoff/          # SKILL.md + scripts/ + assets/  (beta)
+    │   ├── run-handoff/            # SKILL.md only  (beta)
+    │   ├── delegate-handoff/       # SKILL.md only  (beta)
+    │   ├── repair-handoff/         # SKILL.md only  (beta; reuses setup-handoff scripts)
+    │   └── register-cross-repo-handoff/  # SKILL.md + scripts/ + assets/  (beta)
     ├── productivity/               # category README + skills
-    │   └── release-announcement/   # SKILL.md only  (experimental)
+    │   └── release-announcement/   # SKILL.md only  (beta)
     └── personal/                   # category README + skills  (not promoted — --personal)
         ├── register-delegate-agents/  # SKILL.md + scripts/  (experimental)
         ├── setup-delegate-agent/   # SKILL.md + scripts/ + assets/ + references/  (experimental)
@@ -165,17 +167,18 @@ scripts for Antigravity / Gemini / Copilot land in a later iteration.
 
 ## Skills overview
 
-Fourteen skills: ten under [`engineering`](skills/engineering/), one under
+Fifteen skills: eleven under [`engineering`](skills/engineering/), one under
 [`productivity`](skills/productivity/), and three under [`personal`](skills/personal/) (not
 promoted — install with `--personal`). The [skills catalog](skills/README.md) has the full detail
 (status, prerequisites, verification harness, conventions).
 
 ### Project setup
 
-| Skill                                                                        | Status         | What it does                                                                                                                                                       |
-| ---------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable`       | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, and `setup-handoff`.         |
-| [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `experimental` | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it. |
+| Skill                                                                        | Status         | What it does                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable`       | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, and `setup-handoff`.                                                                                 |
+| [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `experimental` | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it.                                                                         |
+| [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md)       | `beta`         | Installs the secret guard so credential values never reach a transcript — a read-path guard that masks each value as a stable fingerprint, plus the shared `secret-scan` / `redact-view` engine. One home-layer install covers every repo. |
 
 ### Graph suite — query, don't grep
 
@@ -187,13 +190,13 @@ promoted — install with `--personal`). The [skills catalog](skills/README.md) 
 
 ### Handoff suite — claim before you work, release when you stop
 
-| Skill                                                                                    | Status         | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------------------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`setup-handoff`](skills/engineering/setup-handoff/SKILL.md)                             | `experimental` | Installs the lease-based board (`.agents/handoff/`) so multiple agents/sessions/repos share code without clobbering — atomic claim/release, per-tool enforcement hooks (one primary gets the deny gate), legacy-install migration. Detects an existing board in the repo and two parent levels and asks when that is ambiguous; records one developer's board in `handoff.local.json`; suggests, never writes, the ignore rules a board needs. On Claude Code, restores held handoffs' context after compaction (not possible on Gemini CLI or Copilot CLI); `handoff show` reads a doc by id. |
-| [`run-handoff`](skills/engineering/run-handoff/SKILL.md)                                 | `experimental` | The claim → work → release discipline over an installed board: check it, claim before editing, release with an honest status (`done` requires evidence). `checkpoint` publishes progress without releasing; `move` transfers a handoff to another board, gated by its git remote; `--ref` points a handoff at its ticket in the board's external tracker. Bundle children are sized as slices and confirmed before filing; failed approaches go in `## Ruled out`; solo session continuity stays off the board.                                                                                |
-| [`delegate-handoff`](skills/engineering/delegate-handoff/SKILL.md)                       | `experimental` | Judgment for handing a handoff to someone outside the board — is it brief-able, and how to review what comes back. Drives `export` / `import --result`; import never sets `status`.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| [`repair-handoff`](skills/engineering/repair-handoff/SKILL.md)                           | `experimental` | Smoke-tests the `handoff` CLI, then repairs the board state a re-install cannot touch — index drift, orphaned leases, doc frontmatter, section resolution, orphaned delegations.                                                                                                                                                                                                                                                                                                                                                                                                               |
-| [`register-cross-repo-handoff`](skills/engineering/register-cross-repo-handoff/SKILL.md) | `experimental` | Stands up a multi-group fleet from a `.agents/handoff.json` cascade: a dedicated board owned by no repo, each member wired to its own sub-indexed section. The user layer of the cascade is opt-in.                                                                                                                                                                                                                                                                                                                                                                                            |
+| Skill                                                                                    | Status | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`setup-handoff`](skills/engineering/setup-handoff/SKILL.md)                             | `beta` | Installs the lease-based board (`.agents/handoff/`) so multiple agents/sessions/repos share code without clobbering — atomic claim/release, per-tool enforcement hooks (one primary gets the deny gate), legacy-install migration. Detects an existing board in the repo and two parent levels and asks when that is ambiguous; records one developer's board in `handoff.local.json`; suggests, never writes, the ignore rules a board needs. On Claude Code, restores held handoffs' context after compaction (not possible on Gemini CLI or Copilot CLI); `handoff show` reads a doc by id. |
+| [`run-handoff`](skills/engineering/run-handoff/SKILL.md)                                 | `beta` | The claim → work → release discipline over an installed board: check it, claim before editing, release with an honest status (`done` requires evidence). `checkpoint` publishes progress without releasing; `move` transfers a handoff to another board, gated by its git remote; `--ref` points a handoff at its ticket in the board's external tracker. Bundle children are sized as slices and confirmed before filing; failed approaches go in `## Ruled out`; solo session continuity stays off the board.                                                                                |
+| [`delegate-handoff`](skills/engineering/delegate-handoff/SKILL.md)                       | `beta` | Judgment for handing a handoff to someone outside the board — is it brief-able, and how to review what comes back. Drives `export` / `import --result`; import never sets `status`.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| [`repair-handoff`](skills/engineering/repair-handoff/SKILL.md)                           | `beta` | Smoke-tests the `handoff` CLI, then repairs the board state a re-install cannot touch — index drift, orphaned leases, doc frontmatter, section resolution, orphaned delegations.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| [`register-cross-repo-handoff`](skills/engineering/register-cross-repo-handoff/SKILL.md) | `beta` | Stands up a multi-group fleet from a `.agents/handoff.json` cascade: a dedicated board owned by no repo, each member wired to its own sub-indexed section. The user layer of the cascade is opt-in.                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### Delegate suite — hand mechanical work to a cheaper agent (`personal/`)
 
@@ -205,9 +208,9 @@ promoted — install with `--personal`). The [skills catalog](skills/README.md) 
 
 ### Productivity
 
-| Skill                                                                       | Status         | What it does                                                                                                                                                |
-| --------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`release-announcement`](skills/productivity/release-announcement/SKILL.md) | `experimental` | Turns a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email). Can emit a second language. |
+| Skill                                                                       | Status | What it does                                                                                                                                                |
+| --------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`release-announcement`](skills/productivity/release-announcement/SKILL.md) | `beta` | Turns a tagged version and its changelog into a user-facing announcement shaped for its channel (GitHub release, Slack, email). Can emit a second language. |
 
 This repo dogfoods `setup-graph-hooks` on itself — see [`.claude/`](.claude/) and [`.mcp.json`](.mcp.json).
 

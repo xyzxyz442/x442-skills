@@ -11,7 +11,7 @@ description: >-
 
 # repair-handoff
 
-> **Status — experimental.** This skill runs real repairs (re-invokes the installer, regenerates
+> **Status — beta.** This skill runs real repairs (re-invokes the installer, regenerates
 > the index, clears orphaned lock directories). Review what it reports before approving anything
 > that touches a lease someone else may hold.
 
