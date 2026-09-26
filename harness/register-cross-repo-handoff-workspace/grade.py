@@ -369,9 +369,61 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             e = gc.git_diff_empty(work / name)
             e["text"] = f"{tag} {name}: {e['text']}"
             exps.append(e)
+
+        # A member whose pre-commit runs prettier pads the peer table. Commit that, re-sync, and the
+        # block must stay put — comparing bytes rewrote it on every sync, and every commit re-padded
+        # it. The first assertion keeps the case honest: if prettier changed nothing, nothing below
+        # it tested anything.
+        exps.extend(_prettier_round_trip(work, env, tag))
         return exps
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _prettier_round_trip(
+    work: Path, env: dict, tag: str, members: tuple = MEMBERS
+) -> list:
+    prettier = REPO / "node_modules/.bin/prettier"
+    if not prettier.is_file():
+        return [
+            gc.expectation(
+                f"{tag} prettier available for the padded-table case",
+                False,
+                f"{prettier} missing — run pnpm install",
+            )
+        ]
+    padded = []
+    for name in members:
+        before = (work / name / "AGENTS.md").read_text(encoding="utf-8")
+        subprocess.run(
+            [str(prettier), "--no-config", "--write", "AGENTS.md"],
+            cwd=work / name,
+            capture_output=True,
+            text=True,
+        )
+        if (work / name / "AGENTS.md").read_text(encoding="utf-8") != before:
+            padded.append(name)
+        gc.git_init_commit(work / name, "prettier pads the peer table")
+    # A sync that crashed writes nothing, and nothing written reads as a clean re-run — so its exit
+    # code is asserted, or the empty-diff checks below could pass without a sync having happened.
+    sync = _run_sync(work, env)
+    exps = [
+        gc.expectation(
+            f"{tag} prettier re-padded the peer table",
+            bool(padded),
+            f"members prettier changed: {padded or 'none'}",
+        ),
+        gc.expectation(
+            f"{tag} re-sync after prettier completes (exit 0)",
+            sync.returncode == 0,
+            (sync.stdout + sync.stderr).strip()[-300:],
+        ),
+    ]
+    for name in members:
+        e = gc.git_diff_empty(work / name)
+        e["text"] = f"{tag} {name} after prettier: {e['text']}"
+        exps.append(e)
+    return exps
 
 
 def _grade_local_wiring_member(fixture: Path) -> list:
@@ -538,6 +590,8 @@ def _grade_flat(fixture: Path) -> list:
             e = gc.git_diff_empty(work / name)
             e["text"] = f"{tag} {name}: {e['text']}"
             exps.append(e)
+        # The flat block carries the same peer table, so it gets the same prettier round trip.
+        exps.extend(_prettier_round_trip(work, env, tag, members))
 
         # Now the board holds a handoff at its root. A manifest that says anything but "flat" must
         # stop the sync — dry run included — and leave the board's config exactly as it was.

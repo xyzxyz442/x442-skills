@@ -106,8 +106,9 @@ Start from [`assets/handoff.example.json`](assets/handoff.example.json):
 3. **Sync**: drop `--dry-run`. Choose tools + primary the same way setup-handoff does:
    `--tools claude,gemini,copilot --primary claude` (or `--primary none` for advisory-only). The
    sync scaffolds each board `--board-only`, wires each member (`--topology cross-repo --group …`),
-   and splices the cross-repo-handoff block into each member's AGENTS.md. Re-runnable: byte-compares
-   before writing, so a second run leaves every repo's `git status` clean.
+   and splices the cross-repo-handoff block into each member's AGENTS.md. Re-runnable: compares
+   before writing, so a second run leaves every repo's `git status` clean — and a member whose
+   formatter re-pads the block's peer table (prettier on commit) is not rewritten for it.
 4. **Verify**: `scripts/verify-cross-repo-handoff.sh --scope <workspace>` — read-only. Confirms each
    board is scaffolded with the expected group facts, each member is wired to its section, and the
    AGENTS.md blocks match the manifest. Exit 0 = healthy, exit 1 = broken (drift, missing wiring).

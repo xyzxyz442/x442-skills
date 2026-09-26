@@ -12,8 +12,9 @@
 #   3. splices the cross-repo-handoff AGENTS.md block into each member (render.py);
 #   4. records a state ledger so --prune can report members that have left scope.
 #
-# Idempotent: setup-handoff and render.py byte-compare before writing, so a second run leaves every
-# repo's `git status` clean. --dry-run prints the plan and writes nothing.
+# Idempotent: setup-handoff and render.py compare before writing (render.py ignores table-cell
+# padding a member's formatter adds), so a second run leaves every repo's `git status` clean.
+# --dry-run prints the plan and writes nothing.
 set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
