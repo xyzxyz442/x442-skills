@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.16.0](https://github.com/xyzxyz442/x442-skills/compare/v0.15.0...v0.16.0) (2026-09-26)
+
+### 🚀 Features
+
+- **feature:** let a manifest register a repository without wiring it ([38085d6](https://github.com/xyzxyz442/x442-skills/commit/38085d636f44904c1e3cbe8c7a67cfb275a52ec6))
+
+### 🐞 Bug Fixes
+
+- **bug:** let a manifest declare a flat board and never re-lay one out ([51bf83f](https://github.com/xyzxyz442/x442-skills/commit/51bf83f35e8c9af77bd228ea3e37fe87c6b7022a))
+- **bug:** stop re-writing the cross-repo block a member's prettier re-padded ([d20534b](https://github.com/xyzxyz442/x442-skills/commit/d20534b7c58cea78254090534e9f5cd9920271be))
+
+### 📚 Documentation
+
+- **docs:** promote secret-guard, handoff suite, and release-announcement to beta ([5fc5f9c](https://github.com/xyzxyz442/x442-skills/commit/5fc5f9cbd791f6d321beab27ea81381ed87cd0a6))
+
 ## [0.15.0](https://github.com/xyzxyz442/x442-skills/compare/v0.14.0...v0.15.0) (2026-09-25)
 
 ### 🚀 Features
