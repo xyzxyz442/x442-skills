@@ -118,7 +118,7 @@ cp "$HERE/setup-embeddings.sh" .graph-hooks/setup-embeddings.sh
 # not a corrupt one; readers treat the two the same and report "behind".
 cp "$HERE/payload.version" .graph-hooks/.version
 find .graph-hooks -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} +
-echo "  + .graph-hooks/ (cores + dispatcher + copilot wrappers + setup-embeddings.sh)"
+echo "  + .graph-hooks/ (cores + dispatcher + copilot wrappers + setup-embeddings.sh + portable-mcp.py)"
 
 # ---- Layer 1: git post-commit hook (husky-aware), appended idempotently ----------------
 install_hook() {
@@ -219,6 +219,15 @@ for t in $TOOLS_LIST; do
   esac
 done
 
+# ---- MCP config portability ------------------------------------------------------------
+# `code-review-graph install` writes the absolute repo root as the server's `cwd` into .mcp.json,
+# .gemini/settings.json and .vscode/mcp.json — repo files that get committed, so one developer's
+# home directory ships to every teammate. Normalize whatever is already registered on every run;
+# the MCP registration step below prints the same call to follow `install` with.
+if [ -f .graph-hooks/portable-mcp.py ]; then
+  python3 .graph-hooks/portable-mcp.py .
+fi
+
 # ---- legacy migration note (non-destructive) -------------------------------------------
 LEGACY=""
 for s in smart-grep-hook.sh graph-cheatsheet.py stop-graph-update.sh read-glob-nudge.sh session-status.sh session-setup-nudge.sh; do
@@ -265,6 +274,7 @@ if [ "$HAVE_CRG" = 1 ] && [ ! -d .code-review-graph ]; then
   echo "    for p in $CRG_PLATFORMS; do"
   echo "      code-review-graph install --platform \"\$p\" --no-hooks --no-instructions --no-skills"
   echo "    done"
+  echo "    python3 .graph-hooks/portable-mcp.py    # strip the machine-local cwd install writes"
   echo "    code-review-graph build"
 fi
 [ "$HAVE_GFY" = 1 ] && [ ! -d graphify-out ] && echo "  Build graphify: graphify update ."

@@ -25,7 +25,7 @@ Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
 `eval_id` is one of the ids in evals/evals.json (no-agents-md | fresh-wired | all-wired |
-copilot-primary-wired | both-wired | graph-search-behavior | embed-provider-guard). With no
+copilot-primary-wired | both-wired | graph-search-behavior | embed-provider-guard | mcp-portable). With no
 eval_id, only the verifier-wrap assertion runs. Exits 0 iff nothing failed.
 """
 
@@ -524,6 +524,104 @@ def grade_embed_provider_guard(target: Path) -> list[gc.Expectation]:
     return exps
 
 
+# ---- mcp-portable ----------------------------------------------------------------------------
+# `code-review-graph install` writes the absolute repo root as the server's cwd into repo-level MCP
+# configs that get committed. The fixture cannot carry that shape itself -- an absolute path in a
+# committed fixture is the very leak under test, and it would not match the scratch copy anyway --
+# so the case seeds it at grade time into a throwaway copy, exactly as `install` would have.
+INSTALLER = REPO / "skills/engineering/setup-graph-hooks/scripts/setup-graph-hooks.sh"
+CRG = "code-review-graph"
+MCP_JSON = ".mcp.json"
+VSCODE_MCP = ".vscode/mcp.json"
+MCP_PATHS = (MCP_JSON, VSCODE_MCP)
+
+
+def _seed_mcp(repo: Path) -> None:
+    entry = {
+        "command": "uvx",
+        "args": [CRG, "serve"],
+        "cwd": str(repo),
+        "type": "stdio",
+    }
+    other = {"command": "x", "cwd": str(repo)}
+    (repo / MCP_JSON).write_text(
+        json.dumps({"mcpServers": {CRG: dict(entry), "other": other}}, indent=2) + "\n"
+    )
+    (repo / ".vscode").mkdir(exist_ok=True)
+    (repo / VSCODE_MCP).write_text(
+        json.dumps({"servers": {CRG: dict(entry)}}, indent=2) + "\n"
+    )
+
+
+def grade_mcp_portable(target: Path) -> list[gc.Expectation]:
+    """Seed the machine-local cwd CRG's installer writes, then assert the verifier flags it, an
+    installer re-run normalizes it, and a second normalize run is byte-stable."""
+    repo = _embed_scratch(target)
+    exps: list[gc.Expectation] = []
+    try:
+        _seed_mcp(repo)
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "mcp.portable",
+                "warn",
+                label="verifier flags an absolute cwd in a committed MCP config",
+            )
+        )
+
+        run = subprocess.run(
+            ["bash", str(INSTALLER), str(repo)], capture_output=True, text=True
+        )
+        mcp = json.loads((repo / MCP_JSON).read_text())["mcpServers"]
+        vsc = json.loads((repo / VSCODE_MCP).read_text())["servers"]
+        exps.append(
+            gc.expectation(
+                "installer drops the machine-local cwd from .mcp.json",
+                run.returncode == 0 and "cwd" not in mcp[CRG],
+                f"rc={run.returncode} entry={mcp[CRG]}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "installer rewrites the .vscode/mcp.json cwd to ${workspaceFolder}",
+                vsc[CRG].get("cwd") == "${workspaceFolder}",
+                f"entry={vsc[CRG]}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "another server's entry in the same file is left alone",
+                mcp["other"].get("cwd") == str(repo),
+                f"other={mcp['other']}",
+            )
+        )
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "mcp.portable",
+                "pass",
+                label="verifier passes once the configs are portable",
+            )
+        )
+
+        before = [(repo / p).read_bytes() for p in MCP_PATHS]
+        subprocess.run(
+            ["python3", str(repo / GRAPH_HOOKS_DIR / "portable-mcp.py"), str(repo)],
+            capture_output=True,
+        )
+        after = [(repo / p).read_bytes() for p in MCP_PATHS]
+        exps.append(
+            gc.expectation(
+                "a second normalize run is byte-stable",
+                before == after,
+                "unchanged" if before == after else "bytes changed on re-run",
+            )
+        )
+    finally:
+        shutil.rmtree(repo.parent, ignore_errors=True)
+    return exps
+
+
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     """Grade in an isolated copy when `target` is nested in a larger repo.
 
@@ -571,6 +669,8 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         # config) -- it exists only to fire embed-provider.sh / embed-health.sh directly, so
         # verify-graph-hooks.sh (which grades overall wiring) does not apply here.
         return grade_embed_provider_guard(target)
+    if eval_id == "mcp-portable":
+        return grade_mcp_portable(target)
 
     exps = [gc.run_verify_script(VERIFY, target)]
     # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder

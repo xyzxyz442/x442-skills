@@ -225,6 +225,7 @@ manages.
 for p in <platform-values-for-the-tools-chosen-in-step-2>; do
   code-review-graph install --platform "$p" --no-hooks --no-instructions --no-skills
 done
+python3 .graph-hooks/portable-mcp.py # strip the machine-local cwd install just wrote
 code-review-graph build
 # graphify (optional): CLI exploration — builds the initial graph
 graphify update .
@@ -236,6 +237,17 @@ Why each opt-out:
 - `--no-instructions` — step 5 owns the `AGENTS.md` routing block.
 - `--no-skills` — the generated `explore-codebase` skill routes to `get_architecture_overview_tool`,
   which the routing block explicitly rules out in favour of `list_communities_tool`.
+
+**Always follow `install` with `portable-mcp.py`.** CRG writes the absolute repo root as the
+server's `cwd` into `.mcp.json`, `.gemini/settings.json`, and `.vscode/mcp.json` — repo files that
+get committed — so the first commit publishes this machine's home directory and points every
+teammate's server at a path they do not have. The key is not needed: `code-review-graph serve`
+finds the repo by walking up from the directory the client launched it in. The script drops `cwd`
+from the `code-review-graph` entry (`${workspaceFolder}` in `.vscode/mcp.json`, the editor's
+portable spelling), replaces an absolute-interpreter `command` with the `code-review-graph` console
+script, and touches no other server. The installer also runs it on every re-run, and
+`verify-graph-hooks.sh` reports any leftover as the `mcp.portable` warning — for files git would
+commit only.
 
 Preview with `--dry-run` before running: it lists every platform config the invocation would touch,
 so you can confirm nothing outside the chosen tools appears. One caveat — CRG prints its

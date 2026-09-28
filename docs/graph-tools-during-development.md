@@ -350,6 +350,9 @@ One-time build (only if you've installed the tools):
 for p in claude-code copilot; do
   code-review-graph install --platform "$p" --no-hooks --no-instructions --no-skills
 done
+# install writes this machine's absolute repo root as the server's cwd into committed MCP
+# configs (.mcp.json, .gemini/settings.json, .vscode/mcp.json); make them portable again.
+python3 .graph-hooks/portable-mcp.py
 code-review-graph build
 # graphify (optional): CLI exploration. The post-commit hook already refreshes it, so do NOT add
 # `graphify hook install` — that would be a second refresh owner.

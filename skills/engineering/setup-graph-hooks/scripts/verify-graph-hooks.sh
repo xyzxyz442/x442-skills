@@ -271,6 +271,22 @@ fi
 [ -f .agents/hooks.json ] && warn antigravity.active "ACTIVE .agents/hooks.json present — contract is UNVERIFIED; confirm before trusting"
 [ -f .agents/hooks.json.example ] && ok antigravity.example "antigravity example present and inert (not activated) — expected"
 [ -z "$WIRED" ] && bad tool.any_wired "no tool hooks wired (expected at least one of claude/gemini/copilot)"
+# A committed MCP entry carrying this machine's repo root (or interpreter path) works here and
+# nowhere else — CRG's installer writes one by default. Advisory: the local server still starts.
+# Optional core: an install predating portable-mcp.py reports nothing rather than failing.
+if [ -f .graph-hooks/portable-mcp.py ]; then
+  PORTABLE=$(python3 .graph-hooks/portable-mcp.py . --check 2> /dev/null)
+  if [ -n "$PORTABLE" ]; then
+    TAB=$(printf '\t')
+    while IFS="$TAB" read -r mfile msg; do
+      [ -n "${msg:-}" ] && warn mcp.portable "$mfile: $msg — machine-local path in a committed MCP config; fix: python3 .graph-hooks/portable-mcp.py"
+    done << EOF
+$PORTABLE
+EOF
+  elif [ -f .mcp.json ] || [ -f .gemini/settings.json ] || [ -f .vscode/mcp.json ]; then
+    ok mcp.portable "committed MCP configs carry no machine-local paths for code-review-graph"
+  fi
+fi
 
 section "3. Dispatcher fires per tool"
 payload() { # $1=tool $2=kind
