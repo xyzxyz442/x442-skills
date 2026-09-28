@@ -104,6 +104,12 @@ graphify --version
   Never the bare `code-review-graph install`: it defaults to `--platform all`, configures every
   platform it can detect or create a file for, injects competing instruction blocks, and merges its
   own hooks — a second refresh owner, which is the drift this skill exists to repair.
+  Follow it with `python3 .graph-hooks/portable-mcp.py`: `install` writes this machine's absolute
+  repo root as the server's `cwd` into committed MCP configs.
+- **`mcp.portable` warning** (a committed MCP config carries a machine-local `cwd` or interpreter
+  path): run `python3 .graph-hooks/portable-mcp.py`. It rewrites only the `code-review-graph` entry
+  and only a `cwd` that resolves to this repo. A `cwd` pointing at another repo is left alone and
+  reported, since the server would be answering for a different codebase — fix that one by hand.
 
 ### 1. Detect wiring (reuse the verifier)
 
