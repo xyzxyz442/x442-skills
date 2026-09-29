@@ -208,9 +208,15 @@ The self-contained document exported for an executor with no board access, carry
 contract and a result block. Not a handoff — it has no lease and cannot set status.
 
 **Depends on**:
-A structural prerequisite: this cannot _start_ before that lands. Board ids only.
-Distinguished from **blocked on**, which is the reason someone _stopped_ and is reserved for
-what the board cannot model.
+A structural prerequisite: this cannot _start_ before that lands. Board ids only — a **qualified
+id** when the prerequisite is in another group. Distinguished from **blocked on**, which is the
+reason someone _stopped_ and is reserved for what the board cannot model.
+
+**Qualified id**:
+A handoff id prefixed by its group, `group/id`, naming a handoff in another group of the same board.
+A **bare id** always means the caller's own group; ids repeat across groups, so a bare id is never
+searched for elsewhere.
+_Avoid_: full id (the id with its `-handoff` suffix), path, cross-board id
 
 **Environment**:
 The stage a piece of work targets. An open string, ordered per board by a **ladder** running
