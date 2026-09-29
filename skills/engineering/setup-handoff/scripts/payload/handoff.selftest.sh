@@ -1792,6 +1792,66 @@ chk "and the released lease is gone from the remote" "b-work-handoff" \
   "$(remote_leases "$GRL")"
 trash "$GS" "$GR" "$GR2" "$GRS" "$GRS2" "$GRL" "$GRL2" 2> /dev/null
 
+printf '\ndepends_on across groups — a qualified id names the other section (ADR 0021)\n'
+XG="$(mkshared)"
+printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4,\n  "groupLayout": "subfolder",\n  "groups": ["libs", "api"]\n}\n' > "$XG/handoff.json"
+xg() { # group subcommand... -> run the board CLI acting in that section
+  local g="$1"
+  shift
+  HANDOFF_REPO=acme-api HANDOFF_GROUP="$g" "$XG/handoff" "$@" 2>&1
+}
+xg libs new shared-dto --title "Shared DTO" > /dev/null
+xg api new consume-dto --title "Consume DTO" --after libs/shared-dto > /dev/null
+chk "a qualified --after keeps its group" "depends_on: [libs/shared-dto-handoff]" \
+  "$(grep '^depends_on:' "$XG/api/consume-dto-handoff.md")"
+
+XG_CLAIM="$(xg api claim consume-dto "start")"
+chk_contains "claim finds the prerequisite in the other group" "$XG_CLAIM" "libs/shared-dto-handoff (open)"
+chk "and never calls it unfiled" "0" "$(printf '%s' "$XG_CLAIM" | grep -c 'not filed')"
+xg api release consume-dto --status open "stopping" > /dev/null
+
+xg libs claim shared-dto "land it" > /dev/null
+xg libs release shared-dto --status done --verified-by "bash dto.test.sh — 4 passed, 0 failed" > /dev/null
+XG_CLAIM2="$(xg api claim consume-dto "again")"
+chk "a landed prerequisite in another group raises no warning" "0" \
+  "$(printf '%s' "$XG_CLAIM2" | grep -c 'prerequisites')"
+xg api release consume-dto --status open "stopping" > /dev/null
+
+XG_BAD="$(xg api new bad-group --title "Bad group" --after nope/x)"
+chk_contains "an unknown group is refused by name" "$XG_BAD" "names group 'nope'"
+chk "and nothing is written" "no" "$([ -f "$XG/api/bad-group-handoff.md" ] && echo yes || echo no)"
+
+xg api new own-group --title "Own group" --after api/local-thing > /dev/null
+chk "a qualified entry naming its own group is stored bare" "depends_on: [local-thing-handoff]" \
+  "$(grep '^depends_on:' "$XG/api/own-group-handoff.md")"
+
+chk_contains "more than one '/' is refused" \
+  "$(xg api new too-deep --title "Too deep" --after a/b/c)" "more than one '/'"
+
+xg api new plain --title "Plain" --after own-group > /dev/null
+chk "a bare --after inside one section is unchanged" "depends_on: [own-group-handoff]" \
+  "$(grep '^depends_on:' "$XG/api/plain-handoff.md")"
+
+chk "a hand-edited mixed-case entry reads canonically" "libs/shared-dto-handoff" \
+  "$(cd "$XG" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=api . ./handoff && dep_read 'Libs/Shared-DTO')"
+
+chk_contains "a bundle refuses a child in another group" \
+  "$(xg api new bundle-x --title "Bundle" --orchestrator --children libs/x)" "stays within one group"
+
+XF="$(mkshared)"
+chk_contains "a flat board refuses the qualified form" \
+  "$(HANDOFF_REPO=acme-api "$XF/handoff" new flat-q --title "Flat" --after libs/x 2>&1)" "this board has no groups"
+
+xg libs new x --title "Libs x" > /dev/null
+xg api new x --title "Api x" > /dev/null
+xg api new uses-own-x --title "Uses api x" --after x > /dev/null
+chk "move names a dependent in another group" "api/consume-dto-handoff" \
+  "$(cd "$XG" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=libs . ./handoff && move_dependents_of shared-dto-handoff)"
+chk "a bare id in another group's doc is that group's, not the mover's" "" \
+  "$(cd "$XG" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=libs . ./handoff && move_dependents_of x-handoff)"
+chk "an own-section dependent is still named bare" "uses-own-x-handoff" \
+  "$(cd "$XG" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=api . ./handoff && move_dependents_of x-handoff)"
+
 printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
 # The registry carries no path at all. Resolution goes through the per-machine location map, which
 # is what lets one committed board resolve on a machine whose checkout layout differs from the
