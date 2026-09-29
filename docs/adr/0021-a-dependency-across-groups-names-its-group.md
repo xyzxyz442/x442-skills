@@ -53,7 +53,9 @@ This makes ADR 0018's premise true and changes nothing on a flat board.
   reading as satisfied by a pointer.
 - **Payload bump, no schema bump.** The field stays a list of strings and every existing document
   stays valid. An older CLI that meets a qualified entry folds it into a non-existent id and prints
-  the same spurious "not filed" warning it prints today; it writes nothing from the misread value.
+  the same spurious "not filed" warning it prints today, may write the folded id into a moved copy's
+  free-text blocker, and does not name a qualified dependent in another group when moving; nothing
+  else is written from the misread value.
 
 ## Considered options
 

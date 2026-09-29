@@ -868,7 +868,7 @@ sys.stdout.write(v if isinstance(v, str) else "")' "$REPO/.agents/handoff.json")
       case "$_lb_remote" in */*/*/*) _lb_remote="" ;; */*/*) ;; *) _lb_remote="" ;; esac
       echo "setup-handoff: this checkout claims on $_team_abs today. Recording $LOCAL_BOARD as its board"
       echo "  moves every claim, list and hook here onto it, where the rest of the team does not look."
-      echo "  To keep claiming on the team board and still reach it, record it in the boards map instead —"
+      echo "  To keep claiming on the team board and still reach $LOCAL_BOARD, record your own board in the boards map instead —"
       echo "  in .agents/handoff.local.json, \"boards\": { \"${_lb_remote:-<its host/owner/repo>}\": \"$_lb_abs\" } (ADR 0022)."
     fi
   fi

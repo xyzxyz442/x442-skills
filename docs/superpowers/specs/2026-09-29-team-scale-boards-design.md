@@ -70,8 +70,6 @@ Every site below changes; nothing else reads the field.
 
 | Site                                            | Change                                                                                                                              |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Site                                            | Change                                                                                                                              |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------  |
 | `new --after` / `--depends-on` (builds `dlist`) | parse through a new `dep_csv` instead of `children_csv`; refuse an unknown group by name; refuse the qualified form on a flat board |
 | `depends_of`                                    | read through a new `dep_read`, which keeps the `group/` prefix instead of folding it                                                |
 | `warn_open_dependencies` (claim)                | resolve each entry through a new `dep_path`, which calls `doc_file`/`arch_file` with the named group                                |

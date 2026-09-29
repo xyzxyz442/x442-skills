@@ -511,7 +511,7 @@ which is the one every repo under `workspace/src/` finds. She records it in the 
 moves one across — naming the target — when the team should see it
 ([ADR 0022](../adr/0022-the-team-board-is-the-one-setup-finds-and-a-developers-own-board-is-reached-by-name.md)).
 When the app needs a change in a platform library first, Bob files it with
-`--after platform/<id>`, and his claim reports whether it has landed.
+`--after platform/<id>`, and his claim warns until it has landed.
 Each section mirrors into its own repositories' issues, by
 each handoff's home.
 
