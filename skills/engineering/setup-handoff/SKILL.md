@@ -218,7 +218,8 @@ board ([ADR 0022](../../../docs/adr/0022-the-team-board-is-the-one-setup-finds-a
 
 **When the checkout belongs to a team board, record the own board in the `boards` map, not with
 `--local-board`.** `--local-board` makes it this checkout's board, and every claim then lands where
-the team does not look; setup warns before it does that. Reach the own board through its own CLI
+the team does not look; setup warns before it does that when this repo's committed `.agents/handoff.json` (or an in-repo
+`.agents/handoff/`) names a different board — the normal state of a member repo once setup has run. Reach the own board through its own CLI
 and promote a draft with `handoff move --to`.
 
 Create it with `--board-only <path>` if it does not exist. When it is

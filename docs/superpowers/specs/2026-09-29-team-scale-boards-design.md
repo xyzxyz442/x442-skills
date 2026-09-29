@@ -91,8 +91,9 @@ it prints today; it writes nothing from that value. Payload bumps 66 → 67.
 
 ### Setup guard
 
-`setup-handoff.sh --local-board PATH`, when the repo's committed `.agents/handoff.json` (or the
-detected board) resolves to a different board, prints before writing:
+`setup-handoff.sh --local-board PATH`, when the repo's committed `.agents/handoff.json` (`board` or `boardPath`)
+or, failing that, an in-repo `.agents/handoff/` names a different board, prints before writing
+(a board found only in a parent directory is not consulted):
 
 ```text
 setup-handoff: this checkout claims on <team board> today. Recording <PATH> as its board moves every

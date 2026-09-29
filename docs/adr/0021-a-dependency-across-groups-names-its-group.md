@@ -71,11 +71,10 @@ This makes ADR 0018's premise true and changes nothing on a flat board.
 
 ## Consequences
 
-- ADR 0019 regenerates only the claiming group's index on a lease commit, so a dependent in another
-  group sees the prerequisite land on its next `claim` or `list`, or when the roll-up regenerates —
-  not the instant it lands. Acceptable for an advisory edge.
-- `list` and the indexes show a qualified edge as written, so a reader sees which group owns the
-  prerequisite without opening it.
+- The edge is surfaced only by `claim` and `move`. `claim` warns while the prerequisite is open or
+  not filed, and prints nothing once it has landed; `move` names the dependents it leaves behind.
+  `list` and the indexes do not read `depends_on`, so a dependent learns a prerequisite landed only
+  by claiming again. Acceptable for an advisory edge.
 - Cross-board dependencies remain free text (ADR 0018). This decision stops at the board's edge.
 
 ## Sources

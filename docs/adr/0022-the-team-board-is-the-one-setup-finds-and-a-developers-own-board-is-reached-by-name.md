@@ -40,7 +40,10 @@ applies ADR 0002 and ADR 0010 at team scale; it adds no mechanism a board can ho
   to a team board. Drive it through its own CLI, and promote a draft with `handoff move --to`.
   `--local-board` stays for a checkout whose only board is the developer's own.
 - **Setup warns before `--local-board` overrides a committed team board**, naming the board the
-  checkout will stop claiming on. A warning, not a refusal — a developer may legitimately take one
+  checkout will stop claiming on. The guard reads only this repo: its committed `.agents/handoff.json`
+  (`board` or `boardPath`), else an in-repo `.agents/handoff/`. That is the normal state of a member
+  repo once setup has run, since setup writes the detected board into that file (ADR 0010); a board
+  found only in a parent directory is not consulted. A warning, not a refusal — a developer may legitimately take one
   checkout off the team board.
 
 ## Considered options
