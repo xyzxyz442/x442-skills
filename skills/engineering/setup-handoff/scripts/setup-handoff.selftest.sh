@@ -372,5 +372,25 @@ chk_contains "a dedicated board's install suggests recording hostAccount" "$OUT1
 chk_contains "and cites ADR 0018" "$OUT13" "ADR 0018"
 chk "an in-repo install prints no such note" "0" "$(printf '%s' "$OUT14" | grep -c 'hostAccount')"
 
+printf '\n--local-board over a committed team board warns first (ADR 0022)\n'
+LB="$(mkparentrepo)"
+LB_TEAM="$(mkgitboard)"
+"$INSTALLER" --board-only "$LB_TEAM" > /dev/null 2>&1
+LB_OWN="$(mkgitboard)"
+"$INSTALLER" --board-only "$LB_OWN" > /dev/null 2>&1
+mkdir -p "$LB/.agents"
+printf '{\n  "board": "%s"\n}\n' "$LB_TEAM" > "$LB/.agents/handoff.json"
+LB_OUT="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+LB_ST=$?
+chk_contains "names the board the checkout stops claiming on" "$LB_OUT" "claims on $LB_TEAM today"
+chk_contains "and offers the boards map instead" "$LB_OUT" '"boards"'
+chk "still records the choice and exits 0" "0 yes" \
+  "$LB_ST $(grep -qF "$LB_OWN" "$LB/.agents/handoff.local.json" && echo yes || echo no)"
+LB_SAME="$("$INSTALLER" "$LB" --local-board "$LB_TEAM" 2>&1)"
+chk "pointing at the team board itself is silent" "0" "$(printf '%s' "$LB_SAME" | grep -c 'claims on')"
+LB2="$(mkparentrepo)"
+LB2_OUT="$("$INSTALLER" "$LB2" --local-board "$LB_OWN" 2>&1)"
+chk "no team board, no warning" "0" "$(printf '%s' "$LB2_OUT" | grep -c 'claims on')"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

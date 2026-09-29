@@ -834,6 +834,32 @@ if [ -n "$LOCAL_BOARD" ]; then
   case "$LOCAL_BOARD" in /*) _lb_abs="$LOCAL_BOARD" ;; *) _lb_abs="$REPO/$LOCAL_BOARD" ;; esac
   [ -f "$_lb_abs/scripts/config.sh" ] || [ -f "$_lb_abs/config.sh" ] \
     || die "--local-board: $_lb_abs is not a handoff board. Create it first: setup-handoff.sh --board-only $_lb_abs"
+  # ADR 0022 — handoff.local.json's board outranks the committed one, so recording a developer's own
+  # board here moves every claim in this checkout onto it, where the team does not look. Say so
+  # before writing. A warning, not a refusal: taking one checkout off the team board can be meant.
+  _team=""
+  if [ -f "$REPO/.agents/handoff.json" ]; then
+    _team="$(python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+v = (d.get("board") or d.get("boardPath") or "") if isinstance(d, dict) else ""
+sys.stdout.write(v if isinstance(v, str) else "")' "$REPO/.agents/handoff.json")"
+  fi
+  [ -z "$_team" ] && [ -d "$REPO/.agents/handoff" ] && _team=".agents/handoff"
+  if [ -n "$_team" ]; then
+    case "$_team" in /*) _team_abs="$_team" ;; *) _team_abs="$REPO/$_team" ;; esac
+    _team_abs="$(cd "$_team_abs" 2> /dev/null && pwd || printf '%s' "$_team_abs")"
+    _lb_real="$(cd "$_lb_abs" && pwd)"
+    if [ "$_team_abs" != "$_lb_real" ]; then
+      _lb_remote="$(git -C "$_lb_abs" remote get-url origin 2> /dev/null || true)"
+      echo "setup-handoff: this checkout claims on $_team_abs today. Recording $LOCAL_BOARD as its board"
+      echo "  moves every claim, list and hook here onto it, where the rest of the team does not look."
+      echo "  To keep claiming on the team board and still reach it, record it in the boards map instead —"
+      echo "  in .agents/handoff.local.json, \"boards\": { \"${_lb_remote:-<its remote>}\": \"$_lb_abs\" } (ADR 0022)."
+    fi
+  fi
   python3 -c 'import json, os, sys
 path, board, group = sys.argv[1], sys.argv[2], sys.argv[3]
 cfg = {}
