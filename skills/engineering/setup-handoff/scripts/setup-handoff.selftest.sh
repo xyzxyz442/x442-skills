@@ -392,5 +392,18 @@ LB2="$(mkparentrepo)"
 LB2_OUT="$("$INSTALLER" "$LB2" --local-board "$LB_OWN" 2>&1)"
 chk "no team board, no warning" "0" "$(printf '%s' "$LB2_OUT" | grep -c 'claims on')"
 
+printf '\nhandle versus hostAccount (ADR 0023)\n'
+HV="$(mkparentrepo)"
+"$INSTALLER" "$HV" --tools claude --primary none > /dev/null 2>&1
+printf '{\n  "handle": "dev-b",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk_contains "a handle that is not the host account warns" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1)" "differs from hostAccount"
+printf '{\n  "handle": "@dev-a",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk "equal after the @ is stripped is silent" "0" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+printf '{\n  "handle": "dev-b"\n}\n' > "$HV/.agents/handoff.local.json"
+chk "no hostAccount is silent" "0" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

@@ -406,6 +406,7 @@ fi
 # ADR 0018 — the two per-developer keys with a shape to get wrong. A hostAccount is a host login,
 # so it holds no whitespace or colon; boards maps a board remote to a local clone path. Either one
 # malformed is ignored by the CLI, which would otherwise look like a guard that is not there.
+# A handle that is not the host account's login makes reviewer assignment fail silently (ADR 0023).
 if [ -f "$ROOT/.agents/handoff.local.json" ] && command -v python3 > /dev/null 2>&1; then
   while IFS='|' read -r _id _msg; do
     [ -n "$_id" ] && warn "$_id" "$_msg"
@@ -416,6 +417,9 @@ if not isinstance(d, dict): raise SystemExit(0)
 h = d.get("hostAccount")
 if "hostAccount" in d and not (isinstance(h, str) and h and not re.search(r"[\s:]", h)):
     print("repo.local_config.hostAccount|hostAccount must be a single host login with no whitespace or colon (ADR 0018)")
+hd = d.get("handle")
+if isinstance(h, str) and h and isinstance(hd, str) and hd and hd.lstrip("@") != h:
+    print("repo.local_config.handle_not_host_account|handle %s differs from hostAccount %s — assignments naming you target the handle, and the two are usually the same login (ADR 0023)" % (hd, h))
 b = d.get("boards")
 if "boards" in d and not (isinstance(b, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in b.items())):
     print("repo.local_config.boards|boards must map a board remote (host/owner/repo) to a local clone path (ADR 0018)")' "$ROOT/.agents/handoff.local.json" 2> /dev/null)
