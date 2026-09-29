@@ -806,7 +806,10 @@ dep_norm() { # entry -> canonical entry; non-zero with the reason on stderr
       [ "$g" = "$GROUP" ] && c="${c#*/}"
       printf '%s' "$c"
       ;;
-    *) resolve_id "$e" ;;
+    *) resolve_id "$e" || {
+      echo "handoff: '$e' needs at least one letter or digit" >&2
+      return 1
+    } ;;
   esac
 }
 dep_csv() { # "a, g/b" -> "a-handoff, g/b-handoff"; non-zero on the first refused element
@@ -3437,6 +3440,16 @@ warn_open_dependencies() { # doc-path id
   local f="$1" id="$2" dep df open=""
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
+    # dep_path ignores the group on a flat board, so a hand-edited GROUP/ID would resolve to the
+    # flat doc here while move_dependents_of never matches it. Report it instead of looking it up.
+    case "$dep" in
+      */*)
+        board_is_grouped || {
+          open="$open\n  - $dep (names a group, but this board has no groups)"
+          continue
+        }
+        ;;
+    esac
     if [ -f "$(dep_path "$dep" active)" ]; then
       df="$(dep_path "$dep" active)"
     elif [ -f "$(dep_path "$dep" archive)" ]; then
@@ -3975,6 +3988,8 @@ move_dependents_of() { # id -> "a-handoff, api/b-handoff", or nothing
         case "$e" in */*) ;; *) [ -n "$sec" ] && e="$sec/$e" ;; esac
         [ "$e" = "$want" ] || continue
         label="$(basename "$other" .md)"
+        # A prefix board names its docs GROUP--ID; the group is added below, so drop it here.
+        [ "$LAYOUT" = prefix ] && [ -n "$sec" ] && label="${label#"$sec"--}"
         [ -n "$sec" ] && [ "$sec" != "$GROUP" ] && label="$sec/$label"
         dependents="${dependents:+$dependents, }$label"
         break
@@ -6651,6 +6666,9 @@ cmd_children() {
   local cur want raw_want changed=0
   cur="$(children_of "$f")"
   for raw_want in "$@"; do
+    case "$raw_want" in
+      */*) die "child '$raw_want' names another group — a bundle stays within one group (ADR 0021); link across groups with --after GROUP/ID" ;;
+    esac
     want="$(resolve_id "$raw_want")" || die "unusable child id: '$raw_want' (needs at least one letter or digit)"
     [ "$want" = "$parent" ] && die "a bundle cannot be its own child"
     if [ "$action" = "add" ]; then

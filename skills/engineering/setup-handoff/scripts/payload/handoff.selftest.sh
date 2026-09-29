@@ -1852,6 +1852,46 @@ chk "a bare id in another group's doc is that group's, not the mover's" "" \
 chk "an own-section dependent is still named bare" "uses-own-x-handoff" \
   "$(cd "$XG" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=api . ./handoff && move_dependents_of x-handoff)"
 
+# A bundle stays within one group on `children add` as well as `--children` (ADR 0021).
+xg api new bun2 --title "Bundle" --orchestrator --children one > /dev/null
+chk_contains "children add refuses a child in another group" \
+  "$(xg api children add bun2 libs/x)" "stays within one group"
+XG_STUB="$(xg api children add bun2 --stub libs/x)"
+chk_contains "children add --stub refuses it the same way" "$XG_STUB" "stays within one group"
+chk "and files no stub named after the folded id" "no" "$([ -f "$XG/api/libs-x-handoff.md" ] && echo yes || echo no)"
+
+# An unusable bare --after keeps its reason.
+chk_contains "an unusable bare --after says why" \
+  "$(xg api new bang --title b --after '!!!')" "needs at least one letter or digit"
+
+# A qualified entry hand-edited into a board without groups is reported, never resolved.
+HANDOFF_REPO=acme-api "$XF/handoff" new shared --title s > /dev/null 2>&1
+HANDOFF_REPO=acme-api "$XF/handoff" new q --title q > /dev/null 2>&1
+sed -i.bak 's|^depends_on:.*|depends_on: [libs/shared-handoff]|' "$XF/q-handoff.md" && trash "$XF/q-handoff.md.bak" 2> /dev/null
+XF_CLAIM="$(HANDOFF_REPO=acme-api "$XF/handoff" claim q "start" 2>&1)"
+chk_contains "a qualified entry on a flat board is reported unresolvable" "$XF_CLAIM" "names a group, but this board has no groups"
+chk "and is not looked up as if it were flat" "0" "$(printf '%s' "$XF_CLAIM" | grep -c '(open)')"
+
+# Pin the earlier fix: a flow-style dependent must show up under set -uo pipefail.
+HANDOFF_REPO=acme-api "$XF/handoff" new base --title b > /dev/null 2>&1
+HANDOFF_REPO=acme-api "$XF/handoff" new dep --title d --after base > /dev/null 2>&1
+chk "move names a flow-style dependent on a flat board" "dep-handoff" \
+  "$(cd "$XF" && HANDOFF_REPO=acme-api HANDOFF_NO_MAIN=1 . ./handoff && move_dependents_of base-handoff)"
+
+# Prefix layout: the section prefix is not part of the label.
+XP="$(mkshared)"
+printf '{\n  "topology": "cross-repo",\n  "ttlHours": 4,\n  "groupLayout": "prefix",\n  "groups": ["libs", "api"]\n}\n' > "$XP/handoff.json"
+xp() { # group subcommand... -> run the board CLI acting in that section
+  local g="$1"
+  shift
+  HANDOFF_REPO=acme-api HANDOFF_GROUP="$g" "$XP/handoff" "$@" 2>&1
+}
+xp libs new x --title x > /dev/null
+xp api new y --title y --after libs/x > /dev/null
+xp libs new z --title z --after x > /dev/null
+chk "prefix layout names dependents as group/id, without the doubled prefix" "z-handoff, api/y-handoff" \
+  "$(cd "$XP" && HANDOFF_NO_MAIN=1 HANDOFF_GROUP=libs . ./handoff && move_dependents_of x-handoff)"
+
 printf '\nboard_repo_entry — schema 2 identifies by root commit, never by path\n'
 # The registry carries no path at all. Resolution goes through the per-machine location map, which
 # is what lets one committed board resolve on a machine whose checkout layout differs from the
