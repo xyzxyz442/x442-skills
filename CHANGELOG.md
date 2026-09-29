@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.17.0](https://github.com/xyzxyz442/x442-skills/compare/v0.16.0...v0.17.0) (2026-09-29)
+
+### 🚀 Features
+
+- **feature:** let depends_on name another group as group/id ([3cd346f](https://github.com/xyzxyz442/x442-skills/commit/3cd346f47f603bba7c92055d2b8c88b35ad8a22f))
+- **feature:** warn before --local-board takes a checkout off the team board ([f211589](https://github.com/xyzxyz442/x442-skills/commit/f2115898a3c3d41eea18b04cd788569d7d642a69))
+- **feature:** warn when a developer's handle is not their host account ([d5ae1f6](https://github.com/xyzxyz442/x442-skills/commit/d5ae1f65fe5bd8b7995e4ce7d627d09b99c739ed))
+
+### 🐞 Bug Fixes
+
+- **bug:** close the remaining group/id folds and prefix-layout labels ([89b137c](https://github.com/xyzxyz442/x442-skills/commit/89b137ca608076476a6eeb827f5bdf625d303199))
+- **bug:** match the CLI's board key and tolerate symlinks and login case ([bd70da1](https://github.com/xyzxyz442/x442-skills/commit/bd70da19ce3755359d84ed6a631e0a3435541aa1))
+- **bug:** pass yarn 1 hook arguments through to the binary ([3795f46](https://github.com/xyzxyz442/x442-skills/commit/3795f4625ab2301a8ea78f31d77fa8faa21b54f8))
+- **bug:** print the boards-map key as host/owner/repo, never the raw remote ([e0c9fbe](https://github.com/xyzxyz442/x442-skills/commit/e0c9fbed23912c56e7d2fb37534add292cbc7d43))
+- **bug:** strip the machine-local cwd code-review-graph install writes ([442803c](https://github.com/xyzxyz442/x442-skills/commit/442803c190eed21cb66db94a48fd25244ad73e1b))
+
+### 📚 Documentation
+
+- **docs:** correct the older-CLI claim and tighten three messages ([4164858](https://github.com/xyzxyz442/x442-skills/commit/4164858feda4eba91fcfd3a0410946c052017723))
+- **docs:** record team-scale board decisions ([3339337](https://github.com/xyzxyz442/x442-skills/commit/3339337398701e0e25c6642d10d66f138dafce5e))
+- **docs:** state only what the local-board guard and depends_on actually surface ([d377231](https://github.com/xyzxyz442/x442-skills/commit/d37723149cedd0d5b125b59da2237d5e04db7c19))
+
 ## [0.16.0](https://github.com/xyzxyz442/x442-skills/compare/v0.15.0...v0.16.0) (2026-09-26)
 
 ### 🚀 Features
