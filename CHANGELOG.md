@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.17.1](https://github.com/xyzxyz442/x442-skills/compare/v0.17.0...v0.17.1) (2026-09-29)
+
+### 🧹 Miscellaneous Chores
+
+- **deps:** bump dev deps and pin undici and ip-address past advisories ([24fe330](https://github.com/xyzxyz442/x442-skills/commit/24fe3304fda144cc122beff96916e3327fef8832))
+
 ## [0.17.0](https://github.com/xyzxyz442/x442-skills/compare/v0.16.0...v0.17.0) (2026-09-29)
 
 ### 🚀 Features
