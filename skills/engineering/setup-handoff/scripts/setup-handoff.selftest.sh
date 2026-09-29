@@ -388,6 +388,13 @@ chk "still records the choice and exits 0" "0 yes" \
   "$LB_ST $(grep -qF "$LB_OWN" "$LB/.agents/handoff.local.json" && echo yes || echo no)"
 LB_SAME="$("$INSTALLER" "$LB" --local-board "$LB_TEAM" 2>&1)"
 chk "pointing at the team board itself is silent" "0" "$(printf '%s' "$LB_SAME" | grep -c 'claims on')"
+git -C "$LB_OWN" remote add origin "https://dev-a:s3cr3t-tok@github.com/acme/own-board.git"
+LB_URL="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+chk_contains "the boards-map key is host/owner/repo" "$LB_URL" '"github.com/acme/own-board"'
+chk "and a credential in the remote never reaches the output" "0" "$(printf '%s' "$LB_URL" | grep -c 's3cr3t-tok')"
+git -C "$LB_OWN" remote set-url origin "git@github.com:acme/own-board.git"
+LB_SCP="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+chk_contains "an scp-form remote gives the same key" "$LB_SCP" '"github.com/acme/own-board"'
 LB2="$(mkparentrepo)"
 LB2_OUT="$("$INSTALLER" "$LB2" --local-board "$LB_OWN" 2>&1)"
 chk "no team board, no warning" "0" "$(printf '%s' "$LB2_OUT" | grep -c 'claims on')"

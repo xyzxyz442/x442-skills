@@ -129,6 +129,16 @@ setup_own_remote() { # board-dir -> its own origin url, or nothing
   git -C "$d" remote get-url origin 2> /dev/null || true
 }
 
+# Mirrors repo_origin_norm in payload/handoff (bare host/owner/repo, userinfo never survives).
+setup_origin_norm() { # url -> host/owner/repo
+  printf '%s' "$1" | sed \
+    -e 's#^[a-zA-Z+][a-zA-Z0-9+.-]*://##' \
+    -e 's#^[^/@]*@##' \
+    -e 's#:#/#' \
+    -e 's#\.git$##' \
+    -e 's#/*$##'
+}
+
 # Run BEFORE anything this install would write, so a refusal leaves nothing new behind. A board
 # with no remote (empty $1) is skipped silently.
 setup_board_visibility_gate() { # remote-url
@@ -853,11 +863,13 @@ sys.stdout.write(v if isinstance(v, str) else "")' "$REPO/.agents/handoff.json")
     _team_abs="$(cd "$_team_abs" 2> /dev/null && pwd || printf '%s' "$_team_abs")"
     _lb_real="$(cd "$_lb_abs" && pwd)"
     if [ "$_team_abs" != "$_lb_real" ]; then
-      _lb_remote="$(git -C "$_lb_abs" remote get-url origin 2> /dev/null || true)"
+      _lb_remote="$(setup_origin_norm "$(git -C "$_lb_abs" remote get-url origin 2> /dev/null || true)")"
+      # A key that is not exactly host/owner/repo would never match, so name the shape instead.
+      case "$_lb_remote" in */*/*/*) _lb_remote="" ;; */*/*) ;; *) _lb_remote="" ;; esac
       echo "setup-handoff: this checkout claims on $_team_abs today. Recording $LOCAL_BOARD as its board"
       echo "  moves every claim, list and hook here onto it, where the rest of the team does not look."
       echo "  To keep claiming on the team board and still reach it, record it in the boards map instead —"
-      echo "  in .agents/handoff.local.json, \"boards\": { \"${_lb_remote:-<its remote>}\": \"$_lb_abs\" } (ADR 0022)."
+      echo "  in .agents/handoff.local.json, \"boards\": { \"${_lb_remote:-<its host/owner/repo>}\": \"$_lb_abs\" } (ADR 0022)."
     fi
   fi
   python3 -c 'import json, os, sys
