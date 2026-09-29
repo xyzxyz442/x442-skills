@@ -757,6 +757,76 @@ env_rank() { # env -> integer sort key
   printf '99'
 }
 
+# ADR 0021 — a depends_on entry is a bare id (the caller's own section) or GROUP/ID (another section
+# of this board). `/` cannot survive slug() or norm_id(), so it is an unambiguous separator; `:`
+# would break unquoted frontmatter. Readers canonicalise and report; only the writer (dep_norm)
+# refuses, because a reader that refused would hide a hand-edited edge instead of showing it.
+dep_read() { # stored entry -> "id-handoff" | "group/id-handoff"; non-zero on an unusable entry
+  local g id
+  case "$1" in
+    */*/*) return 1 ;;
+    */*)
+      g="$(slug "${1%%/*}")"
+      [ -n "$g" ] || return 1
+      id="$(norm_id "${1#*/}")" || return 1
+      printf '%s/%s' "$g" "$id"
+      ;;
+    *) norm_id "$1" ;;
+  esac
+}
+dep_group_hosted() { # group -> 0 if this board's config lists it
+  local g
+  while IFS= read -r g; do [ "$g" = "$1" ] && return 0; done < <(each_group)
+  return 1
+}
+# The writer's rules: a group the board does not host is a typo, refused by name; a qualified entry
+# naming the caller's own group is stored bare, so one edge has one spelling. A bare id goes through
+# resolve_id exactly as before, keeping its pre-slug legacy fallback.
+dep_norm() { # entry -> canonical entry; non-zero with the reason on stderr
+  local e="$1" c g
+  case "$e" in
+    */*/*)
+      echo "handoff: '$e' has more than one '/' — write GROUP/ID" >&2
+      return 1
+      ;;
+    */*)
+      c="$(dep_read "$e")" || {
+        echo "handoff: '$e' needs a letter or digit on each side of the '/'" >&2
+        return 1
+      }
+      g="${c%%/*}"
+      board_is_grouped || {
+        echo "handoff: '$e' names group '$g', but this board has no groups" >&2
+        return 1
+      }
+      dep_group_hosted "$g" || {
+        echo "handoff: '$e' names group '$g', which this board does not host ($(each_group | tr '\n' ' ' | sed 's/ $//'))" >&2
+        return 1
+      }
+      [ "$g" = "$GROUP" ] && c="${c#*/}"
+      printf '%s' "$c"
+      ;;
+    *) resolve_id "$e" ;;
+  esac
+}
+dep_csv() { # "a, g/b" -> "a-handoff, g/b-handoff"; non-zero on the first refused element
+  local raw="$1" out="" c n
+  local IFS=','
+  for c in $raw; do
+    c="${c#"${c%%[![:space:]]*}"}" # strip leading whitespace
+    c="${c%"${c##*[![:space:]]}"}" # strip trailing whitespace
+    [ -n "$c" ] || continue
+    n="$(dep_norm "$c")" || return 1
+    out="${out:+$out, }$n"
+  done
+  printf '%s' "$out"
+}
+dep_path() { # entry active|archive -> the path that entry names, whether or not it is filed
+  local id="${1#*/}" g="$GROUP"
+  case "$1" in */*) g="${1%%/*}" ;; esac
+  if [ "$2" = archive ]; then arch_file "$id" "$g"; else doc_file "$id" "$g"; fi
+}
+
 # `depends_on` holds BOARD IDS ONLY and means "cannot start before that lands". `blocked_on` stays
 # free text for what the board cannot model (`external — …`, `decision — …`). Keeping them apart is
 # the whole of ADR 0004: they are written at different moments by different reasoning, and merging
@@ -765,7 +835,7 @@ env_rank() { # env -> integer sort key
 #
 # Reads flow style (`[a, b]`) and block style (`- a`) alike, because meta() only ever sees the
 # key's own line and a block list would otherwise read as empty — the same trap repos_of documents.
-depends_of() { # path -> newline-separated child ids (canonicalized)
+depends_of() { # path -> newline-separated entries, bare or group/ (canonicalized, ADR 0021)
   local f="$1" inline rest
   inline="$(meta "$f" depends_on)"
   # The brackets are QUOTED. `${var#[}` is an unterminated bracket EXPRESSION to bash, not a literal
@@ -780,13 +850,13 @@ depends_of() { # path -> newline-separated child ids (canonicalized)
   printf '%s\n' "$inline" | tr ',' '\n' | while IFS= read -r one; do
     one="$(printf '%s' "$one" | tr -d '[:space:]')"
     # norm_id prints no newline; without the echo every id after the first is glued onto it.
-    [ -n "$one" ] && norm_id "$one" 2> /dev/null && echo
+    [ -n "$one" ] && dep_read "$one" 2> /dev/null && echo
   done
   rest="$(sed -n '/^depends_on:/,/^[a-z_]*:/p' "$f" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')"
   printf '%s\n' "$rest" | while IFS= read -r one; do
     one="$(printf '%s' "$one" | tr -d '[:space:]')"
     # norm_id prints no newline; without the echo every id after the first is glued onto it.
-    [ -n "$one" ] && norm_id "$one" 2> /dev/null && echo
+    [ -n "$one" ] && dep_read "$one" 2> /dev/null && echo
   done
 }
 
@@ -1045,6 +1115,11 @@ children_csv() { # "a, b, c" -> "a-handoff, b-handoff, c-handoff"; non-zero on a
     c="${c#"${c%%[![:space:]]*}"}" # strip leading whitespace
     c="${c%"${c##*[![:space:]]}"}" # strip trailing whitespace
     [ -n "$c" ] || continue
+    case "$c" in */*)
+      echo "handoff: child '$c' names another group — a bundle stays within one group (ADR 0021); link across groups with --after GROUP/ID" >&2
+      return 1
+      ;;
+    esac
     c="$(resolve_id "$c")" || return 1
     out="${out:+$out, }$c"
   done
@@ -1827,7 +1902,7 @@ cmd_new() {
   # under a spelling that matches no file is a dependency nothing can ever check.
   local dlist=""
   if [ -n "$depends" ]; then
-    dlist="$(children_csv "$depends")" || die "unusable id in --after: '$depends' (each needs at least one letter or digit)"
+    dlist="$(dep_csv "$depends")" || die "unusable entry in --after: '$depends' (see above; a bare id is this section, GROUP/ID another)"
   fi
   # `spec:` is resolved by the reader, not here — a path, a URL, or a board id, in that order. It
   # is not validated at creation because a handoff is routinely filed before its spec is written.
@@ -3362,9 +3437,9 @@ warn_open_dependencies() { # doc-path id
   local f="$1" id="$2" dep df open=""
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
-    if [ -f "$(doc_file "$dep")" ]; then
-      df="$(doc_file "$dep")"
-    elif [ -f "$(arch_file "$dep")" ]; then
+    if [ -f "$(dep_path "$dep" active)" ]; then
+      df="$(dep_path "$dep" active)"
+    elif [ -f "$(dep_path "$dep" archive)" ]; then
       continue # archived means landed
     else
       open="$open\n  - $dep (not filed on this board yet)"
@@ -3887,13 +3962,25 @@ move_leave_pointer() { # doc id dest dst-label
 }
 
 # Docs left here that depended on it now point at a pointer. depends_on cannot follow it across
-# boards, so name the ones to rewrite rather than leave them reading as satisfied.
-move_dependents_of() { # id -> "a-handoff, b-handoff", or nothing
-  local id="$1" other dependents=""
-  while IFS= read -r other; do
-    [ -n "$other" ] || continue
-    depends_of "$other" | grep -qx "$id" && dependents="${dependents:+$dependents, }$(basename "$other" .md)"
-  done < <(each_doc)
+# boards, so name the ones to rewrite rather than leave them reading as satisfied. Every section is
+# walked (ADR 0021): a bare entry means the section it sits in, a qualified one names its own.
+move_dependents_of() { # id -> "a-handoff, api/b-handoff", or nothing
+  local id="$1" want="$1" dependents="" sec other e label
+  grouped && want="$GROUP/$id"
+  while IFS= read -r sec; do
+    while IFS= read -r other; do
+      [ -n "$other" ] || continue
+      while IFS= read -r e; do
+        [ -n "$e" ] || continue
+        case "$e" in */*) ;; *) [ -n "$sec" ] && e="$sec/$e" ;; esac
+        [ "$e" = "$want" ] || continue
+        label="$(basename "$other" .md)"
+        [ -n "$sec" ] && [ "$sec" != "$GROUP" ] && label="$sec/$label"
+        dependents="${dependents:+$dependents, }$label"
+        break
+      done <<< "$(depends_of "$other")"
+    done < <(each_doc "$sec")
+  done < <(if board_is_grouped; then each_group; else printf '\n'; fi)
   printf '%s' "$dependents"
 }
 

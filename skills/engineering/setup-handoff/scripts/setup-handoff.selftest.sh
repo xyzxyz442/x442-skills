@@ -372,5 +372,45 @@ chk_contains "a dedicated board's install suggests recording hostAccount" "$OUT1
 chk_contains "and cites ADR 0018" "$OUT13" "ADR 0018"
 chk "an in-repo install prints no such note" "0" "$(printf '%s' "$OUT14" | grep -c 'hostAccount')"
 
+printf '\n--local-board over a committed team board warns first (ADR 0022)\n'
+LB="$(mkparentrepo)"
+LB_TEAM="$(mkgitboard)"
+"$INSTALLER" --board-only "$LB_TEAM" > /dev/null 2>&1
+LB_OWN="$(mkgitboard)"
+"$INSTALLER" --board-only "$LB_OWN" > /dev/null 2>&1
+mkdir -p "$LB/.agents"
+printf '{\n  "board": "%s"\n}\n' "$LB_TEAM" > "$LB/.agents/handoff.json"
+LB_OUT="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+LB_ST=$?
+chk_contains "names the board the checkout stops claiming on" "$LB_OUT" "claims on $LB_TEAM today"
+chk_contains "and offers the boards map instead" "$LB_OUT" '"boards"'
+chk "still records the choice and exits 0" "0 yes" \
+  "$LB_ST $(grep -qF "$LB_OWN" "$LB/.agents/handoff.local.json" && echo yes || echo no)"
+LB_SAME="$("$INSTALLER" "$LB" --local-board "$LB_TEAM" 2>&1)"
+chk "pointing at the team board itself is silent" "0" "$(printf '%s' "$LB_SAME" | grep -c 'claims on')"
+git -C "$LB_OWN" remote add origin "https://dev-a:s3cr3t-tok@github.com/acme/own-board.git"
+LB_URL="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+chk_contains "the boards-map key is host/owner/repo" "$LB_URL" '"github.com/acme/own-board"'
+chk "and a credential in the remote never reaches the output" "0" "$(printf '%s' "$LB_URL" | grep -c 's3cr3t-tok')"
+git -C "$LB_OWN" remote set-url origin "git@github.com:acme/own-board.git"
+LB_SCP="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+chk_contains "an scp-form remote gives the same key" "$LB_SCP" '"github.com/acme/own-board"'
+LB2="$(mkparentrepo)"
+LB2_OUT="$("$INSTALLER" "$LB2" --local-board "$LB_OWN" 2>&1)"
+chk "no team board, no warning" "0" "$(printf '%s' "$LB2_OUT" | grep -c 'claims on')"
+
+printf '\nhandle versus hostAccount (ADR 0023)\n'
+HV="$(mkparentrepo)"
+"$INSTALLER" "$HV" --tools claude --primary none > /dev/null 2>&1
+printf '{\n  "handle": "dev-b",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk_contains "a handle that is not the host account warns" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1)" "differs from hostAccount"
+printf '{\n  "handle": "@dev-a",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk "equal after the @ is stripped is silent" "0" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+printf '{\n  "handle": "dev-b"\n}\n' > "$HV/.agents/handoff.local.json"
+chk "no hostAccount is silent" "0" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

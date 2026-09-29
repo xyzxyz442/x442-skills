@@ -224,7 +224,11 @@ them into fields rather than prose is what makes them queryable — and a relati
 cannot see is one nobody is warned about.
 
 **`depends_on` vs `blocked_on`.** `depends_on` holds **board ids only** and means _this cannot
-start before that lands_. `blocked_on` is free text, reserved for what the board cannot model
+start before that lands_.
+On a board with groups, a bare id means your own group; name a handoff in another group as
+`group/id` — `--after libs/shared-dto`. A group the board does not host is refused, and a bundle's
+children stay in one group ([ADR 0021](../../../docs/adr/0021-a-dependency-across-groups-names-its-group.md)).
+`blocked_on` is free text, reserved for what the board cannot model
 (`external: …`, `decision: …`). If your blocker is a handoff id it belongs in `depends_on`; put it
 in `blocked_on` and the verifier will say so. **Waiting on a team that is not on the board** — an
 infrastructure or devops group acting on live systems, a vendor, another company — is exactly what

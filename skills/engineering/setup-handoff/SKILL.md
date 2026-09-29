@@ -211,7 +211,19 @@ ready for the team — offer the layouts and let them pick; never assume one:
 - a folder beside the team board (e.g. `../.agents/mine`),
 - any path they name.
 
-Create it with `--board-only <path>` if it does not exist, then record it for this checkout only:
+Whichever layout, the path must not be one detection finds first — not `.agents/handoff` (or the
+other detected spellings) in the repo or its two parents — or setup proposes it in place of the team
+board ([ADR 0022](../../../docs/adr/0022-the-team-board-is-the-one-setup-finds-and-a-developers-own-board-is-reached-by-name.md)).
+`.agents/handoff-<handle>` beside the team board is safe.
+
+**When the checkout belongs to a team board, record the own board in the `boards` map, not with
+`--local-board`.** `--local-board` makes it this checkout's board, and every claim then lands where
+the team does not look; setup warns before it does that when this repo's committed `.agents/handoff.json` (or an in-repo
+`.agents/handoff/`) names a different board — the normal state of a member repo once setup has run. Reach the own board through its own CLI
+and promote a draft with `handoff move --to`.
+
+Create it with `--board-only <path>` if it does not exist. When it is
+the only board this checkout uses, record it for this checkout:
 
 ```text
 bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" --local-board PATH [--group SECTION]

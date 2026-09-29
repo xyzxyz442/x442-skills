@@ -131,6 +131,12 @@ the reviewer can claim it. The row shows `⇤ review` in `handoff list` and `AWA
 session banner, so the next agent reviews it instead of starting it again. The senior closes it the
 ordinary way, with their own `--verified-by`.
 
+**Telling the junior it is theirs.** The board names one person, the reviewer. File with
+`--reviewer` naming yourself, then add the junior as an assignee on the mirrored issue — the mirror
+never reconciles assignees, so that stays. The junior claims on the board when they start; until
+then the issue is what says the work is expected of them
+([ADR 0023](../adr/0023-who-does-the-work-is-told-through-the-tracker-and-the-board-names-only-the-reviewer.md)).
+
 ### Naming who reviews it
 
 `AWAITING REVIEW` with no name is addressed to every reader, and therefore to none. Name the
@@ -379,6 +385,10 @@ handoff release prod-backfill --status blocked --blocked-on "external: platform 
   of the way. Work legitimately runs out of order (a production incident fixed before the
   pre-production backfill), and a rule that refused it would be routed around. If you work past a
   prerequisite, say so in `## Current state`.
+- **Across groups on one board, qualify the id**: `handoff new consume-dto --after libs/shared-dto`.
+  A bare id always means your own group — ids repeat across groups, so nothing guesses — and a group
+  the board does not host is refused
+  ([ADR 0021](../adr/0021-a-dependency-across-groups-names-its-group.md)).
 - `--env` records where the work lands. There is deliberately no command that fans a dev fix out to
   prod: the prod follow-up is different work with different evidence, and it should be filed on
   purpose, as above.
@@ -493,9 +503,16 @@ boundary: anyone who can clone the board reads all of it. Draw the trust boundar
 not with a group.
 
 Inside the app section it is Situation 2: Bob claims a child, hands it back with
-`--for-review --reviewer alice`, and Alice closes it with her own evidence. Alice sketches ideas on
-her own personal board, declared as this board's child, and moves one across — naming the
-target — when the team should see it. Each section mirrors into its own repositories' issues, by
+`--for-review --reviewer alice`, and Alice closes it with her own evidence.
+Alice sketches ideas on her own board, declared as this board's child and cloned at
+`workspace/.agents/handoff-alice` — beside the team board's clone at `workspace/.agents/handoff`,
+which is the one every repo under `workspace/src/` finds. She records it in the `boards` map of her
+`handoff.local.json`, not with `--local-board`, so her checkouts keep claiming on the team board, and
+moves one across — naming the target — when the team should see it
+([ADR 0022](../adr/0022-the-team-board-is-the-one-setup-finds-and-a-developers-own-board-is-reached-by-name.md)).
+When the app needs a change in a platform library first, Bob files it with
+`--after platform/<id>`, and his claim warns until it has landed.
+Each section mirrors into its own repositories' issues, by
 each handoff's home.
 
 At this size — over a hundred repos across the two groups is routine — nobody hand-writes a
@@ -534,6 +551,16 @@ cross-boundary work is therefore handled in one of three ways, cheapest first:
 
 If the project never touches such a library, none of this applies: one owner, one board, and as many
 groups as the team needs.
+
+**Bringing a team onto a board.** Before the first members join:
+
+- Each member's `handle` is exactly their tracker login; mirror one test handoff naming each of them
+  as reviewer and confirm each was assigned. The verifier warns when `handle` and `hostAccount`
+  differ.
+- Start with two groups that depend on each other and a few people, including a senior and a junior.
+- Watch three things in the first weeks: claims that exhaust the three push retries (the signal to
+  give a busy group its own board), `TRACKER-DRIFT.md` growing, and implementers asking what to do
+  anywhere other than the handoff and its issue (the evidence ADR 0023 waits for).
 
 ### A security fix
 
