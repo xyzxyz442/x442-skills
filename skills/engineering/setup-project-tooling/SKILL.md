@@ -115,6 +115,8 @@ generated helper directory, stays ignored. The logic that runs on every commit s
 committed, reviewable, prettier-formatted script instead of JSON-escaped shell fragments. Binaries
 are resolved through the detected package manager's exec form (`pnpm exec` / `yarn exec` / `bunx` /
 `npx --no --`), because `npx` cannot see local binaries under Yarn PnP or a strict pnpm store.
+Yarn 1 gets `yarn exec --`: without the separator it parses the binary's flags as its own, so
+`commitlint --edit <file>` runs with no arguments and rejects every commit.
 
 Add a step by adding a `run_step` line to the relevant hook function. `run_step` skips a script the
 repo does not define, so a Python or base-only repo with no `lint` is never blocked from committing.
@@ -142,7 +144,7 @@ into `.husky/`. Remove those scripts, replace them with the single command above
 `prepare` entry is deleted. The bundled verifier accepts either shape and any command name, so a repo
 that has not been re-run does not fail CI in the meantime.
 
-Committed hooks are the only mode as of payload 3; the older layout regenerated them into a
+Committed hooks are the only mode as of payload 2; the older layout regenerated them into a
 gitignored `.husky/` and is what broke worktrees. [`assets/commit-msg`](assets/commit-msg) is the
 standalone hook body for a repo that wants neither the dispatcher nor install-time generation.
 

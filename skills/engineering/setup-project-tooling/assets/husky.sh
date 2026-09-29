@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x442-payload-version: setup-project-tooling 2
+# x442-payload-version: setup-project-tooling 3
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
 #
 # The marker line above is this skill's payload stamp. setup-project-tooling has no single
@@ -74,7 +74,15 @@ pm_exec() {
   # strict pnpm store, so each manager gets its own exec form.
   case "$(detect_pm)" in
     pnpm) pnpm exec "$@" ;;
-    yarn) yarn exec "$@" ;;
+    yarn)
+      # yarn 1 parses flags after the binary name as its own, so `commitlint --edit <file>`
+      # reaches commitlint with no arguments and every commit fails. `--` stops that; yarn 2+
+      # forwards them as-is and is left on its original form.
+      case "$(yarn --version 2> /dev/null)" in
+        1.*) yarn exec -- "$@" ;;
+        *) yarn exec "$@" ;;
+      esac
+      ;;
     bun) bunx "$@" ;;
     *) npx --no -- "$@" ;;
   esac

@@ -99,11 +99,14 @@ Run these in order from the target project root.
 
    | Order | Skill                                                        | Already-wired marker (recheck → skip if present)                    | What running it wires                                    |
    | ----- | ------------------------------------------------------------ | ------------------------------------------------------------------- | -------------------------------------------------------- |
-   | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `commitlint.config.mjs` or `.husky/` present                        | commit enforcement, staged lint/format, editor + release |
+   | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `scripts/husky.sh` present                                          | commit enforcement, staged lint/format, editor + release |
    | 2     | [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)         | `<!-- graph-hooks:begin -->` in `AGENTS.md` **and** `.graph-hooks/` | self-updating code knowledge graph + routing             |
    | 3     | [`setup-handoff`](../setup-handoff/SKILL.md)                 | `<!-- handoff` block in `AGENTS.md` **and** `.agents/handoff/`      | lease-based cross-session/-repo handoff board            |
 
    Skill 1 installs the `commitlint.config.mjs` behind the commit conventions seeded in step 2.
+   Its marker is the hook dispatcher it ships, not `.husky/` or a commitlint config: a repo wired
+   by hand or by an older chain (a `prepare` script echoing hook bodies into `.husky/`) has both
+   and still needs the skill, which migrates it to `install:dev`.
    Skills chained _downstream_ of these are named as next steps, not walked here:
    [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md) and
    [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) after graph-hooks;
@@ -147,7 +150,7 @@ User: "init this project."
    `../AGENTS.md` and `.vscode/settings.json` lists the root in `chat.agentFilesLocations`.
 5. Report what changed and run the verification steps. To undo, remove the added lines and
    `trash` any file you created — never `rm -rf`.
-6. Recheck the chain in order. `commitlint.config.mjs` is absent → ask, on yes hand off to
+6. Recheck the chain in order. `scripts/husky.sh` is absent → ask, on yes hand off to
    `setup-project-tooling`. No `<!-- graph-hooks:begin -->` in `AGENTS.md` → ask, hand off to
    `setup-graph-hooks`. No `.agents/handoff/` → ask, hand off to `setup-handoff`. Any skill whose
    marker is already present is reported and skipped, not re-prompted.
