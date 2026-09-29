@@ -398,6 +398,23 @@ chk_contains "an scp-form remote gives the same key" "$LB_SCP" '"github.com/acme
 LB2="$(mkparentrepo)"
 LB2_OUT="$("$INSTALLER" "$LB2" --local-board "$LB_OWN" 2>&1)"
 chk "no team board, no warning" "0" "$(printf '%s' "$LB2_OUT" | grep -c 'claims on')"
+# The CLI keys a board by the CONFIGURED url of its first remote, so an insteadOf rewrite in the
+# developer's git config must not change the key the hint prints (board_origin_norm's rule).
+git -C "$LB_OWN" remote set-url origin "https://github.com/acme/own-board.git"
+git -C "$LB_OWN" config 'url.git@gh-work:.insteadOf' "https://github.com/"
+LB_IO="$("$INSTALLER" "$LB" --local-board "$LB_OWN" 2>&1)"
+chk_contains "an insteadOf rewrite does not change the key" "$LB_IO" '"github.com/acme/own-board"'
+chk "and the rewritten host never appears" "0" "$(printf '%s' "$LB_IO" | grep -c 'gh-work')"
+# A team board reached through a symlink is the same board.
+LB_LINKDIR="$(mktemp -d)"
+ln -s "$LB_TEAM" "$LB_LINKDIR/team-link"
+LB3="$(mkparentrepo)"
+mkdir -p "$LB3/.agents"
+printf '{\n  "board": "%s"\n}\n' "$LB_LINKDIR/team-link" > "$LB3/.agents/handoff.json"
+git -C "$LB3" add -A
+git -C "$LB3" commit --quiet -m "team board"
+LB3_OUT="$("$INSTALLER" "$LB3" --local-board "$LB_TEAM" 2>&1)"
+chk "a symlinked team board path is not a different board" "0" "$(printf '%s' "$LB3_OUT" | grep -c 'claims on')"
 
 printf '\nhandle versus hostAccount (ADR 0023)\n'
 HV="$(mkparentrepo)"
@@ -411,6 +428,12 @@ chk "equal after the @ is stripped is silent" "0" \
 printf '{\n  "handle": "dev-b"\n}\n' > "$HV/.agents/handoff.local.json"
 chk "no hostAccount is silent" "0" \
   "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+printf '{\n  "handle": "Dev-A",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk "a login differing only in case is silent" "0" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1 | grep -c 'differs from hostAccount')"
+printf '{\n  "handle": "@@dev-a",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents/handoff.local.json"
+chk_contains "only one leading @ is stripped" \
+  "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1)" "differs from hostAccount"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

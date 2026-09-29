@@ -860,10 +860,17 @@ sys.stdout.write(v if isinstance(v, str) else "")' "$REPO/.agents/handoff.json")
   [ -z "$_team" ] && [ -d "$REPO/.agents/handoff" ] && _team=".agents/handoff"
   if [ -n "$_team" ]; then
     case "$_team" in /*) _team_abs="$_team" ;; *) _team_abs="$REPO/$_team" ;; esac
+    # Compare physical paths (a symlinked path is the same board); print the path as written.
+    _team_real="$(cd "$_team_abs" 2> /dev/null && pwd -P || printf '%s' "$_team_abs")"
+    _lb_real="$(cd "$_lb_abs" && pwd -P)"
     _team_abs="$(cd "$_team_abs" 2> /dev/null && pwd || printf '%s' "$_team_abs")"
-    _lb_real="$(cd "$_lb_abs" && pwd)"
-    if [ "$_team_abs" != "$_lb_real" ]; then
-      _lb_remote="$(setup_origin_norm "$(git -C "$_lb_abs" remote get-url origin 2> /dev/null || true)")"
+    if [ "$_team_real" != "$_lb_real" ]; then
+      # Mirrors board_origin_norm in the payload CLI: the CONFIGURED url of the FIRST remote, not
+      # `remote get-url`, which applies url.*.insteadOf and would print a key the CLI never uses.
+      _lb_name="$(git -C "$_lb_abs" remote 2> /dev/null | head -1)"
+      _lb_url=""
+      [ -n "$_lb_name" ] && _lb_url="$(git -C "$_lb_abs" config --get "remote.$_lb_name.url" 2> /dev/null || true)"
+      _lb_remote="$(setup_origin_norm "$_lb_url")"
       # A key that is not exactly host/owner/repo would never match, so name the shape instead.
       case "$_lb_remote" in */*/*/*) _lb_remote="" ;; */*/*) ;; *) _lb_remote="" ;; esac
       echo "setup-handoff: this checkout claims on $_team_abs today. Recording $LOCAL_BOARD as its board"
