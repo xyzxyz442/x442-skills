@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.1](https://github.com/xyzxyz442/x442-skills/compare/v0.18.0...v0.18.1) (2026-10-01)
+
+### 🐞 Bug Fixes
+
+- **bug:** resolve a defaulted handoff home to its registry alias ([29a004c](https://github.com/xyzxyz442/x442-skills/commit/29a004cc0eba00eacb90cd59e5542aa45a72c167))
+
+### 📚 Documentation
+
+- **docs:** add a team-member guide to team and personal boards ([421e550](https://github.com/xyzxyz442/x442-skills/commit/421e550d1fa96ab36428b805b16e048cdedbc396))
+- **docs:** add the delegate usage guide and its diagrams ([ea5b709](https://github.com/xyzxyz442/x442-skills/commit/ea5b70908cf4fdec392a9203e832294745fa74c2))
+- **docs:** add the handoff issue-projection diagram ([83cb4aa](https://github.com/xyzxyz442/x442-skills/commit/83cb4aa042f89bc5b3b360c9ecb4b81a1f0906d7))
+
 ## [0.18.0](https://github.com/xyzxyz442/x442-skills/compare/v0.17.1...v0.18.0) (2026-10-01)
 
 ### 🚀 Features
