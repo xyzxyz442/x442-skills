@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Handoff issue projection",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "Projection level"
+        },
+        "database": {
+          "label": "Handoff section"
+        },
+        "cloud": {
+          "label": "Tracker"
+        },
+        "external": {
+          "label": "Board only"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "lvl-summary",
+      "type": "backend",
+      "label": "summary",
+      "sublabel": "the default",
+      "pos": [40, 90],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-current",
+      "type": "database",
+      "label": "Current state",
+      "sublabel": "plus title and labels",
+      "pos": [750, 90],
+      "size": [180, 64]
+    },
+    {
+      "id": "lvl-full",
+      "type": "backend",
+      "label": "full",
+      "sublabel": "opt-in per tracker",
+      "pos": [40, 250],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-context",
+      "type": "database",
+      "label": "Context",
+      "sublabel": "why the work exists",
+      "pos": [520, 250],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-verify",
+      "type": "database",
+      "label": "Verify",
+      "sublabel": "how to check done",
+      "pos": [750, 250],
+      "size": [180, 64]
+    },
+    {
+      "id": "lvl-complete",
+      "type": "backend",
+      "label": "complete",
+      "sublabel": "opt-in, private only",
+      "pos": [40, 410],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-decisions",
+      "type": "database",
+      "label": "Decisions",
+      "sublabel": "what was chosen",
+      "pos": [290, 410],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-ruled-out",
+      "type": "database",
+      "label": "Ruled out",
+      "sublabel": "what failed, and why",
+      "pos": [520, 410],
+      "size": [180, 64]
+    },
+    {
+      "id": "sec-evidence",
+      "type": "database",
+      "label": "Evidence",
+      "sublabel": "from verified_by",
+      "pos": [750, 410],
+      "size": [180, 64]
+    },
+    {
+      "id": "activity",
+      "type": "external",
+      "label": "Activity log, note",
+      "sublabel": "never sent, at any level",
+      "pos": [40, 590],
+      "size": [180, 64]
+    },
+    {
+      "id": "public-tracker",
+      "type": "cloud",
+      "label": "Public tracker",
+      "sublabel": "never complete",
+      "pos": [1030, 170],
+      "size": [190, 64]
+    },
+    {
+      "id": "private-tracker",
+      "type": "cloud",
+      "label": "Private tracker",
+      "sublabel": "takes any level",
+      "pos": [1030, 410],
+      "size": [190, 64]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "summary sends",
+      "wraps": ["lvl-summary", "sec-current"]
+    },
+    {
+      "kind": "region",
+      "label": "full adds",
+      "wraps": ["lvl-full", "sec-context", "sec-verify"]
+    },
+    {
+      "kind": "region",
+      "label": "complete adds",
+      "wraps": [
+        "lvl-complete",
+        "sec-decisions",
+        "sec-ruled-out",
+        "sec-evidence"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Stays on the board",
+      "wraps": ["activity"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "summary-to-full",
+      "from": "lvl-summary",
+      "to": "lvl-full",
+      "label": "includes",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [130, 202]
+    },
+    {
+      "id": "full-to-complete",
+      "from": "lvl-full",
+      "to": "lvl-complete",
+      "label": "includes",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [130, 362]
+    },
+    {
+      "id": "current-mirror",
+      "from": "sec-current",
+      "to": "public-tracker",
+      "label": "double opt-in"
+    },
+    {
+      "id": "verify-mirror",
+      "from": "sec-verify",
+      "to": "public-tracker",
+      "label": "double opt-in"
+    },
+    {
+      "id": "evidence-mirror",
+      "from": "sec-evidence",
+      "to": "private-tracker",
+      "label": "mirror"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Levels are cumulative",
+      "items": [
+        "summary is the default: the title, labels and ## Current state",
+        "full adds ## Context and ## Verify; complete adds Decisions, Ruled out and Evidence",
+        "Set per tracker entry or per group tracker rule (ADR 0017, ADR 0020)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What never leaves",
+      "items": [
+        "Activity: every checkpoint would rewrite the issue and notify every watcher",
+        "The note field, at every level",
+        "A sensitivity: restricted doc, or a bundle with a restricted child, is skipped"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Where each level may go",
+      "items": [
+        "A private tracker takes any level; complete goes nowhere else",
+        "summary or full reach a public tracker only with allowPublic plus share: public (ADR 0013)",
+        "complete is refused on a public or unconfirmed tracker, even with allowPublic (ADR 0020)"
+      ]
+    }
+  ]
+}
