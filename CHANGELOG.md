@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/xyzxyz442/x442-skills/compare/v0.17.1...v0.18.0) (2026-10-01)
+
+### 🚀 Features
+
+- **feature:** migrate setup-project-tooling off commitizen and standard-version ([5b37d46](https://github.com/xyzxyz442/x442-skills/commit/5b37d467a953d17ecb377dd1fff9ee653a163a70))
+- **feature:** promote setup-project-tooling to beta ([ea0fc3f](https://github.com/xyzxyz442/x442-skills/commit/ea0fc3fc3a99e7841395d8a24c9c688fa099cadd))
+
 ## [0.17.1](https://github.com/xyzxyz442/x442-skills/compare/v0.17.0...v0.17.1) (2026-09-29)
 
 ### 🧹 Miscellaneous Chores
