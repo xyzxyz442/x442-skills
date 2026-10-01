@@ -1718,7 +1718,7 @@ warn_archive_failed() { # id
 cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
   local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref="" share=""
-  local reviewer="" reviewer_set=0 home="" home_named=""
+  local reviewer="" reviewer_set=0 home="" home_named="" home_src="" home_sec=""
   id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--home REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--reviewer HANDLE] [--note N]}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
@@ -1827,9 +1827,17 @@ cmd_new() {
   # ADR 0017 — the repository whose tracker owns this handoff's issue. Pinned here and never changed:
   # `audience` moves with whoever acts next, the issue does not. Resolved before --ref, because the
   # reference is checked against THIS home's tracker.
+  # A default is resolved to the registry alias it names; one that resolves to nothing is left unset,
+  # because an unregistered home looks configured and is mirrored nowhere. Scoped by the section the
+  # doc lands in — the same one the --group block below settles on.
   if [ "$type" != standalone ] && [ -z "$home" ]; then
-    home="${HANDOFF_REPO:-}"
-    [ -z "$home" ] && [ "$type" = coordination ] && home="$audience"
+    home_src="${HANDOFF_REPO:-}"
+    [ -z "$home_src" ] && [ "$type" = coordination ] && home_src="$audience"
+    home_sec="$GROUP"
+    [ -n "$group" ] && home_sec="$(slug "$group")"
+    home="$(home_alias_for "$home_src" "$home_sec")"
+    [ -n "$home_src" ] && [ -z "$home" ] \
+      && echo "⚠️  no home: $home_src is not one repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — $id will be mirrored nowhere until it names one (--home)." >&2
   fi
   # A DEFAULTED home that cannot be an alias is dropped, never fatal: it came from `audience`, which
   # is free text this board accepts as given (a `|` in one is a case the brief packer already
@@ -1840,18 +1848,12 @@ cmd_new() {
   if [ -n "$home" ]; then
     case "$home" in *[!A-Za-z0-9._-]*) die "--home '$home' is not a repository alias (letters, digits, dot, dash, underscore)." ;; esac
     [ "$type" = standalone ] && die "a standalone doc has no home — it is never mirrored (ADR 0017)."
-    # Checked only when the caller NAMED it, and only against a registry that exists. A home derived
-    # from the audience is as good as the audience, which nothing validates either; and a cross-repo
-    # board has no registry at all until the cross-repo sync writes one, so validating there would
-    # refuse every `new` on a board that is working perfectly well.
-    if [ -n "$(registered_aliases)" ] && ! board_registers "$DIR" "$home"; then
-      if [ -n "$home_named" ]; then
-        die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
-      fi
-      # Derived, so the write proceeds — but a home nothing registers is mirrored nowhere, and the
-      # value came from $HANDOFF_REPO or the audience rather than from this command line, so the
-      # person running it has not seen it. Say it once, here, rather than only in the verifier.
-      echo "⚠️  home: $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — $id will be mirrored nowhere until it names one." >&2
+    # Checked only when the caller NAMED it, and only against a registry that exists. A derived home
+    # is already a registered alias by now (home_alias_for), and a cross-repo board has no registry
+    # at all until the cross-repo sync writes one, so validating there would refuse every `new` on a
+    # board that is working perfectly well.
+    if [ -n "$home_named" ] && [ -n "$(registered_aliases)" ] && ! board_registers "$DIR" "$home"; then
+      die "--home $home is not a repository this board registers ($(registered_aliases | tr '\n' ' ' | sed 's/ $//')) — pass one of those."
     fi
   fi
   CUR_TRACKER="$home"
@@ -4216,6 +4218,36 @@ repos = (d.get("_generated") or {}).get("repos") or []
 raise SystemExit(0 if any(isinstance(r, dict) and r.get("alias") == sys.argv[2] for r in repos) else 1)' "$1" "$2" 2> /dev/null
 }
 
+# ADR 0017 — the registry alias a DEFAULTED home names. Every reader takes `home` as an alias
+# (board_registers, tracker_entry, mirror), but the defaults come from `audience` or $HANDOFF_REPO,
+# which carry the repo's audience name — the two agree only where a fleet chose alias == audience.
+# A value that already is an alias is kept. Otherwise it is matched against each entry's `audience`
+# within <section> only — the scoping export uses, and the fence ADR 0021 draws: a home in another
+# group is named with --home, never guessed — or board-wide when no section is set. Only a unique
+# match answers: two repos claiming one audience is a manifest to fix, not a coin flip. A board with
+# no registry has nothing to map against, so the value passes through unchanged, exactly as before.
+home_alias_for() { # value [section] -> the alias, the value unchanged (no registry), or nothing
+  [ -n "$1" ] || return 0
+  if [ ! -f "$DIR/handoff.json" ] || ! command -v python3 > /dev/null 2>&1; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  python3 -c 'import json,sys
+v, sec = sys.argv[2], sys.argv[3]
+try: d = json.load(open(sys.argv[1]))
+except Exception: d = None
+g = d.get("_generated") if isinstance(d, dict) else None
+repos = [r for r in (g or {}).get("repos") or [] if isinstance(r, dict) and r.get("alias")]
+if not repos or any(r["alias"] == v for r in repos):
+    print(v)
+    raise SystemExit(0)
+hits = [r for r in repos if r.get("audience") == v]
+if sec:
+    hits = [r for r in hits if r.get("group") == sec]
+if len(hits) == 1:
+    print(hits[0]["alias"])' "$DIR/handoff.json" "$1" "${2:-}" 2> /dev/null
+}
+
 tracker_setting() { # key -> CUR_TRACKER's tracker's <key> as a string, or nothing
   local e
   e="$(tracker_entry "$CUR_TRACKER")"
@@ -6132,21 +6164,36 @@ migrate_doc_2_to_3() { # path
 # its children share, read from each child's home or, not yet migrated, its audience — so the order
 # docs are visited in cannot change the answer. Children that disagree, or no signal at all, leave
 # it unset and say so: a guessed home would publish the doc into a repository nobody chose.
+#
+# An audience goes through home_alias_for, scoped by the doc's own section (a board-level run visits
+# every section): an audience is not an alias, and a child already homed at `a` must agree with a
+# sibling whose audience resolves to `a`.
 migrate_doc_3_to_4() { # path -> 0 when home was set or is not needed, 1 when it could not be resolved
-  local f="$1" home="" c cf h mixed=0
+  local f="$1" home="" c cf h mixed=0 sec
+  sec="$(meta "$f" group)"
+  sec="${sec:-$GROUP}"
   if ! is_standalone "$f" && [ -z "$(meta "$f" home)" ]; then
     if is_orchestrator "$f"; then
       while IFS= read -r c; do
         [ -n "$c" ] || continue
         cf="$(doc_of "$c" 2> /dev/null)" || continue
         h="$(meta "$cf" home)"
-        [ -n "$h" ] || h="$(meta "$cf" audience)"
-        [ -n "$h" ] || continue
+        if [ -z "$h" ]; then
+          h="$(meta "$cf" audience)"
+          [ -n "$h" ] || continue
+          # An audience no single repository answers to is a disagreement, not an absence: skipping
+          # it would hand the bundle its siblings' home on a guess.
+          h="$(home_alias_for "$h" "$sec")"
+          [ -n "$h" ] || {
+            mixed=1
+            continue
+          }
+        fi
         if [ -z "$home" ]; then home="$h"; elif [ "$home" != "$h" ]; then mixed=1; fi
       done <<< "$(children_of "$f")"
       [ "$mixed" = 0 ] || home=""
     else
-      home="$(meta "$f" audience)"
+      home="$(home_alias_for "$(meta "$f" audience)" "$sec")"
     fi
     [ -n "$home" ] && set_field "$f" home "$home"
   fi
