@@ -11,6 +11,7 @@ exact flags a command takes, the `SKILL.md` files are the reference; these pages
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | [Handoff](handoff.md)           | Two agents, two sessions or two repos need to work the same code without clobbering each other — or work has to survive a session. |
 | [Secret guard](secret-guard.md) | A credential file has to stay usable by an agent without its values landing in a transcript.                                       |
+| [Delegate](delegate.md)         | Mechanical, bulky work should run on a cheaper agent, without deciding for the user where their code goes.                         |
 
 ## Diagrams
 
@@ -22,7 +23,7 @@ readable; it falls back to a system monospace face. Treat them as **generated ar
 produced by `archify deliver`, which reports a sha256 over the exact committed bytes, so regenerate
 them rather than editing them by hand.
 
-The handoff diagrams' sources live in [`diagrams/src/`](diagrams/src/), one JSON spec per diagram,
+The handoff and delegate diagrams' sources live in [`diagrams/src/`](diagrams/src/), one JSON spec per diagram,
 named `NAME.TYPE.json`. To change one, edit the spec, then validate and deliver it from the archify
 skill directory:
 

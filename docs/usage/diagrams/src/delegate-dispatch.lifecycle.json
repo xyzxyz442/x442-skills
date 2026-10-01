@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Delegate dispatch",
+    "quality_profile": "showcase",
+    "viewBox": [980, 660]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "In this session"
+    },
+    {
+      "id": "events",
+      "label": "Bounced"
+    },
+    {
+      "id": "terminal",
+      "label": "Kept here"
+    }
+  ],
+  "states": [
+    {
+      "id": "assessed",
+      "type": "start",
+      "label": "Assessed",
+      "sublabel": "fit, size, party, risk",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "rubric"
+    },
+    {
+      "id": "approved",
+      "type": "active",
+      "label": "Approved",
+      "sublabel": "consent on file",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "--approve"
+    },
+    {
+      "id": "dispatched",
+      "type": "active",
+      "label": "Dispatched",
+      "sublabel": "separate CLI process",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "--kind --worktree"
+    },
+    {
+      "id": "returned",
+      "type": "waiting",
+      "label": "Returned",
+      "sublabel": "scanned, still a claim",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "status ok"
+    },
+    {
+      "id": "verified",
+      "type": "success",
+      "label": "Verified",
+      "sublabel": "done command re-run",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "report"
+    },
+    {
+      "id": "question",
+      "type": "waiting",
+      "label": "Asked back",
+      "sublabel": "capped rounds, default 3",
+      "lane": "events",
+      "col": 1,
+      "tag": "--resume"
+    },
+    {
+      "id": "refused",
+      "type": "failure",
+      "label": "Refused",
+      "sublabel": "misrouted, blocked, secret",
+      "lane": "events",
+      "col": 0,
+      "tag": "exit 77 / 78"
+    },
+    {
+      "id": "kept",
+      "type": "neutral",
+      "label": "Do it yourself",
+      "sublabel": "two failures, or restricted",
+      "lane": "terminal",
+      "col": 2,
+      "tag": "keep it here"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "approve",
+      "from": "assessed",
+      "to": "approved",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "dispatch",
+      "from": "approved",
+      "to": "dispatched"
+    },
+    {
+      "id": "return",
+      "from": "dispatched",
+      "to": "returned",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "verify",
+      "from": "returned",
+      "to": "verified"
+    },
+    {
+      "id": "ask",
+      "from": "returned",
+      "to": "question",
+      "label": "needs input",
+      "variant": "dashed",
+      "labelDy": 24,
+      "labelDx": 42
+    },
+    {
+      "id": "answer",
+      "from": "question",
+      "to": "returned",
+      "label": "answer, resume",
+      "labelDx": -50
+    },
+    {
+      "id": "refuse",
+      "from": "dispatched",
+      "to": "refused",
+      "label": "gate refuses",
+      "labelDy": 24
+    },
+    {
+      "id": "rebrief",
+      "from": "refused",
+      "to": "assessed",
+      "label": "re-brief within scope",
+      "variant": "dashed",
+      "route": "bottom-channel",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "id": "give-up",
+      "from": "refused",
+      "to": "kept",
+      "label": "still fails",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Main path",
+      "items": [
+        "assess four axes first, and recommend, including against delegating",
+        "approval records agent, class and allowlist; the dispatch must match",
+        "the sub-agent reporting success is a claim; run the done command yourself"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Ask-backs",
+      "items": [
+        "status question means it asked instead of guessing",
+        "answer from the brief and the code; escalate only if you do not know",
+        "a question asking for wider scope is refused, never relayed"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Refusals",
+      "items": [
+        "never-delegate path, restricted brief, or a secret going out or coming back",
+        "a kind the agent does not serve, or files over 70% of its window",
+        "a refusal is a stop; re-brief once within scope, or do the work here"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Delegate topology",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "database": {
+          "label": "Cascade layer"
+        },
+        "frontend": {
+          "label": "Primary assistant"
+        },
+        "security": {
+          "label": "Consent gate"
+        },
+        "backend": {
+          "label": "Runs on this machine"
+        },
+        "cloud": {
+          "label": "Same-party agent"
+        },
+        "external": {
+          "label": "Third-party agent"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "home",
+      "type": "database",
+      "label": "Home layer",
+      "sublabel": "defines agents, primary",
+      "pos": [40, 90],
+      "size": [190, 64],
+      "tag": "~/.agents"
+    },
+    {
+      "id": "workspace",
+      "type": "database",
+      "label": "Workspace layer",
+      "sublabel": "outside any repo",
+      "pos": [40, 250],
+      "size": [190, 64],
+      "tag": "defines"
+    },
+    {
+      "id": "repo",
+      "type": "database",
+      "label": "Repo layer",
+      "sublabel": "committed, narrows only",
+      "pos": [40, 410],
+      "size": [190, 64],
+      "tag": "narrows"
+    },
+    {
+      "id": "session",
+      "type": "frontend",
+      "label": "Your session",
+      "sublabel": "assesses, asks, verifies",
+      "pos": [360, 90],
+      "size": [190, 64]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Consent gate",
+      "sublabel": "PreToolUse hook",
+      "pos": [360, 250],
+      "size": [190, 64]
+    },
+    {
+      "id": "dispatcher",
+      "type": "backend",
+      "label": "delegate-run",
+      "sublabel": "scan, caps, one JSON line",
+      "pos": [360, 410],
+      "size": [190, 64],
+      "tag": "trivy"
+    },
+    {
+      "id": "adapters",
+      "type": "backend",
+      "label": "Adapters",
+      "sublabel": "claude, codex, copilot, gemini",
+      "pos": [700, 410],
+      "size": [210, 64]
+    },
+    {
+      "id": "local",
+      "type": "backend",
+      "label": "Local agent",
+      "sublabel": "LM Studio or Ollama",
+      "pos": [700, 250],
+      "size": [210, 64],
+      "tag": "local"
+    },
+    {
+      "id": "same",
+      "type": "cloud",
+      "label": "Same-vendor agent",
+      "sublabel": "cheaper model, costs quota",
+      "pos": [1040, 410],
+      "size": [200, 64],
+      "tag": "same-party"
+    },
+    {
+      "id": "third",
+      "type": "external",
+      "label": "Gateway agent",
+      "sublabel": "another vendor",
+      "pos": [1040, 590],
+      "size": [200, 64],
+      "tag": "third-party"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "This machine",
+      "wraps": [
+        "home",
+        "workspace",
+        "repo",
+        "session",
+        "gate",
+        "dispatcher",
+        "adapters",
+        "local"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Primary's vendor, already sees the code",
+      "wraps": ["same"]
+    },
+    {
+      "kind": "region",
+      "label": "Adds an observer",
+      "wraps": ["third"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "narrow-workspace",
+      "from": "home",
+      "to": "workspace",
+      "label": "narrows",
+      "labelDy": 48
+    },
+    {
+      "id": "narrow-repo",
+      "from": "workspace",
+      "to": "repo",
+      "label": "narrows",
+      "labelDy": 48
+    },
+    {
+      "id": "roster",
+      "from": "repo",
+      "to": "dispatcher",
+      "label": "effective roster"
+    },
+    {
+      "id": "call",
+      "from": "session",
+      "to": "gate",
+      "label": "approved dispatch",
+      "labelDy": 48
+    },
+    {
+      "id": "pass",
+      "from": "gate",
+      "to": "dispatcher",
+      "label": "consent on file",
+      "labelDy": 48
+    },
+    {
+      "id": "spec",
+      "from": "dispatcher",
+      "to": "adapters",
+      "label": "scanned brief"
+    },
+    {
+      "id": "to-local",
+      "from": "adapters",
+      "to": "local",
+      "label": "never leaves"
+    },
+    {
+      "id": "to-same",
+      "from": "adapters",
+      "to": "same",
+      "label": "no new observer"
+    },
+    {
+      "id": "to-third",
+      "from": "adapters",
+      "to": "third",
+      "label": "named before approval",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The roster is a cascade",
+      "items": [
+        "Agents are defined only in layers no clone can carry",
+        "A repo layer narrows; allow intersects, neverDelegate unions",
+        "No ancestor file can widen what the machine permits"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "One dispatch",
+      "items": [
+        "The hook refuses a raw call that skipped consent",
+        "The brief is scanned before it leaves; credentials are stripped from the child env",
+        "The result is scanned before it reaches your transcript"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Party, not distance",
+      "items": [
+        "Local never leaves; same-party adds no observer; third-party does",
+        "Anything unrecognised resolves to third-party",
+        "Failover walks the rank on reachability, and re-asks, since approval names the agent"
+      ]
+    }
+  ]
+}
