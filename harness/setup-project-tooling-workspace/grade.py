@@ -19,7 +19,7 @@ otherwise be graded against x442-skills. See grade_common.isolated_git_target.
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
-`eval_id` is one of the ids in evals/evals.json (scaffolded | fresh). With no eval_id, only the
+`eval_id` is one of the ids in evals/evals.json (scaffolded | fresh | legacy-commitizen). With no eval_id, only the
 verifier-wrap assertion runs. Exits 0 iff nothing failed.
 """
 
@@ -81,6 +81,13 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     elif eval_id == "fresh":
         # Pre-state: the post-scaffold markers must appear. Both fail on the raw fixture by design.
         exps.append(gc.file_exists(target, COMMITLINT_CONFIG))
+    elif eval_id == "legacy-commitizen":
+        # Pre-state: after the migration the legacy stack is gone, release-it is wired, and the
+        # bare `.husky` ignore rule has become `.husky/_`. All fail on the raw fixture by design.
+        findings = gc.verify_findings(VERIFY, target)
+        exps.append(gc.file_exists(target, ".release-it.json"))
+        exps.append(gc.finding(findings, "legacy.release_tooling", "pass"))
+        exps.append(gc.finding(findings, "gitignore.husky", "pass"))
     return exps
 
 

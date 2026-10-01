@@ -245,7 +245,18 @@ if [ -f .gitignore ]; then
   # husky's generated .husky/_ and the hook files were regenerated on every install. It now points
   # at .husky/ itself, and those files are repo state that every worktree needs — so ignoring the
   # directory is the DEFECT, and ignoring only the vestigial .husky/_ is the fix.
-  if grep -qE '^[[:space:]]*\.husky/?[[:space:]]*$' .gitignore; then
+  # Ask git rather than matching lines: `.husky/*`, `.husky/**` and `/.husky` hide the hooks as
+  # surely as `.husky/`, and a regex for every spelling is a regex that misses the next one.
+  # --no-index matters — without it an already-tracked hook never reads as ignored. Outside a git
+  # work tree there is nothing to ask, so fall back to the line match.
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    HUSKY_HIDDEN=0
+    git check-ignore -q --no-index .husky/commit-msg 2> /dev/null && HUSKY_HIDDEN=1
+  else
+    HUSKY_HIDDEN=0
+    grep -qE '^[[:space:]]*/?\.husky(/|/\*|/\*\*)?[[:space:]]*$' .gitignore && HUSKY_HIDDEN=1
+  fi
+  if [ "$HUSKY_HIDDEN" = 1 ]; then
     bad gitignore.husky ".gitignore ignores .husky/ — the hooks cannot be committed, so no worktree runs them; fix: ignore only .husky/_ and re-run setup-project-tooling"
   elif grep -qE '^[[:space:]]*\.husky/_/?[[:space:]]*$' .gitignore; then
     ok gitignore.husky ".gitignore ignores .husky/_ only — the hook files stay tracked"
@@ -296,6 +307,28 @@ print(p.get('infile','') if isinstance(p,dict) else '')" 2> /dev/null)
   esac
 else
   warn releaseit.present ".release-it.json absent — release automation not wired (skip if intentional)"
+fi
+# Legacy commit/release stack. standard-version is deprecated upstream and release-it covers it;
+# the skill always offers the migration, so a repo that still carries the stack either declined it
+# or has not re-run the skill. Advisory only — keeping it is a legitimate choice.
+LEGACY=""
+if [ -f package.json ]; then
+  LEGACY=$(python3 -c "
+import json,re
+p=json.load(open('package.json'))
+deps={**p.get('dependencies',{}),**p.get('devDependencies',{})}
+legacy=re.compile(r'^(commitizen|standard-version|commit-and-tag-version|conventional-changelog-.+|cz-.+|@commitlint/cz-commitlint)$')
+hits=sorted(d for d in deps if legacy.match(d) and d!='conventional-changelog-conventionalcommits')
+if isinstance(p.get('config'),dict) and 'commitizen' in p['config']: hits.append('config.commitizen')
+print(' '.join(hits))" 2> /dev/null)
+fi
+for f in .czrc .cz.json .versionrc .versionrc.json .versionrc.js .versionrc.cjs; do
+  [ -f "$f" ] && LEGACY="${LEGACY:+$LEGACY }$f"
+done
+if [ -n "$LEGACY" ]; then
+  warn legacy.release_tooling "legacy commit/release tooling present ($LEGACY) — re-run setup-project-tooling to migrate to release-it, or ignore if kept on purpose"
+else
+  ok legacy.release_tooling "no commitizen / standard-version leftovers"
 fi
 
 echo

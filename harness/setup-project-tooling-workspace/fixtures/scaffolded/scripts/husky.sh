@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x442-payload-version: setup-project-tooling 3
+# x442-payload-version: setup-project-tooling 4
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
 #
 # The marker line above is this skill's payload stamp. setup-project-tooling has no single
@@ -146,8 +146,11 @@ install_hooks() {
   [ -f "$SELF" ] && chmod +x "$SELF"
 
   # A gitignored .husky/ reintroduces the exact defect this layout exists to remove, so say so.
-  if git check-ignore -q .husky 2> /dev/null; then
-    echo "WARNING: .husky/ is gitignored — commit it, or worktrees will silently run no hooks." >&2
+  # Probe a hook FILE with --no-index, not the directory: `.husky/*` ignores every hook while
+  # leaving the directory itself unmatched, and without --no-index an already-tracked hook is
+  # never reported as ignored even though the next hook added beside it would be.
+  if git check-ignore -q --no-index .husky/commit-msg 2> /dev/null; then
+    echo "WARNING: .gitignore hides the hooks in .husky/ — ignore only .husky/_, or worktrees will silently run no hooks." >&2
   fi
   echo "Git hooks installed in .husky/. Commit them."
 }
