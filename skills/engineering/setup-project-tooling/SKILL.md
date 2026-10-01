@@ -1,18 +1,19 @@
 ---
 name: x442-setup-project-tooling
 description: >-
-  (Experimental) Use after initial-project, or whenever setting up project dev tooling — commit
-  conventions (commitlint + husky), staged-file lint/format (lint-staged), a VS Code workspace, or
-  release automation (release-it), including migrating off commitizen and standard-version. Detects the
-  language and recommends a category for you to confirm, then applies a common base plus per-language
-  config. Fully supports Python and Node/TypeScript (strict); other languages get the common base to
-  customize.
+  Use after initial-project, or whenever setting up project dev tooling — commit conventions
+  (commitlint + husky), staged-file lint/format (lint-staged), a VS Code workspace, or release
+  automation (release-it), including migrating off commitizen and standard-version. Detects the
+  language and recommends a category for you to confirm, then applies a common base plus
+  per-language config. Fully supports Python and Node/TypeScript (strict); other languages get the
+  common base to customize.
 ---
 
 # setup-project-tooling
 
-> **Status: experimental.** This skill scaffolds real config files, and its profile detection and
-> output may change between versions — review what it writes before relying on it.
+> **Status: beta.** Usable on Node/TypeScript and Python repos, with one rough edge — there is no
+> installer script, so every merge below is applied by the agent from this body. Review the diff
+> before committing it.
 
 Scaffold a project's dev tooling to match what it actually is. Detect the language(s), **recommend a
 category for the user to confirm** (frontend / backend / library / other), then wire tooling in two
