@@ -1,17 +1,19 @@
 ---
 name: x442-setup-project-tooling
 description: >-
-  (Experimental) Use after initial-project, or whenever setting up project dev tooling — commit
-  conventions (commitlint + husky), staged-file lint/format (lint-staged), a VS Code workspace, or
-  release automation (release-it). Detects the language and recommends a category for you to confirm,
-  then applies a common base plus per-language config. Fully supports Python and Node/TypeScript
-  (strict); other languages get the common base to customize.
+  Use after initial-project, or whenever setting up project dev tooling — commit conventions
+  (commitlint + husky), staged-file lint/format (lint-staged), a VS Code workspace, or release
+  automation (release-it), including migrating off commitizen and standard-version. Detects the
+  language and recommends a category for you to confirm, then applies a common base plus
+  per-language config. Fully supports Python and Node/TypeScript (strict); other languages get the
+  common base to customize.
 ---
 
 # setup-project-tooling
 
-> **Status: experimental.** This skill scaffolds real config files, and its profile detection and
-> output may change between versions — review what it writes before relying on it.
+> **Status: beta.** Usable on Node/TypeScript and Python repos, with one rough edge — there is no
+> installer script, so every merge below is applied by the agent from this body. Review the diff
+> before committing it.
 
 Scaffold a project's dev tooling to match what it actually is. Detect the language(s), **recommend a
 category for the user to confirm** (frontend / backend / library / other), then wire tooling in two
@@ -57,15 +59,21 @@ Read the repo first. **Detect** the package manager and language from filesystem
 - **Language → report, don't prompt,** when it is unambiguous (a lockfile, `pyproject.toml`, or a
   project file is factual). Prompt only when the repo is empty or genuinely mixed.
 - **Python-stream** is plain Python plus the SQL add-on — trigger it when `*.sql` files are present.
+- **Legacy commit and release tooling → detect, then always prompt.** Look for commitizen,
+  standard-version, and their helpers (signals under
+  [Migrating off commitizen and standard-version](#migrating-off-commitizen-and-standard-version)).
+  When any is present, ask whether to migrate to release-it **whatever the category** — the table
+  below does not apply to that question.
 
 Category is **lightweight**: it only sets the release-it default and framework expectation. The
 **language** drives which lint/format fragments get applied.
 
-| Category           | release-it default |
-| ------------------ | ------------------ |
-| Frontend / Backend | optional (ask)     |
-| Library            | **on**             |
-| Other (ETL/data)   | off                |
+| Category           | release-it default                  |
+| ------------------ | ----------------------------------- |
+| Frontend / Backend | optional (ask)                      |
+| Library            | **on**                              |
+| Other (ETL/data)   | off                                 |
+| Legacy tooling     | **always ask**, overrides the above |
 
 ## Common / base tooling (every repo)
 
@@ -215,7 +223,20 @@ The AI block must sit **above** any `!`-negation a repo adds for its own fixture
 since a negation only takes effect after the rule it re-includes from.
 
 Greenfield (no `.gitignore`): copy the asset wholesale. Existing `.gitignore`: append any missing
-entries — at minimum the tail — line-merged; never duplicate a line, never drop existing entries.
+entries — at minimum the tail — line-merged; never duplicate a line, never drop existing entries,
+with two exceptions:
+
+- **A rule that ignores the hooks directory is replaced in place by `.husky/_`.** That covers
+  `.husky`, `.husky/`, `/.husky`, `/.husky/`, `.husky/*`, and `.husky/**` — any of them stops the
+  hook files from being committed, which is the worktree defect described under
+  [package.json + the hook-install command](#packagejson--the-hook-install-command). Older husky
+  setups put the bare `.husky` line under a "user-specific" heading, so it reads like intent; it is
+  not. Replace it on the same line rather than appending `.husky/_` beside it, or the broad rule
+  still wins. Check the result with `git check-ignore --no-index -v .husky/commit-msg` — it must
+  print nothing — and report the change to the user, since a hook file that was never tracked now
+  shows up as untracked and needs committing.
+- **An ignore line for a file the migration removes goes with it** — for example
+  `scripts/prepare-commit-msg.sh` once the commitizen hook is gone.
 
 The tail already carries the sibling skills' paths, so `setup-graph-hooks` (graph output
 directories) and `setup-handoff` (its board's `.locks/`) are a no-op here when they run after this
@@ -344,8 +365,8 @@ on `folderOpen`, so opening the workspace repairs only what is missing. `full` m
 
 ### Release automation (release-it)
 
-Wire by default for the **library** category; for frontend/backend, ask first; skip for other/ETL.
-When wiring:
+Wire by default for the **library** category; for frontend/backend, ask first; skip for other/ETL —
+unless legacy release tooling is present, in which case always ask (next section). When wiring:
 
 1. Copy [`assets/release-it.json`](assets/release-it.json) to `.release-it.json`
    (`@release-it/conventional-changelog`, `npm.publish: false` by default — flip for a public library
@@ -361,6 +382,81 @@ When wiring:
   }
 }
 ```
+
+### Migrating off commitizen and standard-version
+
+Many repos predate this skill and carry an older stack: commitizen for an interactive commit prompt,
+standard-version to bump, tag, and write the changelog, and a handful of conventional-changelog
+helpers. standard-version is
+[deprecated upstream](https://github.com/conventional-changelog/standard-version#readme), and
+release-it covers its job. Detect the stack, then **always prompt** to migrate — never migrate
+silently, and never skip the question because of the category.
+
+**Detect** — any one of these is enough:
+
+| Signal                 | Where                                                                                                                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| commitizen             | `commitizen` or a `cz-*` adapter (`cz-conventional-changelog`, `cz-git`, `cz-customizable`, `@commitlint/cz-commitlint`) in `devDependencies`                                                                                                              |
+| commitizen config      | `config.commitizen` in `package.json`, or a `.czrc` / `.cz.json` file                                                                                                                                                                                      |
+| commitizen hook        | `.husky/prepare-commit-msg` or `scripts/prepare-commit-msg.sh` calling `cz`, or a script whose value is `cz` / `git-cz`                                                                                                                                    |
+| standard-version       | `standard-version` (or its fork `commit-and-tag-version`) in `devDependencies`, a `.versionrc*` file, or a script calling it                                                                                                                               |
+| conventional-changelog | `conventional-changelog-cli` or a preset package `conventional-changelog-<preset>` (`-atom`, `-angular`, …) — **not** plain `conventional-changelog` (a release-it dependency) and **not** `-conventionalcommits` (the preset the release-it config names) |
+
+**Prompt.** In Claude Code use `AskUserQuestion`, listing what was found and what would be removed:
+
+- **Migrate to release-it (Recommended)** — wire release-it as in the previous section, then remove
+  the legacy stack.
+- **Keep the legacy tooling** — leave it untouched; the rest of the skill still runs.
+
+State the one behaviour change plainly in the question: commitizen's interactive prompt goes away
+and release-it has no equivalent. Commit messages are still enforced by commitlint on
+`commit-msg`, so a malformed message is rejected rather than guided.
+
+**Migrate.** Wire release-it first, then remove:
+
+1. `config.commitizen` from `package.json`, and `.czrc` / `.cz.json`.
+2. Scripts that call `cz`, `git-cz`, `standard-version`, or `conventional-changelog` — typically
+   `commit` and the old `release`, which the release-it scripts replace.
+3. The commitizen hook — `.husky/prepare-commit-msg` and `scripts/prepare-commit-msg.sh` — plus any
+   `.gitignore` line naming them.
+4. `.versionrc*`, after carrying its settings over. A `tagPrefix` other than `v` becomes
+   `git.tagName` in `.release-it.json`; release-it already reuses a `v` prefix it finds on the latest
+   tag, so the default needs nothing. Custom `types` map to the preset `types` in the release-it
+   config. `bumpFiles` (bumping a version outside `package.json`) has no built-in release-it
+   equivalent — name it to the user and leave it for them rather than dropping it.
+5. The orphaned dev dependencies (below).
+
+Keep `CHANGELOG.md` and the existing tags. The release-it asset already writes to `CHANGELOG.md`,
+so new releases are prepended to the history standard-version wrote.
+
+**Orphaned dev dependencies.** Remove a package only when both hold:
+
+- It is in the legacy set: `commitizen`, any `cz-*` adapter, `@commitlint/cz-commitlint`,
+  `standard-version`, `commit-and-tag-version`, `conventional-changelog-cli`, and
+  `conventional-changelog-<preset>` other than `-conventionalcommits`.
+- Nothing references it once steps 1–4 are done. Search the tracked files for the package name,
+  excluding the lockfile, `node_modules/`, and `CHANGELOG.md`:
+
+  ```bash
+  git grep -l -F PACKAGE -- . ':!*lock*' ':!CHANGELOG.md' ':!package.json'
+  ```
+
+  and check `package.json` itself for any key other than its `devDependencies` entry.
+
+Compute the set **after** release-it is wired, so `conventional-changelog` — which release-it needs —
+is never mistaken for a leftover. Never remove a package outside the legacy set, however unused it
+looks; that is a separate cleanup the user did not ask for. The `husky` package and a `prepare`
+hook-install script are handled by
+[Migrating a repo wired by an earlier version](#packagejson--the-hook-install-command), not here.
+List every removal in the prompt. Do not reinstall yourself — as under
+[Install and activate](#install-and-activate), tell the user to run the hook-install command, which
+reinstalls with the detected manager so the lockfile drops the removed packages.
+
+**Python commitizen** (`[tool.commitizen]` in `pyproject.toml`, or `.cz.toml`) is a different tool:
+`cz bump` owns the version in `pyproject.toml`, which release-it cannot bump on its own — it needs
+[`@release-it/bumper`](https://github.com/release-it/bumper) pointed at that file. Still ask, but
+state that extra plugin in the question and do not mark the migration as recommended: where the
+version lives is the user's decision.
 
 ### Base dev dependencies
 
@@ -544,15 +640,18 @@ failure). Then spot-check:
 5. **Editor:** `.editorconfig`, `.prettierrc`, `.prettierignore`, and `.vscode/settings.json`
    present; `.vscode/extensions.json` lists the stack's extensions; `.vscode/tasks.json` has the
    **Bootstrap Workspace** task and `initialize.sh` is present and executable.
-6. **Git hygiene:** `.gitignore` ignores `.husky/_` but **not** `.husky/` itself (the hook files are tracked; see above), ignores the base AI paths, and does **not** ignore
-   `scripts/`. `.gitattributes` is present and forces LF on `*.sh`, so the shipped hook payloads
+6. **Git hygiene:** `.gitignore` ignores `.husky/_` but **not** `.husky/` itself (the hook files
+   are tracked; see above) — `git check-ignore --no-index .husky/commit-msg` prints nothing — ignores
+   the base AI paths, and does **not** ignore `scripts/`. `.gitattributes` is present and forces LF on `*.sh`, so the shipped hook payloads
    survive a Windows checkout; `git check-attr text eol -- scripts/husky.sh` reports
    `text: set` / `eol: lf`, and `git ls-files --eol scripts/husky.sh` shows `i/lf`. To size a
    renormalize before committing one, list the index-side CRLF files with
    `git ls-files --eol | grep -v 'i/lf'` — **not** `git add --renormalize --dry-run`, which prints
    every tracked path it would re-add whether or not the content changes.
 7. **Release (when wired):** `.release-it.json` present and `release` scripts in `package.json`;
-   `npm run release:dry-run` produces a changelog preview.
+   `npm run release:dry-run` produces a changelog preview. After a migration, no legacy package,
+   `config.commitizen`, `.czrc`, or `.versionrc*` remains, and the dry run picks up the latest
+   existing tag.
 8. **Common-only repos:** an unsupported-language repo still passes the base checks (commitlint,
    `.editorconfig`, a `.lintstagedrc.json` with the base glob), and its `pre-commit` skips any step
    it does not define rather than failing the commit.

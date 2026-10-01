@@ -7,7 +7,7 @@ for sharing later.
 
 > **Status:** eleven skills under `skills/engineering/` — the project-setup chain
 > ([`initial-project`](skills/engineering/initial-project/SKILL.md),
-> [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_),
+> [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(beta)_),
 > [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md) _(beta)_, the
 > **graph suite** ([`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md),
 > [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md),
@@ -70,7 +70,7 @@ The design these skills share — and what they wire into the repos they touch:
     ├── README.md                   # skills catalog: categories, status, per-skill detail
     ├── engineering/                # category README + skills
     │   ├── initial-project/        # SKILL.md + references/ + scripts/
-    │   ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (experimental)
+    │   ├── setup-project-tooling/  # SKILL.md + assets/ + scripts/  (beta)
     │   ├── setup-graph-hooks/      # SKILL.md + scripts/ + assets/
     │   ├── repair-graph-hooks/     # SKILL.md only  (reuses setup-graph-hooks scripts)
     │   ├── register-cross-repo-graph/  # SKILL.md + scripts/ + assets/
@@ -174,11 +174,11 @@ promoted — install with `--personal`). The [skills catalog](skills/README.md) 
 
 ### Project setup
 
-| Skill                                                                        | Status         | What it does                                                                                                                                                                                                                               |
-| ---------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable`       | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, and `setup-handoff`.                                                                                 |
-| [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `experimental` | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it.                                                                         |
-| [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md)       | `beta`         | Installs the secret guard so credential values never reach a transcript — a read-path guard that masks each value as a stable fingerprint, plus the shared `secret-scan` / `redact-view` engine. One home-layer install covers every repo. |
+| Skill                                                                        | Status   | What it does                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable` | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, and `setup-handoff`.                                                                                 |
+| [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `beta`   | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it (offered as a migration off commitizen and standard-version).            |
+| [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md)       | `beta`   | Installs the secret guard so credential values never reach a transcript — a read-path guard that masks each value as a stable fingerprint, plus the shared `secret-scan` / `redact-view` engine. One home-layer install covers every repo. |
 
 ### Graph suite — query, don't grep
 
