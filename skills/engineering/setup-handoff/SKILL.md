@@ -365,7 +365,8 @@ mirrors into its own origin repository under it:
   retired board-level tracker are **listed for the user to close by hand** — closing an issue hides
   nothing, so that call is theirs (ADR 0013's stance for a repository that turned public).
 - Routing by home needs document schema 4, so run `./handoff migrate` before the first mirror. It
-  backfills each handoff's `home` from its audience and names anything it could not resolve.
+  backfills each handoff's `home` with the registry alias its audience names, and names anything it
+  could not resolve.
 
 **One board mirrors into a tracker.** Each issue records the identity of the board that wrote it, so
 a second board mirroring into the same repository refuses and names the first — ownership follows

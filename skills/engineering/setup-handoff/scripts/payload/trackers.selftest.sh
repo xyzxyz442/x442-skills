@@ -215,6 +215,103 @@ chk "an unresolvable doc stays without a home" "" "$(sed -n 's/^home: //p' "$TMB
 chk_contains "migrate names the doc it could not resolve" "$MIG_OUT" "m-none-handoff (3 → 4) — no home"
 chk "migrate stamps schema 4" "4" "$(sed -n 's/^schema: //p' "$TMB/m-none-handoff.md")"
 
+printf '\na defaulted home is the registry alias, never the raw audience (ADR 0017)\n'
+# The fleet shape that broke: an alias shorter than the repo's audience name. `dup` is claimed by two
+# repos in one section (ambiguous); `far` lives only in another section, which is never searched.
+ALIAS_CFG='{ "topology": "cross-repo", "schema": 4, "groupLayout": "subfolder", "groups": ["g", "h"],
+  "_generated": { "repos": [
+    { "alias": "a", "audience": "long-name", "group": "g" },
+    { "alias": "d1", "audience": "dup", "group": "g" },
+    { "alias": "d2", "audience": "dup", "group": "g" },
+    { "alias": "f", "audience": "far", "group": "h" } ] },
+  "trackers": { "a": { "kind": "issues", "system": "github", "repo": "acme/a", "refPattern": "#[0-9]+" } } }'
+TA2="$(mkboard)"
+TA2B="$TA2/.agents/handoff"
+tr_cfg "$TA2B" "$ALIAS_CFG"
+mkdir -p "$TA2B/g" "$TA2B/h"
+(
+  export HANDOFF_GROUP=g
+  trh "$TA2" new al-aud --title "Audience" --audience long-name > /dev/null
+  HANDOFF_REPO=long-name trh "$TA2" new al-env --title "Env" > /dev/null
+  trh "$TA2" new al-far --title "Far" --audience far > /dev/null
+)
+chk "an audience resolves to its registry alias" "a" "$(sed -n 's/^home: //p' "$TA2B/g/al-aud-handoff.md")"
+chk "HANDOFF_REPO resolves to its registry alias too" "a" "$(sed -n 's/^home: //p' "$TA2B/g/al-env-handoff.md")"
+chk "an audience only another section registers is not reached for" "yes:" \
+  "$([ -f "$TA2B/g/al-far-handoff.md" ] && echo yes):$(sed -n 's/^home: //p' "$TA2B/g/al-far-handoff.md")"
+FLAT="$(mkboard)"
+tr_cfg "$FLAT/.agents/handoff" "$ALIAS_CFG"
+trh "$FLAT" new fl-far --title "Flat" --audience far > /dev/null
+chk "with no section set, the whole board is searched" "f" "$(sed -n 's/^home: //p' "$FLAT/.agents/handoff/fl-far-handoff.md")"
+AL_NONE_ERR="$(HANDOFF_GROUP=g trh "$TA2" new al-none --title "None" --audience nobody 2>&1)"
+chk "an audience nothing registers leaves home unset" "yes:" \
+  "$([ -f "$TA2B/g/al-none-handoff.md" ] && echo yes):$(sed -n 's/^home: //p' "$TA2B/g/al-none-handoff.md" 2> /dev/null)"
+chk_contains "and says so" "$AL_NONE_ERR" "no home"
+HANDOFF_GROUP=g trh "$TA2" new al-dup --title "Dup" --audience dup > /dev/null
+chk "an audience two repos in the section claim leaves home unset" "yes:" \
+  "$([ -f "$TA2B/g/al-dup-handoff.md" ] && echo yes):$(sed -n 's/^home: //p' "$TA2B/g/al-dup-handoff.md" 2> /dev/null)"
+# The caller's section wins over the board — the section this doc LANDS in, however it was named.
+SEC_CFG="$(printf '%s' "$ALIAS_CFG" | sed 's#{ "alias": "f", "audience": "far", "group": "h" }#{ "alias": "f", "audience": "far", "group": "h" }, { "alias": "s1", "audience": "both", "group": "g" }, { "alias": "s2", "audience": "both", "group": "h" }#')"
+tr_cfg "$TA2B" "$SEC_CFG"
+HANDOFF_GROUP=h trh "$TA2" new al-both-h --title "Both" --audience both > /dev/null
+chk "an audience both sections register resolves in the caller's section" "s2" "$(sed -n 's/^home: //p' "$TA2B/h/al-both-h-handoff.md")"
+trh "$TA2" new al-both-g --title "Both" --audience both --group G > /dev/null
+chk "a --group that slugs to the section scopes the same way" "s1" "$(sed -n 's/^home: //p' "$TA2B/g/al-both-g-handoff.md")"
+tr_cfg "$TA2B" "$ALIAS_CFG"
+# No registry at all: nothing to map against, so the value passes through as it always has.
+TNR="$(mkboard)"
+tr_cfg "$TNR/.agents/handoff" '{ "topology": "cross-repo", "schema": 4 }'
+trh "$TNR" new nr-one --title "Unsynced" --audience long-name > /dev/null
+chk "a board with no registry keeps the audience as home" "long-name" "$(sed -n 's/^home: //p' "$TNR/.agents/handoff/nr-one-handoff.md")"
+git -C "$TA2" add -A && git -C "$TA2" commit -qm "docs"
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+AL_DRY="$(HANDOFF_GROUP=g trh "$TA2" mirror --dry-run)"
+chk_contains "the resolved home reaches its tracker" "$AL_DRY" "create al-aud-handoff"
+ST="$ST_SAVE"
+
+# migrate resolves the same way, scoped by the doc's own section.
+tr_cfg "$TA2B" "$(printf '%s' "$ALIAS_CFG" | sed 's/"schema": 4/"schema": 3/')"
+cat > "$TA2B/g/am-one-handoff.md" << 'DOC'
+---
+id: am-one-handoff
+title: One
+type: coordination
+schema: 3
+status: open
+group: g
+audience: long-name
+---
+
+## Current state
+DOC
+sed 's/am-one/am-two/; s/^title: One/title: Two/; s/^audience: long-name/home: a/' \
+  "$TA2B/g/am-one-handoff.md" > "$TA2B/g/am-two-handoff.md"
+cat > "$TA2B/g/am-bun-handoff.md" << 'DOC'
+---
+id: am-bun-handoff
+title: Bundle
+type: orchestrator
+schema: 3
+status: open
+group: g
+children: [am-one-handoff, am-two-handoff]
+---
+
+## Bundle
+DOC
+sed 's/am-one/am-dup/; s/^title: One/title: Dup/; s/^audience: long-name/audience: dup/' \
+  "$TA2B/g/am-one-handoff.md" > "$TA2B/g/am-dup-handoff.md"
+sed 's/am-bun/am-bun2/; s/am-two-handoff/am-dup-handoff/' "$TA2B/g/am-bun-handoff.md" > "$TA2B/g/am-bun2-handoff.md"
+git -C "$TA2" add -A && git -C "$TA2" commit -qm "seed schema-3 docs"
+HANDOFF_GROUP=g trh "$TA2" migrate --yes > /dev/null
+chk "migrate backfills the alias, not the audience" "a" "$(sed -n 's/^home: //p' "$TA2B/g/am-one-handoff.md")"
+chk "a bundle whose children name one repo two ways is not mixed" "a" "$(sed -n 's/^home: //p' "$TA2B/g/am-bun-handoff.md")"
+chk "a bundle with a child no repository answers to is not given its sibling's home" "" \
+  "$(sed -n 's/^home: //p' "$TA2B/g/am-bun2-handoff.md")"
+chk "migrate leaves an ambiguous audience without a home" "4:" \
+  "$(sed -n 's/^schema: //p' "$TA2B/g/am-dup-handoff.md"):$(sed -n 's/^home: //p' "$TA2B/g/am-dup-handoff.md")"
+
 printf '\nboard identity and one mirroring board per tracker (ADR 0017)\n'
 LEG_CFG='{ "external": { "kind": "issues", "system": "github", "repo": "acme/owned", "refPattern": "#[0-9]+" } }'
 TO="$(mkboard)"
@@ -471,15 +568,17 @@ chk "including one in the board's sprint tool" "PLAN-9" "$(sed -n 's/^external_r
 chk_contains "but not a reference no declared tracker would take" \
   "$(trh "$TRF" new r-bad --standalone --title "Bad" --ref "nonsense ref")" "does not match"
 
-# A home taken from the environment is a deliberate identity, not free text. It never refuses the
-# write, but the person running the command has not seen it, so it is said out loud.
+# A home taken from the environment never refuses the write, but the person running the command has
+# not seen it, so it is said out loud — and a value no repository answers to is left off rather than
+# written: an unregistered home looks configured.
 TEV="$(mkboard)"
 TEVB="$TEV/.agents/handoff"
 tr_cfg "$TEVB" "$TRACKERS_CFG"
 EV_OUT="$(cd "$TEV" && HANDOFF_REPO=acme-typo HANDOFF_TRACKER_ADAPTER="$SRC/fake-tracker.sh" \
   FAKE_TRACKER_STATE="$ST" ./.agents/handoff/handoff new e-one --title "Typo home" --audience acme-api 2>&1)"
 chk_contains "an unregistered home from the environment is named" "$EV_OUT" "acme-typo"
-chk "but the doc is still written" "acme-typo" "$(sed -n 's/^home: //p' "$TEVB/e-one-handoff.md")"
+chk "but the doc is still written, with no home" "yes:" \
+  "$([ -f "$TEVB/e-one-handoff.md" ] && echo yes):$(sed -n 's/^home: //p' "$TEVB/e-one-handoff.md")"
 ST="$ST_SAVE"
 
 printf '\ntracker rules synthesize a per-repository entry from a group (ADR 0020)\n'

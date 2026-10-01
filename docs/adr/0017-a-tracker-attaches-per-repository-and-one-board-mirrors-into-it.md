@@ -32,10 +32,11 @@ refines ADR 0011 and keeps ADR 0013's double opt-in, now asked per tracker.
 
 - **A handoff's issue lives in its home repository.** A new document field, `home`, is pinned by
   `new` (`--home`, else `HANDOFF_REPO`, else — for a coordination document — its `audience`) and
-  never changes. `audience` keeps changing and is projected as an `audience:ALIAS` label. Adding
-  `home` bumps the document schema to 4 (ADR 0003); `migrate` backfills it from the audience, and on
-  an orchestrator from the one home its children share, leaving unresolved documents unmirrored and
-  naming them.
+  never changes. A defaulted value is resolved to the registry alias it names, and left unset when
+  no single registered repository answers to it. `audience` keeps changing and is projected as an
+  `audience:ALIAS` label. Adding `home` bumps the document schema to 4 (ADR 0003); `migrate`
+  backfills it from the audience, and on an orchestrator from the one home its children share,
+  leaving unresolved documents unmirrored and naming them.
 - **Work another team owns is split, not moved.** A quick audience flip relabels the issue and
   reassigns it to the `reviewer` pointer (ADR 0016). Work that repository genuinely owns becomes a
   child handoff homed there.
