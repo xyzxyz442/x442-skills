@@ -92,6 +92,36 @@ installer writes an inert `.agents/hooks.json.example` and never activates it. A
 gets the full universal layer (git refresh + AGENTS.md routing). To activate later, verify the
 contract against a live install, then rename the example to `.agents/hooks.json`.
 
+### VS Code chat and the Copilot surfaces
+
+Each surface reads a different set of hook files. This is what each one runs once this skill has
+wired Claude and Copilot
+([ADR 0024](../../../docs/adr/0024-vs-code-runs-the-claude-format-hooks-when-a-repo-wires-claude.md)):
+
+| Surface             | Runs                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code         | `.claude/settings.json`                                                                                                  |
+| VS Code chat        | The same Claude-format file. The installer sets `chat.useClaudeHooks` and switches `.github/hooks/graph.json` off there. |
+| Copilot CLI         | Both files. It merges them, so each hook fires twice. A deny still blocks.                                               |
+| Copilot cloud agent | `.github/hooks/graph.json`, the only file it reads                                                                       |
+| Copilot code review | No hooks. It reads `AGENTS.md` and `CLAUDE.md`, which carry the routing block.                                           |
+
+- **The switch is written to `.vscode/settings.json` and touches only `.github/hooks/graph.json`'s own entry**, so
+  another skill's Copilot file is never switched off. It is switched off only while Copilot is not the primary refresh owner. With Copilot as primary, `graph.json` carries the end-of-turn refresh and stays on.
+- **`.vscode/settings.json` with comments is never rewritten.** The installer prints the two
+  settings to add by hand, and the verifier warns `vscode.unreadable`.
+- **The verifier fails `vscode.copilot_off_uncovered`** when `.github/hooks/graph.json` is switched off in VS Code but
+  the committed Claude-format file does not cover it. That combination silently removes these hooks
+  for every teammate in VS Code chat.
+- **`chat.useClaudeHooks` also runs each developer's own `~/.claude/settings.json` hooks in VS
+  Code**, with matchers ignored. To opt out, set `"~/.claude/settings.json": false` under
+  `chat.hookFilesLocations` in your VS Code user settings. The installer never sets this key,
+  because a committed value would switch it off for the whole team.
+
+Sources: [VS Code hooks](https://code.visualstudio.com/docs/copilot/customization/hooks),
+[Copilot hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference),
+[Copilot code review](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review).
+
 ## Preconditions
 
 1. **`AGENTS.md` exists at the repo root.** This skill chains after `initial-project`. If it is
@@ -161,6 +191,12 @@ bash "$SKILL_DIR/scripts/setup-graph-hooks.sh" "$REPO" \
 This installs the universal layer + `.graph-hooks/` cores, then renders and merges each chosen
 tool's native hook config. Re-running with a different `--primary` moves ownership idempotently
 (drops the old owner's end-of-turn hook) without disturbing the read-side hooks.
+
+Claude's hooks go into the committed `.claude/settings.json`, so every teammate gets them, in
+Claude Code and in VS Code chat. An older install kept them in `.claude/settings.local.json` or
+`.claude/settings.example.json`. A re-run moves them out of those files, leaving a developer's own
+hooks in place. When Claude is wired, the installer also writes the VS Code switch described in
+[VS Code chat and the Copilot surfaces](#vs-code-chat-and-the-copilot-surfaces).
 
 ### 5. Inject or refresh the AGENTS.md routing block (idempotent)
 
