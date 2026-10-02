@@ -13,5 +13,9 @@
   "editor.tabSize": 2,
   "editor.wrappingIndent": "indent",
   "files.eol": "\n",
-  "sonarlint.disableTelemetry": true
+  "sonarlint.disableTelemetry": true,
+  "chat.useClaudeHooks": true,
+  "chat.hookFilesLocations": {
+    ".github/hooks/graph.json": false
+  }
 }
