@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.19.0](https://github.com/xyzxyz442/x442-skills/compare/v0.18.1...v0.19.0) (2026-10-02)
+
+### 🚀 Features
+
+- **feature:** commit claude graph hooks to settings.json ([d298de1](https://github.com/xyzxyz442/x442-skills/commit/d298de1a715eb795a83d5c4632d8dd820cea515d))
+- **feature:** point vs code chat at the committed claude-format hooks ([77a65ef](https://github.com/xyzxyz442/x442-skills/commit/77a65ef6019555b5268e0677a486711b0bc4721a))
+
+### 🐞 Bug Fixes
+
+- **bug:** let reads and terminal calls through the handoff edit gate in vs code ([5f73c3d](https://github.com/xyzxyz442/x442-skills/commit/5f73c3d1aea63aa5594c63b67e37e8340b259f62))
+- **bug:** match read-only tool names in any naming style ([4aeab81](https://github.com/xyzxyz442/x442-skills/commit/4aeab81cc92d645b87ff99ba8cc5210c425ddf1b))
+- **bug:** resolve claude handoff hook commands without CLAUDE_PROJECT_DIR ([86cb48b](https://github.com/xyzxyz442/x442-skills/commit/86cb48b4333e60131487557c90af366df37202a5))
+- **bug:** spell the claude grep-gate deny as deny ([ce34a34](https://github.com/xyzxyz442/x442-skills/commit/ce34a341c79c2942dd8a909e533a80e6bf26df66))
+
+### 📚 Documentation
+
+- **docs:** document where vs code and copilot run each skill's hooks ([2b1dd0b](https://github.com/xyzxyz442/x442-skills/commit/2b1dd0b89c3c7830e1f6f7386fe6a4bef8fe5e52))
+- **docs:** record that vs code runs the claude-format hooks when a repo wires claude ([52fc82d](https://github.com/xyzxyz442/x442-skills/commit/52fc82df6a6dd3687d6c2cdec5ef5b6d2cbf0961))
+
+### 🧹 Miscellaneous Chores
+
+- **setup:** re-run the graph and handoff installers on this repo ([a61d42f](https://github.com/xyzxyz442/x442-skills/commit/a61d42ff92e4edfe0c8b382d38111ccdaecd4131))
+
 ## [0.18.1](https://github.com/xyzxyz442/x442-skills/compare/v0.18.0...v0.18.1) (2026-10-01)
 
 ### 🐞 Bug Fixes
