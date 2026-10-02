@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.19.1](https://github.com/xyzxyz442/x442-skills/compare/v0.19.0...v0.19.1) (2026-10-02)
+
+### 🐞 Bug Fixes
+
+- **bug:** write board commits as Conventional Commits ([ca2a149](https://github.com/xyzxyz442/x442-skills/commit/ca2a149821f943a18571ca0efacd9035fdad673f))
+
 ## [0.19.0](https://github.com/xyzxyz442/x442-skills/compare/v0.18.1...v0.19.0) (2026-10-02)
 
 ### 🚀 Features
