@@ -324,7 +324,7 @@ lock_live() { [ -d "$LOCKS/$1" ] && [ "$(date +%s)" -lt "$(lock_expires "$1")" ]
 is_archived() { [ -f "$(arch_file "$1")" ]; }
 
 # --- payload field extraction: python3 first (repo standard), sed fallback ------------
-py_field() { # $1 = session|path|source
+py_field() { # $1 = session|path|source|tool|parses
   printf '%s' "$PAYLOAD" | python3 -c '
 import json, sys
 try:
@@ -332,7 +332,11 @@ try:
 except Exception:
     sys.exit(0)
 w = sys.argv[1]
-if w == "session":
+if w == "parses":
+    print("1" if isinstance(d, dict) else "")
+elif w == "tool":
+    print(d.get("tool_name") or d.get("toolName") or "")
+elif w == "session":
     print(d.get("session_id") or d.get("sessionId") or "")
 elif w == "source":
     print(d.get("source") or "")
@@ -342,12 +346,30 @@ else:
     print(ti.get("file_path") or ti.get("filePath") or tr.get("filePath") or "")
 ' "$1" 2> /dev/null
 }
-sed_field() { # $1 = session|path|source  (best-effort, no python3)
+sed_field() { # $1 = session|path|source|tool  (best-effort, no python3)
   case "$1" in
+    tool) printf '%s' "$PAYLOAD" | sed -n 's/.*"tool_\{0,1\}[nN]ame"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
     source) printf '%s' "$PAYLOAD" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
     session) printf '%s' "$PAYLOAD" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
     path) printf '%s' "$PAYLOAD" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
   esac
+}
+# VS Code chat runs Claude-format hooks with matchers IGNORED (ADR 0024), so the edit gate sees every
+# tool call, reads included. A tool whose name says it only reads is waved through, so reading a
+# board doc is never refused. Anything else -- an unknown or missing name too -- stays gated: a
+# missed write tool would switch enforcement off unseen, while a missed read tool only over-asks.
+read_only_tool() { # $1 = tool name
+  # Naming-style blind: lowercased with _ and - stripped, so read_file, readFile and
+  # copilot_readFile all match. VS Code does not document its tool names. Write stems are checked
+  # first, so createFile or editFiles never reach the read stems.
+  local t
+  t="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '_-')"
+  case "$t" in
+    "") return 1 ;;
+    *edit* | *write* | *replace* | *create* | *insert* | *apply* | *patch* | *delete* | *remove* | *rename* | *move* | *update*) return 1 ;;
+    *read* | *list* | *search* | *find* | *grep* | *glob* | *view* | *fetch* | ls | get*) return 0 ;;
+  esac
+  return 1
 }
 field() {
   local v=""
@@ -747,8 +769,14 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     # No CLI => no way to claim => nothing this gate says is actionable. Allow, silently; the
     # session banner already told the user the gate is off (see CLI_OK above).
     [ "$CLI_OK" = "1" ] || exit 0
+    read_only_tool "$(field tool)" && exit 0
     path="$(field path)"
     if [ -z "$path" ]; then
+      # A payload python3 parsed but that names no file is not a file edit -- a terminal call
+      # reaching this gate under VS Code, say, whose command may well name the board (ADR 0024).
+      if command -v python3 > /dev/null 2>&1 && [ "$(py_field parses)" = 1 ]; then
+        exit 0
+      fi
       # FAIL-SAFE: couldn't parse the path. Only refuse if the payload clearly targets
       # the handoff dir — never block ordinary files over a broken parser.
       case "$PAYLOAD" in
@@ -790,7 +818,8 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
 
   posttool-edit)
     session="$(field session)"
-    touch_my_leases "$session" # active work keeps its lease alive
+    touch_my_leases "$session"               # active work keeps its lease alive
+    read_only_tool "$(field tool)" && exit 0 # a read changed no doc (matchers ignored, ADR 0024)
     path="$(field path)"
     [ -n "$path" ] || exit 0
     doc_id_of "$path" > /dev/null || exit 0

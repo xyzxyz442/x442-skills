@@ -244,14 +244,37 @@ section "2. Wired tools + config validity"
 WIRED=""
 add_wired() { WIRED="${WIRED:+$WIRED }$1"; }
 # claude
+# OUR claude command, not just any `--tool claude`: setup-handoff wires the same settings.json.
+GRAPH_CLAUDE_RE='\.graph-hooks/hook\.sh.*--tool claude'
 CSET=""
-[ -f .claude/settings.local.json ] && CSET=.claude/settings.local.json
-[ -z "$CSET" ] && [ -f .claude/settings.example.json ] && CSET=.claude/settings.example.json
-if [ -n "$CSET" ] && grep -q '\-\-tool claude' "$CSET" 2> /dev/null; then
+# Committed first (ADR 0024); the local and example files are where earlier versions wrote it.
+for c in .claude/settings.json .claude/settings.local.json .claude/settings.example.json; do
+  [ -f "$c" ] && grep -qE "$GRAPH_CLAUDE_RE" "$c" 2> /dev/null && {
+    CSET="$c"
+    break
+  }
+done
+# An unparseable settings file breaks Claude Code's load of it (and VS Code's) whether or not our
+# command survived in it, so judge validity on every file that exists, not only on CSET.
+for c in .claude/settings.json .claude/settings.local.json; do
+  [ -f "$c" ] && [ "$c" != "$CSET" ] && ! is_json "$c" && bad tool.config.json_valid "claude config invalid JSON: $c"
+done
+if [ -n "$CSET" ]; then
   is_json "$CSET" && {
     ok tool.wired "claude wired + valid JSON: $CSET"
     add_wired claude
   } || bad tool.config.json_valid "claude config invalid JSON: $CSET"
+  # VS Code reads settings.local.json as well and does not de-dupe across files, so a graph group
+  # left there runs twice; one only there is invisible to every teammate.
+  LEGACY=""
+  for c in .claude/settings.local.json .claude/settings.example.json; do
+    [ -f "$c" ] && grep -qE "$GRAPH_CLAUDE_RE" "$c" 2> /dev/null && LEGACY="${LEGACY:+$LEGACY }$c"
+  done
+  if [ -n "$LEGACY" ]; then
+    warn claude.legacy_local "claude graph hooks in $LEGACY — re-run setup-graph-hooks to move them to .claude/settings.json (ADR 0024)"
+  else
+    ok claude.legacy_local "claude graph hooks committed in .claude/settings.json only"
+  fi
 fi
 # gemini
 if [ -f .gemini/settings.json ] && grep -q '\-\-tool gemini' .gemini/settings.json 2> /dev/null; then
@@ -266,6 +289,31 @@ if [ -f .github/hooks/graph.json ]; then
     ok tool.wired "copilot wired + valid JSON: .github/hooks/graph.json"
     add_wired copilot
   } || bad tool.config.json_valid "copilot config invalid JSON"
+fi
+# VS Code chat hook source (ADR 0024). "Covered" is literal: every hook kind graph.json runs is also
+# in the committed Claude-format file, so switching graph.json off in VS Code loses nothing.
+VC_CLAUDE=no
+VC_COVERED=no
+if [ "$CSET" = .claude/settings.json ] && is_json .claude/settings.json; then
+  VC_CLAUDE=yes
+  VC_COVERED=yes
+  CLAUDE_KINDS=$(grep -E "$GRAPH_CLAUDE_RE" .claude/settings.json | grep -oE -- '--kind [a-z-]+' | sed 's/--kind //' | sort -u)
+  for k in $(grep -oE '\.graph-hooks/copilot/[a-z-]+\.sh' .github/hooks/graph.json 2> /dev/null | sed 's#.*/##; s#\.sh$##' | sort -u); do
+    printf '%s\n' "$CLAUDE_KINDS" | grep -qx "$k" || VC_COVERED=no
+  done
+fi
+if [ -f "$SCRIPT_DIR/config/vscode-hooks.py" ]; then
+  VC_LINE=$(python3 "$SCRIPT_DIR/config/vscode-hooks.py" --repo . --copilot-file .github/hooks/graph.json \
+    --claude "$VC_CLAUDE" --covered "$VC_COVERED" --check 2> /dev/null)
+  VC_LEVEL="${VC_LINE%% *}"
+  VC_REST="${VC_LINE#* }"
+  VC_ID="${VC_REST%% *}"
+  VC_MSG="${VC_REST#* }"
+  case "$VC_LEVEL" in
+    ok) ok "$VC_ID" "$VC_MSG" ;;
+    warn) warn "$VC_ID" "$VC_MSG" ;;
+    fail) bad "$VC_ID" "$VC_MSG" ;;
+  esac
 fi
 # antigravity (inert by design)
 [ -f .agents/hooks.json ] && warn antigravity.active "ACTIVE .agents/hooks.json present — contract is UNVERIFIED; confirm before trusting"

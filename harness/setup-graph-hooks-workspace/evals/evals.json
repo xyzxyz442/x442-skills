@@ -58,6 +58,20 @@
       "prompt": "Someone registered the code-review-graph MCP server in this repo with `code-review-graph install`. Make sure the committed MCP config works on a teammate's machine too.",
       "fixture": "fixtures/all-wired",
       "expected_output": "Behavioral case, not wiring: the grader seeds a throwaway copy with the absolute repo-root `cwd` that `code-review-graph install` writes into `.mcp.json` and `.vscode/mcp.json` (the fixture cannot commit that shape — it is the leak under test). Regression guards: verify-graph-hooks.sh reports `mcp.portable` as a warning while the absolute cwd is present; re-running setup-graph-hooks.sh drops the cwd from the `.mcp.json` code-review-graph entry and rewrites the `.vscode/mcp.json` one to `${workspaceFolder}`; another server's entry in the same file keeps its cwd; the verifier then reports `mcp.portable` as pass; and a second `.graph-hooks/portable-mcp.py` run leaves both files byte-identical."
+    },
+    {
+      "id": "claude-committed",
+      "kind": "post-state",
+      "prompt": "This repo was wired for graph hooks a while ago. Re-run setup so VS Code chat and teammates get the Claude-format hooks too.",
+      "fixture": "fixtures/all-wired",
+      "expected_output": "Behavioral case (ADR 0024): the grader seeds a throwaway copy with the old layout -- Claude's graph hooks only in the gitignored `.claude/settings.local.json`, beside a developer's own `bash .claude/mine.sh` hook. Regression guards: verify-graph-hooks.sh reports `claude.legacy_local` as a warning; re-running setup-graph-hooks.sh with `--tools claude,copilot --primary claude` writes the graph hooks to the committed `.claude/settings.json`, removes them from `settings.local.json`, keeps the developer's own hook there, and the verifier then reports `claude.legacy_local` as pass."
+    },
+    {
+      "id": "vscode-hook-source",
+      "kind": "post-state",
+      "prompt": "We use VS Code chat alongside Claude Code and Copilot. Make VS Code use the Claude hooks here.",
+      "fixture": "fixtures/all-wired",
+      "expected_output": "Behavioral case (ADR 0024), in a throwaway copy. Regression guards: setup-graph-hooks.sh with `--tools claude,copilot --primary claude` sets `chat.useClaudeHooks: true` and `.github/hooks/graph.json: false` in `.vscode/settings.json`, and the verifier reports `vscode.hook_source` as pass; re-running with `--primary copilot` removes the `graph.json` entry, since the Copilot file then carries the refresh; and with the Claude-format file gone but `graph.json` still switched off, the verifier reports `vscode.copilot_off_uncovered` as a failure."
     }
   ]
 }

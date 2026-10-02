@@ -90,6 +90,12 @@ def dump(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+# The repo root for a Claude-format command. Claude Code sets CLAUDE_PROJECT_DIR; VS Code chat and
+# Copilot CLI read .claude/settings.json as well and do not (ADR 0024), so fall back to the git root,
+# then $PWD. Byte-identical to the resolver setup-graph-hooks' render.py uses.
+CLAUDE_ROOT = 'R="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"; '
+
+
 def command(hdpath: str, tool: str, kind: str) -> str:
     # Identity is NOT baked in here any more. It used to ride as a HANDOFF_REPO=... prefix, which
     # made normal operating configuration invisible to anyone reading the board and stale the
@@ -99,8 +105,8 @@ def command(hdpath: str, tool: str, kind: str) -> str:
     # on the tool's working directory.
     if tool == "claude":
         return (
-            f'bash "$CLAUDE_PROJECT_DIR/{hdpath}/scripts/hooks.sh" '
-            f'--kind {kind} --tool claude --project-dir "$CLAUDE_PROJECT_DIR"'
+            f'{CLAUDE_ROOT}bash "$R/{hdpath}/scripts/hooks.sh" '
+            f'--kind {kind} --tool claude --project-dir "$R"'
         )
     return f"bash {hdpath}/scripts/hooks.sh --kind {kind} --tool {tool}"
 
@@ -504,6 +510,39 @@ def _selftest() -> int:
         "HANDOFF_REPO=acme-api bash x/scripts/hooks.sh --kind stop"
     ) == {"HANDOFF_REPO": "acme-api"}
     assert parse_legacy_prefix("bash x/scripts/hooks.sh --kind stop") == {}
+
+    # The claude command must not depend on CLAUDE_PROJECT_DIR: VS Code chat and Copilot CLI read
+    # .claude/settings.json too and never set it (ADR 0024). Unset, the old form resolved to
+    # "/.agents/..." and the edit gate silently stopped working. Run it the way they do -- from a
+    # subdirectory, variable unset -- and it must still find the repo root.
+    import subprocess
+    import tempfile
+
+    new_claude = command(".agents/handoff", "claude", "pretool-edit")
+    assert "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel" in new_claude
+    assert is_managed(new_claude), "the fallback form must still be ours"
+    old_claude = (
+        'bash "$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh" '
+        '--kind pretool-edit --tool claude --project-dir "$CLAUDE_PROJECT_DIR"'
+    )
+    assert is_managed(old_claude), "the old form must stay ours so a re-run replaces it"
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp).resolve()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        hooks = repo / ".agents/handoff/scripts/hooks.sh"
+        hooks.parent.mkdir(parents=True)
+        hooks.write_text('echo "$@"\n', encoding="utf-8")
+        (repo / "sub").mkdir()
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        r = subprocess.run(
+            ["bash", "-c", new_claude],
+            cwd=repo / "sub",
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0, r.stderr
+        assert f"--project-dir {repo}" in r.stdout, r.stdout
 
     print("merge-hooks selftest OK")
     return 0

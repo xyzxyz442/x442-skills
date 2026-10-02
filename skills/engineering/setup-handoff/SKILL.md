@@ -79,6 +79,39 @@ Gemini CLI and Copilot CLI held-lease context is not restored after compaction:*
 Copilot has no compaction event. The `run-handoff` skill tells agents there to re-read their held
 handoffs with `handoff show` when they notice a compaction.
 
+### VS Code chat and the Copilot surfaces
+
+Each surface reads a different set of hook files. This is what each one runs once this skill has
+wired Claude and Copilot
+([ADR 0024](../../../docs/adr/0024-vs-code-runs-the-claude-format-hooks-when-a-repo-wires-claude.md)):
+
+| Surface             | Runs                                                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code         | `.claude/settings.json`                                                                                                    |
+| VS Code chat        | The same Claude-format file. The installer sets `chat.useClaudeHooks` and switches `.github/hooks/handoff.json` off there. |
+| Copilot CLI         | Both files. It merges them, so each hook fires twice. A deny still blocks.                                                 |
+| Copilot cloud agent | `.github/hooks/handoff.json`, the only file it reads                                                                       |
+| Copilot code review | No hooks. It reads `AGENTS.md` and `CLAUDE.md`, which carry the routing block.                                             |
+
+- **The switch is written to `.vscode/settings.json` and touches only `.github/hooks/handoff.json`'s own entry**, so
+  another skill's Copilot file is never switched off. It is switched off only while Copilot is not the primary. With Copilot as primary, `handoff.json` alone carries the hard-enforcement hooks and stays on. Under `--local-wiring` nothing tracked changes, so the installer prints the setting for your user settings instead.
+- **`.vscode/settings.json` with comments is never rewritten.** The installer prints the two
+  settings to add by hand, and the verifier warns `vscode.unreadable`.
+- **In VS Code chat the edit gate sees every tool call**, because VS Code ignores matchers. It
+  lets reads and terminal commands through, refuses an edit of a board doc you have not claimed,
+  and keeps gating any tool it does not recognize.
+- **The verifier fails `vscode.copilot_off_uncovered`** when `.github/hooks/handoff.json` is switched off in VS Code but
+  the committed Claude-format file does not cover it. That combination silently removes these hooks
+  for every teammate in VS Code chat.
+- **`chat.useClaudeHooks` also runs each developer's own `~/.claude/settings.json` hooks in VS
+  Code**, with matchers ignored. To opt out, set `"~/.claude/settings.json": false` under
+  `chat.hookFilesLocations` in your VS Code user settings. The installer never sets this key,
+  because a committed value would switch it off for the whole team.
+
+Sources: [VS Code hooks](https://code.visualstudio.com/docs/copilot/customization/hooks),
+[Copilot hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference),
+[Copilot code review](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review).
+
 ## Preconditions
 
 1. **`AGENTS.md` exists at the repo root.** This skill chains after `initial-project`. If it is

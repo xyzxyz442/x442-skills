@@ -435,5 +435,74 @@ printf '{\n  "handle": "@@dev-a",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents
 chk_contains "only one leading @ is stripped" \
   "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1)" "differs from hostAccount"
 
+printf '\nclaude command resolves without CLAUDE_PROJECT_DIR (ADR 0024)\n'
+# The claude command now opens with R="${CLAUDE_PROJECT_DIR:-<git root>}" and runs "$R/<board>/...".
+# The verifier recovers a single-repo board from that command when nothing declares it, and must
+# strip the "$R/" anchor the way it strips the old "$CLAUDE_PROJECT_DIR/" one.
+CR="$(mkparentrepo)"
+"$INSTALLER" "$CR" --tools claude --primary claude --handoff-dir tools/board > /dev/null 2>&1
+CR_OUT="$(bash "$HERE/verify-setup-handoff.sh" "$CR" 2>&1)"
+chk "a claude-only custom board is found through the \$R anchor" "0" \
+  "$(printf '%s' "$CR_OUT" | grep -c 'handoff not installed')"
+chk "the derived board path carries no literal \$R" "0" \
+  "$(printf '%s' "$CR_OUT" | grep -c '/\$R/')"
+
+printf '\nVS Code chat runs the committed claude hooks (ADR 0024)\n'
+vfind() { # repo id -> that finding's level(s), or "none"
+  bash "$HERE/verify-setup-handoff.sh" "$1" --json 2> /dev/null \
+    | python3 -c 'import json,sys; f=[x["level"] for x in json.load(sys.stdin)["findings"] if x["id"]==sys.argv[1]]; print(",".join(f) or "none")' "$2"
+}
+vsc() { python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s.get("chat.useClaudeHooks"), s.get("chat.hookFilesLocations", {}).get(".github/hooks/handoff.json"))' "$1/.vscode/settings.json" 2> /dev/null || echo absent; }
+VS="$(mkparentrepo)"
+"$INSTALLER" "$VS" --tools claude,copilot --primary claude > /dev/null 2>&1
+chk "claude primary: useClaudeHooks on, handoff.json off in VS Code" "True False" "$(vsc "$VS")"
+chk "the verifier accepts it" "pass" "$(vfind "$VS" vscode.hook_source)"
+"$INSTALLER" "$VS" --tools claude,copilot --primary copilot > /dev/null 2>&1
+chk "copilot primary: handoff.json stays on (it alone carries the hard hooks)" "True None" "$(vsc "$VS")"
+VL="$(mkparentrepo)"
+VL_OUT="$("$INSTALLER" "$VL" --tools claude --primary claude --local-wiring 2>&1)"
+chk "--local-wiring never writes the tracked .vscode/settings.json" "absent" "$(vsc "$VL")"
+chk_contains "--local-wiring says where to turn it on instead" "$VL_OUT" "chat.useClaudeHooks"
+VU="$(mkparentrepo)"
+"$INSTALLER" "$VU" --tools copilot --primary copilot > /dev/null 2>&1
+mkdir -p "$VU/.vscode"
+printf '{"chat.hookFilesLocations": {".github/hooks/handoff.json": false}}\n' > "$VU/.vscode/settings.json"
+chk "handoff.json off with no claude twin fails" "fail" "$(vfind "$VU" vscode.copilot_off_uncovered)"
+
+printf '\nthe edit gate under VS Code, which ignores matchers (ADR 0024)\n'
+# VS Code runs the claude-format pretool-edit on EVERY tool call. A read of a board doc, or a
+# terminal command naming the board, must pass; an edit must still be refused; and a tool the gate
+# does not recognize stays gated, since a missed write tool would switch enforcement off unseen.
+VG="$(mkparentrepo)"
+"$INSTALLER" "$VG" --tools claude --primary claude > /dev/null 2>&1
+VG="$(cd "$VG" && pwd -P)"
+gate() { # tool_name tool_input-json -> "deny" or "allow"
+  # Capture, then match: `| grep -q` under pipefail turns a deny into "allow" when grep's early
+  # exit SIGPIPEs the hook, which would let every allow-expecting case below pass vacuously.
+  local out
+  out="$(printf '{"session_id":"vg","tool_name":"%s","tool_input":%s}' "$1" "$2" \
+    | (cd "$VG" && bash .agents/handoff/scripts/hooks.sh --kind pretool-edit --tool claude --project-dir "$VG" 2> /dev/null))"
+  case "$out" in *'"deny"'*) echo deny ;; *) echo allow ;; esac
+}
+# Payloads go through single-quoted variables: a JSON object with a comma, written inline inside
+# "$(...)", is brace-expanded by bash into two calls, and the case then grades a fragment.
+IDX="$VG/.agents/handoff/INDEX.md"
+J_READ='{"filePath":"'"$IDX"'"}'
+J_GREP='{"query":"x","includePattern":"'"$VG"'/.agents/handoff/*.md"}'
+J_TERM='{"command":"bash '"$VG"'/.agents/handoff/handoff list"}'
+J_EDIT='{"file_path":"'"$IDX"'"}'
+chk "VS Code read_file of INDEX.md passes" "allow" "$(gate read_file "$J_READ")"
+chk "VS Code grep_search over the board passes" "allow" "$(gate grep_search "$J_GREP")"
+chk "a terminal command naming the board passes" "allow" "$(gate run_in_terminal "$J_TERM")"
+chk "VS Code replace_string_in_file on INDEX.md is refused" "deny" "$(gate replace_string_in_file "$J_READ")"
+chk "Claude Edit on INDEX.md is still refused" "deny" "$(gate Edit "$J_EDIT")"
+chk "an unrecognized tool carrying a board path stays gated" "deny" "$(gate frobnicate "$J_READ")"
+# VS Code does not document its tool names (they are read from the agent debug logs), so the
+# match must not depend on the naming style: snake_case, camelCase, or a vendor prefix.
+chk "camelCase readFile passes" "allow" "$(gate readFile "$J_READ")"
+chk "prefixed copilot_findTextInFiles naming a board file passes" "allow" "$(gate copilot_findTextInFiles "$J_READ")"
+chk "camelCase createFile on INDEX.md is refused" "deny" "$(gate createFile "$J_READ")"
+chk "camelCase editFiles on INDEX.md is refused" "deny" "$(gate editFiles "$J_READ")"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

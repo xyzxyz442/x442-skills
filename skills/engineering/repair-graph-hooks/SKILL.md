@@ -120,6 +120,14 @@ bash "$GRAPH_SKILL/scripts/verify-graph-hooks.sh" "$REPO"
 Capture every `[FAIL]` / `[warn]`. This already covers structure, per-tool JSON validity, that the
 dispatcher fires, and the single-refresh-owner invariant.
 
+A `claude.legacy_local` warning means an older install put Claude's graph hooks in
+`.claude/settings.local.json` or `.claude/settings.example.json`. Re-run setup-graph-hooks to fix
+it. The re-run moves them to the committed `.claude/settings.json` and removes only its own groups
+from the old files, so a developer's own hooks stay. The hooks belong in the committed file because
+VS Code chat runs the Claude-format hooks for every teammate, and reads `settings.local.json` as
+well without de-duplicating across files
+([ADR 0024](../../../docs/adr/0024-vs-code-runs-the-claude-format-hooks-when-a-repo-wires-claude.md)).
+
 ### 2. Extend detection — the graph-state checks the verifier lacks
 
 Read-only probes, each reported as a finding:
