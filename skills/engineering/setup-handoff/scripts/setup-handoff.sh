@@ -661,7 +661,7 @@ board_commit_payload() { # board-dir
     [ -e "$b/$f" ] && git -C "$b" add -- "$b/$f" 2> /dev/null
   done
   git -C "$b" diff --cached --quiet 2> /dev/null && return 0 # nothing of ours changed
-  git -C "$b" commit --quiet -m "handoff: install board machinery" 2> /dev/null || {
+  git -C "$b" commit --quiet -m "build(setup): install board machinery" 2> /dev/null || {
     echo "setup-handoff: could not commit the board machinery in $b (is git identity configured?)"
     return 0
   }

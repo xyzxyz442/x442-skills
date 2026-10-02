@@ -3548,7 +3548,7 @@ cmd_claim() {
     } > "$LOCKS/$key/owner"
     lease_index
     leases_shared || break
-    lease_commit_push "$key" "handoff: claim $id" "$doc_path" && break
+    lease_commit_push "$key" "chore(other): claim $id" "$doc_path" && break
 
     lease_rollback "$key"
     local synced=0
@@ -3596,7 +3596,7 @@ cmd_touch() {
   # On a shared board the deadline other machines read is the lease's COMMIT time, so an extension
   # that is not committed extends nothing outside this checkout. Optimistic, like a release: if the
   # push cannot land, the extension is still real locally and saying "touch failed" would be false.
-  release_commit_push "handoff: extend lease on $id" "$(doc_of "$id" 2> /dev/null)"
+  release_commit_push "chore(other): extend lease on $id" "$(doc_of "$id" 2> /dev/null)"
   echo "Lease on $id extended ${TTL_HOURS}h."
 }
 
@@ -3953,7 +3953,7 @@ move_publish_target() { # target-board dest src-label
   local to="$1" dest="$2" src_label="$3"
   handoff_leases_shared "$to" || return 0
   handoff_board_git "$to" add --all -- "$dest" "$to/INDEX.md" "$(dirname "$dest")/INDEX.md"
-  if handoff_board_git "$to" commit --quiet -m "handoff: move in $(basename "$dest" .md) from $src_label"; then
+  if handoff_board_git "$to" commit --quiet -m "docs(docs): move in $(basename "$dest" .md)" -m "from $src_label"; then
     handoff_board_git "$to" push --quiet "$(handoff_board_remote "$to")" HEAD \
       || echo "⚠️  Moved and committed on the target, but its push did not land. Push $to."
   fi
@@ -4095,7 +4095,7 @@ cmd_move() { # <id> --to <board-dir> [--group G] [--id NEW] [--to-remote host/ow
 
   move_leave_pointer "$f" "$id" "$dest" "$dst_label"
   lease_index > /dev/null
-  release_commit_push "handoff: move $id to $dst_label" "$(arch_file "$id")"
+  release_commit_push "docs(docs): move out $id"$'\n\n'"to $dst_label" "$(arch_file "$id")"
 
   local dependents
   dependents="$(move_dependents_of "$id")"
@@ -5597,7 +5597,7 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
   # ADR 0020 — after the doc is fully updated, before it is committed/pushed below.
   [ -n "$(board_remote)" ] && machine_refs_file "$f"
   lease_index > /dev/null
-  release_commit_push "handoff: checkpoint $id" "$f"
+  release_commit_push "chore(other): checkpoint $id" "$f"
   echo "Checkpointed $id — Current state published, lease kept."
 }
 
@@ -5609,7 +5609,7 @@ cmd_checkpoint() { # <id> [current-state text] [--force-secret REASON]
 # and neither `release` nor `claim` could clear it: the board read as work-in-progress for hours.
 finish_release() { # id status
   clear_lock "$(lock_key "$1")"
-  _release_subject="handoff: release $1 ($2)"
+  _release_subject="chore(other): release $1 ($2)"
   # A closed handoff is no longer awaiting review; leaving `review: pending` set would make a
   # reopened doc read as pending against a review that already happened. doc_of searches active
   # THEN archive, so this reaches the doc whether or not a `done` release above already moved it.
@@ -6347,7 +6347,7 @@ cmd_migrate() {
   # the board while this ran; the migration is undone rather than left half-applied.
   if leases_shared; then
     board_git add --all -- "$DIR"
-    if ! board_git commit --quiet -m "handoff: migrate board schema $from → $to ($migrated docs)"; then
+    if ! board_git commit --quiet -m "chore(setup): migrate board schema $from → $to ($migrated docs)"; then
       die "could not commit the migration (is git identity configured?). Nothing was pushed."
     fi
     if ! board_git push --quiet "$(board_remote)" HEAD; then
@@ -6363,7 +6363,7 @@ cmd_migrate() {
     echo "✅ Migrated $migrated document(s) to schema $to and pushed."
   else
     board_git add --all -- "$DIR" 2> /dev/null
-    board_git commit --quiet -m "handoff: migrate board schema $from → $to ($migrated docs)" 2> /dev/null \
+    board_git commit --quiet -m "chore(setup): migrate board schema $from → $to ($migrated docs)" 2> /dev/null \
       && echo "✅ Migrated $migrated document(s) to schema $to (committed locally)." \
       || echo "✅ Migrated $migrated document(s) to schema $to. Commit $DIR when you are ready."
   fi
@@ -6414,7 +6414,7 @@ cmd_reap() { # show (and with --force, clear) expired leases
   # the local modification that makes the next claim's fast-forward refuse — so the board's own
   # self-healing would take the claim path down. Optimistic like a release: this records a lease
   # that had already lapsed, so a failed push is a warning, not a reason to keep the lease.
-  [ "$force" = "--force" ] && release_commit_push "handoff: reap expired leases"
+  [ "$force" = "--force" ] && release_commit_push "chore(other): reap expired leases"
   return 0
 }
 

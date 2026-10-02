@@ -27,6 +27,9 @@ cp "$HERE/tracker-github.sh" "$HERE/hooks.sh" "$SRC/"
 cp "$HERE/../../../../../harness/lib/fake-tracker.sh" "$SRC/"
 cp "$ASSETS"/handoff-*-template.md "$TPL/"
 chmod +x "$SRC/handoff"
+# Read only by the commit-subject lint below. Copied rather than read in place for the same reason.
+mkdir -p "$SRC/lint"
+cp "$HERE/../setup-handoff.sh" "$ASSETS/mirror-workflow.yml" "$SRC/lint/"
 
 # ONE session id per run, pinned here so the suite never inherits the developer's.
 #
@@ -2102,6 +2105,25 @@ chk_contains "checkpoint on a standalone doc refuses — there is no lease to ke
     cph "$CP_ME" new cp-ref --standalone --title "ref" --audience acme-api > /dev/null
     cph "$CP_ME" checkpoint cp-ref "x"
   )" "standalone"
+
+printf '\nboard commits are Conventional Commits\n'
+# A board is a git repo like any other, and its history is linted like any other. The CLI writes
+# most of that history, so a subject it builds that fails commitlint fails on every board. `board`
+# is the seed commit mkshared writes, not the CLI's.
+cph "$CP_ME" release cp-work --status open "parked" > /dev/null
+CC_BAD="$(git -C "$CPB" log --format=%s | grep -vx 'board' \
+  | grep -vE '^(chore|docs|build)\((other|docs|setup)\): [a-z0-9]' || true)"
+chk "every subject the CLI wrote has an allowed type and scope" "" "$CC_BAD"
+chk "and fits the 100-character header limit" "" \
+  "$(git -C "$CPB" log --format=%s | awk 'length > 100' || true)"
+# claim, checkpoint and release ran above; move, migrate, reap, the hook's lease extension, the
+# installer and the mirror workflow are not exercised on a pushed board here, so hold their
+# literals to the same rule at the source.
+chk "no commit subject in the shipped sources uses the bare handoff: prefix" "" \
+  "$(grep -nE '"handoff: (claim|extend lease|move|checkpoint|release|migrate|reap|install)' \
+    "$SRC/handoff" "$SRC/hooks.sh" "$SRC/lint/setup-handoff.sh" "$SRC/lint/mirror-workflow.yml" || true)"
+chk "no commit subject uses a scope commitlint does not allow" "" \
+  "$(grep -nE 'commit[^"]*-m "[a-z]+\((board|handoff)\)' "$SRC/lint/setup-handoff.sh" "$SRC/lint/mirror-workflow.yml" || true)"
 
 printf '\nan external tracker attaches per board, by reference (ADR 0011, schema 2)\n'
 XR="$(mkboard)"
