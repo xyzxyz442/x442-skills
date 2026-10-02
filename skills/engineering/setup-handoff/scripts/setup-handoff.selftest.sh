@@ -447,5 +447,27 @@ chk "a claude-only custom board is found through the \$R anchor" "0" \
 chk "the derived board path carries no literal \$R" "0" \
   "$(printf '%s' "$CR_OUT" | grep -c '/\$R/')"
 
+printf '\nVS Code chat runs the committed claude hooks (ADR 0024)\n'
+vfind() { # repo id -> that finding's level(s), or "none"
+  bash "$HERE/verify-setup-handoff.sh" "$1" --json 2> /dev/null \
+    | python3 -c 'import json,sys; f=[x["level"] for x in json.load(sys.stdin)["findings"] if x["id"]==sys.argv[1]]; print(",".join(f) or "none")' "$2"
+}
+vsc() { python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s.get("chat.useClaudeHooks"), s.get("chat.hookFilesLocations", {}).get(".github/hooks/handoff.json"))' "$1/.vscode/settings.json" 2> /dev/null || echo absent; }
+VS="$(mkparentrepo)"
+"$INSTALLER" "$VS" --tools claude,copilot --primary claude > /dev/null 2>&1
+chk "claude primary: useClaudeHooks on, handoff.json off in VS Code" "True False" "$(vsc "$VS")"
+chk "the verifier accepts it" "pass" "$(vfind "$VS" vscode.hook_source)"
+"$INSTALLER" "$VS" --tools claude,copilot --primary copilot > /dev/null 2>&1
+chk "copilot primary: handoff.json stays on (it alone carries the hard hooks)" "True None" "$(vsc "$VS")"
+VL="$(mkparentrepo)"
+VL_OUT="$("$INSTALLER" "$VL" --tools claude --primary claude --local-wiring 2>&1)"
+chk "--local-wiring never writes the tracked .vscode/settings.json" "absent" "$(vsc "$VL")"
+chk_contains "--local-wiring says where to turn it on instead" "$VL_OUT" "chat.useClaudeHooks"
+VU="$(mkparentrepo)"
+"$INSTALLER" "$VU" --tools copilot --primary copilot > /dev/null 2>&1
+mkdir -p "$VU/.vscode"
+printf '{"chat.hookFilesLocations": {".github/hooks/handoff.json": false}}\n' > "$VU/.vscode/settings.json"
+chk "handoff.json off with no claude twin fails" "fail" "$(vfind "$VU" vscode.copilot_off_uncovered)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

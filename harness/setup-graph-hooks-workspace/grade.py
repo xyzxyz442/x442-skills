@@ -720,6 +720,83 @@ def grade_claude_committed(target: Path) -> list[gc.Expectation]:
     return exps
 
 
+# ADR 0024: VS Code chat runs the committed Claude-format hooks, and the Copilot file is switched
+# off there only while those cover it -- never when Copilot is the primary, and never for a repo
+# whose Claude-format file does not carry them (the teammate regression).
+VSCODE_SETTINGS = ".vscode/settings.json"
+
+
+def _install(repo: Path, tools: str, primary: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", str(INSTALLER), str(repo), "--tools", tools, "--primary", primary],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _vscode(repo: Path) -> dict:
+    p = repo / VSCODE_SETTINGS
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def grade_vscode_hook_source(target: Path) -> list[gc.Expectation]:
+    repo = _embed_scratch(target)
+    exps: list[gc.Expectation] = []
+    try:
+        run = _install(repo, "claude,copilot", "claude")
+        s = _vscode(repo)
+        exps.append(
+            gc.expectation(
+                "claude primary: VS Code runs the Claude-format hooks, graph.json off there",
+                run.returncode == 0
+                and s.get("chat.useClaudeHooks") is True
+                and s.get("chat.hookFilesLocations", {}).get(COPILOT_CONFIG) is False,
+                f"rc={run.returncode} settings={s}",
+            )
+        )
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "vscode.hook_source",
+                "pass",
+                label="verifier accepts the applied VS Code hook source",
+            )
+        )
+
+        _install(repo, "claude,copilot", "copilot")
+        s = _vscode(repo)
+        exps.append(
+            gc.expectation(
+                "copilot primary: graph.json stays on in VS Code (it carries the refresh)",
+                COPILOT_CONFIG not in s.get("chat.hookFilesLocations", {}),
+                f"settings={s}",
+            )
+        )
+
+        # The teammate regression: graph.json switched off, no committed Claude twin.
+        (repo / CLAUDE_CONFIG).unlink()
+        (repo / ".vscode").mkdir(exist_ok=True)
+        (repo / VSCODE_SETTINGS).write_text(
+            json.dumps(
+                {
+                    "chat.useClaudeHooks": True,
+                    "chat.hookFilesLocations": {COPILOT_CONFIG: False},
+                }
+            )
+        )
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "vscode.copilot_off_uncovered",
+                "fail",
+                label="verifier fails graph.json switched off without a Claude twin",
+            )
+        )
+    finally:
+        shutil.rmtree(repo.parent, ignore_errors=True)
+    return exps
+
+
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     """Grade in an isolated copy when `target` is nested in a larger repo.
 
@@ -771,6 +848,8 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         return grade_mcp_portable(target)
     if eval_id == "claude-committed":
         return grade_claude_committed(target)
+    if eval_id == "vscode-hook-source":
+        return grade_vscode_hook_source(target)
 
     exps = [gc.run_verify_script(VERIFY, target)]
     # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder

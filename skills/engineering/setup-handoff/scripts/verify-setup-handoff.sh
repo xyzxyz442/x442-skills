@@ -581,6 +581,33 @@ check_tool claude "$ROOT/.claude/settings.local.json"
 check_tool gemini "$ROOT/.gemini/settings.json"
 check_tool copilot "$ROOT/.github/hooks/handoff.json"
 [ -z "$WIRED" ] && bad tool.wired.any "no tool hooks wired (expected at least one)"
+# VS Code chat hook source (ADR 0024). Only the COMMITTED claude file counts: a --local-wiring
+# install is per-machine and cannot stand in for handoff.json for a teammate. "Covered" is literal:
+# every hook kind handoff.json runs is also in it, so switching handoff.json off loses nothing.
+VC_CLAUDE=no
+VC_COVERED=no
+CJ="$ROOT/.claude/settings.json"
+if [ -f "$CJ" ] && grep -qE "$HOOK_CMD_RE" "$CJ" 2> /dev/null && is_json "$CJ"; then
+  VC_CLAUDE=yes
+  VC_COVERED=yes
+  VC_KINDS=$(grep -E "$HOOK_CMD_RE" "$CJ" | grep -oE -- '--kind [a-z-]+' | sed 's/--kind //' | sort -u)
+  for k in $(grep -E "$HOOK_CMD_RE" "$ROOT/.github/hooks/handoff.json" 2> /dev/null | grep -oE -- '--kind [a-z-]+' | sed 's/--kind //' | sort -u); do
+    printf '%s\n' "$VC_KINDS" | grep -qx "$k" || VC_COVERED=no
+  done
+fi
+if [ -f "$SCRIPT_DIR/vscode-hooks.py" ]; then
+  VC_LINE=$(python3 "$SCRIPT_DIR/vscode-hooks.py" --repo "$ROOT" --copilot-file .github/hooks/handoff.json \
+    --claude "$VC_CLAUDE" --covered "$VC_COVERED" --check 2> /dev/null)
+  VC_LEVEL="${VC_LINE%% *}"
+  VC_REST="${VC_LINE#* }"
+  VC_ID="${VC_REST%% *}"
+  VC_MSG="${VC_REST#* }"
+  case "$VC_LEVEL" in
+    ok) ok "$VC_ID" "$VC_MSG" ;;
+    warn) warn "$VC_ID" "$VC_MSG" ;;
+    fail) bad "$VC_ID" "$VC_MSG" ;;
+  esac
+fi
 if [ -n "$HARD" ]; then
   ok tool.primary.hard "hard-enforcement primary wired (pretool deny): $HARD"
 else

@@ -2636,8 +2636,8 @@ def grade_custom_board_name(_target):
         e.append(gc.finding(findings, "tool.primary.hard", "pass"))
         e.append(gc.no_findings_at(findings, "fail"))
 
-        # The graph hooks land in .claude/settings.local.json, which check_tool also reads. Exactly
-        # one config may be claimed as handoff wiring, and it must be the one setup-handoff wrote.
+        # The graph hooks land in the same .claude/settings.json (ADR 0024). Exactly one config may
+        # be claimed as handoff wiring, and the graph groups beside ours must not add a second.
         label = "a graph-hooks config alongside it is NOT claimed as handoff wiring"
         if graph.returncode != 0:
             e.append(
@@ -2663,12 +2663,13 @@ def grade_custom_board_name(_target):
             ["bash", str(SETUP), str(only), "--tools", "claude", "--primary", "claude"],
             only,
         )
+        # Drop handoff's claude wiring, keep its board: graph then writes settings.json alone.
+        (only / ".claude/settings.json").unlink()
         g2 = wire_graph(only)
-        graph_cfg = only / ".claude/settings.local.json"
+        graph_cfg = only / ".claude/settings.json"
         if g2.returncode != 0 or not graph_cfg.is_file():
             e.append(gc.skipped(label, f"setup-graph-hooks: {g2.stderr.strip()[:160]}"))
         else:
-            shutil.copyfile(graph_cfg, only / ".claude/settings.json")
             e.append(
                 gc.finding(
                     gc.verify_findings(VERIFY, only),

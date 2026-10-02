@@ -227,6 +227,28 @@ for t in $TOOLS_LIST; do
   esac
 done
 
+# ---- VS Code chat hook source (ADR 0024) -----------------------------------------------
+# VS Code chat runs the committed Claude-format hooks when this repo wires Claude, and stops
+# reading graph.json there only while those cover it: Claude wired, and Copilot not the primary
+# (graph.json alone then carries the end-of-turn refresh). Copilot CLI and the cloud agent keep
+# graph.json either way. Only graph.json's own entry is touched.
+VC_CLAUDE=no
+VC_COVERED=no
+case " $TOOLS_LIST " in *" claude "*) VC_CLAUDE=yes ;; esac
+if [ "$VC_CLAUDE" = yes ] && [ "$PRIMARY" != copilot ]; then
+  case " $TOOLS_LIST " in *" copilot "*) VC_COVERED=yes ;; esac
+fi
+if python3 "$HERE/config/vscode-hooks.py" --repo . --copilot-file .github/hooks/graph.json \
+  --claude "$VC_CLAUDE" --covered "$VC_COVERED" --apply; then
+  if [ "$VC_CLAUDE" = yes ]; then
+    VC_NOTE=""
+    [ "$VC_COVERED" = yes ] && VC_NOTE=", graph.json off there"
+    echo "  = .vscode/settings.json: VS Code chat runs the Claude-format hooks$VC_NOTE"
+  fi
+else
+  echo "  ! .vscode/settings.json is not plain JSON — add the settings printed above by hand"
+fi
+
 # ---- MCP config portability ------------------------------------------------------------
 # `code-review-graph install` writes the absolute repo root as the server's `cwd` into .mcp.json,
 # .gemini/settings.json and .vscode/mcp.json — repo files that get committed, so one developer's

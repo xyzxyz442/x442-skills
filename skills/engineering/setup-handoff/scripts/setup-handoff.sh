@@ -1141,6 +1141,32 @@ for t in ${TOOL_ARR[@]+"${TOOL_ARR[@]}"}; do
   if [ "$t" = "$PRIMARY" ]; then render_and_merge "$t" 1; else render_and_merge "$t" 0; fi
 done
 
+# --- VS Code chat hook source (ADR 0024) -----------------------------------------------
+# VS Code chat runs the committed Claude-format hooks when claude is wired, and stops reading
+# handoff.json there only while those cover it: every tool gets the soft hooks, but only the
+# primary gets the hard ones, so a copilot primary keeps handoff.json on. Copilot CLI and the
+# cloud agent keep handoff.json either way. Only handoff.json's own entry is touched.
+VC_CLAUDE=no
+VC_COPILOT=no
+for t in ${TOOL_ARR[@]+"${TOOL_ARR[@]}"}; do
+  [ "$t" = claude ] && VC_CLAUDE=yes
+  [ "$t" = copilot ] && VC_COPILOT=yes
+done
+if [ "$LOCAL_WIRING" = 1 ]; then
+  # Promised: nothing tracked changes. .vscode/settings.json usually is tracked.
+  [ "$VC_CLAUDE" = yes ] \
+    && echo "  VS Code chat: set \"chat.useClaudeHooks\": true in your user settings to run these hooks there"
+else
+  VC_COVERED=no
+  [ "$VC_CLAUDE" = yes ] && [ "$VC_COPILOT" = yes ] && [ "$PRIMARY" != copilot ] && VC_COVERED=yes
+  if ! python3 "$SKILL_DIR/scripts/vscode-hooks.py" --repo "$REPO" --copilot-file .github/hooks/handoff.json \
+    --claude "$VC_CLAUDE" --covered "$VC_COVERED" --apply; then
+    echo "  WARN: .vscode/settings.json is not plain JSON -- add the settings printed above by hand" >&2
+  elif [ "$VC_CLAUDE" = yes ]; then
+    echo "  VS Code chat: runs the Claude-format hooks$([ "$VC_COVERED" = yes ] && echo ', handoff.json off there' || true)"
+  fi
+fi
+
 # cross-repo: grant the current repo read/exec access to the shared handoff dir via
 # Claude's additionalDirectories (best-effort; only when claude is wired).
 if [ "$TOPOLOGY" = "cross-repo" ] && printf '%s' "$TOOLS" | grep -q claude; then

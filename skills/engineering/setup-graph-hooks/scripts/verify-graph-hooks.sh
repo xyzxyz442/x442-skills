@@ -290,6 +290,31 @@ if [ -f .github/hooks/graph.json ]; then
     add_wired copilot
   } || bad tool.config.json_valid "copilot config invalid JSON"
 fi
+# VS Code chat hook source (ADR 0024). "Covered" is literal: every hook kind graph.json runs is also
+# in the committed Claude-format file, so switching graph.json off in VS Code loses nothing.
+VC_CLAUDE=no
+VC_COVERED=no
+if [ "$CSET" = .claude/settings.json ] && is_json .claude/settings.json; then
+  VC_CLAUDE=yes
+  VC_COVERED=yes
+  CLAUDE_KINDS=$(grep -E "$GRAPH_CLAUDE_RE" .claude/settings.json | grep -oE -- '--kind [a-z-]+' | sed 's/--kind //' | sort -u)
+  for k in $(grep -oE '\.graph-hooks/copilot/[a-z-]+\.sh' .github/hooks/graph.json 2> /dev/null | sed 's#.*/##; s#\.sh$##' | sort -u); do
+    printf '%s\n' "$CLAUDE_KINDS" | grep -qx "$k" || VC_COVERED=no
+  done
+fi
+if [ -f "$SCRIPT_DIR/config/vscode-hooks.py" ]; then
+  VC_LINE=$(python3 "$SCRIPT_DIR/config/vscode-hooks.py" --repo . --copilot-file .github/hooks/graph.json \
+    --claude "$VC_CLAUDE" --covered "$VC_COVERED" --check 2> /dev/null)
+  VC_LEVEL="${VC_LINE%% *}"
+  VC_REST="${VC_LINE#* }"
+  VC_ID="${VC_REST%% *}"
+  VC_MSG="${VC_REST#* }"
+  case "$VC_LEVEL" in
+    ok) ok "$VC_ID" "$VC_MSG" ;;
+    warn) warn "$VC_ID" "$VC_MSG" ;;
+    fail) bad "$VC_ID" "$VC_MSG" ;;
+  esac
+fi
 # antigravity (inert by design)
 [ -f .agents/hooks.json ] && warn antigravity.active "ACTIVE .agents/hooks.json present — contract is UNVERIFIED; confirm before trusting"
 [ -f .agents/hooks.json.example ] && ok antigravity.example "antigravity example present and inert (not activated) — expected"
