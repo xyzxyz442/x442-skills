@@ -152,6 +152,7 @@ if [ ! -d "$HD" ]; then
     DERIVED=$(grep -E "$HOOK_CMD_RE" "$ROOT/$CF" 2> /dev/null | grep -oE '[^" ]*/(scripts/)?hooks\.sh' | head -1)
     [ -n "$DERIVED" ] || continue
     D="${DERIVED##*CLAUDE_PROJECT_DIR/}"
+    D="${D#\$R/}" # the claude command's root anchor since ADR 0024 (R="${CLAUDE_PROJECT_DIR:-...}")
     D="${D#bash }"
     case "$D" in */scripts/hooks.sh) D="$(dirname "$(dirname "$D")")" ;; *) D="$(dirname "$D")" ;; esac
     case "$D" in /*) HD="$D" ;; *) HD="$ROOT/$D" ;; esac

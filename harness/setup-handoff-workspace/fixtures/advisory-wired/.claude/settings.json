@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; bash \"$R/.agents/handoff/scripts/hooks.sh\" --kind sessionstart --tool claude --project-dir \"$R\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude --project-dir \"$CLAUDE_PROJECT_DIR\""
+            "command": "R=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"; bash \"$R/.agents/handoff/scripts/hooks.sh\" --kind posttool-edit --tool claude --project-dir \"$R\""
           }
         ],
         "matcher": "Edit|Write|MultiEdit"

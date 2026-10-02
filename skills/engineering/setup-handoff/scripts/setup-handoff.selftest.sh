@@ -435,5 +435,17 @@ printf '{\n  "handle": "@@dev-a",\n  "hostAccount": "dev-a"\n}\n' > "$HV/.agents
 chk_contains "only one leading @ is stripped" \
   "$(bash "$HERE/verify-setup-handoff.sh" "$HV" 2>&1)" "differs from hostAccount"
 
+printf '\nclaude command resolves without CLAUDE_PROJECT_DIR (ADR 0024)\n'
+# The claude command now opens with R="${CLAUDE_PROJECT_DIR:-<git root>}" and runs "$R/<board>/...".
+# The verifier recovers a single-repo board from that command when nothing declares it, and must
+# strip the "$R/" anchor the way it strips the old "$CLAUDE_PROJECT_DIR/" one.
+CR="$(mkparentrepo)"
+"$INSTALLER" "$CR" --tools claude --primary claude --handoff-dir tools/board > /dev/null 2>&1
+CR_OUT="$(bash "$HERE/verify-setup-handoff.sh" "$CR" 2>&1)"
+chk "a claude-only custom board is found through the \$R anchor" "0" \
+  "$(printf '%s' "$CR_OUT" | grep -c 'handoff not installed')"
+chk "the derived board path carries no literal \$R" "0" \
+  "$(printf '%s' "$CR_OUT" | grep -c '/\$R/')"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
