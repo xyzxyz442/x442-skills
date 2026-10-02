@@ -359,12 +359,15 @@ sed_field() { # $1 = session|path|source|tool  (best-effort, no python3)
 # board doc is never refused. Anything else -- an unknown or missing name too -- stays gated: a
 # missed write tool would switch enforcement off unseen, while a missed read tool only over-asks.
 read_only_tool() { # $1 = tool name
+  # Naming-style blind: lowercased with _ and - stripped, so read_file, readFile and
+  # copilot_readFile all match. VS Code does not document its tool names. Write stems are checked
+  # first, so createFile or editFiles never reach the read stems.
   local t
-  t="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  t="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '_-')"
   case "$t" in
     "") return 1 ;;
     *edit* | *write* | *replace* | *create* | *insert* | *apply* | *patch* | *delete* | *remove* | *rename* | *move* | *update*) return 1 ;;
-    read | read_* | *_read | *_read_* | list | list_* | *_list | *_list_* | ls | glob | grep | *search* | find | find_* | *_find | view | view_* | get_* | fetch | fetch_*) return 0 ;;
+    *read* | *list* | *search* | *find* | *grep* | *glob* | *view* | *fetch* | ls | get*) return 0 ;;
   esac
   return 1
 }

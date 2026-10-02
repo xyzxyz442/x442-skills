@@ -497,6 +497,12 @@ chk "a terminal command naming the board passes" "allow" "$(gate run_in_terminal
 chk "VS Code replace_string_in_file on INDEX.md is refused" "deny" "$(gate replace_string_in_file "$J_READ")"
 chk "Claude Edit on INDEX.md is still refused" "deny" "$(gate Edit "$J_EDIT")"
 chk "an unrecognized tool carrying a board path stays gated" "deny" "$(gate frobnicate "$J_READ")"
+# VS Code does not document its tool names (they are read from the agent debug logs), so the
+# match must not depend on the naming style: snake_case, camelCase, or a vendor prefix.
+chk "camelCase readFile passes" "allow" "$(gate readFile "$J_READ")"
+chk "prefixed copilot_findTextInFiles naming a board file passes" "allow" "$(gate copilot_findTextInFiles "$J_READ")"
+chk "camelCase createFile on INDEX.md is refused" "deny" "$(gate createFile "$J_READ")"
+chk "camelCase editFiles on INDEX.md is refused" "deny" "$(gate editFiles "$J_READ")"
 
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
