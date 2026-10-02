@@ -205,7 +205,7 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
             bool(first)
             and "calculateInvoiceTotal" in first_ctx
             and "src/billing.ts" in first_ctx
-            and _decision(first) != "block",
+            and _decision(first) != "deny",
             f"additionalContext: {first_ctx[:200]!r}" if first else NO_HOOK_OUTPUT,
         )
     )
@@ -219,7 +219,7 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
     exps.append(
         gc.expectation(
             "repeating the same grep is BLOCKED once the graph already answered it",
-            _decision(second) == "block",
+            _decision(second) == "deny",
             (
                 f"second grep output: {json.dumps(second)[:200]}"
                 if second
@@ -246,7 +246,7 @@ def grade_graph_search_behavior(target: Path) -> list[gc.Expectation]:
             gc.expectation(
                 "a first-time miss still allows the grep, pointing at the graph tool for next time",
                 bool(miss)
-                and _decision(miss) != "block"
+                and _decision(miss) != "deny"
                 and (
                     "graphify" in miss_ctx or "semantic_search_nodes_tool" in miss_ctx
                 ),

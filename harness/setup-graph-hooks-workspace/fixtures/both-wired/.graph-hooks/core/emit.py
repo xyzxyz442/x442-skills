@@ -14,7 +14,7 @@
 #    "systemMessage": "..."}    # session-level system message
 #
 # Per-tool output contracts (sources cited in SKILL.md):
-#   Claude Code   PreToolUse deny  -> hookSpecificOutput.permissionDecision="block"
+#   Claude Code   PreToolUse deny  -> hookSpecificOutput.permissionDecision="deny"
 #                 context          -> hookSpecificOutput.additionalContext
 #   Gemini CLI    BeforeTool deny  -> {"decision":"deny","reason":...}
 #                 context          -> hookSpecificOutput.additionalContext
@@ -48,7 +48,7 @@ def translate(n, tool: str, event: str) -> dict:
     if tool == "claude":
         hso = {"hookEventName": "PreToolUse" if event == "pretool" else "SessionStart"}
         if decision == "deny":
-            hso["permissionDecision"] = "block"
+            hso["permissionDecision"] = "deny"
             hso["permissionDecisionReason"] = reason
         elif context:
             hso["additionalContext"] = context
@@ -103,12 +103,15 @@ def _selftest() -> int:
     ctx = {"context": "graph says X"}
 
     # Claude: deny and context both ride inside hookSpecificOutput, and the event name differs
-    # per event. permissionDecision is "block" -- NOT "deny", which is Copilot's spelling.
+    # per event. permissionDecision is "deny": Claude Code accepts allow|deny|ask|defer there, and
+    # "block" -- the OLD top-level spelling -- fails validation, so the call goes through as if no
+    # hook had answered (https://code.claude.com/docs/en/hooks). The grep gate shipped that way.
     got = translate(deny, "claude", "pretool")
+    assert "block" not in json.dumps(got), got
     assert got == {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "block",
+            "permissionDecision": "deny",
             "permissionDecisionReason": "use the graph",
         }
     }, got
@@ -131,7 +134,8 @@ def _selftest() -> int:
         "hookSpecificOutput": {"additionalContext": "graph says X"}
     }
 
-    # Copilot: top-level, and "deny" not "block". THE asymmetry worth asserting -- preToolUse
+    # Copilot: the same "deny" as Claude, but TOP-LEVEL rather than nested. THE asymmetry worth
+    # asserting -- preToolUse
     # cannot inject context, so a context-only decision must produce NOTHING rather than a
     # plausible-looking object the tool discards.
     assert translate(deny, "copilot", "pretool") == {

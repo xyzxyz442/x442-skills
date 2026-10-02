@@ -75,12 +75,12 @@ one tool is named `--primary`, so N wired tools still produce exactly one refres
 
 ### Per-tool support
 
-| Tool           | Config file                | Pre-tool event              | Session event  | End-of-turn  | Deny shape                   |
-| -------------- | -------------------------- | --------------------------- | -------------- | ------------ | ---------------------------- |
-| Claude Code    | `.claude/settings*.json`   | `PreToolUse` (matcher)      | `SessionStart` | `Stop`       | `permissionDecision:"block"` |
-| Gemini CLI     | `.gemini/settings.json`    | `BeforeTool` (regex)        | `SessionStart` | `AfterAgent` | `decision:"deny"`            |
-| GitHub Copilot | `.github/hooks/graph.json` | `preToolUse`                | `sessionStart` | `agentStop`  | `permissionDecision:"deny"`  |
-| Antigravity    | `.agents/hooks.json`       | `PreToolUse` _(unverified)_ | —              | —            | _(unverified)_               |
+| Tool           | Config file                | Pre-tool event              | Session event  | End-of-turn  | Deny shape                  |
+| -------------- | -------------------------- | --------------------------- | -------------- | ------------ | --------------------------- |
+| Claude Code    | `.claude/settings*.json`   | `PreToolUse` (matcher)      | `SessionStart` | `Stop`       | `permissionDecision:"deny"` |
+| Gemini CLI     | `.gemini/settings.json`    | `BeforeTool` (regex)        | `SessionStart` | `AfterAgent` | `decision:"deny"`           |
+| GitHub Copilot | `.github/hooks/graph.json` | `preToolUse`                | `sessionStart` | `agentStop`  | `permissionDecision:"deny"` |
+| Antigravity    | `.agents/hooks.json`       | `PreToolUse` _(unverified)_ | —              | —            | _(unverified)_              |
 
 Sources: [Claude Code hooks](https://code.claude.com/docs/en/hooks.md),
 [Gemini CLI hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md),

@@ -10,6 +10,7 @@
 # The container of tool arguments differs by tool:
 #   Claude / Gemini / Antigravity -> "tool_input"   (snake_case)
 #   GitHub Copilot                -> "toolArgs"      (camelCase)
+#   VS Code chat (Claude format)  -> "tool_input", but a file read's path is "filePath"
 # Extraction is shape-tolerant (it tries both, then top level), so a contract drift in
 # one tool degrades to "no match" rather than a crash. --tool is accepted for clarity
 # and future per-tool divergence.
@@ -49,7 +50,7 @@ def extract(payload, field: str) -> str:
         return ti.get("command", "") or ""
     if field == "readtarget":
         parts = [
-            str(ti.get("file_path") or ""),
+            str(ti.get("file_path") or ti.get("filePath") or ""),
             str(ti.get("pattern") or ""),
             str(ti.get("path") or ""),
         ]
@@ -102,6 +103,22 @@ def _selftest() -> int:
         == "a.ts Foo src/"
     )
     assert extract({"tool_input": {}}, "readtarget") == ""
+
+    # VS Code runs Claude-format hooks with matchers IGNORED (ADR 0024): every PreToolUse kind
+    # sees every tool. A terminal call reaching the read gate, or a file read reaching the shell
+    # gate, must extract nothing -- an empty field is "no match", and the call passes.
+    vsc_term = {
+        "tool_name": "run_in_terminal",
+        "tool_input": {"command": "grep -rn foo src/"},
+    }
+    vsc_read = {"tool_name": "read_file", "tool_input": {"filePath": "src/a.ts"}}
+    assert (
+        extract(vsc_term, "readtarget") == ""
+    ), "terminal call must not look like a read"
+    assert (
+        extract(vsc_read, "command") == ""
+    ), "file read must not look like a shell command"
+    assert extract(vsc_read, "readtarget") == "src/a.ts", "VS Code spells it filePath"
 
     # Shape tolerance: degrade to "", never raise. Each of these is a real payload a tool has
     # sent at some point (null argument object, list body, missing key, wrong type).
