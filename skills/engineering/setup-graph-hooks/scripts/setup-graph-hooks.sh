@@ -190,14 +190,22 @@ for t in $TOOLS_LIST; do
   case "$t" in
     claude)
       mkdir -p .claude
-      # Merge into BOTH the committed template and the active local copy. merge.py adds only
-      # the hook groups it recognizes as ours and refreshes them in place, so a --primary change
-      # drops the stale Stop/endturn from whichever file previously owned it — no stale second
-      # refresh owner — while a user's own hooks in those same events stay put. The active file
-      # Claude Code actually reads is settings.local.json.
-      render claude | merge .claude/settings.example.json
-      render claude | merge .claude/settings.local.json
-      echo "  + .claude/settings.example.json + settings.local.json (claude hooks)"
+      # Committed, not per-machine (ADR 0024): VS Code chat runs the Claude-format file for every
+      # teammate, so a gitignored copy would leave anyone who never ran this installer without
+      # graph hooks there. merge.py adds only the groups it recognizes as ours and refreshes them
+      # in place, so a --primary change drops a stale Stop/endturn while a user's own hooks stay.
+      render claude | merge .claude/settings.json
+      # Our groups come OUT of the files earlier versions wrote: VS Code reads settings.local.json
+      # too and, unlike Claude Code, does not de-dupe a command across files. An empty render
+      # removes only ours; a user's own hooks in the same file are carried through.
+      for legacy in .claude/settings.local.json .claude/settings.example.json; do
+        [ -f "$legacy" ] && printf '{"hooks": {}}' | merge "$legacy"
+      done
+      if [ -f .claude/settings.example.json ] \
+        && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d in ({}, {"hooks": {}}) else 1)' .claude/settings.example.json 2> /dev/null; then
+        echo "  ~ .claude/settings.example.json no longer used by graph hooks — remove it if nothing else needs it"
+      fi
+      echo "  + .claude/settings.json (claude hooks; graph groups removed from settings.local.json)"
       ;;
     gemini)
       render gemini | merge .gemini/settings.json

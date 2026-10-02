@@ -51,7 +51,8 @@ STEER_CACHE = Path.home() / ".cache" / "graph-steer-hook"
 GRAPH_HOOKS_DIR = ".graph-hooks"
 NO_HOOK_OUTPUT = "no hook output"
 COPILOT_CONFIG = ".github/hooks/graph.json"
-CLAUDE_CONFIG = ".claude/settings.local.json"
+CLAUDE_CONFIG = ".claude/settings.json"
+CLAUDE_LOCAL = ".claude/settings.local.json"
 
 
 def _slot_path(repo: Path) -> Path:
@@ -622,6 +623,103 @@ def grade_mcp_portable(target: Path) -> list[gc.Expectation]:
     return exps
 
 
+# ADR 0024: Claude's graph hooks are committed in .claude/settings.json, so VS Code runs them for
+# every teammate. A repo wired before that holds them in the gitignored settings.local.json; a
+# re-run must move them, and leave a developer's own hook in that file alone.
+RENDER = REPO / "skills/engineering/setup-graph-hooks/scripts/config/render.py"
+MINE = "bash .claude/mine.sh"
+
+
+def _seed_legacy_local(repo: Path) -> None:
+    """The pre-ADR-0024 layout: our groups in settings.local.json beside a user's own hook."""
+    ours = json.loads(
+        subprocess.run(
+            ["python3", str(RENDER), "--tool", "claude", "--primary", "claude"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    ours["hooks"]["PreToolUse"].append(
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": MINE}]}
+    )
+    (repo / ".claude").mkdir(exist_ok=True)
+    (repo / CLAUDE_LOCAL).write_text(json.dumps(ours, indent=2) + "\n")
+    shared = repo / CLAUDE_CONFIG
+    if shared.exists():
+        shared.unlink()
+
+
+def grade_claude_committed(target: Path) -> list[gc.Expectation]:
+    repo = _embed_scratch(target)
+    exps: list[gc.Expectation] = []
+    try:
+        _seed_legacy_local(repo)
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "claude.legacy_local",
+                "warn",
+                label="verifier flags graph hooks left in settings.local.json",
+            )
+        )
+        run = subprocess.run(
+            [
+                "bash",
+                str(INSTALLER),
+                str(repo),
+                "--tools",
+                "claude,copilot",
+                "--primary",
+                "claude",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        shared = (
+            (repo / CLAUDE_CONFIG).read_text()
+            if (repo / CLAUDE_CONFIG).exists()
+            else ""
+        )
+        local = (repo / CLAUDE_LOCAL).read_text()
+        exps.append(
+            gc.expectation(
+                "installer writes claude graph hooks to the committed settings.json",
+                run.returncode == 0 and ".graph-hooks/hook.sh" in shared,
+                f"rc={run.returncode} settings.json has hook: {'.graph-hooks/hook.sh' in shared}",
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "installer removes its graph groups from settings.local.json",
+                ".graph-hooks/hook.sh" not in local,
+                (
+                    "clean"
+                    if ".graph-hooks/hook.sh" not in local
+                    else "graph hook still in local"
+                ),
+            )
+        )
+        exps.append(
+            gc.expectation(
+                "a developer's own hook in settings.local.json survives",
+                MINE in local,
+                "kept" if MINE in local else "user hook lost",
+            )
+        )
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, repo),
+                "claude.legacy_local",
+                "pass",
+                label="verifier passes once the hooks are committed",
+            )
+        )
+    finally:
+        shutil.rmtree(repo.parent, ignore_errors=True)
+    return exps
+
+
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     """Grade in an isolated copy when `target` is nested in a larger repo.
 
@@ -671,6 +769,8 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         return grade_embed_provider_guard(target)
     if eval_id == "mcp-portable":
         return grade_mcp_portable(target)
+    if eval_id == "claude-committed":
+        return grade_claude_committed(target)
 
     exps = [gc.run_verify_script(VERIFY, target)]
     # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder

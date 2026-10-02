@@ -77,7 +77,7 @@ one tool is named `--primary`, so N wired tools still produce exactly one refres
 
 | Tool           | Config file                | Pre-tool event              | Session event  | End-of-turn  | Deny shape                  |
 | -------------- | -------------------------- | --------------------------- | -------------- | ------------ | --------------------------- |
-| Claude Code    | `.claude/settings*.json`   | `PreToolUse` (matcher)      | `SessionStart` | `Stop`       | `permissionDecision:"deny"` |
+| Claude Code    | `.claude/settings.json`    | `PreToolUse` (matcher)      | `SessionStart` | `Stop`       | `permissionDecision:"deny"` |
 | Gemini CLI     | `.gemini/settings.json`    | `BeforeTool` (regex)        | `SessionStart` | `AfterAgent` | `decision:"deny"`           |
 | GitHub Copilot | `.github/hooks/graph.json` | `preToolUse`                | `sessionStart` | `agentStop`  | `permissionDecision:"deny"` |
 | Antigravity    | `.agents/hooks.json`       | `PreToolUse` _(unverified)_ | —              | —            | _(unverified)_              |

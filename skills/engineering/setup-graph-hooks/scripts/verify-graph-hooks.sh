@@ -244,14 +244,37 @@ section "2. Wired tools + config validity"
 WIRED=""
 add_wired() { WIRED="${WIRED:+$WIRED }$1"; }
 # claude
+# OUR claude command, not just any `--tool claude`: setup-handoff wires the same settings.json.
+GRAPH_CLAUDE_RE='\.graph-hooks/hook\.sh.*--tool claude'
 CSET=""
-[ -f .claude/settings.local.json ] && CSET=.claude/settings.local.json
-[ -z "$CSET" ] && [ -f .claude/settings.example.json ] && CSET=.claude/settings.example.json
-if [ -n "$CSET" ] && grep -q '\-\-tool claude' "$CSET" 2> /dev/null; then
+# Committed first (ADR 0024); the local and example files are where earlier versions wrote it.
+for c in .claude/settings.json .claude/settings.local.json .claude/settings.example.json; do
+  [ -f "$c" ] && grep -qE "$GRAPH_CLAUDE_RE" "$c" 2> /dev/null && {
+    CSET="$c"
+    break
+  }
+done
+# An unparseable settings file breaks Claude Code's load of it (and VS Code's) whether or not our
+# command survived in it, so judge validity on every file that exists, not only on CSET.
+for c in .claude/settings.json .claude/settings.local.json; do
+  [ -f "$c" ] && [ "$c" != "$CSET" ] && ! is_json "$c" && bad tool.config.json_valid "claude config invalid JSON: $c"
+done
+if [ -n "$CSET" ]; then
   is_json "$CSET" && {
     ok tool.wired "claude wired + valid JSON: $CSET"
     add_wired claude
   } || bad tool.config.json_valid "claude config invalid JSON: $CSET"
+  # VS Code reads settings.local.json as well and does not de-dupe across files, so a graph group
+  # left there runs twice; one only there is invisible to every teammate.
+  LEGACY=""
+  for c in .claude/settings.local.json .claude/settings.example.json; do
+    [ -f "$c" ] && grep -qE "$GRAPH_CLAUDE_RE" "$c" 2> /dev/null && LEGACY="${LEGACY:+$LEGACY }$c"
+  done
+  if [ -n "$LEGACY" ]; then
+    warn claude.legacy_local "claude graph hooks in $LEGACY — re-run setup-graph-hooks to move them to .claude/settings.json (ADR 0024)"
+  else
+    ok claude.legacy_local "claude graph hooks committed in .claude/settings.json only"
+  fi
 fi
 # gemini
 if [ -f .gemini/settings.json ] && grep -q '\-\-tool gemini' .gemini/settings.json 2> /dev/null; then
