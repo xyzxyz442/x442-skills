@@ -61,6 +61,11 @@ already covers every hook kind in that Copilot file.
   reach it. Installing graph tools into the review sandbox through `copilot-setup-steps.yml` is a
   separate piece of work.
 - **The grep gate's deny is spelled `deny` for Claude.** Spelled `block`, the gate never blocked.
+- **Hooks judge the tool themselves.** VS Code ignores `matcher`, so the handoff edit gate sees
+  every tool call. It waves through a tool whose name says it only reads, and a payload that names
+  no file, such as a terminal command. It keeps gating every other tool, including one it does not
+  recognize. Missing a write tool would switch enforcement off without anyone seeing it, while
+  missing a read tool only refuses a call that should have passed.
 
 ## Consequences
 

@@ -97,6 +97,9 @@ wired Claude and Copilot
   another skill's Copilot file is never switched off. It is switched off only while Copilot is not the primary. With Copilot as primary, `handoff.json` alone carries the hard-enforcement hooks and stays on. Under `--local-wiring` nothing tracked changes, so the installer prints the setting for your user settings instead.
 - **`.vscode/settings.json` with comments is never rewritten.** The installer prints the two
   settings to add by hand, and the verifier warns `vscode.unreadable`.
+- **In VS Code chat the edit gate sees every tool call**, because VS Code ignores matchers. It
+  lets reads and terminal commands through, refuses an edit of a board doc you have not claimed,
+  and keeps gating any tool it does not recognize.
 - **The verifier fails `vscode.copilot_off_uncovered`** when `.github/hooks/handoff.json` is switched off in VS Code but
   the committed Claude-format file does not cover it. That combination silently removes these hooks
   for every teammate in VS Code chat.

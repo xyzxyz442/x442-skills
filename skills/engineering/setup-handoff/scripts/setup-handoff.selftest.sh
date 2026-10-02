@@ -469,5 +469,34 @@ mkdir -p "$VU/.vscode"
 printf '{"chat.hookFilesLocations": {".github/hooks/handoff.json": false}}\n' > "$VU/.vscode/settings.json"
 chk "handoff.json off with no claude twin fails" "fail" "$(vfind "$VU" vscode.copilot_off_uncovered)"
 
+printf '\nthe edit gate under VS Code, which ignores matchers (ADR 0024)\n'
+# VS Code runs the claude-format pretool-edit on EVERY tool call. A read of a board doc, or a
+# terminal command naming the board, must pass; an edit must still be refused; and a tool the gate
+# does not recognize stays gated, since a missed write tool would switch enforcement off unseen.
+VG="$(mkparentrepo)"
+"$INSTALLER" "$VG" --tools claude --primary claude > /dev/null 2>&1
+VG="$(cd "$VG" && pwd -P)"
+gate() { # tool_name tool_input-json -> "deny" or "allow"
+  # Capture, then match: `| grep -q` under pipefail turns a deny into "allow" when grep's early
+  # exit SIGPIPEs the hook, which would let every allow-expecting case below pass vacuously.
+  local out
+  out="$(printf '{"session_id":"vg","tool_name":"%s","tool_input":%s}' "$1" "$2" \
+    | (cd "$VG" && bash .agents/handoff/scripts/hooks.sh --kind pretool-edit --tool claude --project-dir "$VG" 2> /dev/null))"
+  case "$out" in *'"deny"'*) echo deny ;; *) echo allow ;; esac
+}
+# Payloads go through single-quoted variables: a JSON object with a comma, written inline inside
+# "$(...)", is brace-expanded by bash into two calls, and the case then grades a fragment.
+IDX="$VG/.agents/handoff/INDEX.md"
+J_READ='{"filePath":"'"$IDX"'"}'
+J_GREP='{"query":"x","includePattern":"'"$VG"'/.agents/handoff/*.md"}'
+J_TERM='{"command":"bash '"$VG"'/.agents/handoff/handoff list"}'
+J_EDIT='{"file_path":"'"$IDX"'"}'
+chk "VS Code read_file of INDEX.md passes" "allow" "$(gate read_file "$J_READ")"
+chk "VS Code grep_search over the board passes" "allow" "$(gate grep_search "$J_GREP")"
+chk "a terminal command naming the board passes" "allow" "$(gate run_in_terminal "$J_TERM")"
+chk "VS Code replace_string_in_file on INDEX.md is refused" "deny" "$(gate replace_string_in_file "$J_READ")"
+chk "Claude Edit on INDEX.md is still refused" "deny" "$(gate Edit "$J_EDIT")"
+chk "an unrecognized tool carrying a board path stays gated" "deny" "$(gate frobnicate "$J_READ")"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]
