@@ -452,7 +452,7 @@ touch_my_leases() { # auto-touch: extend every lease held by THIS session so act
       exp="$(handoff_lease_expiry "$DIR" "$d/owner" 0 "$TTL_HOURS")"
       [ "$(($(date +%s) + TTL_HOURS * 3600 / 4))" -lt "${exp:-0}" ] && continue
       handoff_board_git "$DIR" add -- "$d/owner" \
-        && handoff_board_git "$DIR" commit --quiet -m "handoff: extend lease on $(basename "$d")" \
+        && handoff_board_git "$DIR" commit --quiet -m "chore(other): extend lease on $(basename "$d")" \
         && handoff_board_git "$DIR" push --quiet "$(handoff_board_remote "$DIR")" HEAD
     done
   fi
