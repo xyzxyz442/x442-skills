@@ -7,7 +7,7 @@ It exists because the usual answers do not survive. A branch name says nothing a
 ticket goes stale the moment the work moves. And a chat transcript — where most of an agent's
 reasoning actually lives — is gone the next session. The board is the part that persists.
 
-Two diagrams give the shape of it:
+Three diagrams give the shape of it:
 
 - **[The lifecycle](diagrams/handoff-lifecycle.html)** — filed, claimed, in progress, and every way
   a claim ends: released open, blocked, delegated, handed back for review, or closed with evidence.
@@ -15,10 +15,15 @@ Two diagrams give the shape of it:
   group sections, a personal board declared as its child, each section mirrored into its home
   repositories' trackers by a tracker rule, and a library owned by someone else, on a board of its
   own in a separate trust boundary.
+- **[The issue projection](diagrams/handoff-projection.html)** — what a mirrored issue carries at
+  each projection level, what never leaves the board at any level, and which levels a public tracker
+  may receive.
 
 The suite is five skills, but you meet them in an order. If you want to know whether the board fits
 your problem at all, start with [Recommended use-cases](#recommended-use-cases). Otherwise read the
-situations below and stop when one matches yours.
+situations below and stop when one matches yours. If you are joining a team whose board someone else
+set up, read [Team board and personal board](handoff-team-and-personal-boards.md) first — it is
+written for that seat.
 
 ---
 
@@ -245,6 +250,10 @@ Activity, and refused outright on any tracker the board cannot confirm is privat
 Short of `complete`, your ruled-out options, notes and evidence never leave the board — the board
 is the record, the issue is the window into it.
 
+[The issue projection](diagrams/handoff-projection.html) diagram lays the three levels side by side:
+what each one sends, what never leaves the board at any level, and which levels a public tracker may
+receive.
+
 A team with many repos in groups declares this once per **group**, as a tracker rule, instead of
 by hand in every repository: every member registered in that group mirrors into its own origin
 repository under the rule, and a per-repository entry still overrides it where one repo needs to
@@ -327,6 +336,8 @@ A personal board still coordinates only what its owner claims to mirror; in prac
 board is the one that has already claimed the team's trackers, so that is where finished work goes.
 The personal board holds one person's thinking; the team board holds what the team coordinates on;
 the repositories' issues hold what everyone else needs to see.
+[Team board and personal board](handoff-team-and-personal-boards.md) walks through working both day
+to day: where each lives on disk, what goes on which, and how a draft moves onto the team board.
 
 **The trust boundary is read from a board's remote — its host and owner — never declared and never
 the host account used to reach it.** One boundary holds one or more boards, and no board spans two;

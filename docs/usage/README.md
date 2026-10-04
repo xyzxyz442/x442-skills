@@ -7,11 +7,12 @@ situations it is the right answer to.
 They are written for someone meeting these skills for the first time. If you are looking for the
 exact flags a command takes, the `SKILL.md` files are the reference; these pages are the map.
 
-| Guide                           | Read it when                                                                                                                       |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| [Handoff](handoff.md)           | Two agents, two sessions or two repos need to work the same code without clobbering each other — or work has to survive a session. |
-| [Secret guard](secret-guard.md) | A credential file has to stay usable by an agent without its values landing in a transcript.                                       |
-| [Delegate](delegate.md)         | Mechanical, bulky work should run on a cheaper agent, without deciding for the user where their code goes.                         |
+| Guide                                                           | Read it when                                                                                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Handoff](handoff.md)                                           | Two agents, two sessions or two repos need to work the same code without clobbering each other — or work has to survive a session.                            |
+| [Team and personal boards](handoff-team-and-personal-boards.md) | You work on a team that shares one handoff board and keep a board of your own — where each lives, which work goes on which, and how a draft reaches the team. |
+| [Secret guard](secret-guard.md)                                 | A credential file has to stay usable by an agent without its values landing in a transcript.                                                                  |
+| [Delegate](delegate.md)                                         | Mechanical, bulky work should run on a cheaper agent, without deciding for the user where their code goes.                                                    |
 
 ## Diagrams
 
