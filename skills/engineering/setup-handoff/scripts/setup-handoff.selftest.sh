@@ -372,6 +372,29 @@ chk_contains "a dedicated board's install suggests recording hostAccount" "$OUT1
 chk_contains "and cites ADR 0018" "$OUT13" "ADR 0018"
 chk "an in-repo install prints no such note" "0" "$(printf '%s' "$OUT14" | grep -c 'hostAccount')"
 
+printf '\n12. --board-only lifts a board whose only config is the legacy shell file\n'
+# The per-repo path folds a shell `config` into handoff.json and renames it aside; --board-only
+# used to do neither, leaving two sources of truth — and, with no --groups, dropping the groups
+# and ttl the shell file held, since write_board_config only seeds from config.json/handoff.json.
+mklegacyboard() { # -> a board holding only a shell config
+  local d
+  d="$(mkgitboard)"
+  printf 'TOPOLOGY=cross-repo\nHANDOFF_GROUPS=a,b\nHANDOFF_TTL_HOURS=8\n' > "$d/config"
+  printf '%s' "$d"
+}
+cfg_field() { # board key -> the key's value in handoff.json, lists comma-joined
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2], ""); print(",".join(v) if isinstance(v, list) else v)' "$1/handoff.json" "$2"
+}
+B15="$(mklegacyboard)"
+"$INSTALLER" --board-only "$B15" --groups a,b > /dev/null 2>&1
+chk "with --groups: the shell config is renamed aside" "no yes" \
+  "$([ -f "$B15/config" ] && echo yes || echo no) $([ -f "$B15/config.superseded" ] && echo yes || echo no)"
+chk "with --groups: its ttl is carried into handoff.json" "8" "$(cfg_field "$B15" ttlHours)"
+B16="$(mklegacyboard)"
+"$INSTALLER" --board-only "$B16" > /dev/null 2>&1
+chk "without --groups: the shell config's groups are carried forward" "a,b" "$(cfg_field "$B16" groups)"
+chk "without --groups: the shell config is renamed aside" "no" "$([ -f "$B16/config" ] && echo yes || echo no)"
+
 printf '\n--local-board over a committed team board warns first (ADR 0022)\n'
 LB="$(mkparentrepo)"
 LB_TEAM="$(mkgitboard)"

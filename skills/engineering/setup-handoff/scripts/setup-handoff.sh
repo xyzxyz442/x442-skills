@@ -593,6 +593,41 @@ supersede_legacy() { # path reason
   echo "setup-handoff: $why — renamed $(basename "$f") to $(basename "$f").superseded (safe to delete)"
 }
 
+# Fold a legacy shell `config` into handoff.json. Both install paths call it before
+# write_board_config, which seeds only from config.json/handoff.json — skipping it drops the
+# groups, layout and ttl the shell file held. The caller renames the old file aside with
+# supersede_legacy only after handoff.json is written, so a half-finished install cannot strand a
+# board with no config at all.
+migrate_legacy_shell_config() { # board-dir
+  if [ -f "$1/config" ] && [ ! -f "$1/handoff.json" ] && [ ! -f "$1/config.json" ]; then
+    echo "Migrating legacy shell config -> handoff.json in $1"
+    python3 - "$1/config" "$1/handoff.json" << 'PY'
+import json, sys
+MAP = {"TOPOLOGY": "topology", "REPO_NAME": "repoName", "HANDOFF_GROUPS": "groups",
+       "HANDOFF_GROUP_LAYOUT": "groupLayout", "HANDOFF_TTL_HOURS": "ttlHours",
+       "HANDOFF_ALLOW_VERIFY_CMD": "allowVerifyCmd"}
+cfg = {}
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key in MAP:
+            cfg[MAP[key]] = val.strip().strip('"').strip("'")
+cfg["groups"] = [g for g in str(cfg.get("groups", "")).split(",") if g]
+cfg["ttlHours"] = int(cfg.get("ttlHours") or 4)
+cfg["allowVerifyCmd"] = str(cfg.get("allowVerifyCmd", "0")) == "1"
+cfg.setdefault("topology", "single-repo")
+cfg.setdefault("groupLayout", "")
+with open(sys.argv[2], "w") as fh:
+    json.dump(cfg, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+  fi
+}
+
 # --- the board's own git substrate (ADR 0002) -------------------------------------------
 # A STANDALONE shared board is git-initialised non-optionally. It is the board of record: it holds
 # documents that exist nowhere else, and one that was never a repository has no history, no blame,
@@ -818,9 +853,11 @@ if [ -n "$BOARD_ONLY" ]; then
   install_file "$ASSETS/handoff-orchestrator-template.md" "$HDEST/templates/handoff-orchestrator-template.md"
   install_file "$ASSETS/handoff-brief-template.md" "$HDEST/templates/handoff-brief-template.md"
   chmod +x "$HDEST/scripts/hooks.sh"
+  migrate_legacy_shell_config "$HDEST"
   write_board_config "$HDEST/handoff.json" cross-repo ""
   supersede_legacy "$HDEST/config.json" "board config now lives in handoff.json"
   supersede_legacy "$HDEST/.version" "the payload stamp now lives in handoff.json"
+  supersede_legacy "$HDEST/config" "the legacy shell config was folded into handoff.json"
   board_ensure_git "$HDEST" "$BOARD_REMOTE"
   # After the board exists and has its remote: the workflow's every precondition is read from that
   # finished state, so it cannot be rendered against a board that is still half-written.
@@ -990,36 +1027,7 @@ if [ -f "$HDEST/hooks.sh" ] || [ -f "$HDEST/handoff-doc-template.md" ]; then
 fi
 
 # --- migrate a legacy shell config to JSON ---------------------------------------------
-# The old file is RETAINED, not deleted: the readers prefer config.json and fall back to it, so
-# keeping it means a half-finished install cannot strand a board with no config at all. A later
-# install overwrites config.json from live facts anyway.
-if [ -f "$HDEST/config" ] && [ ! -f "$HDEST/handoff.json" ] && [ ! -f "$HDEST/config.json" ]; then
-  echo "Migrating legacy shell config -> handoff.json in $HDEST"
-  python3 - "$HDEST/config" "$HDEST/handoff.json" << 'PY'
-import json, sys
-MAP = {"TOPOLOGY": "topology", "REPO_NAME": "repoName", "HANDOFF_GROUPS": "groups",
-       "HANDOFF_GROUP_LAYOUT": "groupLayout", "HANDOFF_TTL_HOURS": "ttlHours",
-       "HANDOFF_ALLOW_VERIFY_CMD": "allowVerifyCmd"}
-cfg = {}
-with open(sys.argv[1]) as fh:
-    for line in fh:
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        if key in MAP:
-            cfg[MAP[key]] = val.strip().strip('"').strip("'")
-cfg["groups"] = [g for g in str(cfg.get("groups", "")).split(",") if g]
-cfg["ttlHours"] = int(cfg.get("ttlHours") or 4)
-cfg["allowVerifyCmd"] = str(cfg.get("allowVerifyCmd", "0")) == "1"
-cfg.setdefault("topology", "single-repo")
-cfg.setdefault("groupLayout", "")
-with open(sys.argv[2], "w") as fh:
-    json.dump(cfg, fh, indent=2, sort_keys=True)
-    fh.write("\n")
-PY
-fi
+migrate_legacy_shell_config "$HDEST"
 
 # --- ADR 0018: the board's own remote, before any of the payload below is written ------
 # Only when $HDEST is already its own repository (a dedicated board on a re-run). The common
