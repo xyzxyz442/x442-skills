@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.19.3](https://github.com/xyzxyz442/x442-skills/compare/v0.19.2...v0.19.3) (2026-10-07)
+
+### 🐞 Bug Fixes
+
+- **bug:** close the honest-shape gaps from the v0.19.2 security reviews ([1a5d9f3](https://github.com/xyzxyz442/x442-skills/commit/1a5d9f313fe967621b1564c3a08eada98b8ceb74))
+
+### 📚 Documentation
+
+- **docs:** record the guard threat model in ADR 0026 and amend ADRs 0009 and 0025 ([d509220](https://github.com/xyzxyz442/x442-skills/commit/d50922073acea8f284a0fe7bf4369a834d956085))
+
 ## [0.19.2](https://github.com/xyzxyz442/x442-skills/compare/v0.19.1...v0.19.2) (2026-10-07)
 
 ### 🐞 Bug Fixes
