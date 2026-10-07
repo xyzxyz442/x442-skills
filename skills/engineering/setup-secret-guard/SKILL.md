@@ -103,8 +103,14 @@ denied. A producer inside a quoted script or a heredoc the shell expands, and ou
 anywhere but `/dev/null`, are asked about. A file of any name can be printed raw later, so a
 redirect is not proof of silence. Matching reads the command the way the shell does: line
 continuations are joined, and quoted words are unquoted (`'kubectl'`, `-o 'yaml'`). The producer
-list is data in `secret-file-guard.py`, one line per tool. A binary reached through a variable or
-an alias (`$k get secret …`) is not seen, which is the cooperative-guard limit below.
+list is data in `secret-file-guard.py`, one line per tool. `kubecolor` counts as `kubectl`. A
+producer or credential read inside a quoted script asks when an allowlisted runner (`sh -c`,
+`eval`, `su -c`, `script -c`, a heredoc fed to `python3` or `make`) sits earlier in the same step,
+and a read whose path is a variable always goes through the viewer. `kubectl config view` is
+always routed; a template output on it passes only over `current-context`, `contexts`, `clusters`
+or `preferences`. ADR 0026 sets the scope: a binary reached through a variable or an alias
+(`$k get secret …`), an interpreter one-liner, and a script file run later are the
+cooperative-guard limit below.
 
 `secret-scan` derives its answer from the viewer's own redaction count. The two cannot disagree,
 so a file the scanner flags is never printed raw by the viewer.

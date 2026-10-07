@@ -12,6 +12,7 @@ pass; a bare allow-with-no-change on a credential read is the bug.
 Every fixture is synthetic. Nothing here touches a real credential file.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -289,6 +290,203 @@ def cluster_cases(d):
         failures.append(
             f"cluster/shell-words: ANSI-C jsonpath was {decision}, expected deny"
         )
+
+    # Slice: quoted scripts (ADR 0026). A runner on the allowlist runs its quoted argument, so a
+    # producer or a credential read inside it is asked about -- not rewritten, since nested
+    # quoting is where the next differential would come from.
+    for cmd in (
+        "su -c 'kubectl get secret acme -o yaml'",
+        "runuser -l svc -c 'kubectl get secret acme -o yaml'",
+        "script -q -c 'kubectl get secret acme -o yaml' /dev/null",
+        "flock /tmp/l -c 'helm get values acme'",
+        "sudo -s 'kubectl get secret acme -o yaml'",
+        "python3 <<'PY'\nimport os\nos.system('kubectl get secret acme -o yaml')\nPY",
+        "make -f - <<'MK'\nall:\n\tkubectl get secret acme -o yaml\nMK",
+        "bash -c 'cat .env'",
+        "eval 'cat .env'",
+        'sh -c "head .env"',
+        "su -c 'cat .env'",
+        "bash <<'EOF'\ncat .env\nEOF",
+    ):
+        checked += 1
+        decision, _ = decide(cmd, d)
+        if decision != "ask":
+            failures.append(
+                f"quoted-script/runner: {cmd!r} was {decision}, expected ask"
+            )
+    # ...honest quoting stays untouched, including after a runner in an EARLIER step.
+    for cmd in (
+        'echo "kubectl get secret acme -o yaml"',
+        'git commit -m "route kubectl get secret -o yaml through the viewer"',
+        'bash scripts/x.sh; git commit -m "route kubectl get secret -o yaml"',
+        'echo "cat .env" >> notes.txt',
+        "cat > notes.md <<'EOF'\nRun cat .env to see the keys.\nEOF",
+    ):
+        checked += 1
+        decision, updated = decide(cmd, d)
+        if decision in ("ask", "deny") or (updated and "redact-view" in updated):
+            failures.append(
+                f"quoted-script/honest: {cmd!r} was interfered with ({decision})"
+            )
+    # The documented cooperative limit (ADR 0026): an interpreter one-liner is not detected.
+    # Pinned so the limit is a decision, not an accident -- change it deliberately or not at all.
+    checked += 1
+    decision, _ = decide(
+        "python3 -c \"import os; os.system('kubectl get secret acme -o yaml')\"", d
+    )
+    if decision != "allow":
+        failures.append(
+            f"quoted-script/limit: interpreter one-liner was {decision}; update ADR 0026"
+        )
+
+    # Slice: template parity. Plain `kubectl config view` redacts only password, token and cert
+    # data -- OIDC auth-provider secrets and exec-plugin env values print raw (verified against a
+    # synthetic kubeconfig) -- so config view is always routed. A template output that can reach
+    # credentials (`users`, recursive `..`, the whole document) prints a bare value the viewer
+    # cannot redact, so it is denied with or without --raw. Templates over contexts, clusters and
+    # current-context are everyday queries and stay untouched.
+    for cmd in (
+        "kubectl config view --raw -o jsonpath='{.users[0].user.token}'",
+        "kubectl config view --raw -o go-template='{{(index .users 0).user.token}}'",
+        "kubectl config view --flatten --minify -o jsonpath='{.users[0].user.client-key-data}'",
+        "kubectl config view -o jsonpath='{.users[0].user.auth-provider.config.client-secret}'",
+        "kubectl config view -o jsonpath='{..client-secret}'",
+        "kubectl config view -o go-template='{{json .}}'",
+        # The template is checked against an allowlist of safe roots, not a list of bad words:
+        # a file template, a wildcard or an indexed root can reach users without naming them.
+        "kubectl config view -o jsonpath-file=/tmp/t.txt",
+        "kubectl config view -o go-template-file=/tmp/t.tmpl",
+        "kubectl config view -o jsonpath='{.*}'",
+        "kubectl config view -o jsonpath='{[*]}'",
+        "kubectl config view -o go-template='{{index . \"us\"}}'",
+        # kubectl honours the LAST -o; every template in the step is checked, so the order of
+        # a safe and an unsafe one cannot matter, and custom-columns does not end the check.
+        "kubectl config view -o go-template='{{.current-context}}' -o jsonpath='{[*]}'",
+        "kubectl config view -o jsonpath='{[*]}' -o go-template='{{.current-context}}'",
+        "kubectl config view -o custom-columns=A:.contexts -o jsonpath='{[*]}'",
+    ):
+        checked += 1
+        decision, _ = decide(cmd, d)
+        if decision != "deny":
+            failures.append(f"template-parity: {cmd!r} was {decision}, expected deny")
+    for cmd in (
+        "kubectl config view -o jsonpath='{.current-context}'",
+        "kubectl config view -o jsonpath='{.contexts[*].name}'",
+        "kubectl config view -o jsonpath='{range .contexts[*]}{.name}{\"\\n\"}{end}'",
+        "kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'",
+        "kubectl config view -o go-template='{{.current-context}}'",
+    ):
+        checked += 1
+        decision, updated = decide(cmd, d)
+        if decision != "allow" or (updated and "redact-view" in updated):
+            failures.append(
+                f"template-parity/honest: {cmd!r} was interfered with ({decision})"
+            )
+    for cmd in (
+        "kubectl config view",
+        "kubectl config view --minify",
+        "kubectl config view --raw",
+    ):
+        checked += 1
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(
+                f"template-parity/routed: {cmd!r} was {decision}, not routed"
+            )
+
+    # Slice: unresolved reads. A path held in a variable cannot be opened here, and its
+    # extension may say nothing (`config.uat`). The viewer prints a clean file byte-identical,
+    # so every read whose path is not a literal goes through it.
+    for cmd in (
+        "for f in /srv/app/config.uat; do cat $f; done",
+        'cat "$CFG"',
+        "head -5 ${DIR}/x",
+        "cat $(ls /srv/app/*)",
+    ):
+        checked += 1
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(f"unresolved-read: {cmd!r} was {decision}, not routed")
+    # A variable in a FLAG VALUE is not a path: `head -n $N` reads stdin. Routing it rewrote
+    # honest commands into broken ones (`"redact-view" $N | head -n`).
+    # ...but a flag only takes a value for the verb that defines it: `-n`, `-s`, `-b` and `-v`
+    # are plain flags for cat, so the variable after them is the path, and it is routed.
+    for cmd in (
+        'cat -n "$HOME/.env"',
+        "cat -s $DIR/.env",
+        'cat -v "$F"',
+        'tac -s "$SEP" "$F"',
+    ):
+        checked += 1
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(
+                f"unresolved-read/plain-flag: {cmd!r} was {decision}, not routed"
+            )
+    for cmd in (
+        "ps aux | head -n $N",
+        'tail -n "$LINES" app.log',
+        "head -c $BYTES big.bin",
+        "git log | head -$N",
+        "less +$LINE file.txt",
+    ):
+        checked += 1
+        decision, updated = decide(cmd, d)
+        if decision in ("ask", "deny") or (updated and "redact-view" in updated):
+            failures.append(
+                f"unresolved-read/flag-value: {cmd!r} was interfered with ({decision})"
+            )
+    with open(os.path.join(d, "plain.txt"), "w") as fh:
+        fh.write("just a line of text\n")
+    checked += 1
+    decision, updated = decide(f"cat {d}/plain.txt", d)
+    if decision != "allow" or updated:
+        failures.append(
+            "unresolved-read/literal: a literal clean path was interfered with"
+        )
+    checked += 1
+    _, _, upd = _rewritten('F=plain.txt; cat "$F"', d)
+    shown = subprocess.run(
+        ["bash", "-c", upd or "false"], cwd=d, text=True, capture_output=True
+    )
+    if shown.stdout != "just a line of text\n":
+        failures.append(
+            "unresolved-read/clean: a clean file read through a variable changed"
+        )
+
+    # Slice: kubecolor. On this machine kubectl is an alias for kubecolor, so an agent may well
+    # write it directly. Every kubectl rule applies to it.
+    checked += 1
+    ok_, decision, _ = _rewritten("kubecolor get secret acme -o yaml", d)
+    if not ok_:
+        failures.append(
+            f"kubecolor: kubecolor get secret -o yaml was {decision}, not routed"
+        )
+    checked += 1
+    decision, _ = decide("kubecolor get secret acme -o jsonpath='{.data.password}'", d)
+    if decision != "deny":
+        failures.append(
+            f"kubecolor: a kubecolor template output on a Secret was {decision}"
+        )
+    checked += 1
+    decision, _ = decide("kubecolor exec pod -- cat /var/run/.env", d)
+    if decision != "ask":
+        failures.append(
+            f"kubecolor: a credential read behind kubecolor exec was {decision}"
+        )
+    checked += 1
+    decision, updated = decide("kubecolor get pods -n acme", d)
+    if decision != "allow" or updated:
+        failures.append("kubecolor: a table-format kubecolor get was interfered with")
+
+    # The backstop skips a value after a value-taking flag only when it is a variable. `-n` is a
+    # plain flag for cat, so `cat -n .env` must still be probed if the rewrite ever misses it.
+    checked += 1
+    spec = importlib.util.spec_from_file_location("guard_mod", GUARD)
+    guard_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard_mod)
+    if ".env" not in guard_mod.missed_reads("cat -n .env", d):
+        failures.append("backstop: `cat -n .env` was skipped as a flag value")
 
     # Shapes whose whole purpose is one raw value: the viewer cannot redact a bare scalar.
     for cmd in (

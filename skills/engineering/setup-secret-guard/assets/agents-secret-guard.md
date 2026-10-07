@@ -79,7 +79,9 @@ wholesale — you get type, byte count, and a digest.
   `lxc`/`incus`/`multipass`/`limactl` shells and multi-line `-c '...'` scripts execute in another
   filesystem namespace where the host's `redact-view` does not exist, so no rewrite can both work
   and withhold the value. Reads of merely config-shaped paths there pass through untouched;
-  credential-named ones prompt. Prefer reading on the host, or redact inside the guest.
+  credential-named ones prompt. Prefer reading on the host, or redact inside the guest. The same
+  applies to a quoted script run by `bash -c`, `eval`, `su -c`, `script -c` or a heredoc fed to a
+  shell or interpreter.
 - `~/.claude/bin/redact-view --all FILE` redacts every scalar, for when the key names themselves
   are sensitive.
 

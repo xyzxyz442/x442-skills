@@ -180,7 +180,7 @@ def strip_heredocs(cmd: str) -> str:
 REMOTE_EXEC_RE = re.compile(
     r"""(?:\b(?:docker|podman|nerdctl)\s+(?:exec|run)\b)"""
     r"""|(?:\b(?:docker|podman|nerdctl)\s+compose\s+(?:exec|run)\b)"""
-    r"""|(?:\bkubectl\s+exec\b)"""
+    r"""|(?:\bkube(?:ctl|color)\s+exec\b)"""
     r"""|(?<!\S)ssh(?=\s)"""
     r"""|(?:\bdistrobox\s+enter\b)|(?:\btoolbox\s+run\b)"""
     r"""|(?:\bvagrant\s+ssh\b)|(?:\bheroku\s+run\b)"""
@@ -294,6 +294,13 @@ def leaks(token: str, cwd: str) -> bool:
     """
     if SECRET_RE.search(token):
         return True
+    # A path the shell has yet to expand -- a variable, a substitution -- cannot be opened here,
+    # and its name may say nothing (`config.uat`). The viewer re-decides at runtime with the
+    # real path and prints a clean file byte-identical, so routing it costs nothing. A token
+    # starting with `-` or `+` is an option (`head -$N`, `less +$LINE`), never a path.
+    bare = token.strip("\"'")
+    if ("$" in token or "`" in token) and not bare.startswith(("-", "+")):
+        return True
     path = _resolve(token, cwd)
     resolved = False
     try:
@@ -327,6 +334,8 @@ def leaks(token: str, cwd: str) -> bool:
 # One line per producer; adding one is a one-line change. A pattern never crosses a shell
 # separator, so it cannot pair a binary in one stage with a subcommand in the next.
 _BIN = r"(?<![\w.-])(?:[\w./-]*/)?{}(?![\w-])[^|;&\n]*?\s"
+# `kubecolor` wraps kubectl with the same arguments; on this machine kubectl is aliased to it.
+KUBECTL = "(?:kubectl|kubecolor)"
 PRODUCERS = [
     ("argocd app get", re.compile(_BIN.format("argocd") + r"app\s+get(?![\w-])", re.I)),
     (
@@ -347,12 +356,12 @@ PRODUCERS = [
         ),
     ),
     ("helm template", re.compile(_BIN.format("helm") + r"template(?![\w-])", re.I)),
-    ("kubectl get", re.compile(_BIN.format("kubectl") + r"get(?![\w-])", re.I)),
+    ("kubectl get", re.compile(_BIN.format(KUBECTL) + r"get(?![\w-])", re.I)),
     # `--raw` and `--flatten` print the kubeconfig's tokens and keys; the default view redacts
-    # them itself, and clean output passes the viewer byte-identical.
+    # them itself, so _classify routes it only with one of those flags.
     (
         "kubectl config view",
-        re.compile(_BIN.format("kubectl") + r"config\s+view(?![\w-])", re.I),
+        re.compile(_BIN.format(KUBECTL) + r"config\s+view(?![\w-])", re.I),
     ),
 ]
 
@@ -370,9 +379,17 @@ PIPE_EXTRACT_RE = re.compile(
     r"|pbcopy|nc|ncat|socat|gpg|age|keybase)\b"
 )
 # What runs a quoted string as a script. A producer inside one executes, so it is not data.
+# The allowlist is the honest runners (ADR 0026). Interpreter one-liners (`python3 -c
+# "os.system(...)"`) are the documented cooperative limit, not an omission.
 SCRIPT_RUNNER_RE = re.compile(
     r"(?<![\w./-])(?:[\w./-]*/)?(?:ba|z|da|k|fi)?sh(?![\w-])"
-    r"|(?<![\w-])(?:eval|watch|xargs|parallel)(?![\w-])"
+    r"|(?<![\w-])(?:eval|watch|xargs|parallel|su|runuser|script|flock)(?![\w-])"
+    r"|(?<![\w-])sudo\s+-[A-Za-z]*[is](?![\w-])"
+)
+# A heredoc is a script when it is fed to a runner above or to an interpreter.
+HEREDOC_RUNNER_RE = re.compile(
+    SCRIPT_RUNNER_RE.pattern
+    + r"|(?<![\w./-])(?:[\w./-]*/)?(?:python3?|perl|node|ruby|make)(?![\w-])"
 )
 # A redirection of stdout. `2>` and `2>&1` leave stdout alone. Anything else moves it: to a
 # file a later read can print raw, to stderr, or back to stdout by another name (`>&1`,
@@ -558,7 +575,7 @@ def _heredoc_bodies(cmd: str):
     for line, pos, kind, marker in _heredoc_lines(cmd):
         if kind == "cmd" and marker:
             head = line[: marker.start()]
-            fed = bool(SCRIPT_RUNNER_RE.search(head) or REMOTE_EXEC_RE.search(head))
+            fed = bool(HEREDOC_RUNNER_RE.search(head) or REMOTE_EXEC_RE.search(head))
             expands = not re.search(r"[\"']", marker.group(0))
             opened = (pos + len(line) + 1, fed, expands)
         elif kind == "end" and opened:
@@ -595,17 +612,89 @@ def _scan_end(cmd: str, code, start: int, ends_at: str) -> int:
     return j
 
 
+TEMPLATE_FORMATS = ("jsonpath", "go-template", "template", "custom-columns")
+# A kubeconfig template is allowed only when every expression reads a safe root. Credentials
+# live under `users`, and a wildcard, an index on the root, recursive descent or a template file
+# reaches them without naming them, so the check is an allowlist, not a list of bad words.
+SAFE_CONFIG_ROOT_RE = re.compile(
+    r"^\$?\.(?:current-context|contexts|clusters|preferences|apiVersion|kind)(?![\w-])"
+)
+
+
+def _template_groups_safe(groups) -> bool:
+    """Does every expression in one template's groups read a safe root?"""
+    in_range = 0
+    for raw in groups:
+        g = raw.strip()
+        if g == "end":
+            in_range = max(0, in_range - 1)
+        elif g.startswith("range "):
+            if not SAFE_CONFIG_ROOT_RE.match(g[6:].strip()):
+                return False
+            in_range += 1
+        elif not re.search(r"[.@$*\[]", g):
+            continue  # a literal: `{"\n"}`, `{"\t"}`
+        elif not (
+            SAFE_CONFIG_ROOT_RE.match(g) or (in_range and re.match(r"^\.[\w-]", g))
+        ):
+            return False
+    return True
+
+
+def _config_template_safe(stage: str) -> bool:
+    """Does every template expression anywhere in a `kubectl config view` step read a safe root?
+
+    kubectl honours the last `-o`, and a step can carry several templates. Checking only the
+    first, or stopping at custom-columns, let `-o go-template={{.current-context}} -o
+    jsonpath={[*]}` pass on the safe one while kubectl printed every user. So every jsonpath
+    group, every go-template group and every custom-columns path must be safe.
+    """
+    if re.search(r"-file\b|users|\.\.", stage):
+        return False
+    jsonpath = re.findall(r"(?<!\{)\{(?!\{)([^{}]*)\}", stage)
+    go = re.findall(r"\{\{-?(.*?)-?\}\}", stage)
+    columns = [
+        c.split(":", 1)[-1]
+        for spec in re.findall(r"custom-columns=(\S+)", stage)
+        for c in spec.split(",")
+    ]
+    if not (jsonpath or go or columns):
+        return False
+    return (
+        _template_groups_safe(jsonpath)
+        and _template_groups_safe(go)
+        and all(SAFE_CONFIG_ROOT_RE.match(p) for p in columns)
+    )
+
+
+def _template_output(stage: str) -> bool:
+    """Does this kubectl step print through a template -- one bare value per field?"""
+    found = KUBE_OUTPUT_RE.findall(stage)
+    fmt = found[-1].lower() if found else ""
+    return bool(KUBE_TEMPLATE_RE.search(stage)) or fmt.startswith(TEMPLATE_FORMATS)
+
+
 def _classify(label: str, stage: str):
     """(action, why) for one producer stage: rewrite, ask, deny, or None to leave it."""
+    if label == "kubectl config view":
+        # kubectl redacts only password, token and cert data on its own; OIDC auth-provider
+        # secrets and exec-plugin env values print raw even without --raw. So the view is always
+        # routed, and a template that can reach `users` (or the whole document) is denied: it
+        # prints a bare value. `{.current-context}` and the like are everyday and left alone.
+        if _template_output(stage):
+            if not _config_template_safe(stage):
+                return "deny", (
+                    "a template output that reaches the kubeconfig's users prints one raw "
+                    "token or key, which no viewer can redact by structure"
+                )
+            return None, None
+        return "rewrite", None
     if label == "kubectl get":
         found = KUBE_OUTPUT_RE.findall(stage)
         fmt = found[-1].lower() if found else ""  # kubectl honours the last -o
         if fmt in DOC_FORMATS or re.search(r"\s--raw(?:=|\s|$)", stage):
             return "rewrite", None
-        if KUBE_SECRET_RE.search(stage) and (
-            KUBE_TEMPLATE_RE.search(stage)
-            or fmt.startswith(("jsonpath", "go-template", "template", "custom-columns"))
-        ):
+        if KUBE_SECRET_RE.search(stage) and _template_output(stage):
             return "deny", (
                 "a template output format on a Secret prints one raw value, which no viewer "
                 "can redact by structure"
@@ -665,9 +754,12 @@ class ShellView:
         return next((b for b in self.bodies if b.start <= pos < b.end), None)
 
     def runner_before(self, pos: int) -> bool:
-        """Is a script runner (`sh -c`, `eval`, a remote launcher) executed before `pos`?"""
+        """Is a script runner (`sh -c`, `eval`, a remote launcher) executed earlier in the step
+        holding `pos`? A runner in an earlier step (`bash x.sh; git commit -m "…"`) runs
+        nothing here, and counting it made an honest commit message ask."""
+        first = self.stage_start(pos)
         return any(
-            self.code[m.start()] and m.start() < pos
+            self.code[m.start()] and first <= m.start() < pos
             for rx in (SCRIPT_RUNNER_RE, REMOTE_EXEC_RE)
             for m in rx.finditer(self.view)
         )
@@ -816,6 +908,39 @@ def emit(decision: str, reason: str, updated=None):
     sys.exit(0)
 
 
+def emit_embedded(embedded):
+    emit(
+        "ask",
+        f"`{', '.join(sorted(set(embedded)))}` is read inside an embedded shell or a quoted "
+        f"script (docker/ssh, `sh -c`, `su -c`, a heredoc fed to a shell). redact-view cannot "
+        f"be inserted there, so the value would reach the transcript unredacted. Prefer "
+        f"running the read on the host, or redacting inside the guest.",
+    )
+
+
+# Reader options that take a value, per verb. A variable right after one is that value, not a
+# path: `head -n $N` reads stdin, and routing `$N` broke the command. The same letters are plain
+# flags elsewhere -- `cat -n FILE` numbers lines -- so a verb with no entry takes no values.
+VALUE_FLAGS = {
+    "head": frozenset(("-n", "-c", "--lines", "--bytes")),
+    "tail": frozenset(("-n", "-c", "--lines", "--bytes")),
+    "bat": frozenset(("-r", "--line-range", "-l", "--language")),
+    "nl": frozenset(("-w", "-s", "-b", "-v", "-i")),
+    "tac": frozenset(("-s", "--separator")),
+}
+
+
+def _is_flag_value(verb: str, flags: str, token: str) -> bool:
+    """Is `token` the value of the last flag, rather than a path to read?"""
+    words = flags.split()
+    return (
+        bool(words)
+        and words[-1] in VALUE_FLAGS.get(verb, ())
+        and ("$" in token or "`" in token)
+        and not SECRET_RE.search(token)
+    )
+
+
 def rewrite_reads(cmd: str, cwd: str = ""):
     """Redirect plain reads of credential-bearing files through redact-view.
 
@@ -832,6 +957,16 @@ def rewrite_reads(cmd: str, cwd: str = ""):
     line_mask = []
     carried = False
     remote_at = None
+    runners = []
+
+    def runner_runs(line, verb_at):
+        """Does a runner earlier in the same step run the quoted script holding `verb_at`?"""
+        first = 0
+        for k in range(verb_at - 1, -1, -1):
+            if line[k] in "|;&(" and not line_mask[k]:
+                first = k + 1
+                break
+        return any(first <= r < verb_at for r in runners)
 
     def repl(m):
         verb, flags, path = m.group(1), m.group(2) or "", m.group(3)
@@ -843,12 +978,16 @@ def rewrite_reads(cmd: str, cwd: str = ""):
         masked = m.start(1) < len(line_mask) and line_mask[m.start(1)]
         # `carried` -> inside a quote a previous line opened (a multi-line -c script).
         # `remote_at` -> a launcher earlier on this line already crossed the boundary.
-        nested = carried or (remote_at is not None and m.start(1) > remote_at)
+        nested = (
+            carried
+            or (remote_at is not None and m.start(1) > remote_at)
+            or (masked and runner_runs(m.string, m.start(1)))
+        )
         if masked or nested:
             if nested and SECRET_RE.search(path):
                 embedded.append(path)
             return m.group(0)
-        if not leaks(path, cwd):
+        if _is_flag_value(verb, flags, path) or not leaks(path, cwd):
             return m.group(0)
         touched.append(path)
         # head/tail keep their line limits by piping after redaction.
@@ -858,11 +997,22 @@ def rewrite_reads(cmd: str, cwd: str = ""):
 
     # Apply only outside heredoc bodies: text inside one is a document being
     # written, not a command being run. Rewriting there would corrupt the file.
-    out, pending = [], None
-    for line, _, kind, _ in _heredoc_lines(cmd):
+    out, pending, fed = [], None, False
+    for line, _, kind, marker in _heredoc_lines(cmd):
         if kind != "cmd":
+            # A body fed to a runner is a script, so a credential read in it runs. Report it;
+            # rewriting inside a document someone else executes is not this guard's to do.
+            if kind == "body" and fed:
+                embedded.extend(
+                    rm.group(3)
+                    for rm in READ_CALL.finditer(line)
+                    if SECRET_RE.search(rm.group(3))
+                )
             out.append(line)
             continue
+        if marker:
+            head = line[: marker.start()]
+            fed = bool(HEREDOC_RUNNER_RE.search(head) or REMOTE_EXEC_RE.search(head))
         carried = pending is not None
         line_mask, pending = quoted_mask(line, pending)
         remote_at = None
@@ -870,6 +1020,11 @@ def rewrite_reads(cmd: str, cwd: str = ""):
             if rm.start() >= len(line_mask) or not line_mask[rm.start()]:
                 remote_at = rm.start()
                 break
+        runners = [
+            rm.start()
+            for rm in SCRIPT_RUNNER_RE.finditer(line)
+            if rm.start() < len(line_mask) and not line_mask[rm.start()]
+        ]
         out.append(READ_CALL.sub(repl, line))
     return "\n".join(out), touched, embedded
 
@@ -900,8 +1055,15 @@ def missed_reads(cmd: str, cwd: str, limit: int = 40):
         vm = STAGE_VERB.search(stage)
         if not vm or (vm.start() < len(mask) and mask[vm.start()]):
             continue  # no plain reader here, or it is quoted data rather than a command
+        prev = ""
         for tok in stage[vm.end() :].split():
-            if tok.startswith("-") or probes >= limit:
+            variable = "$" in tok or "`" in tok
+            # Only a VARIABLE after one of this verb's value-taking flags is that flag's value:
+            # `-n` is a plain flag for cat, and skipping what followed it hid `cat -n .env`.
+            value, prev = _is_flag_value(vm.group(1), prev, tok), tok
+            if tok.startswith("-") or (tok.startswith("+") and variable) or value:
+                continue
+            if probes >= limit:
                 continue
             probes += 1
             if leaks(tok, cwd):
@@ -1011,7 +1173,9 @@ def main():
     # Content probe: a plain read of an innocuously-named file that nonetheless
     # holds credentials must still be redirected through the viewer.
     if not SECRET_RE.search(probe):
-        rewritten, touched, _ = rewrite_reads(original, cwd)
+        rewritten, touched, embedded = rewrite_reads(original, cwd)
+        if embedded:
+            emit_embedded(embedded)
         if touched:
             new_input = dict(ti)
             new_input["command"] = rewritten
@@ -1067,13 +1231,7 @@ def main():
     # value. Ask rather than deny -- the operator may have a reason, and a guard
     # that refuses outright is a guard that gets switched off.
     if embedded:
-        emit(
-            "ask",
-            f"`{', '.join(sorted(set(embedded)))}` is read inside an embedded shell "
-            f"(docker/ssh/-c script). redact-view is a host path with no meaning in "
-            f"that namespace, so the value would reach the transcript unredacted. "
-            f"Prefer running the read on the host, or redacting inside the guest.",
-        )
+        emit_embedded(embedded)
 
     if touched:
         # Judge the leftover per stage, exactly as the deny below does. A whole-command

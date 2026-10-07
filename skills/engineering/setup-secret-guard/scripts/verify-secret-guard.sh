@@ -445,6 +445,38 @@ sys.exit(0 if "redact-view" in u.get("command", "") else 1)' 2> /dev/null; then
   else
     bad "guard.cluster_api_routing_kept" "a later rule discarded the cluster-API routing"
   fi
+  # A runner on the allowlist runs its quoted argument (ADR 0026), so a producer or a credential
+  # read inside it asks. Both halves, because they are matched by different code paths.
+  D1="$(probe "$(payload_for "su -c 'kubectl get secret acme -o yaml'")")"
+  D2="$(probe "$(payload_for "bash -c 'cat ${DOTENV}'")")"
+  if [ "$D1" = "ask" ] && [ "$D2" = "ask" ]; then
+    ok "guard.quoted_script_asks" "a producer or credential read inside a runner's quoted script asks"
+  else
+    bad "guard.quoted_script_asks" "a quoted script ran unguarded (producer ${D1}, read ${D2})"
+  fi
+  # A template output on `kubectl config view --raw` prints one bare token; plain config view
+  # is redacted by kubectl itself and must stay untouched.
+  D1="$(probe "$(payload_for "kubectl config view --raw -o jsonpath='{.users[0].user.token}'")")"
+  PL="$(payload_for "kubectl config view -o jsonpath='{.current-context}'")"
+  D2="$(probe "$PL")"
+  if [ "$D1" = "deny" ] && [ "$D2" = "allow" ] && ! rewritten "$PL"; then
+    ok "guard.config_view_template_denied" "a template output on config view --raw is denied; plain config view is untouched"
+  else
+    bad "guard.config_view_template_denied" "config view template parity is off (raw template ${D1}, plain view ${D2})"
+  fi
+  # A read through a variable cannot be resolved here, so it goes through the viewer; a variable
+  # in a flag value (`head -n $N`) is not a path and must be left alone.
+  PL2="$(payload_for 'ps aux | head -n $N')"
+  if rewritten "$(payload_for 'cat "$CFG"')" && ! rewritten "$PL2" && [ "$(probe "$PL2")" = "allow" ]; then
+    ok "guard.unresolved_read_routed" "a read through a variable is routed; a flag value is left alone"
+  else
+    bad "guard.unresolved_read_routed" "an unresolvable read ran unrouted, or a flag value was treated as a path"
+  fi
+  if rewritten "$(payload_for "kubecolor get secret acme -o yaml")"; then
+    ok "guard.kubecolor_routed" "kubecolor, kubectl's colouring wrapper, is routed like kubectl"
+  else
+    bad "guard.kubecolor_routed" "a kubecolor read of a Secret ran unrouted"
+  fi
   PL="$(payload_for "kubectl get pods -n acme")"
   D="$(probe "$PL")"
   if [ "$D" = "allow" ] && ! rewritten "$PL"; then
