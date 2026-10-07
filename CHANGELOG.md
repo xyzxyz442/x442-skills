@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.19.2](https://github.com/xyzxyz442/x442-skills/compare/v0.19.1...v0.19.2) (2026-10-07)
+
+### 🐞 Bug Fixes
+
+- **bug:** route cluster-API reads through the secret guard viewer ([37218ef](https://github.com/xyzxyz442/x442-skills/commit/37218ef1c469058b23d79be1ec23aba31803ea1d))
+
+### 📚 Documentation
+
+- **docs:** link the team-member guide and the projection diagram ([8968491](https://github.com/xyzxyz442/x442-skills/commit/8968491495ed5e4324a6ac6782c607cdad2a90b0))
+- **docs:** record cluster-API routing in ADR 0025 and the glossary ([33bd179](https://github.com/xyzxyz442/x442-skills/commit/33bd1799a892d9903287396cca72586c3f584438))
+
 ## [0.19.1](https://github.com/xyzxyz442/x442-skills/compare/v0.19.0...v0.19.1) (2026-10-02)
 
 ### 🐞 Bug Fixes
