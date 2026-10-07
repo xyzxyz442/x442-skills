@@ -305,6 +305,19 @@ structure, and from refusal, which yields nothing. The same secret fingerprints 
 two files, which answers whether two environments share a credential without disclosing either.
 _Avoid_: masking, scrubbing, sanitising
 
+**Cluster-API read**:
+A command that prints credentials it fetched from a cluster or a deployment controller rather than
+from a file — an Argo CD Application's inline Helm values, a Helm release's values, a
+Kubernetes Secret. It names no path, so no rule keyed on file paths can see it.
+_Avoid_: remote read, API leak
+
+**Producer**:
+A command the **secret guard** recognises as a **cluster-API read** and routes through the
+redacting viewer, inserted straight after it so a filter downstream still works on the redacted
+output. One line each, kept as data. Distinguished from a read verb (`cat`, `head`), which is
+recognised by the path it opens.
+_Avoid_: source, emitter
+
 **Backstop**:
 A second, independent check that asks the same question in a different shape and prefers a prompt
 over a silent pass. It exists for the outcome a **secret guard** cannot report on itself — a
