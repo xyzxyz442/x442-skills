@@ -15,6 +15,11 @@ Usage:
     redact-view FILE [FILE...]
     redact-view --all FILE     # redact every scalar, not just secret-looking ones
     ... | redact-view -        # read stdin
+    ... | redact-view --yaml - # read stdin as YAML (helm get values, argocd -o yaml)
+    ... | redact-view --diff - # read stdin as a diff: every value redacted (argocd app diff)
+
+Reading stdin, the "redacted view" header goes to stderr, so the output stays valid
+JSON/YAML for a filter downstream (`... | redact-view - | jq .spec`).
 """
 import os
 import sys
@@ -32,12 +37,18 @@ def _lib_dir():
 
 
 sys.path.insert(0, _lib_dir())
-from secret_redact import MAX_BYTES, render_or_verbatim  # noqa: E402
+from secret_redact import MAX_BYTES, render_header, render_or_verbatim  # noqa: E402
+
+FLAGS = ("--all", "--yaml", "--diff")
+# A cluster read is far larger than a config file: `kubectl get pods -A -o yaml` runs to tens of
+# MiB. Stdin is held in memory once, so its cap is set by that, not by MAX_BYTES's file probe.
+STDIN_MAX_BYTES = 256 * 1024 * 1024
 
 
 def main(argv):
-    args = [a for a in argv[1:] if a != "--all"]
+    args = [a for a in argv[1:] if a not in FLAGS]
     mask_all = "--all" in argv[1:]
+    fmt = "diff" if "--diff" in argv[1:] else "yaml" if "--yaml" in argv[1:] else ""
     if not args:
         print(__doc__.strip(), file=sys.stderr)
         return 2
@@ -46,7 +57,15 @@ def main(argv):
     for path in args:
         try:
             if path == "-":
-                raw, path = sys.stdin.buffer.read(MAX_BYTES), "<stdin>"
+                raw, path = sys.stdin.buffer.read(STDIN_MAX_BYTES), "<stdin>"
+                if sys.stdin.buffer.read(1):
+                    # Truncated JSON no longer parses and falls through to a line grammar
+                    # that cannot see its values. Refuse rather than print a partial view.
+                    while sys.stdin.buffer.read(1 << 16):
+                        pass
+                    print(f"# {path}: too large to redact safely", file=sys.stderr)
+                    rc = 1
+                    continue
             else:
                 if os.path.getsize(path) > MAX_BYTES:
                     print(f"# {path}: too large to redact safely", file=sys.stderr)
@@ -58,8 +77,17 @@ def main(argv):
             print(f"# cannot read {path}: {exc}", file=sys.stderr)
             rc = 1
             continue
-        text, _ = render_or_verbatim(path, raw, mask_all)
-        sys.stdout.write(text)
+        stdin = path == "<stdin>"
+        text, masked = render_or_verbatim(path, raw, mask_all, fmt, header=not stdin)
+        if stdin and masked:
+            sys.stderr.write(render_header(path))
+        try:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # `| head -5` closed the pipe; that is the reader's choice, not a failure.
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            return rc
     return rc
 
 

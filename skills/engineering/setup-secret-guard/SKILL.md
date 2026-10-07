@@ -48,9 +48,10 @@ policy. A shared verdict vocabulary would drag an `ask` into a bash CLI with no 
 **The consumers** map detections to decisions:
 
 - `secret-file-guard.py` — the `PreToolUse` hook (matcher `Bash|Grep|Read`). Rewrites a plain
-  read into a redacted read, asks on helm/Harness values files, denies extraction verbs, and
-  asks before the `Read` tool opens a config file whose **content** holds a credential. It allows
-  everything else.
+  read into a redacted read, routes cluster-API reads (`argocd app get`, `helm get`,
+  `kubectl get -o yaml|json`) through the viewer, asks on helm/Harness values files, denies
+  extraction verbs, and asks before the `Read` tool opens a config file whose **content** holds a
+  credential. It allows everything else.
 - `permissions.deny` in the tool's settings — covers credential-**named** files (`.env*`,
   `*.env`, `.envrc`, keys, kubeconfigs) for `Read`/`Edit`, whose output a hook cannot filter.
 - The `AGENTS.md` block — the rules an agent follows where no hook can intercept.
@@ -74,8 +75,36 @@ indentation instead, stdlib only, and redacts:
 - `value:` in an `env` entry whose sibling `name:` is secret-shaped (`DB_PASSWORD`)
 - children of a `secrets:` / `credentials:` parent, except switches and `imagePullSecrets`
 - every `data`/`stringData` value in a document with `kind: Secret`, whatever the key is called
+  — including each Secret inside a `kind: List`, as `kubectl get secrets -o yaml` returns
 - credentials inside an ordinary block, such as a ConfigMap's embedded `application.yaml` or
   `app.env`
+
+Text on stdin has no name to choose a grammar by, so it is read as YAML only when it carries a
+manifest's `apiVersion:`/`kind:` signature. `helm get values` and `argocd app get -o yaml` carry
+none, so `redact-view --yaml -` names the format, and the hook passes `--yaml` whenever it routes
+a cluster-API read. Reading stdin, the viewer writes its header to stderr, so its output stays
+valid JSON or YAML for a filter downstream. It also finds a column-0 JSON document among flat
+log lines (`WARN[…]` merged in by `2>&1`) without reshaping structured YAML, and it accepts up to
+256 MiB, because cluster output dwarfs a config file. A diff on stdin (`--diff`, which the hook
+passes for `argocd app diff`, or text with a hunk header or Argo CD's `=====` header) is redacted
+fail-closed: every value on every line is fingerprinted except the readable `name`, `kind` and
+`apiVersion`, because a diff shows a changed value without the context that would mark it
+secret.
+
+### Cluster-API reads are routed by command, not path
+
+`argocd app get APP -o json`, `argocd app manifests`, `argocd app diff`, `kubectl config view`,
+`helm get values|manifest|all|hooks`, `helm template`, and `kubectl get … -o yaml|json` print
+credentials without naming a file, so no path rule sees them. The hook inserts `| redact-view
+--yaml -` straight after the producer, before any `jq` or `head`, so field selection still works on
+redacted text. Clean output passes byte-identical. A template output on a Secret (`-o jsonpath=…`,
+`go-template`, `--template`) and an extraction verb downstream of a producer (`| base64 -d`) are
+denied. A producer inside a quoted script or a heredoc the shell expands, and output redirected
+anywhere but `/dev/null`, are asked about. A file of any name can be printed raw later, so a
+redirect is not proof of silence. Matching reads the command the way the shell does: line
+continuations are joined, and quoted words are unquoted (`'kubectl'`, `-o 'yaml'`). The producer
+list is data in `secret-file-guard.py`, one line per tool. A binary reached through a variable or
+an alias (`$k get secret …`) is not seen, which is the cooperative-guard limit below.
 
 `secret-scan` derives its answer from the viewer's own redaction count. The two cannot disagree,
 so a file the scanner flags is never printed raw by the viewer.

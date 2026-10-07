@@ -19,10 +19,12 @@ Permission deny rules cover the Read/Edit tools but NOT Bash, so this hook is th
 load-bearing half of the policy.
 """
 
+import bisect
 import json
 import os
 import re
 import sys
+from typing import NamedTuple
 
 
 # The library sits beside this file in the payload, and one directory over once installed
@@ -148,23 +150,13 @@ READ_CALL = re.compile(
 )
 # An already-redacted call, so we don't re-flag our own rewrite.
 REDACTED_CALL = re.compile(
-    rf"""["']?(?:{re.escape(REDACT_VIEW)}|redact-view)["']?\s+(?:--all\s+)?{PATH_TOKEN}"""
+    rf"""["']?(?:{re.escape(REDACT_VIEW)}|redact-view)["']?\s+(?:--(?:all|yaml|diff)\s+)*{PATH_TOKEN}"""
 )
 
 
 def strip_heredocs(cmd: str) -> str:
     """Drop heredoc bodies: they are data being written, not files being read."""
-    out, terminator = [], None
-    for line in cmd.split("\n"):
-        if terminator is not None:
-            if line.strip() == terminator:
-                terminator = None
-            continue
-        m = HEREDOC_START.search(line)
-        out.append(line)
-        if m:
-            terminator = m.group(1)
-    return "\n".join(out)
+    return "\n".join(line for line, _, kind, _ in _heredoc_lines(cmd) if kind == "cmd")
 
 
 # ------------------------------------------------------------------ shell shape
@@ -323,7 +315,494 @@ def leaks(token: str, cwd: str) -> bool:
     return configish_token(token)
 
 
+# ------------------------------------------------------- cluster-API producers
+
+# Commands that pull credentials from a cluster API instead of a file. They name no path, so
+# nothing above sees them: `argocd app get APP -o json` printed an Application's inline Helm
+# values, client secrets included, and the guard neither rewrote, asked, nor denied. Each is
+# routed through the viewer by inserting it straight after the producer, so a downstream `jq`
+# or `head` still works -- on redacted text with its structure intact. Clean output passes
+# byte-identical, so the detour costs nothing where there is nothing to hide.
+#
+# One line per producer; adding one is a one-line change. A pattern never crosses a shell
+# separator, so it cannot pair a binary in one stage with a subcommand in the next.
+_BIN = r"(?<![\w.-])(?:[\w./-]*/)?{}(?![\w-])[^|;&\n]*?\s"
+PRODUCERS = [
+    ("argocd app get", re.compile(_BIN.format("argocd") + r"app\s+get(?![\w-])", re.I)),
+    (
+        "argocd app manifests",
+        re.compile(_BIN.format("argocd") + r"app\s+manifests(?![\w-])", re.I),
+    ),
+    # Argo CD masks a Secret's data in a diff, but not always all of it: CVE-2026-45737
+    # leaked values through the last-applied annotation. The viewer's in-place redaction of
+    # embedded JSON reads through the diff's `<`/`>` markers.
+    (
+        "argocd app diff",
+        re.compile(_BIN.format("argocd") + r"app\s+diff(?![\w-])", re.I),
+    ),
+    (
+        "helm get",
+        re.compile(
+            _BIN.format("helm") + r"get\s+(?:values|manifest|all|hooks)(?![\w-])", re.I
+        ),
+    ),
+    ("helm template", re.compile(_BIN.format("helm") + r"template(?![\w-])", re.I)),
+    ("kubectl get", re.compile(_BIN.format("kubectl") + r"get(?![\w-])", re.I)),
+    # `--raw` and `--flatten` print the kubeconfig's tokens and keys; the default view redacts
+    # them itself, and clean output passes the viewer byte-identical.
+    (
+        "kubectl config view",
+        re.compile(_BIN.format("kubectl") + r"config\s+view(?![\w-])", re.I),
+    ),
+]
+
+# `kubectl get` prints a table unless asked for a document; only the document formats carry
+# values. A template format prints one bare scalar, which no viewer can redact by structure.
+KUBE_OUTPUT_RE = re.compile(r"""(?:\s-o(?:=|\s*)|\s--output(?:=|\s+))["']?([\w-]+)""")
+KUBE_TEMPLATE_RE = re.compile(r"\s--template(?:=|\s)")
+KUBE_SECRET_RE = re.compile(r"[\s,]secrets?(?![\w-])", re.IGNORECASE)
+DOC_FORMATS = ("yaml", "json")
+
+# Downstream of a producer, these exist to obtain or move a raw value. `tee` is not here: after
+# the viewer it writes the redacted text, which is exactly what a saved copy should hold.
+PIPE_EXTRACT_RE = re.compile(
+    r"\b(base64|openssl|xxd|od|hexdump|strings|scp|rsync|curl|wget"
+    r"|pbcopy|nc|ncat|socat|gpg|age|keybase)\b"
+)
+# What runs a quoted string as a script. A producer inside one executes, so it is not data.
+SCRIPT_RUNNER_RE = re.compile(
+    r"(?<![\w./-])(?:[\w./-]*/)?(?:ba|z|da|k|fi)?sh(?![\w-])"
+    r"|(?<![\w-])(?:eval|watch|xargs|parallel)(?![\w-])"
+)
+# A redirection of stdout. `2>` and `2>&1` leave stdout alone. Anything else moves it: to a
+# file a later read can print raw, to stderr, or back to stdout by another name (`>&1`,
+# `/dev/fd/1`). Only `/dev/null` is provably silent.
+STDOUT_REDIR_RE = re.compile(r"(?<![<>&\d])(?:1|&)?>>?\|?\s*(&?\S*)")
+SILENT_TARGETS = ("/dev/null",)
+# `exec >file` redirects every later command in the shell, the producer included.
+EXEC_REDIR_RE = re.compile(r"(?<![\w-])exec\s+(?:\d*|&)>")
+
+
+# One escape inside bash's ANSI-C quoting, `$'...'`. bash decodes these before the command sees
+# them, so `-o $'\x79aml'` is `-o yaml`.
+ANSI_ESC_RE = re.compile(
+    r"\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)", re.S
+)
+ANSI_SIMPLE = {
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+
+
+def _ansi_char(seq: str):
+    """The character an ANSI-C escape decodes to, or None when bash keeps it as written."""
+    kind = seq[0]
+    try:
+        if kind in "xuU":
+            return chr(int(seq[1:], 16))
+        if kind.isdigit():
+            return chr(int(seq, 8) & 0xFF)
+    except (ValueError, OverflowError):
+        return None
+    if kind == "c" and len(seq) == 2:
+        return chr(ord(seq[1]) & 0x1F)
+    return ANSI_SIMPLE.get(kind)
+
+
+def _exec_mask(cmd: str):
+    """Per character: True where the shell executes it as code.
+
+    quoted_mask() calls every quoted character data, which is right for a read's verb --
+    `echo "cat .env"` runs nothing. For a producer it is wrong in one place: `$( )` inside
+    double quotes is code, and `echo "$(argocd app get APP -o json)"` prints the output.
+
+    Returns (code, drop, subst): `drop` marks characters the shell consumes, and `subst` maps
+    the first character of an ANSI-C escape to the character bash decodes it to.
+    """
+    code = [True] * len(cmd)
+    subst = {}
+    # Characters the shell consumes rather than passes on: quote delimiters, escaping
+    # backslashes, and the newline of a line continuation. Removing them yields the words
+    # the command actually receives -- `ya'ml'` is `yaml`, `kube\ctl` is `kubectl`.
+    drop = [False] * len(cmd)
+
+    def escape(at, live):
+        drop[at] = at + 1 < len(cmd) and (live is None or cmd[at + 1] in live)
+        if at + 1 < len(cmd) and cmd[at + 1] == "\n":
+            drop[at + 1] = True
+
+    stack = ["top"]
+    i = 0
+    while i < len(cmd):
+        c, top = cmd[i], stack[-1]
+        if top == "ansi":
+            code[i] = False
+            if c == "'":
+                stack.pop()
+                drop[i] = True
+            elif c == "\\":
+                esc = ANSI_ESC_RE.match(cmd, i)
+                decoded = _ansi_char(esc.group(1)) if esc else None
+                if decoded is not None:
+                    subst[i] = decoded
+                    for k in range(i + 1, esc.end()):
+                        code[k], drop[k] = False, True
+                    i = esc.end()
+                    continue
+        elif top == "sq":
+            code[i] = False
+            if c == "'":
+                stack.pop()
+                drop[i] = True
+        elif top == "dq":
+            code[i] = False
+            if c == "\\":
+                escape(i, '$`"\\\n')
+                i += 1
+            elif c == '"':
+                stack.pop()
+                drop[i] = True
+            elif c == "$" and cmd[i + 1 : i + 2] == "(":
+                stack.append("sub")
+                i += 1
+            elif c == "`":
+                stack.append("bt")
+        elif c == "$" and cmd[i + 1 : i + 2] in ("'", '"'):
+            # `$'...'` is ANSI-C quoting and `$"..."` a locale string; the `$` is consumed.
+            drop[i] = True
+            if cmd[i + 1] == "'":
+                stack.append("ansi")
+                code[i + 1], drop[i + 1] = False, True
+                i += 2
+                continue
+        elif c == "\\":
+            escape(i, None)
+            i += 1
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;|&("):
+            # A comment runs to the end of the line and executes nothing. A producer named
+            # there was matched, "routed" into the comment, and excused the real step.
+            while i < len(cmd) and cmd[i] != "\n":
+                code[i] = False
+                i += 1
+            continue
+        elif c == "'":
+            stack.append("sq")
+            code[i] = False
+            drop[i] = True
+        elif c == '"':
+            stack.append("dq")
+            code[i] = False
+            drop[i] = True
+        elif c == "(":
+            stack.append("paren")
+        elif c == ")" and top in ("sub", "paren"):
+            stack.pop()
+        elif c == "`" and top == "bt":
+            stack.pop()
+        elif c == "`":
+            stack.append("bt")
+        i += 1
+    return code, drop, subst
+
+
+def _heredoc_lines(cmd: str):
+    """Yield (line, offset, kind, marker) for each line of `cmd`.
+
+    kind is "cmd" for a line the shell runs, "body" for a heredoc body line, and "end" for the
+    line that closes one. marker is the heredoc-start match on a "cmd" line, else None. The one
+    place heredocs are recognised; every consumer below decides what to do with a body.
+    """
+    pos, terminator = 0, None
+    for line in cmd.split("\n"):
+        if terminator is not None:
+            if line.strip() == terminator:
+                terminator = None
+                yield line, pos, "end", None
+            else:
+                yield line, pos, "body", None
+        else:
+            marker = HEREDOC_START.search(line)
+            if marker:
+                terminator = marker.group(1)
+            yield line, pos, "cmd", marker
+        pos += len(line) + 1
+
+
+class HeredocBody(NamedTuple):
+    """A heredoc body by character offset, and how the shell treats it."""
+
+    start: int
+    end: int
+    fed_to_shell: bool  # `bash <<EOF`: the body is a script
+    expands: bool  # unquoted delimiter: `$( )` and backticks inside it run
+
+
+def _heredoc_bodies(cmd: str):
+    """Every heredoc body in `cmd`, with whether it runs or expands.
+
+    `expands` is an unquoted delimiter: the shell runs `$( )` and backticks inside the body,
+    so `cat <<EOF` around `$(kubectl get secret X -o yaml)` prints the Secret.
+    """
+    bodies, opened = [], None
+    for line, pos, kind, marker in _heredoc_lines(cmd):
+        if kind == "cmd" and marker:
+            head = line[: marker.start()]
+            fed = bool(SCRIPT_RUNNER_RE.search(head) or REMOTE_EXEC_RE.search(head))
+            expands = not re.search(r"[\"']", marker.group(0))
+            opened = (pos + len(line) + 1, fed, expands)
+        elif kind == "end" and opened:
+            bodies.append(HeredocBody(opened[0], pos, *opened[1:]))
+            opened = None
+    if opened:
+        bodies.append(HeredocBody(opened[0], len(cmd), *opened[1:]))
+    return bodies
+
+
+def _scan_end(cmd: str, code, start: int, ends_at: str) -> int:
+    """Where the span holding `start` ends: an unquoted `;`, newline, backtick, unmatched `)`,
+    a lone `&`, or a pipe beginning with `ends_at` (`|` ends a stage, `||` a pipeline).
+    """
+    depth, j = 0, start
+    while j < len(cmd):
+        c = cmd[j]
+        if code[j]:
+            if c in ";\n`":
+                break
+            if c == "|":
+                if cmd.startswith(ends_at, j):
+                    break
+            elif c == "&":
+                if cmd[j - 1 : j] not in ("<", ">", "|") and cmd[j + 1 : j + 2] != ">":
+                    break
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+        j += 1
+    return j
+
+
+def _classify(label: str, stage: str):
+    """(action, why) for one producer stage: rewrite, ask, deny, or None to leave it."""
+    if label == "kubectl get":
+        found = KUBE_OUTPUT_RE.findall(stage)
+        fmt = found[-1].lower() if found else ""  # kubectl honours the last -o
+        if fmt in DOC_FORMATS or re.search(r"\s--raw(?:=|\s|$)", stage):
+            return "rewrite", None
+        if KUBE_SECRET_RE.search(stage) and (
+            KUBE_TEMPLATE_RE.search(stage)
+            or fmt.startswith(("jsonpath", "go-template", "template", "custom-columns"))
+        ):
+            return "deny", (
+                "a template output format on a Secret prints one raw value, which no viewer "
+                "can redact by structure"
+            )
+        return None, None
+    if label == "argocd app get" and "--show-params" in stage:
+        return "ask", (
+            "`--show-params` prints Helm parameters as a table the viewer cannot read "
+            "structurally; `-o json | jq '.spec.source.helm.parameters'` is routed instead"
+        )
+    return "rewrite", None
+
+
+class ShellView:
+    """Two readings of one command: one that keeps offsets, one that reads as the shell does.
+
+    view: same length as the command, line continuations blanked; used to find where a stage
+          ends and where to insert, so offsets carry straight back to the command.
+    code: where the shell executes rather than quotes (see _exec_mask). Heredoc bodies are
+          excluded; `bodies` says how each one is run.
+    word: quoted spans holding no whitespace. `'kubectl'` is still the binary; a quoted span
+          with a space in it is a message, a fixture or a script, never a bare word.
+    deq, idx: the command with quote delimiters, escapes and continuations REMOVED, and the
+          original offset of each remaining character. Matching and classification read this,
+          because the shell joins `kube"ctl"` and `-o ya'ml'` into single words; blanking the
+          quotes instead read different words and let both run unrouted.
+    """
+
+    def __init__(self, cmd: str):
+        self.cmd = cmd
+        self.view = cmd.replace("\\\n", "  ")
+        self.code, drop, subst = _exec_mask(cmd)
+        self.word = [False] * len(cmd)
+        i = 0
+        while i < len(cmd):
+            if self.code[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(cmd) and not self.code[j]:
+                j += 1
+            if cmd[i] in "'\"" and not any(ch.isspace() for ch in cmd[i:j]):
+                self.word[i:j] = [True] * (j - i)
+            i = j
+        self.idx = [k for k in range(len(cmd)) if not drop[k]]
+        self.deq = "".join(subst.get(k, cmd[k]) for k in self.idx)
+        self.bodies = _heredoc_bodies(cmd)
+        for body in self.bodies:
+            for k in range(body.start, min(body.end, len(cmd))):
+                self.code[k] = self.word[k] = False
+
+    def executes(self, pos: int) -> bool:
+        """Is the character at `pos` part of a command the shell runs, not quoted data?"""
+        return self.code[pos] or self.word[pos]
+
+    def body_at(self, pos: int):
+        return next((b for b in self.bodies if b.start <= pos < b.end), None)
+
+    def runner_before(self, pos: int) -> bool:
+        """Is a script runner (`sh -c`, `eval`, a remote launcher) executed before `pos`?"""
+        return any(
+            self.code[m.start()] and m.start() < pos
+            for rx in (SCRIPT_RUNNER_RE, REMOTE_EXEC_RE)
+            for m in rx.finditer(self.view)
+        )
+
+    def stage_end(self, start: int) -> int:
+        return _scan_end(self.view, self.code, start, ends_at="|")
+
+    def pipeline_end(self, start: int) -> int:
+        return _scan_end(self.view, self.code, start, ends_at="||")
+
+    def stage_start(self, end: int) -> int:
+        """Where the stage ending at `end` begins: just after the previous unquoted separator."""
+        j = end - 1
+        while j >= 0 and not (self.code[j] and self.view[j] in "|;&\n(`"):
+            j -= 1
+        return j + 1
+
+    def executed(self, a: int, b: int) -> str:
+        """Offsets [a, b) with quoted characters blanked; for finding redirections."""
+        return "".join(
+            ch if self.code[a + k] else " " for k, ch in enumerate(self.view[a:b])
+        )
+
+    def words(self, a: int, b: int, executed_only: bool = False) -> str:
+        """The words the shell passes for original offsets [a, b)."""
+        lo, hi = bisect.bisect_left(self.idx, a), bisect.bisect_left(self.idx, b)
+        if not executed_only:
+            return self.deq[lo:hi]
+        return "".join(
+            self.deq[d] if self.executes(self.idx[d]) else " " for d in range(lo, hi)
+        )
+
+
+class Routing(NamedTuple):
+    """What route_producers() decided for one command."""
+
+    command: str  # the command to run, with the viewer inserted after each producer
+    labels: tuple  # the producers routed, in the order they were matched
+    verdict: tuple  # (decision, reason) when no rewrite can work, else None
+    routed_stages: frozenset  # the exact original text of every routed step
+
+
+def _verdict(cmd: str, decision: str, reason: str) -> Routing:
+    return Routing(cmd, (), (decision, reason), frozenset())
+
+
+def route_producers(cmd: str) -> Routing:
+    """Route cluster-API reads through the viewer.
+
+    A non-None verdict is final: a deny for an extraction shape, an ask where no rewrite can
+    both work and withhold the value (a quoted script, an expanding heredoc, output sent
+    anywhere but stdout).
+    """
+    shell = ShellView(cmd)
+    unroutable = (
+        "runs inside a quoted script or a heredoc the shell expands, where its output cannot "
+        "be routed through redact-view, so any credential it prints reaches the transcript "
+        f'raw. Run it on the host and pipe it through `"{REDACT_VIEW}" --yaml -`.'
+    )
+    inserts = []  # (offset to insert at, producer label)
+    for label, pattern in PRODUCERS:
+        for match in pattern.finditer(shell.deq):
+            start = shell.idx[match.start()]
+            if not shell.executes(start):
+                body = shell.body_at(start)
+                if body:
+                    nested = body.fed_to_shell or (
+                        body.expands and re.search(r"\$\(|`", cmd[body.start : start])
+                    )
+                else:
+                    nested = shell.runner_before(start)
+                if nested:
+                    return _verdict(cmd, "ask", f"`{label}` {unroutable}")
+                continue  # quoted data: a message, a fixture, a note being written
+            end = shell.stage_end(start)
+            action, why = _classify(label, " " + shell.words(start, end))
+            if action is None:
+                continue
+            if action != "rewrite":
+                return _verdict(
+                    cmd,
+                    action,
+                    f"`{label}`: {why}. For the structure, pipe a document format through "
+                    f'`"{REDACT_VIEW}" --yaml -` -- key names survive, values do not.',
+                )
+            downstream = shell.words(end, shell.pipeline_end(end), executed_only=True)
+            extract = PIPE_EXTRACT_RE.search(downstream)
+            if extract:
+                return _verdict(
+                    cmd,
+                    "deny",
+                    f"Blocked: `{extract.group(0)}` downstream of `{label}` exists to obtain or "
+                    f"move a raw credential value. If a process needs the secret, let it read "
+                    f"the cluster itself -- you do not need to see the value.",
+                )
+            # The whole step, not just from the producer on: `> out kubectl get …` redirects too.
+            targets = STDOUT_REDIR_RE.findall(
+                shell.executed(shell.stage_start(start), end)
+            )
+            if EXEC_REDIR_RE.search(shell.executed(0, start)):
+                targets.append("exec")
+            if targets and all(t in SILENT_TARGETS for t in targets):
+                continue  # discarded; nothing reaches the transcript
+            if targets:
+                return _verdict(
+                    cmd,
+                    "ask",
+                    f"`{label}` output is redirected ({', '.join(targets)}), where the viewer "
+                    f"cannot reach it: a file a later read prints raw, or stderr. Approve to "
+                    f"write it raw, or drop the redirection so it is routed through redact-view.",
+                )
+            # Trim on the raw text: the view blanks quote characters, and trimming there walks
+            # back inside a closing quote -- `-o 'json | redact-view'` -- and routes nothing.
+            at = end
+            while at > start and cmd[at - 1] in " \t":
+                at -= 1
+            if any(a == at for a, _ in inserts):
+                continue  # two patterns matched one stage
+            inserts.append((at, label))
+    routed = frozenset(cmd[shell.stage_start(at) : at].strip() for at, _ in inserts)
+    for at, label in sorted(inserts, reverse=True):
+        hint = "--diff" if label == "argocd app diff" else "--yaml"
+        cmd = f'{cmd[:at]} | "{REDACT_VIEW}" {hint} -{cmd[at:]}'
+    return Routing(cmd, tuple(label for _, label in inserts), None, routed)
+
+
+# The routed command, once route_producers() has rewritten one. Every later decision carries
+# it: an `ask` without it shows -- and on approval runs -- the command as originally typed,
+# with the producer unrouted.
+ROUTED = None
+
+
 def emit(decision: str, reason: str, updated=None):
+    if updated is None and decision != "deny":
+        updated = ROUTED
     out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -379,12 +858,10 @@ def rewrite_reads(cmd: str, cwd: str = ""):
 
     # Apply only outside heredoc bodies: text inside one is a document being
     # written, not a command being run. Rewriting there would corrupt the file.
-    out, terminator, pending = [], None, None
-    for line in cmd.split("\n"):
-        if terminator is not None:
+    out, pending = [], None
+    for line, _, kind, _ in _heredoc_lines(cmd):
+        if kind != "cmd":
             out.append(line)
-            if line.strip() == terminator:
-                terminator = None
             continue
         carried = pending is not None
         line_mask, pending = quoted_mask(line, pending)
@@ -393,12 +870,6 @@ def rewrite_reads(cmd: str, cwd: str = ""):
             if rm.start() >= len(line_mask) or not line_mask[rm.start()]:
                 remote_at = rm.start()
                 break
-        m = HEREDOC_START.search(line)
-        if m:
-            # The command part precedes the heredoc marker; body starts next line.
-            terminator = m.group(1)
-            out.append(READ_CALL.sub(repl, line))
-            continue
         out.append(READ_CALL.sub(repl, line))
     return "\n".join(out), touched, embedded
 
@@ -512,6 +983,29 @@ def main():
         sys.exit(0)
 
     cwd = payload.get("cwd") or os.getcwd()
+
+    # A cluster-API read names no file, so it is routed before anything path-driven runs.
+    # Every decision below then judges the command that will actually run, and each exit
+    # that would otherwise leave it untouched carries the routing instead.
+    global ROUTED
+    routing = route_producers(original)
+    if routing.verdict:
+        emit(*routing.verdict)
+    original = routing.command
+    if routing.labels:
+        ROUTED = dict(ti, command=original)
+
+    def finish():
+        if routing.labels:
+            emit(
+                "allow",
+                f"Routed {', '.join(routing.labels)} output through redact-view: cluster "
+                f"credentials are redacted to a length + sha256 fingerprint, structure "
+                f"preserved for any filter downstream.",
+                updated=ROUTED,
+            )
+        sys.exit(0)
+
     probe = scrub(original)
 
     # Content probe: a plain read of an innocuously-named file that nonetheless
@@ -530,10 +1024,21 @@ def main():
 
     if not SECRET_RE.search(probe):
         # No secret path left once safe constructs are removed.
-        if ASK_RE.search(probe) and (
-            FILTER_RE.search(probe) or READ_CALL.search(probe)
-        ):
-            hit = ASK_RE.search(probe)
+        # Whole-command, as before routing existed: `ls values.yaml | xargs grep` reads the
+        # file in a stage that never names it. Only a values path inside a routed producer's
+        # own stage is discounted -- `helm template -f values.yaml | yq` filters the
+        # producer's redacted output, never the file.
+        hit = next(
+            (
+                ASK_RE.search(st)
+                for st in stages(probe)
+                # Exactly a step the guard routed -- not any step that mentions a producer,
+                # which a quoted word or a comment can do.
+                if ASK_RE.search(st) and st.strip() not in routing.routed_stages
+            ),
+            None,
+        )
+        if hit and (FILTER_RE.search(probe) or READ_CALL.search(probe)):
             emit(
                 "ask",
                 f"This reads a helm/Harness values file ({hit.group(0).strip()!r}), which "
@@ -541,7 +1046,7 @@ def main():
                 f'`"{REDACT_VIEW}" <file>` for a redacted view.',
             )
         backstop(original, cwd)
-        sys.exit(0)
+        finish()
 
     # ---- extraction / exfiltration: redaction cannot help --------------------
     if EXTRACT_RE.search(probe) or SOURCE_RE.search(probe):
@@ -606,7 +1111,7 @@ def main():
     # Check the command that will actually run: no rewrite was emitted, so that is the
     # original. Checking `rewritten` skipped the very reads the discarded rewrite had routed.
     backstop(original, cwd)
-    sys.exit(0)
+    finish()
 
 
 if __name__ == "__main__":

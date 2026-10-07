@@ -46,7 +46,7 @@ SECTION=""
 cleanup() {
   rm -f "$FINDINGS"
   find "$TMP" -type f -delete 2> /dev/null
-  rmdir "$TMP" 2> /dev/null
+  find "$TMP" -depth -type d -exec rmdir {} \; 2> /dev/null
 }
 trap cleanup EXIT
 
@@ -202,6 +202,26 @@ if [ -x "$SCAN" ] && [ -x "$VIEW" ]; then
     bad "engine.masks_k8s_secret" "the viewer printed a Kubernetes Secret's data value"
   else
     ok "engine.masks_k8s_secret" "a Kubernetes Secret's data values are redacted"
+  fi
+  # Cluster-API output arrives on stdin with no name to choose a grammar by. `helm get values`
+  # carries no manifest signature, so without the --yaml hint the guard now passes it was read
+  # as dotenv and its nested values printed raw.
+  # Capture first: under pipefail a viewer that exits non-zero fails the pipeline even when grep
+  # matched, and this negative check would pass without having tested anything.
+  OUT="$(printf 'USER-SUPPLIED VALUES:\napp:\n  auth0:\n    clientSecret: not-a-real-secret-004\n' \
+    | "$VIEW" --yaml - 2> /dev/null || true)"
+  if [ -z "$OUT" ] || printf '%s' "$OUT" | grep -q 'not-a-real-secret-004'; then
+    bad "engine.masks_stdin_yaml" "the viewer printed a nested value from YAML on stdin"
+  else
+    ok "engine.masks_stdin_yaml" "YAML on stdin is redacted when the producer is named as YAML"
+  fi
+  # `kubectl get secrets -o yaml` returns a List: `kind: Secret` is indented inside each item.
+  OUT="$(printf 'apiVersion: v1\nitems:\n- apiVersion: v1\n  data:\n    DB_URL: bm90LWEtcmVhbC0wMDU=\n  kind: Secret\nkind: List\n' \
+    | "$VIEW" --yaml - 2> /dev/null || true)"
+  if [ -z "$OUT" ] || printf '%s' "$OUT" | grep -q 'bm90LWEtcmVhbC0wMDU='; then
+    bad "engine.masks_k8s_secret_list" "the viewer printed a data value from a Secret inside a List"
+  else
+    ok "engine.masks_k8s_secret_list" "a Secret's data values are redacted inside a List"
   fi
 else
   bad "engine.runnable" "secret-scan or redact-view is missing or not executable"
@@ -364,6 +384,73 @@ print(json.dumps({"tool_name": "Read", "tool_input": {"file_path": sys.argv[1]}}
     ok "guard.consumer_allowed" "a process that merely consumes a credential is allowed"
   else
     bad "guard.consumer_allowed" "a process consuming a credential was blocked — it never needed the value"
+  fi
+
+  # --- reads from a cluster API -----------------------------------------------------------
+  # These name no file, so a guard routed by path never saw them: `argocd app get APP -o json`
+  # printed an Application's inline Helm values raw. Asserting the rewrite is not enough; run
+  # what the guard substituted against a stub producer that prints a synthetic value, and check
+  # the value is gone while the filter downstream still parses the output.
+  mkdir -p "${TMP}/stubbin"
+  cat > "${TMP}/stubbin/argocd" << 'STUB'
+#!/bin/sh
+printf '%s\n' '{"spec":{"source":{"targetRevision":"main","helm":{"values":"app:\n  clientSecret: not-a-real-secret-006\n"}}}}'
+STUB
+  chmod +x "${TMP}/stubbin/argocd"
+  PL="$(payload_for "argocd app get acme-api -o json | jq -c .spec.source")"
+  REWRITE="$(printf '%s' "$PL" | python3 "$GUARD" 2> /dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+d = json.loads(raw) if raw else {}
+print((d.get("hookSpecificOutput", {}).get("updatedInput") or {}).get("command", ""))' 2> /dev/null || true)"
+  if [ -z "$REWRITE" ]; then
+    bad "guard.cluster_api_routed" "a cluster-API read (argocd app get -o json) was not routed through the viewer"
+  elif ! command -v jq > /dev/null 2>&1; then
+    warn "guard.cluster_api_routed" "a cluster-API read is routed, but jq is absent so the substituted command was not run"
+  else
+    RESULT="$(PATH="${TMP}/stubbin:${PATH}" bash -c "$REWRITE" 2> /dev/null || true)"
+    if printf '%s' "$RESULT" | grep -q 'not-a-real-secret-006'; then
+      bad "guard.cluster_api_routed" "the substituted cluster-API command printed the value it was meant to redact"
+    elif printf '%s' "$RESULT" | grep -q '"targetRevision":"main"'; then
+      ok "guard.cluster_api_routed" "a cluster-API read is routed through the viewer and stays usable by jq"
+    else
+      bad "guard.cluster_api_routed" "the substituted cluster-API command broke the filter downstream"
+    fi
+  fi
+
+  D="$(probe "$(payload_for "kubectl get secret acme -o jsonpath='{.data.password}'")")"
+  if [ "$D" = "deny" ]; then
+    ok "guard.cluster_api_scalar_denied" "a template output on a Secret (one raw value) is denied"
+  else
+    bad "guard.cluster_api_scalar_denied" "a template output on a Secret was not denied (decided ${D})"
+  fi
+  # Matching reads the command as the shell does. A quoted format and a line continuation once
+  # let a Secret print with no decision at all.
+  if rewritten "$(payload_for "kubectl get secret acme \\
+  -o 'yaml'")"; then
+    ok "guard.cluster_api_shell_spelling" "a continued, quoted cluster-API read is still routed"
+  else
+    bad "guard.cluster_api_shell_spelling" "a cluster-API read split by a continuation or a quoted format ran unrouted"
+  fi
+  # An ask after routing must carry the routed command, or approving runs the producer raw.
+  # Read updatedInput itself: an ask's reason also names redact-view, so a grep of the whole
+  # hook output passes whether or not the routing survived.
+  if printf '%s' "$(payload_for "helm template acme ./chart -f values-uat.yaml | yq .kind")" \
+    | python3 "$GUARD" 2> /dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+u = (json.loads(raw).get("hookSpecificOutput", {}).get("updatedInput") or {}) if raw else {}
+sys.exit(0 if "redact-view" in u.get("command", "") else 1)' 2> /dev/null; then
+    ok "guard.cluster_api_routing_kept" "a values-file mention elsewhere in the pipeline keeps the routing"
+  else
+    bad "guard.cluster_api_routing_kept" "a later rule discarded the cluster-API routing"
+  fi
+  PL="$(payload_for "kubectl get pods -n acme")"
+  D="$(probe "$PL")"
+  if [ "$D" = "allow" ] && ! rewritten "$PL"; then
+    ok "guard.cluster_api_table_untouched" "a table-format kubectl get passes through untouched"
+  else
+    bad "guard.cluster_api_table_untouched" "a table-format kubectl get was interfered with (decided ${D})"
   fi
 
   # --- reads inside an embedded shell ---------------------------------------------------
