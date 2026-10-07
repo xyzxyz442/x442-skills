@@ -117,3 +117,20 @@ Three changes, each closing the hole independently of the others:
   document that mentions a read prompt, which is the honest-command prompting this record rejects.
 
 The narrow scope is unchanged: skipping heredoc bodies narrows it, it does not widen it.
+
+## Amendment — 2026-10-07, payload v14
+
+The masked-verb rule above was written for invalid shell. A quoted script handed to a runner is
+valid shell, and the runner executes it: `bash -c 'cat SECRETFILE'` and `eval 'cat SECRETFILE'`
+printed the file raw. A credential read inside a quoted script is now asked about when a runner
+from the allowlist sits earlier in the same step (`sh`-family shells, `eval`, `su`, `runuser`,
+`script`, `flock`, `sudo -s/-i`, plus `watch`, `xargs`, `parallel`). The same applies to a heredoc
+fed to a runner or an interpreter. It asks rather than rewrites, for the reason the embedded-shell
+rule does: inserting a path into nested quoting is where the next differential comes from.
+
+The narrow scope still holds. A quoted read with no runner in its step (`echo "cat FILE" >> notes`)
+remains data. ADR 0026 records why the allowlist names honest runners only.
+
+The backstop also learned one distinction. A variable right after a value-taking flag
+(`head -n $N`) is the flag's value, not a path, so it is not probed. A literal after a plain flag
+(`cat -n FILE`) still is.

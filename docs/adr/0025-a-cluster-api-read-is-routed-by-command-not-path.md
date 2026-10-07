@@ -144,6 +144,22 @@ regression case. Two lessons shaped the final design:
 - **One pattern, one job.** A banner regex served both header passthrough and diff detection.
   Tightening it for the first job silently narrowed the second, which then failed open.
 
+## Amendment — 2026-10-07, payload v14
+
+The review round after v0.19.2 is triaged by ADR 0026. It changes four things:
+
+- **Runners.** A producer inside a quoted script asks when an allowlisted runner sits earlier in
+  the same step. The list is the honest runners (`su -c`, `runuser -c`, `script -c`, `flock -c`
+  and `sudo -s/-i`, added to the shells, `eval`, `watch`, `xargs` and `parallel`). A heredoc fed to
+  `python3`, `perl`, `node`, `ruby` or `make` counts as a script. A runner in an earlier step no
+  longer makes a later quoted message ask.
+- **`kubectl config view`** is always routed. Without `--raw`, kubectl still prints OIDC
+  `auth-provider` secrets and exec-plugin `env` values. A template output passes only when every
+  expression reads `current-context`, `contexts`, `clusters` or `preferences`; anything else is
+  denied, including a template file or a wildcard.
+- **Variable reads.** Any read whose path the shell has yet to expand goes through the viewer.
+- **`kubecolor`** matches wherever `kubectl` does, including `kubecolor exec`.
+
 ## Scope and relation to ADR 0009
 
 ADR 0009 keeps the read backstop out of quoted regions, because quoted text there is data. This
