@@ -367,7 +367,11 @@ PRODUCERS = [
 
 # `kubectl get` prints a table unless asked for a document; only the document formats carry
 # values. A template format prints one bare scalar, which no viewer can redact by structure.
-KUBE_OUTPUT_RE = re.compile(r"""(?:\s-o(?:=|\s*)|\s--output(?:=|\s+))["']?([\w-]+)""")
+# kubectl's flag parser joins boolean shorthands with `-o` (`-Ao yaml` is `-A -o yaml`). Only the
+# boolean ones may precede it: `-n` takes a value, so `-nfoo` is a namespace, never an `-o`.
+KUBE_OUTPUT_RE = re.compile(
+    r"""(?:\s-[ARwh]*o(?:=|\s*)|\s--output(?:=|\s+))["']?([\w-]+)"""
+)
 KUBE_TEMPLATE_RE = re.compile(r"\s--template(?:=|\s)")
 KUBE_SECRET_RE = re.compile(r"[\s,]secrets?(?![\w-])", re.IGNORECASE)
 DOC_FORMATS = ("yaml", "json")
@@ -667,11 +671,25 @@ def _config_template_safe(stage: str) -> bool:
     )
 
 
+def _kube_format(stage: str) -> str:
+    """The output format kubectl will use: the last `-o`, lowercased, or "" for none."""
+    found = KUBE_OUTPUT_RE.findall(stage)
+    return found[-1].lower() if found else ""
+
+
 def _template_output(stage: str) -> bool:
     """Does this kubectl step print through a template -- one bare value per field?"""
-    found = KUBE_OUTPUT_RE.findall(stage)
-    fmt = found[-1].lower() if found else ""
-    return bool(KUBE_TEMPLATE_RE.search(stage)) or fmt.startswith(TEMPLATE_FORMATS)
+    return bool(KUBE_TEMPLATE_RE.search(stage)) or _kube_format(stage).startswith(
+        TEMPLATE_FORMATS
+    )
+
+
+# kyaml is a whole document like yaml, but flow-style, and the viewer reads block YAML only: it
+# passes kyaml through with every value raw. Ask until the viewer learns it.
+KYAML_WHY = (
+    "`-o kyaml` prints the whole object in flow-style YAML, which redact-view cannot read, so "
+    "its values would reach the transcript raw; `-o yaml` is routed through the viewer instead"
+)
 
 
 def _classify(label: str, stage: str):
@@ -681,6 +699,13 @@ def _classify(label: str, stage: str):
         # secrets and exec-plugin env values print raw even without --raw. So the view is always
         # routed, and a template that can reach `users` (or the whole document) is denied: it
         # prints a bare value. `{.current-context}` and the like are everyday and left alone.
+        # A document format beats --template: kubectl ignores the template under `-o yaml` or
+        # `-o json`, in either order, and prints the whole kubeconfig.
+        fmt = _kube_format(stage)
+        if fmt == "kyaml":
+            return "ask", KYAML_WHY
+        if fmt in DOC_FORMATS:
+            return "rewrite", None
         if _template_output(stage):
             if not _config_template_safe(stage):
                 return "deny", (
@@ -690,8 +715,9 @@ def _classify(label: str, stage: str):
             return None, None
         return "rewrite", None
     if label == "kubectl get":
-        found = KUBE_OUTPUT_RE.findall(stage)
-        fmt = found[-1].lower() if found else ""  # kubectl honours the last -o
+        fmt = _kube_format(stage)
+        if fmt == "kyaml":
+            return "ask", KYAML_WHY
         if fmt in DOC_FORMATS or re.search(r"\s--raw(?:=|\s|$)", stage):
             return "rewrite", None
         if KUBE_SECRET_RE.search(stage) and _template_output(stage):

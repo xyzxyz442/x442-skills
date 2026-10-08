@@ -108,7 +108,9 @@ producer or credential read inside a quoted script asks when an allowlisted runn
 `eval`, `su -c`, `script -c`, a heredoc fed to `python3` or `make`) sits earlier in the same step,
 and a read whose path is a variable always goes through the viewer. `kubectl config view` is
 always routed; a template output on it passes only over `current-context`, `contexts`, `clusters`
-or `preferences`. ADR 0026 sets the scope: a binary reached through a variable or an alias
+or `preferences`, and `-o yaml|json` beats `--template` as it does in kubectl. A boolean shorthand joined to `-o`
+(`-Ao yaml`) is read as `-o`. `-o kyaml` asks:
+the viewer cannot read flow-style YAML, so `-o yaml` is the routed form. ADR 0026 sets the scope: a binary reached through a variable or an alias
 (`$k get secret …`), an interpreter one-liner, and a script file run later are the
 cooperative-guard limit below.
 

@@ -394,6 +394,81 @@ def cluster_cases(d):
                 f"template-parity/routed: {cmd!r} was {decision}, not routed"
             )
 
+    # Slice: output precedence. kubectl ignores --template when -o names a document format, in
+    # either order, and prints the whole kubeconfig (measured on kubectl 1.37.1 against a
+    # synthetic kubeconfig: 19 lines for `-o yaml --template=...`, 0 for the bare template). The
+    # guard took the --template flag at its word and left the full document unrouted.
+    for cmd in (
+        "kubectl config view -o yaml --template='{{.current-context}}'",
+        "kubectl config view --template='{{.current-context}}' -o yaml",
+        "kubectl config view -o json --template='{{.current-context}}'",
+        "kubectl config view --output=yaml --template '{{.current-context}}'",
+        'kubectl config view -o "yaml" --template={{.current-context}}',
+        "kubecolor config view -ojson --template='{{.current-context}}'",
+    ):
+        checked += 1
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(f"output-precedence: {cmd!r} was {decision}, not routed")
+    for cmd in (
+        "kubectl config view --template='{{.current-context}}'",
+        "kubectl config view -o go-template --template='{{.current-context}}'",
+        "kubectl config view -o jsonpath --template='{.current-context}'",
+    ):
+        checked += 1
+        decision, updated = decide(cmd, d)
+        if decision != "allow" or (updated and "redact-view" in updated):
+            failures.append(
+                f"output-precedence/honest: {cmd!r} was interfered with ({decision})"
+            )
+
+    # Slice: kyaml. kubectl's flow-style YAML is a whole document, but the viewer reads block
+    # YAML line by line and passes kyaml through with the Secret's data raw. Until the viewer
+    # learns it, the step asks and names `-o yaml`, which it does redact.
+    for cmd in (
+        "kubectl get secret acme -o kyaml",
+        "kubectl get secret acme -okyaml",
+        "kubecolor get secret acme --output=kyaml",
+        "kubectl get pods -o kyaml",
+        "kubectl get secret acme -o yaml -o kyaml",
+        "kubectl config view -o kyaml",
+        "kubectl config view -o kyaml --template='{{.current-context}}'",
+    ):
+        checked += 1
+        decision, _ = decide(cmd, d)
+        if decision != "ask":
+            failures.append(f"kyaml: {cmd!r} was {decision}, expected ask")
+    # Slice: combined short flags. kubectl's flag parser joins boolean shorthands with `-o`
+    # (`-Ao yaml` is `-A -o yaml`; confirmed on 1.37.1, where `-Ro bogusfmt` is refused as an
+    # output format). The guard wanted whitespace right before `-o` and missed the format.
+    for cmd in (
+        "kubectl get secrets -Ao yaml",
+        "kubectl get secrets -Aoyaml",
+        "kubectl get secret acme -wo json",
+        "kubectl get secrets -ARo=yaml",
+        # `-n` takes a value, so `-nfoo` is a namespace and never an `-o`.
+        "kubectl get secret acme -o yaml -nfoo",
+    ):
+        checked += 1
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(f"short-flags: {cmd!r} was {decision}, not routed")
+    checked += 1
+    decision, _ = decide("kubectl get secrets -Ao kyaml", d)
+    if decision != "ask":
+        failures.append(f"short-flags/kyaml: was {decision}, expected ask")
+    checked += 1
+    decision, updated = decide("kubectl get pods -Ao wide", d)
+    if decision != "allow" or (updated and "redact-view" in updated):
+        failures.append(
+            f"short-flags/honest: -Ao wide was interfered with ({decision})"
+        )
+
+    checked += 1
+    ok_, decision, _ = _rewritten("kubectl get secret acme -o kyaml -o yaml", d)
+    if not ok_:
+        failures.append(f"kyaml/last-o-wins: was {decision}, not routed")
+
     # Slice: unresolved reads. A path held in a variable cannot be opened here, and its
     # extension may say nothing (`config.uat`). The viewer prints a clean file byte-identical,
     # so every read whose path is not a literal goes through it.

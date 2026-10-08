@@ -53,7 +53,8 @@ Commands whose whole purpose is to obtain the raw value: `base64`, `openssl`, `x
 A template output on a Secret (`kubectl get secret … -o jsonpath=…`, `go-template`,
 `--template`) prints one bare value and is blocked, as is an extraction verb downstream of a
 cluster read (`… | base64 -d`). For the structure, use a document format:
-`kubectl get secret NAME -o yaml | ~/.claude/bin/redact-view --yaml -`.
+`kubectl get secret NAME -o yaml | ~/.claude/bin/redact-view --yaml -`. `-o kyaml` asks, because
+the viewer cannot read it; use `-o yaml`.
 
 The tools are called by full path on purpose, and are not on `PATH`. A generic name like
 `secret-scan` can resolve to some other program first, and for a redactor that failure is
