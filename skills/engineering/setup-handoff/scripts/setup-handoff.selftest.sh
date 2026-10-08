@@ -527,5 +527,38 @@ chk "prefixed copilot_findTextInFiles naming a board file passes" "allow" "$(gat
 chk "camelCase createFile on INDEX.md is refused" "deny" "$(gate createFile "$J_READ")"
 chk "camelCase editFiles on INDEX.md is refused" "deny" "$(gate editFiles "$J_READ")"
 
+printf '\nthe mirror workflow must check out full history (ADR 0017)\n'
+# A workflow rendered before the template carried `fetch-depth: 0` is a shallow checkout, which the
+# CLI refuses outright, so every run fails. vfind (above) reads the verifier's finding by id.
+# The verifier needs an installed board (a --board-only board has no .agents/handoff to find), so
+# this uses the single-repo install section 7 uses, with the workflow written at the repo root.
+MC="$(mkparentrepo)"
+"$INSTALLER" "$MC" --tools claude --primary none > /dev/null 2>&1
+seed_external "$MC/.agents/handoff" "example-invalid/no-such-board"
+"$INSTALLER" "$MC" --tools claude --primary none --with-mirror-workflow > /dev/null 2>&1
+WFC="$MC/.github/workflows/handoff-mirror.yml"
+# Guard the premise: without it, the fail case below would pass against a workflow that never
+# existed (the verifier skips the whole block when no workflow is installed).
+chk "checkout: the rendered workflow exists" "yes" "$([ -f "$WFC" ] && echo yes || echo no)"
+chk "checkout: a freshly rendered workflow checks out full history" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
+# Delete the line in place, keeping every other line, then re-verify the SAME board.
+WFC_BEFORE="$(grep -c 'fetch-depth' "$WFC")"
+grep -v '^[[:space:]]*fetch-depth:' "$WFC" > "$WFC.tmp" && mv "$WFC.tmp" "$WFC"
+chk "checkout: the fetch-depth line was actually removed" "1 0" "$WFC_BEFORE $(grep -c 'fetch-depth' "$WFC")"
+chk "checkout: a workflow without fetch-depth 0 is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.checkout)"
+
+printf '\na re-run refreshes an installed mirror workflow, flag or not\n'
+# The stale workflow above is what a payload upgrade used to leave behind: the re-run lifted the CLI
+# and skipped the workflow unless --with-mirror-workflow was passed again.
+"$INSTALLER" "$MC" --tools claude --primary none > /dev/null 2>&1
+chk "refresh: a plain re-run restores fetch-depth 0" "1" "$(grep -c '^[[:space:]]*fetch-depth:[[:space:]]*0' "$WFC")"
+chk "refresh: the refreshed workflow verifies" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
+# Presence of the file is the opt-in; a board that never had one still never gets one unasked.
+MN="$(mkparentrepo)"
+"$INSTALLER" "$MN" --tools claude --primary none > /dev/null 2>&1
+seed_external "$MN/.agents/handoff" "example-invalid/no-such-board"
+"$INSTALLER" "$MN" --tools claude --primary none > /dev/null 2>&1
+chk "refresh: a plain re-run installs no workflow that was never asked for" "no" "$([ -f "$MN/.github/workflows/handoff-mirror.yml" ] && echo yes || echo no)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

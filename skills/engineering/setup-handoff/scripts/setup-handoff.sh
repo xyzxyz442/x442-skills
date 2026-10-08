@@ -30,6 +30,7 @@
 #       board on every push to its default branch (ADR 0011). ON REQUEST ONLY, never by default, and
 #       refused unless the board's own repository has a GitHub remote. No token value is ever
 #       written: it renders GITHUB_TOKEN when the tracker IS the board's repo, else a secret NAME.
+#       Once installed, every later run re-renders it, flag or not, so template fixes reach it.
 #
 #   setup-handoff.sh --board-only <path> [--groups <csv>] [--layout subfolder|prefix] [--remote <url>]
 #       Scaffold a STANDALONE shared board (payload + config) at <path>, owned by no repo:
@@ -826,6 +827,24 @@ PY
   [ "$tracker" = "$repo" ] || echo "  ACTION NEEDED: set the repository secret HANDOFF_TRACKER_TOKEN (issues:write on $tracker) — the workflow cannot run without it."
 }
 
+# The workflow's own header says "re-run it to update this file", so a re-run must: a workflow an
+# earlier run installed IS the opt-in, and re-rendering it is how a board picks up a template fix.
+# Without this, a payload upgrade lifts the CLI and leaves the workflow behind — the CLI began
+# refusing shallow boards while every installed workflow still checked out shallow, and each mirror
+# run failed for two weeks. Only an explicit request may fail the run: a refresh the board no
+# longer supports (its tracker or remote gone since) keeps the old file and says so.
+mirror_workflow_step() { # board-dir
+  local b="$1" top
+  if [ "$MIRROR_WORKFLOW" = 1 ]; then
+    install_mirror_workflow "$b"
+    return
+  fi
+  top="$(git -C "$b" rev-parse --show-toplevel 2> /dev/null)" || return 0
+  [ -f "$top/.github/workflows/handoff-mirror.yml" ] || return 0
+  (install_mirror_workflow "$b") \
+    || echo "setup-handoff: warning — could not refresh the existing mirror workflow (above); left it as it was" >&2
+}
+
 # --- --board-only: scaffold a standalone shared board, owned by no repo -----------------
 # Copies the payload + writes a cross-repo config (with any group facts), then exits. No per-tool
 # wiring, no AGENTS.md edit, no git/AGENTS.md precondition — the board is a plain directory the
@@ -861,7 +880,7 @@ if [ -n "$BOARD_ONLY" ]; then
   board_ensure_git "$HDEST" "$BOARD_REMOTE"
   # After the board exists and has its remote: the workflow's every precondition is read from that
   # finished state, so it cannot be rendered against a board that is still half-written.
-  [ "$MIRROR_WORKFLOW" = 1 ] && install_mirror_workflow "$HDEST"
+  mirror_workflow_step "$HDEST"
   echo "setup-handoff: scaffolded standalone board at $HDEST (topology=cross-repo${GROUP_LIST:+, groups=$GROUP_LIST}${LAYOUT:+, layout=$LAYOUT})"
   exit 0
 fi
@@ -1227,7 +1246,8 @@ PYEOF
 # --- what needs ignoring (ADR 0010) ------------------------------------------------------
 apply_ignore_needs "$REPO" "$HDEST"
 
-# Last, and only on request: every precondition it checks is read from the finished board.
-[ "$MIRROR_WORKFLOW" = 1 ] && install_mirror_workflow "$HDEST"
+# Last, on request or to refresh one already installed: every precondition it checks is read from
+# the finished board.
+mirror_workflow_step "$HDEST"
 
 echo "setup-handoff: installed at $HDEST (topology=$TOPOLOGY, tools=${TOOLS:-none}, primary=$PRIMARY)"

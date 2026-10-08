@@ -535,6 +535,15 @@ PY
   else
     ok board.mirror_workflow.token "the mirror workflow passes its token by reference, never by value"
   fi
+  # A failure, not a warning: the CLI refuses a shallow board outright (ADR 0017), so a workflow
+  # rendered before the template carried `fetch-depth: 0` fails EVERY run and mirrors nothing —
+  # there is no degraded mode to warn about. Grep the file directly, never through a pipe: under
+  # pipefail `| grep -q` turns an early exit into a false negative.
+  if grep -qE '^[[:space:]]*fetch-depth:[[:space:]]*0[[:space:]]*$' "$WF"; then
+    ok board.mirror_workflow.checkout "the mirror workflow checks out full history"
+  else
+    bad board.mirror_workflow.checkout "the mirror workflow checks out a shallow clone, and the CLI refuses a shallow board (ADR 0017) — every run fails and nothing is mirrored; re-run setup-handoff --with-mirror-workflow"
+  fi
 fi
 
 section "3. Wired tools + hard-enforcement primary"
