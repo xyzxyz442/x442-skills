@@ -714,6 +714,10 @@ def cluster_cases(d):
         ("list", kyaml_list),
         ("env", kyaml_env),
         ("multi-doc", kyaml_clean + kyaml_secret),
+        # `2>&1` puts kubectl's deprecation warnings in front of the document (ADR 0026 names it
+        # an honest shape), and CRLF line endings must not hide the `---` either.
+        ("stderr-noise", "Warning: v1 Foo is deprecated; use v2 Foo\n" + kyaml_secret),
+        ("crlf", kyaml_secret.replace("\n", "\r\n")),
         # Truncated mid-document: it does not parse, so it must fail closed.
         (
             "truncated",
@@ -729,6 +733,23 @@ def cluster_cases(d):
         checked += 1
         if any(v in out for v in kyaml_fakes) or "redacted" not in out:
             failures.append(f"engine/kyaml/{name}: printed a fake value")
+    # The block grammar already tolerates the same noise; pin the two to one tolerance.
+    yaml_noise = (
+        "Warning: v1 Foo is deprecated\napiVersion: v1\nkind: Secret\nmetadata:\n  name: acme\n"
+        "data:\n  DB_URL: RkFLRWt5YW1sVXJs\n"
+    )
+    out = subprocess.run(
+        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
+        input=yaml_noise,
+        text=True,
+        capture_output=True,
+    ).stdout
+    checked += 1
+    if "RkFLRWt5YW1sVXJs" in out:
+        failures.append(
+            "engine/kyaml/yaml-noise-sibling: block yaml behind noise printed raw"
+        )
+
     # JSONC (`tsconfig.json`, VS Code settings) also opens with `{` alone on a line and fails
     # json.loads. It is not kyaml -- kubectl starts every kyaml document with `---` -- so an
     # honest read of one must not be routed and printed masked.

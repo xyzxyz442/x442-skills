@@ -920,8 +920,10 @@ def _redact_diff(text: str) -> str:
 # across lines with `\`. The block-YAML reader sees none of that, so a Secret printed raw.
 # kubectl opens every kyaml document with `---`. JSON never does, and JSONC (`tsconfig.json`)
 # also starts with a lone `{` and fails json.loads, so the separator is what tells them apart.
-KYAML_START = re.compile(r"\A---[ \t]*\n[ \t]*[{\[][ \t]*\n")
-KYAML_DOC_SEP = re.compile(r"^---[ \t]*$", re.MULTILINE)
+KYAML_START = re.compile(r"\A---[ \t]*\r?\n[ \t]*[{\[][ \t]*\r?\n")
+# Piped input can carry `2>&1` noise -- kubectl's deprecation warnings -- before the first document.
+KYAML_FIND = re.compile(r"^---[ \t]*\r?\n[ \t]*[{\[][ \t]*\r?\n", re.MULTILINE)
+KYAML_DOC_SEP = re.compile(r"^(---[ \t]*\r?)$", re.MULTILINE)
 # A truncated document can end inside a string, so an unterminated one runs to the end.
 KYAML_STRING = re.compile(r'"(?:[^"\\]|\\.)*(?:"|\\?\Z)', re.DOTALL)
 _KYAML_ESCAPES = {
@@ -1078,20 +1080,26 @@ def _kyaml_fail_closed(text: str) -> str:
     return KYAML_STRING.sub(mask, text)
 
 
-def _redact_kyaml(text: str, mask_all: bool):
-    """kyaml documents, redacted; None when the text is not kyaml.
+def _kyaml_start(text: str, noisy: bool):
+    """Where kyaml begins, or None. Only piped input may carry noise before it: a named file or
+    the write-path scanner must open with the separator, or prose holding a `---` line and a `{`
+    would be read as a document that failed to parse."""
+    m = KYAML_START.match(text) or (noisy and KYAML_FIND.search(text))
+    return m.start() if m else None
+
+
+def _redact_kyaml(text: str, mask_all: bool) -> str:
+    """kyaml documents, redacted. `text` opens with the first document's separator.
 
     A document with nothing masked is returned byte-identical. A redacted one is printed as
     indented JSON, which every YAML reader also accepts: re-emitting kubectl's own key quoting
     and string folding exactly is not worth a second grammar. Input that looks like kyaml but
     does not parse is never handed to a line grammar that cannot see inside it.
     """
-    if not KYAML_START.match(text):
-        return None
-    parts = KYAML_DOC_SEP.split(text)
     out = []
-    for n, part in enumerate(parts):
-        if not part.strip():
+    # The split keeps each separator (odd indexes), so a clean document goes back byte-identical.
+    for n, part in enumerate(KYAML_DOC_SEP.split(text)):
+        if n % 2 or not part.strip():
             out.append(part)
             continue
         before = MASK_COUNT
@@ -1100,12 +1108,10 @@ def _redact_kyaml(text: str, mask_all: bool):
         except (_KyamlError, RecursionError):
             out.append(_kyaml_fail_closed(part))
             continue
-        if MASK_COUNT == before:
-            out.append(part)
-        else:
-            lead = "\n" if n else ""
-            out.append(lead + json.dumps(doc, indent=2) + "\n")
-    return "---".join(out)
+        out.append(
+            part if MASK_COUNT == before else "\n" + json.dumps(doc, indent=2) + "\n"
+        )
+    return "".join(out)
 
 
 def _render_grammar(name: str, text: str, mask_all: bool, fmt: str = "") -> str:
@@ -1140,9 +1146,12 @@ def _render_grammar(name: str, text: str, mask_all: bool, fmt: str = "") -> str:
                 return jsonl
             # otherwise fall through to line-based
 
-    kyaml = _redact_kyaml(text, mask_all)
-    if kyaml is not None:
-        return kyaml
+    at = _kyaml_start(text, bool(fmt or name.startswith("<")))
+    if at is not None:
+        # Whatever came before the first document -- noise, or block YAML -- is read by the
+        # grammar it would have met anyway. It holds no kyaml start, so this cannot recurse back.
+        head = _render_grammar(name, text[:at], mask_all, fmt) if at else ""
+        return head + _redact_kyaml(text[at:], mask_all)
 
     # Stdin and named formats only: the write-path scanner passes no name, and reading prose as
     # JSON-among-noise would change what a handoff release refuses.
