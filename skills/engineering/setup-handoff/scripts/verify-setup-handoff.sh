@@ -525,8 +525,12 @@ PY
   elif [ -n "$WF_MISSING" ]; then
     # A warning, not a failure: what is there still works, it just no longer covers everything.
     warn board.mirror_workflow.sections "the mirror workflow does not mirror section(s):${WF_MISSING} — re-run setup-handoff --with-mirror-workflow"
+  elif [ -z "$WF_SECTIONS" ] && grep -qE '^[[:space:]]*for section in \$SECTIONS;' "$WF"; then
+    # An empty list is only a working flat board when the loop still makes one pass. The bare loop
+    # every workflow rendered before that fix carries makes none, and the job still exits 0.
+    bad board.mirror_workflow.sections "the mirror workflow loops over an empty SECTIONS, so it makes zero passes and mirrors nothing while the job still passes — re-run setup-handoff --with-mirror-workflow"
   else
-    ok board.mirror_workflow.sections "the mirror workflow mirrors exactly this board's sections (${WF_SECTIONS:-flat board})"
+    ok board.mirror_workflow.sections "the mirror workflow mirrors exactly this board's sections (${WF_SECTIONS:-none — the whole board, once})"
   fi
   # A token VALUE in a committed workflow is the one failure here that cannot be undone by editing
   # the file, so it is checked rather than trusted: every GH_TOKEN must be a ${{ }} expression.
@@ -536,10 +540,14 @@ PY
     ok board.mirror_workflow.token "the mirror workflow passes its token by reference, never by value"
   fi
   # A failure, not a warning: the CLI refuses a shallow board outright (ADR 0017), so a workflow
-  # rendered before the template carried `fetch-depth: 0` fails EVERY run and mirrors nothing —
-  # there is no degraded mode to warn about. Grep the file directly, never through a pipe: under
-  # pipefail `| grep -q` turns an early exit into a false negative.
+  # rendered before the template carried a full-history checkout fails EVERY run and mirrors
+  # nothing — there is no degraded mode to warn about. Full history is either the template's plain
+  # `git fetch` with no --depth, or `fetch-depth: 0` on a workflow still using actions/checkout.
+  # Grep the file directly, never through a pipe: under pipefail `| grep -q` turns an early exit
+  # into a false negative.
   if grep -qE '^[[:space:]]*fetch-depth:[[:space:]]*0[[:space:]]*$' "$WF"; then
+    ok board.mirror_workflow.checkout "the mirror workflow checks out full history"
+  elif grep -qE '^[[:space:]]*git fetch[[:space:]]' "$WF" && ! grep -qE '^[[:space:]]*git fetch[[:space:]].*--(depth|shallow)' "$WF"; then
     ok board.mirror_workflow.checkout "the mirror workflow checks out full history"
   else
     bad board.mirror_workflow.checkout "the mirror workflow checks out a shallow clone, and the CLI refuses a shallow board (ADR 0017) — every run fails and nothing is mirrored; re-run setup-handoff --with-mirror-workflow"

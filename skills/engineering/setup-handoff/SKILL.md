@@ -420,8 +420,10 @@ setup-handoff.sh --board-only <board> --with-mirror-workflow
 **On request only, never by default.** It writes `.github/workflows/handoff-mirror.yml` at the
 board's _repository_ root — which is not always the board directory, since a board at
 `.agents/handoff` inside a project has its root two levels up — and the job cds into the board from
-there. The workflow runs `handoff mirror` once per section the board hosts, on every push to the
-board's default branch and on demand.
+there. The workflow runs `handoff mirror` once per section the board hosts — once, for the whole
+board, when it hosts none — on every push to the board's default branch and on demand. It checks the
+board out with plain `git` at full history and runs no JavaScript action, so the job needs no Node
+runtime at all.
 
 Every value in it is read from the board's own committed config, never guessed and never taken from
 a flag, so the file cannot claim a section the board does not host. The flag **refuses** — writing
@@ -435,8 +437,10 @@ gone stale.
 **No token value is ever written.** When the tracker _is_ the board's own repository the built-in
 `GITHUB_TOKEN` already carries `issues: write`, so no secret is needed at all. Any other tracker
 renders a secret **name** (`HANDOFF_TRACKER_TOKEN`) for you to set on the repository, and the
-installer says so. `verify-setup-handoff.sh` re-checks both halves: that the workflow's sections
-still match the board's, and that every `GH_TOKEN` is a `${{ }}` expression rather than a literal.
+installer says so. `verify-setup-handoff.sh` re-checks the rendered file: that the workflow's
+sections still match the board's (and that a sectionless board's loop still makes its one pass),
+that every `GH_TOKEN` is a `${{ }}` expression rather than a literal, and that the checkout fetches
+full history.
 
 Two behaviours are deliberate and look odd otherwise. The job **retries a failed section up to
 three times** — a mirror run can die part-way on a transient GitHub error, and because issues are

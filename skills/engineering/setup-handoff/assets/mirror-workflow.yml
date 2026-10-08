@@ -28,15 +28,29 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # Check out the BRANCH, not the detached commit: this job may push a drift report back.
-          ref: ${{ github.ref_name }}
+      # Plain git, not actions/checkout: this job runs no JavaScript action and so needs no Node
+      # runtime at all (the mirror is bash + python3). A JavaScript action pins the job to whatever
+      # Node release the runner happens to ship, which a board's own Node floor may be above.
+      - name: Check out the board
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git -c init.defaultBranch=main init -q .
+          # The same auth actions/checkout sets up: an extra header, so the drift step's push works
+          # without the token ever being written into the remote URL.
+          basic="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::$basic"
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic $basic"
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
           # FULL history. A board's identity is derived from its repository's ROOT commit, and a
           # shallow checkout reports the commit it fetched as that root — a different one after
           # every push, so each run would look like a different board and be refused the tracker
           # the run before it had just written (ADR 0017). The CLI refuses a shallow board outright.
-          fetch-depth: 0
+          git fetch -q origin "+refs/heads/$GITHUB_REF_NAME:refs/remotes/origin/$GITHUB_REF_NAME"
+          # The BRANCH, not the detached commit, tracking origin: this job may push a drift report
+          # back, and that step's bare `git push` needs an upstream.
+          git checkout -q -B "$GITHUB_REF_NAME" --track "origin/$GITHUB_REF_NAME"
 
       - name: Mirror each section into the tracker
         working-directory: __BOARD_PATH__
@@ -47,23 +61,27 @@ jobs:
           # Sections this board hosts, rendered by setup-handoff from the board's own config.
           SECTIONS="__SECTIONS__"
           rc=0
-          for section in $SECTIONS; do
+          # A board with no sections is mirrored once, whole: an empty HANDOFF_GROUP is the same
+          # as none. Looping over an empty $SECTIONS would run zero passes and still go green.
+          set -- $SECTIONS
+          [ $# -gt 0 ] || set -- ""
+          for section in "$@"; do
             # Up to three attempts. A mirror run can fail part-way on a transient GitHub error
             # (a GraphQL 502 was seen in practice), and the adapter correctly fails the run rather
             # than continuing blind. Retrying is safe and is the whole point of matching issues by
             # a hidden marker instead of a stored number: a re-run resumes where it stopped and
             # opens no duplicates.
             for attempt in 1 2 3; do
-              echo "::group::mirror $section (attempt $attempt)"
+              echo "::group::mirror ${section:-board} (attempt $attempt)"
               HANDOFF_GROUP="$section" ./handoff mirror
               status=$?
               echo "::endgroup::"
               [ $status -eq 0 ] && break
               if [ $attempt -eq 3 ]; then
-                echo "::error::mirror failed for section $section after 3 attempts"
+                echo "::error::mirror failed for section ${section:-board} after 3 attempts"
                 rc=1
               else
-                echo "::warning::mirror failed for section $section, retrying"
+                echo "::warning::mirror failed for section ${section:-board}, retrying"
                 sleep $((attempt * 5))
               fi
             done

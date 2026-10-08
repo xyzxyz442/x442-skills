@@ -134,6 +134,20 @@ chk "flag omitted: the plain board-only install still succeeds" "0" "$ST4"
 chk "flag omitted: no workflow file" "no" "$([ -f "$B4/.github/workflows/handoff-mirror.yml" ] && echo yes || echo no)"
 chk "flag omitted: not even a .github directory" "no" "$([ -d "$B4/.github" ] && echo yes || echo no)"
 
+# Runs a rendered workflow's mirror loop for real, against a stub ./handoff, and prints the
+# HANDOFF_GROUP of every pass it makes, one per line. A string match on the loop cannot tell a
+# loop that runs once from one that runs zero times and still exits 0; running it can.
+loop_passes() { # workflow-file
+  local d
+  d="$(mktemp -d)"
+  printf '#!/bin/sh\nprintf "[%%s]\\n" "$HANDOFF_GROUP" >> "$PASSES_LOG"\n' > "$d/handoff"
+  chmod +x "$d/handoff"
+  sed -n '/^[[:space:]]*SECTIONS=/,/^[[:space:]]*exit \$rc/p' "$1" | sed 's/^[[:space:]]*//' > "$d/loop.sh"
+  (cd "$d" && PASSES_LOG="$d/passes" bash loop.sh > /dev/null 2>&1)
+  [ -f "$d/passes" ] && cat "$d/passes"
+  return 0
+}
+
 printf '\n3+5+6. self-tracker board: GITHUB_TOKEN, no ACTION NEEDED, exact sections\n'
 B5="$(mkgitboard)"
 git -C "$B5" remote add origin "$GH_FAKE_REMOTE"
@@ -150,6 +164,8 @@ chk_contains "self-tracker: uses the built-in GITHUB_TOKEN" "$(cat "$WF5")" 'GH_
 chk "self-tracker: prints no ACTION NEEDED line" "" "$(printf '%s' "$OUT5" | grep 'ACTION NEEDED')"
 chk_contains "sections: SECTIONS names exactly the board's configured groups, in order" \
   "$(cat "$WF5")" 'SECTIONS="alpha beta gamma"'
+chk "sections: the loop makes exactly one mirror pass per section" "[alpha] [beta] [gamma]" \
+  "$(loop_passes "$WF5" | tr '\n' ' ' | sed 's/ $//')"
 chk_contains "board path: working-directory is . when the board is its own repository root" \
   "$(cat "$WF5")" 'working-directory: .'
 
@@ -541,18 +557,39 @@ WFC="$MC/.github/workflows/handoff-mirror.yml"
 # existed (the verifier skips the whole block when no workflow is installed).
 chk "checkout: the rendered workflow exists" "yes" "$([ -f "$WFC" ] && echo yes || echo no)"
 chk "checkout: a freshly rendered workflow checks out full history" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
-# Delete the line in place, keeping every other line, then re-verify the SAME board.
-WFC_BEFORE="$(grep -c 'fetch-depth' "$WFC")"
-grep -v '^[[:space:]]*fetch-depth:' "$WFC" > "$WFC.tmp" && mv "$WFC.tmp" "$WFC"
-chk "checkout: the fetch-depth line was actually removed" "1 0" "$WFC_BEFORE $(grep -c 'fetch-depth' "$WFC")"
-chk "checkout: a workflow without fetch-depth 0 is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.checkout)"
+# The job is bash + python3 and runs no JavaScript action, so it needs no Node runtime at all.
+chk "checkout: the rendered workflow runs no action (no uses: line)" "0" "$(grep -c 'uses:' "$WFC")"
+# Make the plain-git fetch shallow in place, keeping every other line, then re-verify the SAME board.
+sed 's/git fetch -q origin/git fetch -q --depth 1 origin/' "$WFC" > "$WFC.tmp" && mv "$WFC.tmp" "$WFC"
+chk "checkout: the fetch was actually made shallow" "1" "$(grep -c 'git fetch.*--depth' "$WFC")"
+chk "checkout: a git fetch with --depth is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.checkout)"
+# A board not yet re-rendered still carries the actions/checkout shape; that is judged on fetch-depth.
+WFC_SAVED="$(cat "$WFC")"
+printf 'jobs:\n  mirror:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n' > "$WFC"
+chk "checkout: a legacy actions/checkout with fetch-depth 0 still passes" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
+printf 'jobs:\n  mirror:\n    steps:\n      - uses: actions/checkout@v4\n' > "$WFC"
+chk "checkout: a legacy actions/checkout without fetch-depth 0 is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.checkout)"
+printf '%s\n' "$WFC_SAVED" > "$WFC"
+
+printf '\na flat board is mirrored once, whole\n'
+# A board with no sections renders SECTIONS="". The loop must still make one pass, with
+# HANDOFF_GROUP empty — `for section in $SECTIONS` over an empty list makes none and exits 0.
+chk_contains "flat: SECTIONS is rendered empty" "$(cat "$WFC")" 'SECTIONS=""'
+chk "flat: the loop makes exactly one pass, for the whole board" "[]" "$(loop_passes "$WFC")"
+chk "flat: the verifier accepts the rendered loop" "pass" "$(vfind "$MC" board.mirror_workflow.sections)"
+# Put the bare loop back — what every board rendered before this fix carries.
+sed -e '/^[[:space:]]*set -- \$SECTIONS$/d' -e '/^[[:space:]]*\[ \$# -gt 0 \] || set -- ""$/d' \
+  -e 's/for section in "\$@"; do/for section in $SECTIONS; do/' "$WFC" > "$WFC.tmp" && mv "$WFC.tmp" "$WFC"
+chk "flat: the bare loop was actually restored" "" "$(loop_passes "$WFC")"
+chk "flat: a bare loop over an empty SECTIONS is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.sections)"
 
 printf '\na re-run refreshes an installed mirror workflow, flag or not\n'
 # The stale workflow above is what a payload upgrade used to leave behind: the re-run lifted the CLI
 # and skipped the workflow unless --with-mirror-workflow was passed again.
 "$INSTALLER" "$MC" --tools claude --primary none > /dev/null 2>&1
-chk "refresh: a plain re-run restores fetch-depth 0" "1" "$(grep -c '^[[:space:]]*fetch-depth:[[:space:]]*0' "$WFC")"
-chk "refresh: the refreshed workflow verifies" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
+chk "refresh: a plain re-run restores the one-pass loop" "[]" "$(loop_passes "$WFC")"
+chk "refresh: the refreshed workflow verifies" "pass pass" \
+  "$(vfind "$MC" board.mirror_workflow.checkout) $(vfind "$MC" board.mirror_workflow.sections)"
 # Presence of the file is the opt-in; a board that never had one still never gets one unasked.
 MN="$(mkparentrepo)"
 "$INSTALLER" "$MN" --tools claude --primary none > /dev/null 2>&1
