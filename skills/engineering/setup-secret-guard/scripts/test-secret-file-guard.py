@@ -750,6 +750,64 @@ def cluster_cases(d):
             "engine/kyaml/yaml-noise-sibling: block yaml behind noise printed raw"
         )
 
+    # kyaml is not always at byte 0. A saved file can open with a comment or a blank line, a
+    # `-o kyaml >> all.yaml` lands after block YAML, an editor adds a BOM, and output pasted
+    # into a markdown note sits behind prose. Each was printed raw by name, missed by the
+    # write-path scanner, and left unrouted by the guard.
+    # Innocuous key, bare base64: nothing but the Secret's `kind` marks it, as in real output.
+    plain_secret = (
+        '---\n{\n  kind: "Secret",\n  apiVersion: "v1",\n  metadata: {\n    name: "fk",\n'
+        '  },\n  data: {\n    k: "RkFLRWt5YW1sUGxhaW4=",\n  },\n}\n'
+    )
+    kyaml_fakes = kyaml_fakes + ("RkFLRWt5YW1sUGxhaW4=",)
+    rv = os.path.join(os.path.dirname(GUARD), "redact-view")
+    scan = os.path.join(os.path.dirname(GUARD), "secret-scan")
+    placed = {
+        "comment.yaml": "# saved from the cluster\n" + plain_secret,
+        "blank.yaml": "\n" + plain_secret,
+        "appended.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
+        + plain_secret,
+        "bom.yaml": "\ufeff" + plain_secret,
+        "note.md": "# Notes\n\nAs kubectl printed it:\n\n```yaml\n"
+        + plain_secret
+        + "```\n",
+        "nested.md": "- step one\n\n   ```yaml\n"
+        + "".join("   " + ln for ln in plain_secret.splitlines(True))
+        + "   ```\n",
+    }
+    for fname, body in placed.items():
+        path = os.path.join(d, fname)
+        with open(path, "w") as fh:
+            fh.write(body)
+        named = subprocess.run([rv, path], text=True, capture_output=True).stdout
+        piped = subprocess.run(
+            [rv, "--yaml", "-"], input=body, text=True, capture_output=True
+        ).stdout
+        found = subprocess.run([scan, path], capture_output=True).returncode == 0
+        checked += 1
+        if fname.endswith(".yaml") and any(v in named + piped for v in kyaml_fakes):
+            failures.append(f"engine/kyaml/placed/{fname}: printed a fake value")
+        checked += 1
+        if not found:
+            failures.append(f"engine/kyaml/placed/{fname}: secret-scan missed it")
+        if fname.endswith(".yaml"):
+            checked += 1
+            ok_, decision, _ = _rewritten(f"cat {fname}", d)
+            if not ok_:
+                failures.append(
+                    f"engine/kyaml/placed/{fname}: cat was {decision}, not routed"
+                )
+    # Prose that only looks like kyaml -- a rule, then a JSONC block -- is not a document that
+    # failed to parse: a note holding it stays clean to the scanner.
+    prose = os.path.join(d, "prose.md")
+    with open(prose, "w") as fh:
+        fh.write('# Config\n\n---\n{\n  // editor\n  "editor.fontSize": "14",\n}\n')
+    checked += 1
+    if subprocess.run([scan, prose], capture_output=True).returncode == 0:
+        failures.append(
+            "engine/kyaml/prose: secret-scan flagged a JSONC block in prose"
+        )
+
     # JSONC (`tsconfig.json`, VS Code settings) also opens with `{` alone on a line and fails
     # json.loads. It is not kyaml -- kubectl starts every kyaml document with `---` -- so an
     # honest read of one must not be routed and printed masked.
@@ -777,6 +835,17 @@ def cluster_cases(d):
     checked += 1
     if out != kyaml_clean:
         failures.append("engine/kyaml/clean: a clean document was not byte-identical")
+    crlf_clean = (kyaml_clean + kyaml_clean).replace("\n", "\r\n")
+    out = subprocess.run(
+        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
+        input=crlf_clean.encode(),
+        capture_output=True,
+    ).stdout.decode()
+    checked += 1
+    if out != crlf_clean:
+        failures.append(
+            "engine/kyaml/clean-crlf: a clean CRLF stream was not byte-identical"
+        )
 
     # A diff shows only the changed lines, so a Deployment env `value:` arrives without the
     # sibling `name:` that marks it secret, behind a marker no YAML grammar reads. Argo CD masks
