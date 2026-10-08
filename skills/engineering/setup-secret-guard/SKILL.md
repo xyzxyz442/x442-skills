@@ -110,7 +110,10 @@ and a read whose path is a variable always goes through the viewer. `kubectl con
 always routed; a template output on it passes only over `current-context`, `contexts`, `clusters`
 or `preferences`, and `-o yaml|json` beats `--template` as it does in kubectl. A boolean shorthand
 joined to `-o` (`-Ao yaml`) is read as `-o`. The viewer reads kyaml, kubectl's flow-style YAML, and
-redacts it like any other document. ADR 0026 sets the scope: a binary reached through a variable or
+redacts it like any other document, wherever it sits: behind a comment, a BOM or stderr noise, or
+pasted into a note. `secret-scan` reads it there too, so a handoff `release` whose note quotes a
+Secret, or a JSON object after a `---` line with a credential-shaped value, is refused; pass
+`--force-secret` only for a genuine false positive. ADR 0026 sets the scope: a binary reached through a variable or
 an alias (`$k get secret …`), an interpreter one-liner, and a script file run later are the
 cooperative-guard limit below.
 
