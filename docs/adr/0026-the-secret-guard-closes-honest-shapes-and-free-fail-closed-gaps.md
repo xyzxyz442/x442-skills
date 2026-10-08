@@ -37,7 +37,10 @@ accident. Changing it means revisiting this record.
 **Cadence.** Work a round of findings on one branch. Allow at most two review rounds after the
 first fix, plus one explicit review pass in which every finding is read in full. A finding a
 background review reports without detail is not guessed at. A finding that fails the test above
-is filed, not fixed. Then release once.
+is filed, not fixed. Then release once. The one exception is a regression: a value the installed
+payload redacts that the new code prints raw, reproduced. It may be fixed past the cap with the
+user's go-ahead, and the fix must provably redact no less than the installed payload. Record each
+exception below.
 
 ## Applied in v0.19.3
 
@@ -55,6 +58,22 @@ is filed, not fixed. Then release once.
   prints a clean file byte-identical. A variable that is a flag's value (`head -n $N`) is not a
   path.
 - **`kubecolor`** matches wherever `kubectl` does.
+
+## Applied in v0.20.0
+
+- **kyaml:** the viewer reads kubectl's flow-style YAML (`-o kyaml`), so `-o kyaml` is routed like
+  `-o yaml` rather than asked about. A document is found from its `---` separator wherever it sits:
+  behind stderr noise, a comment, a BOM or block YAML, or pasted into a note, where `secret-scan`
+  sees it too. A document that does not parse fails closed when the input is piped or opens with
+  it. Elsewhere in a named file or a note it may be prose, so it is left to the surrounding
+  grammar; that is a limit, pinned by a test.
+- **Cadence exception:** the round used both review rounds by its third commit. A further review
+  reported a regression, reproduced as plain and single-quoted values in an unparseable document
+  that the installed payload had masked. With the user's go-ahead it was fixed past the cap: the
+  fail-closed path runs the old grammar first and masks the remaining quoted strings, so it
+  redacts no less than before. A differential over 2,242 generated documents showed no regression.
+  One more undescribed "redaction regression" finding could not be reproduced and was not
+  guessed at. The user shipped with it open.
 
 ## Considered options
 
