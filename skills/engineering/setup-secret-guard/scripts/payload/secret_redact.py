@@ -1119,7 +1119,13 @@ def _render_kyaml(name: str, text: str, mask_all: bool, fmt: str):
             nxt = KYAML_SEP_LINE.search(text, m.end())
             end = nxt.start() if nxt else len(text)
             out.append(around(text[done : m.start()]))
-            out.append(_kyaml_fail_closed(text[m.start() : end]))
+            # The grammar this text met before kyaml was read masks by key -- plain and
+            # single-quoted values included -- and the quoted-string mask covers what it cannot
+            # see. Applying both means failing closed never redacts less than either alone.
+            region = _render_grammar(
+                name, text[m.start() : end], mask_all, fmt, kyaml=False
+            )
+            out.append(_kyaml_fail_closed(region))
             pos = done = end
             found = True
             continue

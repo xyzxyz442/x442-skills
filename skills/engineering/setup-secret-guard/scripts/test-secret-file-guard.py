@@ -733,6 +733,29 @@ def cluster_cases(d):
         checked += 1
         if any(v in out for v in kyaml_fakes) or "redacted" not in out:
             failures.append(f"engine/kyaml/{name}: printed a fake value")
+    # A document that opens like kyaml but does not parse fails closed -- and failing closed
+    # must never redact less than the grammar it replaced. Masking only double-quoted strings
+    # let a single-quoted or plain value through that payload 15's block grammar masked by key.
+    flow = "---\n{\n  password: 'RkFLRXNpbmdsZQ',\n  token: RkFLRXBsYWlu,\n}\n"
+    flow_path = os.path.join(d, "flow.yaml")
+    with open(flow_path, "w") as fh:
+        fh.write(flow)
+    for label, args, stdin in (
+        ("stdin", ["--yaml", "-"], flow),
+        ("named", [flow_path], None),
+    ):
+        out = subprocess.run(
+            [os.path.join(os.path.dirname(GUARD), "redact-view"), *args],
+            input=stdin,
+            text=True,
+            capture_output=True,
+        ).stdout
+        checked += 1
+        if "RkFLRXNpbmdsZQ" in out or "RkFLRXBsYWlu" in out:
+            failures.append(
+                f"engine/kyaml/fail-closed-floor/{label}: printed a fake value"
+            )
+
     # The block grammar already tolerates the same noise; pin the two to one tolerance.
     yaml_noise = (
         "Warning: v1 Foo is deprecated\napiVersion: v1\nkind: Secret\nmetadata:\n  name: acme\n"
