@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.0](https://github.com/xyzxyz442/x442-skills/compare/v0.19.4...v0.20.0) (2026-10-08)
+
+### 🚀 Features
+
+- **feature:** teach redact-view kyaml and route -o kyaml like yaml ([5981e9b](https://github.com/xyzxyz442/x442-skills/commit/5981e9be601fa5fcd4cd7d9eaebc69442e85248b))
+
+### 🐞 Bug Fixes
+
+- **bug:** find kyaml behind stderr noise and CRLF line endings ([0daf3df](https://github.com/xyzxyz442/x442-skills/commit/0daf3dfe5ab0108bb0fc04412c3dd80547e9d865))
+- **bug:** find kyaml documents anywhere, not only at byte 0 ([8970147](https://github.com/xyzxyz442/x442-skills/commit/8970147fb6df96d5d650af865ddcb3d33f4c5599))
+- **bug:** never let the kyaml fail-closed path redact less than before ([0cfa539](https://github.com/xyzxyz442/x442-skills/commit/0cfa5392d38c2763a91fb3125747fb867228fbbc))
+
+### 📚 Documentation
+
+- **docs:** say where the viewer and scanner now find kyaml ([5a0342b](https://github.com/xyzxyz442/x442-skills/commit/5a0342ba4861169ddf40ca646628919f0d1d29c8))
+
 ## [0.19.4](https://github.com/xyzxyz442/x442-skills/compare/v0.19.3...v0.19.4) (2026-10-08)
 
 ### 🐞 Bug Fixes
