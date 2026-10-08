@@ -163,6 +163,16 @@ def _rewritten(cmd, cwd):
     )
 
 
+def _view(args, stdin=None):
+    """redact-view's stdout for `args`, with `stdin` piped in as text."""
+    return subprocess.run(
+        [os.path.join(os.path.dirname(GUARD), "redact-view"), *args],
+        input=stdin,
+        text=True,
+        capture_output=True,
+    ).stdout
+
+
 def cluster_cases(d):
     failures, checked = [], 0
 
@@ -605,12 +615,7 @@ def cluster_cases(d):
         '      {"apiVersion":"v1","data":{"DB_URL":"RkFLRWRiVXJsUGFzcw=="},"kind":"Secret"}\n'
         "  name: acme\ntype: Opaque\n"
     )
-    view = subprocess.run(
-        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-        input=sec,
-        text=True,
-        capture_output=True,
-    ).stdout
+    view = _view(["--yaml", "-"], sec)
     checked += 1
     if (
         len(view.splitlines()) != len(sec.splitlines())
@@ -637,12 +642,7 @@ def cluster_cases(d):
             "    last-applied: |\n      " + APP_JSON + "\n  name: acme\n",
         ),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-            input=text,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(["--yaml", "-"], text)
         checked += 1
         if any(v in out for v in FAKE):
             failures.append(f"engine/fail-closed/{name}: printed a fake value")
@@ -663,12 +663,7 @@ def cluster_cases(d):
             f'>         {{"apiVersion":"v1","kind":"Secret","data":{{"pw":"{FAKE[0]}"}}}}\n',
         ),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-            input=text,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(["--yaml", "-"], text)
         checked += 1
         if any(v in out for v in FAKE) or "RkFLRW9sZA==" in out:
             failures.append(f"engine/encoded/{name}: printed a fake value")
@@ -724,12 +719,7 @@ def cluster_cases(d):
             '---\n{\n  kind: "Secret",\n  data: {\n    pw: "RkFLRWJyb2tlbg",\n',
         ),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-            input=text,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(["--yaml", "-"], text)
         checked += 1
         if any(v in out for v in kyaml_fakes) or "redacted" not in out:
             failures.append(f"engine/kyaml/{name}: printed a fake value")
@@ -744,12 +734,7 @@ def cluster_cases(d):
         ("stdin", ["--yaml", "-"], flow),
         ("named", [flow_path], None),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), *args],
-            input=stdin,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(args, stdin)
         checked += 1
         if "RkFLRXNpbmdsZQ" in out or "RkFLRXBsYWlu" in out:
             failures.append(
@@ -761,12 +746,7 @@ def cluster_cases(d):
         "Warning: v1 Foo is deprecated\napiVersion: v1\nkind: Secret\nmetadata:\n  name: acme\n"
         "data:\n  DB_URL: RkFLRWt5YW1sVXJs\n"
     )
-    out = subprocess.run(
-        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-        input=yaml_noise,
-        text=True,
-        capture_output=True,
-    ).stdout
+    out = _view(["--yaml", "-"], yaml_noise)
     checked += 1
     if "RkFLRWt5YW1sVXJs" in out:
         failures.append(
@@ -783,7 +763,6 @@ def cluster_cases(d):
         '  },\n  data: {\n    k: "RkFLRWt5YW1sUGxhaW4=",\n  },\n}\n'
     )
     kyaml_fakes = kyaml_fakes + ("RkFLRWt5YW1sUGxhaW4=",)
-    rv = os.path.join(os.path.dirname(GUARD), "redact-view")
     scan = os.path.join(os.path.dirname(GUARD), "secret-scan")
     placed = {
         "comment.yaml": "# saved from the cluster\n" + plain_secret,
@@ -802,10 +781,8 @@ def cluster_cases(d):
         path = os.path.join(d, fname)
         with open(path, "w") as fh:
             fh.write(body)
-        named = subprocess.run([rv, path], text=True, capture_output=True).stdout
-        piped = subprocess.run(
-            [rv, "--yaml", "-"], input=body, text=True, capture_output=True
-        ).stdout
+        named = _view([path])
+        piped = _view(["--yaml", "-"], body)
         found = subprocess.run([scan, path], capture_output=True).returncode == 0
         checked += 1
         if fname.endswith(".yaml") and any(v in named + piped for v in kyaml_fakes):
@@ -849,12 +826,7 @@ def cluster_cases(d):
             failures.append(
                 f"engine/kyaml/jsonc: cat {fname} was interfered with ({decision})"
             )
-    out = subprocess.run(
-        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-        input=kyaml_clean,
-        text=True,
-        capture_output=True,
-    ).stdout
+    out = _view(["--yaml", "-"], kyaml_clean)
     checked += 1
     if out != kyaml_clean:
         failures.append("engine/kyaml/clean: a clean document was not byte-identical")
@@ -912,12 +884,7 @@ def cluster_cases(d):
             "name:",
         ),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
-            input=text,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(["--yaml", "-"], text)
         checked += 1
         if any(v in out for v in FAKE):
             failures.append(f"engine/diff/{name}: printed a fake value")
@@ -931,12 +898,7 @@ def cluster_cases(d):
         f"          value: {FAKE[2]}old            |           value: {FAKE[2]}\n"
         f"clientSecret: {FAKE[0]}\n"
     )
-    out = subprocess.run(
-        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--diff", "-"],
-        input=side,
-        text=True,
-        capture_output=True,
-    ).stdout
+    out = _view(["--diff", "-"], side)
     checked += 1
     if any(v in out for v in FAKE):
         failures.append("engine/diff/hunkless-side-by-side: printed a fake value")
@@ -983,12 +945,7 @@ def cluster_cases(d):
             f"===== /ConfigMap a/b ======\nindex {FAKE[0]}\n=== {FAKE[1]}\ndiff {FAKE[2]}\n",
         ),
     ):
-        out = subprocess.run(
-            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--diff", "-"],
-            input=text,
-            text=True,
-            capture_output=True,
-        ).stdout
+        out = _view(["--diff", "-"], text)
         checked += 1
         if any(v in out for v in FAKE):
             failures.append(f"engine/diff/headers/{name}: printed a fake value")
@@ -1000,12 +957,9 @@ def cluster_cases(d):
     # Detection stays loose even though header passthrough is strict: a banner that is not in
     # Argo CD's exact shape must still put stdin into diff mode, or the markers hide every
     # value from the YAML grammar. Tightening the one regex for both jobs failed open.
-    out = subprocess.run(
-        [os.path.join(os.path.dirname(GUARD), "redact-view"), "-"],
-        input=f"===== /Secret default/My_Secret ======\n>   data_value: {FAKE[0]}\n",
-        text=True,
-        capture_output=True,
-    ).stdout
+    out = _view(
+        ["-"], f"===== /Secret default/My_Secret ======\n>   data_value: {FAKE[0]}\n"
+    )
     checked += 1
     if FAKE[0] in out:
         failures.append("engine/diff/loose-detection: a hunkless diff was not detected")
