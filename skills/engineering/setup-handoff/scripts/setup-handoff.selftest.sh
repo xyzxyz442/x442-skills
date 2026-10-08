@@ -597,5 +597,23 @@ seed_external "$MN/.agents/handoff" "example-invalid/no-such-board"
 "$INSTALLER" "$MN" --tools claude --primary none > /dev/null 2>&1
 chk "refresh: a plain re-run installs no workflow that was never asked for" "no" "$([ -f "$MN/.github/workflows/handoff-mirror.yml" ] && echo yes || echo no)"
 
+printf '\nthe install commit carries only the installer'"'"'s own files\n'
+# board_commit_payload stages its own paths, but a bare `git commit` takes the whole index: a file
+# somebody had already staged on the board was committed under "install board machinery". That is
+# how a pre-fix mirror workflow, staged by a `git checkout REV -- path`, landed on a live board.
+BS="$(mkgitboard)"
+"$INSTALLER" --board-only "$BS" > /dev/null 2>&1
+# Commit a drifted README so the re-run has something of its own to commit (it rewrites README.md).
+printf 'drift\n' >> "$BS/README.md"
+git -C "$BS" commit --quiet -am "drift the README"
+printf 'work in progress\n' > "$BS/stray.md"
+git -C "$BS" add stray.md
+"$INSTALLER" --board-only "$BS" > /dev/null 2>&1
+chk "sweep: the re-run did commit the installer's own files" "build(setup): install board machinery" \
+  "$(git -C "$BS" log -1 --format=%s)"
+chk "sweep: a file already staged on the board is not in the install commit" "0" \
+  "$(git -C "$BS" show --name-only --format= HEAD | grep -c 'stray.md')"
+chk "sweep: and it is still staged afterwards" "A  stray.md" "$(git -C "$BS" status --short -- stray.md)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

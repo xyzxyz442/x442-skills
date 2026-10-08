@@ -690,14 +690,19 @@ board_bootstrap() { # board-dir remote-url
 # confusing about HEAD instead of doing its job.
 #
 # Only the files this installer just wrote. Documents are not swept in: someone may have one open,
-# and committing it under an install's message would be both a lie and a surprise.
+# and committing it under an install's message would be both a lie and a surprise. That includes
+# anything already STAGED on the board, so the guard and the commit both name our paths — a bare
+# `git commit` takes the whole index, and once committed a stale workflow someone had staged under
+# this message. Their staged work is left staged.
 board_commit_payload() { # board-dir
   local b="$1" f
+  local ours=()
   for f in handoff README.md handoff.json .gitignore scripts templates; do
-    [ -e "$b/$f" ] && git -C "$b" add -- "$b/$f" 2> /dev/null
+    [ -e "$b/$f" ] && git -C "$b" add -- "$b/$f" 2> /dev/null && ours+=("$f")
   done
-  git -C "$b" diff --cached --quiet 2> /dev/null && return 0 # nothing of ours changed
-  git -C "$b" commit --quiet -m "build(setup): install board machinery" 2> /dev/null || {
+  [ ${#ours[@]} -gt 0 ] || return 0
+  git -C "$b" diff --cached --quiet -- "${ours[@]}" 2> /dev/null && return 0 # nothing of ours changed
+  git -C "$b" commit --quiet -m "build(setup): install board machinery" -- "${ours[@]}" 2> /dev/null || {
     echo "setup-handoff: could not commit the board machinery in $b (is git identity configured?)"
     return 0
   }
