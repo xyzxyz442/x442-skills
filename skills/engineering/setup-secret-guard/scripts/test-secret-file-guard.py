@@ -422,9 +422,8 @@ def cluster_cases(d):
                 f"output-precedence/honest: {cmd!r} was interfered with ({decision})"
             )
 
-    # Slice: kyaml. kubectl's flow-style YAML is a whole document, but the viewer reads block
-    # YAML line by line and passes kyaml through with the Secret's data raw. Until the viewer
-    # learns it, the step asks and names `-o yaml`, which it does redact.
+    # Slice: kyaml. kubectl's flow-style YAML is a whole document, routed like yaml now that
+    # the viewer reads it (the engine/kyaml slice). It asked while the viewer could not.
     for cmd in (
         "kubectl get secret acme -o kyaml",
         "kubectl get secret acme -okyaml",
@@ -435,9 +434,9 @@ def cluster_cases(d):
         "kubectl config view -o kyaml --template='{{.current-context}}'",
     ):
         checked += 1
-        decision, _ = decide(cmd, d)
-        if decision != "ask":
-            failures.append(f"kyaml: {cmd!r} was {decision}, expected ask")
+        ok_, decision, _ = _rewritten(cmd, d)
+        if not ok_:
+            failures.append(f"kyaml: {cmd!r} was {decision}, not routed")
     # Slice: combined short flags. kubectl's flag parser joins boolean shorthands with `-o`
     # (`-Ao yaml` is `-A -o yaml`; confirmed on 1.37.1, where `-Ro bogusfmt` is refused as an
     # output format). The guard wanted whitespace right before `-o` and missed the format.
@@ -454,9 +453,9 @@ def cluster_cases(d):
         if not ok_:
             failures.append(f"short-flags: {cmd!r} was {decision}, not routed")
     checked += 1
-    decision, _ = decide("kubectl get secrets -Ao kyaml", d)
-    if decision != "ask":
-        failures.append(f"short-flags/kyaml: was {decision}, expected ask")
+    ok_, decision, _ = _rewritten("kubectl get secrets -Ao kyaml", d)
+    if not ok_:
+        failures.append(f"short-flags/kyaml: was {decision}, not routed")
     checked += 1
     decision, updated = decide("kubectl get pods -Ao wide", d)
     if decision != "allow" or (updated and "redact-view" in updated):
@@ -673,6 +672,90 @@ def cluster_cases(d):
         checked += 1
         if any(v in out for v in FAKE) or "RkFLRW9sZA==" in out:
             failures.append(f"engine/encoded/{name}: printed a fake value")
+
+    # kyaml (`kubectl -o kyaml`, 1.34+) is flow-style YAML: `---` before every document, bare
+    # keys, trailing commas, YAML double-quoted strings folded across lines with `\`. The line
+    # grammar read none of it and printed a Secret's data raw. Shapes below are what kubectl
+    # 1.37.1 prints; a clean document passes byte-identical, and one that looks like kyaml but
+    # does not parse has every quoted value masked rather than falling through to a grammar
+    # that cannot see it.
+    kyaml_secret = (
+        '---\n{\n  kind: "Secret",\n  apiVersion: "v1",\n  metadata: {\n    name: "acme",\n'
+        '  },\n  data: {\n    DB_URL: "RkFLRWt5YW1sVXJs",\n    "tls.key": "RkFLRWt5YW1sS2V5",\n'
+        '  },\n  stringData: {\n    pem: "\\\n       -----BEGIN FAKE-----\\n\\\n'
+        '       RkFLRWZvbGRlZA==\\n\\\n       -----END FAKE-----\\\n      ",\n'
+        '    quoted: "say \\"RkFLRXF1b3Rl\\"",\n  },\n  type: "Opaque",\n}\n'
+    )
+    kyaml_fakes = (
+        "RkFLRWt5YW1sVXJs",
+        "RkFLRWt5YW1sS2V5",
+        "RkFLRWZvbGRlZA==",
+        "RkFLRXF1b3Rl",
+        "RkFLRWVudlZhbA",
+        "RkFLRWJyb2tlbg",
+    )
+    kyaml_clean = (
+        '---\n{\n  kind: "ConfigMap",\n  apiVersion: "v1",\n  metadata: {\n    name: "fc",\n'
+        '  },\n  data: {\n    multi: "\\\n       a\\n\\\n       b\\\n      ",\n    num: "123",\n'
+        '    quote: "say \\"hi\\" \\\\ back",\n  },\n}\n'
+    )
+    kyaml_env = (
+        '---\n{\n  kind: "Deployment",\n  apiVersion: "apps/v1",\n  spec: {\n    template: {\n'
+        '      spec: {\n        containers: [{\n          name: "api",\n          env: [{\n'
+        '            name: "DB_PASSWORD",\n            value: "RkFLRWVudlZhbA",\n'
+        "          }],\n        }],\n      },\n    },\n  },\n}\n"
+    )
+    kyaml_list = (
+        '---\n{\n  kind: "List",\n  apiVersion: "v1",\n  items: [{\n    kind: "Secret",\n'
+        '    data: {\n      DB_URL: "RkFLRWt5YW1sVXJs",\n    },\n  }],\n}\n'
+    )
+    for name, text in (
+        ("secret", kyaml_secret),
+        ("list", kyaml_list),
+        ("env", kyaml_env),
+        ("multi-doc", kyaml_clean + kyaml_secret),
+        # Truncated mid-document: it does not parse, so it must fail closed.
+        (
+            "truncated",
+            '---\n{\n  kind: "Secret",\n  data: {\n    pw: "RkFLRWJyb2tlbg",\n',
+        ),
+    ):
+        out = subprocess.run(
+            [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
+            input=text,
+            text=True,
+            capture_output=True,
+        ).stdout
+        checked += 1
+        if any(v in out for v in kyaml_fakes) or "redacted" not in out:
+            failures.append(f"engine/kyaml/{name}: printed a fake value")
+    # JSONC (`tsconfig.json`, VS Code settings) also opens with `{` alone on a line and fails
+    # json.loads. It is not kyaml -- kubectl starts every kyaml document with `---` -- so an
+    # honest read of one must not be routed and printed masked.
+    for fname, body in (
+        (
+            "tsconfig.json",
+            '{\n  // options\n  "compilerOptions": {\n    "target": "es2022",\n  },\n}\n',
+        ),
+        ("settings.json", '{\n  "editor.fontSize": 14,\n}\n'),
+    ):
+        with open(os.path.join(d, fname), "w") as fh:
+            fh.write(body)
+        checked += 1
+        decision, updated = decide(f"cat {fname}", d)
+        if decision != "allow" or (updated and "redact-view" in updated):
+            failures.append(
+                f"engine/kyaml/jsonc: cat {fname} was interfered with ({decision})"
+            )
+    out = subprocess.run(
+        [os.path.join(os.path.dirname(GUARD), "redact-view"), "--yaml", "-"],
+        input=kyaml_clean,
+        text=True,
+        capture_output=True,
+    ).stdout
+    checked += 1
+    if out != kyaml_clean:
+        failures.append("engine/kyaml/clean: a clean document was not byte-identical")
 
     # A diff shows only the changed lines, so a Deployment env `value:` arrives without the
     # sibling `name:` that marks it secret, behind a marker no YAML grammar reads. Argo CD masks

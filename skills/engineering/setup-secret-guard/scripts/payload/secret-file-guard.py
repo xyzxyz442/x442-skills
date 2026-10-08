@@ -374,7 +374,8 @@ KUBE_OUTPUT_RE = re.compile(
 )
 KUBE_TEMPLATE_RE = re.compile(r"\s--template(?:=|\s)")
 KUBE_SECRET_RE = re.compile(r"[\s,]secrets?(?![\w-])", re.IGNORECASE)
-DOC_FORMATS = ("yaml", "json")
+# kyaml is flow-style YAML; the viewer reads it like any other document.
+DOC_FORMATS = ("yaml", "json", "kyaml")
 
 # Downstream of a producer, these exist to obtain or move a raw value. `tee` is not here: after
 # the viewer it writes the redacted text, which is exactly what a saved copy should hold.
@@ -684,14 +685,6 @@ def _template_output(stage: str) -> bool:
     )
 
 
-# kyaml is a whole document like yaml, but flow-style, and the viewer reads block YAML only: it
-# passes kyaml through with every value raw. Ask until the viewer learns it.
-KYAML_WHY = (
-    "`-o kyaml` prints the whole object in flow-style YAML, which redact-view cannot read, so "
-    "its values would reach the transcript raw; `-o yaml` is routed through the viewer instead"
-)
-
-
 def _classify(label: str, stage: str):
     """(action, why) for one producer stage: rewrite, ask, deny, or None to leave it."""
     if label == "kubectl config view":
@@ -701,10 +694,7 @@ def _classify(label: str, stage: str):
         # prints a bare value. `{.current-context}` and the like are everyday and left alone.
         # A document format beats --template: kubectl ignores the template under `-o yaml` or
         # `-o json`, in either order, and prints the whole kubeconfig.
-        fmt = _kube_format(stage)
-        if fmt == "kyaml":
-            return "ask", KYAML_WHY
-        if fmt in DOC_FORMATS:
+        if _kube_format(stage) in DOC_FORMATS:
             return "rewrite", None
         if _template_output(stage):
             if not _config_template_safe(stage):
@@ -716,8 +706,6 @@ def _classify(label: str, stage: str):
         return "rewrite", None
     if label == "kubectl get":
         fmt = _kube_format(stage)
-        if fmt == "kyaml":
-            return "ask", KYAML_WHY
         if fmt in DOC_FORMATS or re.search(r"\s--raw(?:=|\s|$)", stage):
             return "rewrite", None
         if KUBE_SECRET_RE.search(stage) and _template_output(stage):

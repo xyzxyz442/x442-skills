@@ -473,14 +473,13 @@ sys.exit(0 if "redact-view" in u.get("command", "") else 1)' 2> /dev/null; then
     bad "guard.unresolved_read_routed" "an unresolvable read ran unrouted, or a flag value was treated as a path"
   fi
   # kubectl ignores --template under a document format and prints the whole kubeconfig, so the
-  # format decides, not the flag; and `-Ao yaml` is `-A -o yaml`. kyaml is a document the viewer
-  # cannot read, so it asks.
-  D1="$(probe "$(payload_for "kubectl get secret acme -o kyaml")")"
+  # format decides, not the flag; and `-Ao yaml` is `-A -o yaml`. kyaml is a document like yaml.
   if rewritten "$(payload_for "kubectl config view -o yaml --template='{{.current-context}}'")" \
-    && rewritten "$(payload_for "kubectl get secrets -Ao yaml")" && [ "$D1" = "ask" ]; then
-    ok "guard.kube_output_precedence" "a document format beats --template, -Ao yaml is read as -o yaml, and -o kyaml asks"
+    && rewritten "$(payload_for "kubectl get secrets -Ao yaml")" \
+    && rewritten "$(payload_for "kubectl get secret acme -o kyaml")"; then
+    ok "guard.kube_output_precedence" "a document format beats --template, -Ao yaml is read as -o yaml, and -o kyaml is routed"
   else
-    bad "guard.kube_output_precedence" "a full kubeconfig or a kyaml Secret ran unrouted (kyaml ${D1})"
+    bad "guard.kube_output_precedence" "a full kubeconfig, an -Ao read or a kyaml Secret ran unrouted"
   fi
   if rewritten "$(payload_for "kubecolor get secret acme -o yaml")"; then
     ok "guard.kubecolor_routed" "kubecolor, kubectl's colouring wrapper, is routed like kubectl"

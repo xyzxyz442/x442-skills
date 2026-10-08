@@ -33,7 +33,7 @@ every `data`/`stringData` value of a `kind: Secret`.
 
 Reads from a cluster API are routed too, although they name no file: `argocd app get`,
 `argocd app manifests`, `argocd app diff`, `helm get values|manifest|all`, `helm template`,
-`kubectl get … -o yaml|json` and `kubectl config view` are piped through `redact-view` straight
+`kubectl get … -o yaml|json|kyaml` and `kubectl config view` are piped through `redact-view` straight
 after the producer, so `| jq …` still works on the redacted output.
 
 The `Read` tool cannot redact what it returns. Opening a config file whose content holds a
@@ -53,8 +53,7 @@ Commands whose whole purpose is to obtain the raw value: `base64`, `openssl`, `x
 A template output on a Secret (`kubectl get secret … -o jsonpath=…`, `go-template`,
 `--template`) prints one bare value and is blocked, as is an extraction verb downstream of a
 cluster read (`… | base64 -d`). For the structure, use a document format:
-`kubectl get secret NAME -o yaml | ~/.claude/bin/redact-view --yaml -`. `-o kyaml` asks, because
-the viewer cannot read it; use `-o yaml`.
+`kubectl get secret NAME -o yaml | ~/.claude/bin/redact-view --yaml -`.
 
 The tools are called by full path on purpose, and are not on `PATH`. A generic name like
 `secret-scan` can resolve to some other program first, and for a redactor that failure is

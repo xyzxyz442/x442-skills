@@ -913,6 +913,201 @@ def _redact_diff(text: str) -> str:
     return "\n".join(out)
 
 
+# ------------------------------------------------------------------ format: kyaml
+
+# kyaml (`kubectl -o kyaml`, 1.34+) is flow-style YAML: `---` before every document, a `{` or
+# `[` alone on the next line, bare keys, trailing commas, and YAML double-quoted strings folded
+# across lines with `\`. The block-YAML reader sees none of that, so a Secret printed raw.
+# kubectl opens every kyaml document with `---`. JSON never does, and JSONC (`tsconfig.json`)
+# also starts with a lone `{` and fails json.loads, so the separator is what tells them apart.
+KYAML_START = re.compile(r"\A---[ \t]*\n[ \t]*[{\[][ \t]*\n")
+KYAML_DOC_SEP = re.compile(r"^---[ \t]*$", re.MULTILINE)
+# A truncated document can end inside a string, so an unterminated one runs to the end.
+KYAML_STRING = re.compile(r'"(?:[^"\\]|\\.)*(?:"|\\?\Z)', re.DOTALL)
+_KYAML_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v", "f": "\f",
+    "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\", "N": "\x85",
+    "_": "\xa0", "L": " ", "P": " ",
+}  # fmt: skip
+_KYAML_HEX = {"x": 2, "u": 4, "U": 8}
+
+
+class _KyamlError(ValueError):
+    pass
+
+
+class _Kyaml:
+    """A reader for the flow subset kubectl prints. Anything else raises _KyamlError."""
+
+    def __init__(self, text: str):
+        self.s, self.i = text, 0
+
+    def _skip(self):
+        while self.i < len(self.s):
+            c = self.s[self.i]
+            if c in " \t\r\n":
+                self.i += 1
+            elif c == "#":
+                while self.i < len(self.s) and self.s[self.i] != "\n":
+                    self.i += 1
+            else:
+                return
+
+    def _peek(self) -> str:
+        self._skip()
+        if self.i >= len(self.s):
+            raise _KyamlError("unexpected end of document")
+        return self.s[self.i]
+
+    def document(self):
+        value = self.value()
+        self._skip()
+        if self.i != len(self.s):
+            raise _KyamlError("trailing text after the document")
+        return value
+
+    def value(self):
+        c = self._peek()
+        if c == "{":
+            return self._collection("}", True)
+        if c == "[":
+            return self._collection("]", False)
+        if c == '"':
+            return self._quoted()
+        return self._plain()
+
+    def _collection(self, close: str, mapping: bool):
+        self.i += 1
+        out = {} if mapping else []
+        while self._peek() != close:
+            if mapping:
+                key = self._quoted() if self._peek() == '"' else self._plain(key=True)
+                if self._peek() != ":":
+                    raise _KyamlError("a key without a colon")
+                self.i += 1
+                out[key] = self.value()
+            else:
+                out.append(self.value())
+            c = self._peek()
+            if c == ",":
+                self.i += 1
+            elif c != close:
+                raise _KyamlError("a missing comma")
+        self.i += 1
+        return out
+
+    def _plain(self, key: bool = False):
+        start = self.i
+        stops = ":,}]\n" if key else ",}]\n"
+        while self.i < len(self.s) and self.s[self.i] not in stops:
+            self.i += 1
+        word = self.s[start : self.i].strip()
+        if not word or word[0] in "{[\"'&*!|>%@`":
+            raise _KyamlError("an unsupported plain scalar")
+        if key:
+            return word
+        if word in ("null", "~"):
+            return None
+        if word in ("true", "false"):
+            return word == "true"
+        try:
+            return int(word)
+        except ValueError:
+            pass
+        try:
+            return float(word)
+        except ValueError:
+            return word
+
+    def _quoted(self) -> str:
+        """A YAML double-quoted scalar, folding included (YAML 1.2, section 7.3.1)."""
+        self.i += 1
+        out = []
+        while True:
+            if self.i >= len(self.s):
+                raise _KyamlError("an unterminated string")
+            c = self.s[self.i]
+            if c == '"':
+                self.i += 1
+                return "".join(out)
+            if c == "\\":
+                self.i += 1
+                if self.i >= len(self.s):
+                    raise _KyamlError("an unterminated escape")
+                e = self.s[self.i]
+                if e == "\n":  # an escaped line break joins the lines, no space
+                    self.i += 1
+                    while self.i < len(self.s) and self.s[self.i] in " \t":
+                        self.i += 1
+                elif e in _KYAML_ESCAPES:
+                    out.append(_KYAML_ESCAPES[e])
+                    self.i += 1
+                elif e in _KYAML_HEX:
+                    digits = self.s[self.i + 1 : self.i + 1 + _KYAML_HEX[e]]
+                    try:
+                        out.append(chr(int(digits, 16)))
+                    except ValueError as exc:
+                        raise _KyamlError("a bad hex escape") from exc
+                    self.i += 1 + _KYAML_HEX[e]
+                else:
+                    raise _KyamlError("an unknown escape")
+            elif (
+                c == "\n"
+            ):  # a bare line break folds: one becomes a space, more become newlines
+                while out and out[-1] in " \t":
+                    out.pop()
+                breaks = 0
+                while self.i < len(self.s) and self.s[self.i] in " \t\n":
+                    breaks += self.s[self.i] == "\n"
+                    self.i += 1
+                out.append("\n" * (breaks - 1) if breaks > 1 else " ")
+            else:
+                out.append(c)
+                self.i += 1
+
+
+def _kyaml_fail_closed(text: str) -> str:
+    """Mask every quoted value: the document looked like kyaml but could not be read."""
+
+    def mask(m):
+        closed = len(m.group(0)) > 1 and m.group(0).endswith('"')
+        if closed and text[m.end() :].lstrip(" \t").startswith(":"):
+            return m.group(0)  # a quoted key stays readable
+        return mask_value(m.group(0)[1:-1] if closed else m.group(0)[1:])
+
+    return KYAML_STRING.sub(mask, text)
+
+
+def _redact_kyaml(text: str, mask_all: bool):
+    """kyaml documents, redacted; None when the text is not kyaml.
+
+    A document with nothing masked is returned byte-identical. A redacted one is printed as
+    indented JSON, which every YAML reader also accepts: re-emitting kubectl's own key quoting
+    and string folding exactly is not worth a second grammar. Input that looks like kyaml but
+    does not parse is never handed to a line grammar that cannot see inside it.
+    """
+    if not KYAML_START.match(text):
+        return None
+    parts = KYAML_DOC_SEP.split(text)
+    out = []
+    for n, part in enumerate(parts):
+        if not part.strip():
+            out.append(part)
+            continue
+        before = MASK_COUNT
+        try:
+            doc = redact_json(_Kyaml(part).document(), mask_all)
+        except (_KyamlError, RecursionError):
+            out.append(_kyaml_fail_closed(part))
+            continue
+        if MASK_COUNT == before:
+            out.append(part)
+        else:
+            lead = "\n" if n else ""
+            out.append(lead + json.dumps(doc, indent=2) + "\n")
+    return "---".join(out)
+
+
 def _render_grammar(name: str, text: str, mask_all: bool, fmt: str = "") -> str:
     if fmt == "diff" or ((fmt or name.startswith("<")) and is_diff(text)):
         return _redact_diff(text)
@@ -944,6 +1139,10 @@ def _render_grammar(name: str, text: str, mask_all: bool, fmt: str = "") -> str:
             if jsonl is not None:
                 return jsonl
             # otherwise fall through to line-based
+
+    kyaml = _redact_kyaml(text, mask_all)
+    if kyaml is not None:
+        return kyaml
 
     # Stdin and named formats only: the write-path scanner passes no name, and reading prose as
     # JSON-among-noise would change what a handoff release refuses.
