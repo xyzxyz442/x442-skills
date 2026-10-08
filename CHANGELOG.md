@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/xyzxyz442/x442-skills/compare/v0.19.3...v0.19.4) (2026-10-08)
+
+### 🐞 Bug Fixes
+
+- **bug:** fold and supersede the legacy shell config on a board-only lift ([b64ff7b](https://github.com/xyzxyz442/x442-skills/commit/b64ff7b11f547fa4691e8cc6dc8f168d5d79f00c))
+- **bug:** read kubectl output flags the way kubectl parses them ([264b137](https://github.com/xyzxyz442/x442-skills/commit/264b13774a8a4a7f4bb7d8edaa4f01274f009342))
+
 ## [0.19.3](https://github.com/xyzxyz442/x442-skills/compare/v0.19.2...v0.19.3) (2026-10-07)
 
 ### 🐞 Bug Fixes
