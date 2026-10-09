@@ -11,7 +11,7 @@ exact flags a command takes, the `SKILL.md` files are the reference; these pages
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Handoff](handoff.md)                                           | Two agents, two sessions or two repos need to work the same code without clobbering each other — or work has to survive a session.                            |
 | [Team and personal boards](handoff-team-and-personal-boards.md) | You work on a team that shares one handoff board and keep a board of your own — where each lives, which work goes on which, and how a draft reaches the team. |
-| [Secret guard](secret-guard.md)                                 | A credential file has to stay usable by an agent without its values landing in a transcript.                                                                  |
+| [Secret guard](secret-guard.md)                                 | A credential file or a cluster read has to stay usable by an agent without its values landing in a transcript.                                                |
 | [Delegate](delegate.md)                                         | Mechanical, bulky work should run on a cheaper agent, without deciding for the user where their code goes.                                                    |
 
 ## Diagrams
