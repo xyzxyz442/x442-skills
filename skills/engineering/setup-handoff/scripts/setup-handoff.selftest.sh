@@ -604,6 +604,9 @@ printf '\nthe install commit carries only the installer'"'"'s own files\n'
 # somebody had already staged on the board was committed under "install board machinery". That is
 # how a pre-fix mirror workflow, staged by a `git checkout REV -- path`, landed on a live board.
 BS="$(mkgitboard)"
+# A local identity, or nothing commits on a runner with none (macOS invents one; Linux CI does not).
+git -C "$BS" config user.email "test@example.com"
+git -C "$BS" config user.name "test"
 "$INSTALLER" --board-only "$BS" > /dev/null 2>&1
 # Commit a drifted README so the re-run has something of its own to commit (it rewrites README.md).
 printf 'drift\n' >> "$BS/README.md"
