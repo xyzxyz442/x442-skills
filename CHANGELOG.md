@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.20.1](https://github.com/xyzxyz442/x442-skills/compare/v0.20.0...v0.20.1) (2026-10-09)
+
+### 🐞 Bug Fixes
+
+- **bug:** commit only the installer's own files to the board ([678a56c](https://github.com/xyzxyz442/x442-skills/commit/678a56c25856fd28caf8b0b453550d0ec62dccd3))
+- **bug:** keep an installed mirror workflow in step with the template ([1be5e7b](https://github.com/xyzxyz442/x442-skills/commit/1be5e7be0ea75a16bf765ab466f8352babac6004))
+- **bug:** mirror a flat board once and check the board out with plain git ([3ed8f0d](https://github.com/xyzxyz442/x442-skills/commit/3ed8f0dab217aea648f98e5134b0f9c963960b87))
+- **deps:** patch the basic-ftp and fast-uri advisories ([2e19fa0](https://github.com/xyzxyz442/x442-skills/commit/2e19fa04e3e3acc4d80f62194b967b3bad2dc5df))
+
+### 📚 Documentation
+
+- **docs:** record the kyaml round and its cadence exception in ADR 0026 ([7ad6e75](https://github.com/xyzxyz442/x442-skills/commit/7ad6e7566499e58a31972b0c1505f1e6e4a0019d))
+- **docs:** rewrite the secret-guard usage guide for cluster reads and the guard's limits ([1702d50](https://github.com/xyzxyz442/x442-skills/commit/1702d50d429e091380797b3aaea104b7f0623234))
+- **docs:** say that a re-run keeps an installed mirror workflow in step ([ec99027](https://github.com/xyzxyz442/x442-skills/commit/ec99027e3223d31ee7c2626fe93e54a3de5c6533))
+
+### 🧪 Tests
+
+- **test:** read redact-view output through one _view helper ([4535c09](https://github.com/xyzxyz442/x442-skills/commit/4535c090b8f5a6298f1735d429d6bb59a3ed420f))
+
 ## [0.20.0](https://github.com/xyzxyz442/x442-skills/compare/v0.19.4...v0.20.0) (2026-10-08)
 
 ### 🚀 Features
