@@ -232,9 +232,9 @@ def selftest() -> int:
         )
         expect(gem["hooks"] == {"x": 1}, "unrelated keys survive")
 
-        before = {rel: open(os.path.join(root, rel)).read() for rel in docs}
+        before = {rel: _load(os.path.join(root, rel))[0] for rel in docs}
         run(root, check=False, have_crg=True, out=sink)
-        after = {rel: open(os.path.join(root, rel)).read() for rel in docs}
+        after = {rel: _load(os.path.join(root, rel))[0] for rel in docs}
         expect(before == after, "a second run is byte-stable")
         expect(
             run(root, check=True, have_crg=True, out=sink) == 1,
