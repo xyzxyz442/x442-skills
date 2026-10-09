@@ -545,7 +545,7 @@ PY
   # `git fetch` with no --depth, or `fetch-depth: 0` on a workflow still using actions/checkout.
   # Grep the file directly, never through a pipe: under pipefail `| grep -q` turns an early exit
   # into a false negative.
-  if grep -qE '^[[:space:]]*fetch-depth:[[:space:]]*0[[:space:]]*$' "$WF"; then
+  if grep -qE '^[[:space:]]*fetch-depth:[[:space:]]*0[[:space:]]*(#.*)?$' "$WF"; then
     ok board.mirror_workflow.checkout "the mirror workflow checks out full history"
   elif grep -qE '^[[:space:]]*git fetch[[:space:]]' "$WF" && ! grep -qE '^[[:space:]]*git fetch[[:space:]].*--(depth|shallow)' "$WF"; then
     ok board.mirror_workflow.checkout "the mirror workflow checks out full history"

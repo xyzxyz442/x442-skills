@@ -567,6 +567,8 @@ chk "checkout: a git fetch with --depth is a failure" "fail" "$(vfind "$MC" boar
 WFC_SAVED="$(cat "$WFC")"
 printf 'jobs:\n  mirror:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n' > "$WFC"
 chk "checkout: a legacy actions/checkout with fetch-depth 0 still passes" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
+printf 'jobs:\n  mirror:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0 # full history\n' > "$WFC"
+chk "checkout: fetch-depth 0 with a trailing comment still passes" "pass" "$(vfind "$MC" board.mirror_workflow.checkout)"
 printf 'jobs:\n  mirror:\n    steps:\n      - uses: actions/checkout@v4\n' > "$WFC"
 chk "checkout: a legacy actions/checkout without fetch-depth 0 is a failure" "fail" "$(vfind "$MC" board.mirror_workflow.checkout)"
 printf '%s\n' "$WFC_SAVED" > "$WFC"

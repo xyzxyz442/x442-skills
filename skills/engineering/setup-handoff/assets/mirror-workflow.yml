@@ -66,22 +66,23 @@ jobs:
           set -- $SECTIONS
           [ $# -gt 0 ] || set -- ""
           for section in "$@"; do
+            label="${section:-board}"
             # Up to three attempts. A mirror run can fail part-way on a transient GitHub error
             # (a GraphQL 502 was seen in practice), and the adapter correctly fails the run rather
             # than continuing blind. Retrying is safe and is the whole point of matching issues by
             # a hidden marker instead of a stored number: a re-run resumes where it stopped and
             # opens no duplicates.
             for attempt in 1 2 3; do
-              echo "::group::mirror ${section:-board} (attempt $attempt)"
+              echo "::group::mirror $label (attempt $attempt)"
               HANDOFF_GROUP="$section" ./handoff mirror
               status=$?
               echo "::endgroup::"
               [ $status -eq 0 ] && break
               if [ $attempt -eq 3 ]; then
-                echo "::error::mirror failed for section ${section:-board} after 3 attempts"
+                echo "::error::mirror failed for section $label after 3 attempts"
                 rc=1
               else
-                echo "::warning::mirror failed for section ${section:-board}, retrying"
+                echo "::warning::mirror failed for section $label, retrying"
                 sleep $((attempt * 5))
               fi
             done
