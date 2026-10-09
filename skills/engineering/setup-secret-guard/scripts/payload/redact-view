@@ -86,7 +86,9 @@ def main(argv):
             sys.stdout.flush()
         except BrokenPipeError:
             # `| head -5` closed the pipe; that is the reader's choice, not a failure.
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
             return rc
     return rc
 

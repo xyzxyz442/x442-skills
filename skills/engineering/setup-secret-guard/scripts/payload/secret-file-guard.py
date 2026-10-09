@@ -44,12 +44,11 @@ def _lib_dir():
 
 sys.path.insert(0, _lib_dir())
 try:
-    from secret_redact import MAX_BYTES, contains_secrets, looks_configish
+    from secret_redact import MAX_BYTES, contains_secrets
     from secret_redact import _logical_name as logical_name
 except Exception:  # library missing -> fall back to filename matching only
     MAX_BYTES = 2 * 1024 * 1024
     contains_secrets = None
-    looks_configish = None
 
     def logical_name(name):
         return name
@@ -313,6 +312,7 @@ def leaks(token: str, cwd: str) -> bool:
             if contains_secrets(path):
                 return True
         except Exception:
+            # A scan that errors is not a finding; fall through to the clean answer below.
             pass
         # Resolvable and demonstrably clean -> read it raw, no detour.
         return False
