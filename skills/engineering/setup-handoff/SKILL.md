@@ -409,7 +409,7 @@ Several maintainers therefore typically still keep one team board — each keepi
 their own, declared as its child — and move work onto it with `handoff move ID --to BOARD` when it
 is ready.
 
-## Mirroring on a schedule (optional)
+## Mirroring in CI (optional)
 
 A board whose own repository is on GitHub can run its mirror in CI instead of by hand:
 
@@ -417,13 +417,19 @@ A board whose own repository is on GitHub can run its mirror in CI instead of by
 setup-handoff.sh --board-only <board> --with-mirror-workflow
 ```
 
-**On request only, never by default.** It writes `.github/workflows/handoff-mirror.yml` at the
+**Installed on request, never by default.** It writes `.github/workflows/handoff-mirror.yml` at the
 board's _repository_ root — which is not always the board directory, since a board at
 `.agents/handoff` inside a project has its root two levels up — and the job cds into the board from
 there. The workflow runs `handoff mirror` once per section the board hosts — once, for the whole
 board, when it hosts none — on every push to the board's default branch and on demand. It checks the
 board out with plain `git` at full history and runs no JavaScript action, so the job needs no Node
 runtime at all.
+
+**Once installed, every re-run keeps it in step.** A later `setup-handoff.sh` run re-renders an
+existing `handoff-mirror.yml` from the template, flag or not, so a template fix reaches every board
+on its next payload upgrade and a hand edit to the file is overwritten. A board that never had the
+workflow never gets one unasked. The installer commits only the board's own files, so review and
+commit the re-rendered workflow yourself.
 
 Every value in it is read from the board's own committed config, never guessed and never taken from
 a flag, so the file cannot claim a section the board does not host. The flag **refuses** — writing
