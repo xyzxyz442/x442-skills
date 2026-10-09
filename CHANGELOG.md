@@ -4,6 +4,8 @@
 
 ### 🐞 Bug Fixes
 
+- **bug:** clear the CodeQL quality findings in the secret-guard payload ([9d06679](https://github.com/xyzxyz442/x442-skills/commit/9d066797a1c5346cb22aabbe7b21aad11acb707f))
+- **bug:** close the files the portable-mcp selftest reads ([456fdd4](https://github.com/xyzxyz442/x442-skills/commit/456fdd4e6780d492687b2d7fe4788a8f1876ec5f))
 - **bug:** drop the backtracking anchor from the ts-library fixture's slugify ([606b9c0](https://github.com/xyzxyz442/x442-skills/commit/606b9c0a76b8aa832b050bddccaecdcfb62d028d))
 - **bug:** name the mirror loop's label once and accept a commented fetch-depth ([953289f](https://github.com/xyzxyz442/x442-skills/commit/953289f3920128216521fc53af842824316561e0))
 
