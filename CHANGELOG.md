@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.20.2](https://github.com/xyzxyz442/x442-skills/compare/v0.20.1...v0.20.2) (2026-10-09)
+
+### 🐞 Bug Fixes
+
+- **bug:** drop the backtracking anchor from the ts-library fixture's slugify ([606b9c0](https://github.com/xyzxyz442/x442-skills/commit/606b9c0a76b8aa832b050bddccaecdcfb62d028d))
+- **bug:** name the mirror loop's label once and accept a commented fetch-depth ([953289f](https://github.com/xyzxyz442/x442-skills/commit/953289f3920128216521fc53af842824316561e0))
+
+### 🧪 Tests
+
+- **test:** give the sweep case's scratch board a git identity ([2e4dcf5](https://github.com/xyzxyz442/x442-skills/commit/2e4dcf5840c64477b0faaf0a9dedcc3c03734073))
+
 ## [0.20.1](https://github.com/xyzxyz442/x442-skills/compare/v0.20.0...v0.20.1) (2026-10-09)
 
 ### 🐞 Bug Fixes
