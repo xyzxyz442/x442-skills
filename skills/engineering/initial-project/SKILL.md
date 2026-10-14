@@ -90,23 +90,32 @@ Run these in order from the target project root.
      ensure `.vscode/settings.json` lists the project root in `chat.agentFilesLocations`
      (`".": true`) using the merge-safe procedure below.
 6. **Recheck and run the setup chain.** `AGENTS.md` now exists — the shared precondition for the
-   three setup skills that chain after this one. Walk them **in the order below**, treating this
+   four setup skills that chain after this one. Walk them **in the order below**, treating this
    run like a fresh project: for each, recheck its "already-wired" marker _now_ (do not assume a
    prior run's state). If the marker is present, report it and move on — no prompt. If it is
    absent, offer to run it (in Claude Code, `AskUserQuestion`, `multiSelect: false`, yes/no,
    default **yes**); on yes, invoke the skill and let its own verifier run; on no, name it as a
    recommended next step. Each chained skill is itself idempotent, so this is safe to repeat.
 
-   | Order | Skill                                                        | Already-wired marker (recheck → skip if present)                    | What running it wires                                    |
-   | ----- | ------------------------------------------------------------ | ------------------------------------------------------------------- | -------------------------------------------------------- |
-   | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `scripts/husky.sh` present                                          | commit enforcement, staged lint/format, editor + release |
-   | 2     | [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)         | `<!-- graph-hooks:begin -->` in `AGENTS.md` **and** `.graph-hooks/` | self-updating code knowledge graph + routing             |
-   | 3     | [`setup-handoff`](../setup-handoff/SKILL.md)                 | `<!-- handoff` block in `AGENTS.md` **and** `.agents/handoff/`      | lease-based cross-session/-repo handoff board            |
+   | Order | Skill                                                        | Already-wired marker (recheck → skip if present)                | What running it wires                                    |
+   | ----- | ------------------------------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------- |
+   | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `scripts/husky.sh` present                                      | commit enforcement, staged lint/format, editor + release |
+   | 2     | [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)         | `<!-- graph-hooks:begin` in `AGENTS.md` **and** `.graph-hooks/` | self-updating code knowledge graph + routing             |
+   | 3     | [`setup-handoff`](../setup-handoff/SKILL.md)                 | `<!-- handoff` block in `AGENTS.md` **and** `.agents/handoff/`  | lease-based cross-session/-repo handoff board            |
+   | 4     | [`setup-secret-guard`](../setup-secret-guard/SKILL.md)       | `<!-- secret-guard:begin` block in `AGENTS.md`                  | secret rules in `AGENTS.md`; the home guard if absent    |
 
    Skill 1 installs the `commitlint.config.mjs` behind the commit conventions seeded in step 2.
    Its marker is the hook dispatcher it ships, not `.husky/` or a commitlint config: a repo wired
    by hand or by an older chain (a `prepare` script echoing hook bodies into `.husky/`) has both
    and still needs the skill, which migrates it to `install:dev`.
+   Skill 4 is the one link with a per-machine half, so its marker decides only the repo half. The
+   repo layer (`setup-secret-guard.sh "$REPO"`) writes the `AGENTS.md` block, which carries the
+   secret rules to every assistant, including those with no hook; skip it when the marker is
+   present. **Check the home layer every run, marker or not**: a teammate cloning an onboarded repo
+   has the block but not the guard. If `~/.claude/bin/redact-view` is absent, the home layer, the
+   guard itself, is not installed on this machine. Offer it in the same step, because the repo block
+   alone enforces nothing. A first home install on any machine needs `--adopt` (see
+   [Install](../setup-secret-guard/SKILL.md#install)), and it backs up whatever it replaces.
    Skills chained _downstream_ of these are named as next steps, not walked here:
    [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md) and
    [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) after graph-hooks;
@@ -151,6 +160,7 @@ User: "init this project."
 5. Report what changed and run the verification steps. To undo, remove the added lines and
    `trash` any file you created — never `rm -rf`.
 6. Recheck the chain in order. `scripts/husky.sh` is absent → ask, on yes hand off to
-   `setup-project-tooling`. No `<!-- graph-hooks:begin -->` in `AGENTS.md` → ask, hand off to
-   `setup-graph-hooks`. No `.agents/handoff/` → ask, hand off to `setup-handoff`. Any skill whose
-   marker is already present is reported and skipped, not re-prompted.
+   `setup-project-tooling`. No `<!-- graph-hooks:begin` in `AGENTS.md` → ask, hand off to
+   `setup-graph-hooks`. No `.agents/handoff/` → ask, hand off to `setup-handoff`. No
+   `<!-- secret-guard:begin` block in `AGENTS.md` → ask, hand off to `setup-secret-guard`. Any
+   skill whose marker is already present is reported and skipped, not re-prompted.

@@ -15,7 +15,7 @@
       "kind": "pre-state",
       "prompt": "Install the lease-based handoff protocol here, with Claude Code as the enforcement primary.",
       "fixture": "fixtures/fresh",
-      "expected_output": "AGENTS.md present, nothing wired. Running the installer wires the `.agents/handoff/` payload, the Claude hard-enforcement hooks, the `.locks/` gitignore entry, and the `<!-- handoff -->` AGENTS.md routing block; the verifier passes 0-failed."
+      "expected_output": "AGENTS.md present, nothing wired. Running the installer wires the `.agents/handoff/` payload, the Claude hard-enforcement hooks, the `.locks/` gitignore entry, and the `<!-- handoff:begin` AGENTS.md routing block; the verifier passes 0-failed."
     },
     {
       "id": "claude-wired",

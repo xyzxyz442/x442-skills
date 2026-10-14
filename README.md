@@ -7,8 +7,8 @@ for sharing later.
 
 > **Status:** eleven skills under `skills/engineering/` — the project-setup chain
 > ([`initial-project`](skills/engineering/initial-project/SKILL.md),
-> [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(beta)_),
-> [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md) _(beta)_, the
+> [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(beta)_,
+> [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md) _(beta)_), the
 > **graph suite** ([`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md),
 > [`repair-graph-hooks`](skills/engineering/repair-graph-hooks/SKILL.md),
 > [`register-cross-repo-graph`](skills/engineering/register-cross-repo-graph/SKILL.md)), and the
@@ -41,7 +41,7 @@ The design these skills share — and what they wire into the repos they touch:
 ## Roadmap
 
 - [x] **Iteration 0** — bootstrap: AI context files ([AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), [ANTIGRAVITY.md](ANTIGRAVITY.md), [GEMINI.md](GEMINI.md), [.github/copilot-instructions.md](.github/copilot-instructions.md)), license, editor config, dev-loop scripts under `scripts/`.
-- [x] **Iteration 1** — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md), [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental)_, and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (both of which `initial-project` offers to run on completion).
+- [x] **Iteration 1** — first skills land under `skills/engineering/`: [`initial-project`](skills/engineering/initial-project/SKILL.md), [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) _(experimental at the time; now beta)_, and [`setup-graph-hooks`](skills/engineering/setup-graph-hooks/SKILL.md) (both of which `initial-project` offers to run on completion).
 - [ ] **Iteration 2** — the eval harness — fixtures, graders, and A/B benchmarks that score what a skill actually produces — lands in [`harness/`](harness/README.md), specced by [docs/harness-structure.md](docs/harness-structure.md) and built on the per-skill read-only `verify-*.sh` checkers. Shipped so far: the shared `harness/lib/` graders plus **thirteen** workspaces — twelve grading one skill each (including a behavioral `setup-graph-hooks` fixture that proves the wired hooks actually steer a search), plus `agents-md-blocks-workspace` for the cross-skill `AGENTS.md` managed-block invariant no single-skill workspace can catch, and the first committed benchmark iterations — deterministic `+1.00` A/B runs for [`setup-graph-hooks`](harness/setup-graph-hooks-workspace/iterations/iteration-1) and [`setup-project-tooling`](harness/setup-project-tooling-workspace/iterations/iteration-1) that exercise the grade → aggregate → benchmark pipeline end-to-end. Still open: workspaces for the two newest `personal/` skills (`register-delegate-agents`, `run-delegate-agent`), a true **agent** A/B (LLM-driven, to measure whether a skill helps a model, not just the structural delta) and skill lint / validation tooling.
 - [ ] **Iteration 3** — TBD. <!-- TODO -->
 
@@ -56,7 +56,7 @@ The design these skills share — and what they wire into the repos they touch:
 ├── .github/copilot-instructions.md # GitHub Copilot overrides
 ├── .vscode/settings.json           # wires Copilot to AGENTS.md
 ├── .mcp.json                       # code-review-graph MCP server (repo dogfoods setup-graph-hooks)
-├── .claude/                        # Claude Code config: settings.example.json + hook scripts
+├── .claude/                        # Claude Code config: settings.json (committed hooks); settings.local.json is gitignored
 ├── .editorconfig                   # UTF-8, LF, 2-space indent, final newline
 ├── LICENSE                         # MIT
 ├── scripts/
@@ -176,7 +176,7 @@ promoted — install with `--personal`). The [skills catalog](skills/README.md) 
 
 | Skill                                                                        | Status   | What it does                                                                                                                                                                                                                               |
 | ---------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable` | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, and `setup-handoff`.                                                                                 |
+| [`initial-project`](skills/engineering/initial-project/SKILL.md)             | `stable` | Sets up a project's AI assistant config around a shared `AGENTS.md`, then offers to run `setup-project-tooling`, `setup-graph-hooks`, `setup-handoff`, and `setup-secret-guard`.                                                           |
 | [`setup-project-tooling`](skills/engineering/setup-project-tooling/SKILL.md) | `beta`   | Detects the project profile and scaffolds matching dev tooling: commitlint + husky, lint-staged/prettier/ruff/black/sqlfluff, a VS Code workspace, and release-it (offered as a migration off commitizen and standard-version).            |
 | [`setup-secret-guard`](skills/engineering/setup-secret-guard/SKILL.md)       | `beta`   | Installs the secret guard so credential values never reach a transcript — a read-path guard that masks each value as a stable fingerprint, plus the shared `secret-scan` / `redact-view` engine. One home-layer install covers every repo. |
 

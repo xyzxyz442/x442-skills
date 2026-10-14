@@ -40,6 +40,32 @@ Everything here is idempotent: detect each piece and skip what is already presen
 config the repo already has unless the user asks; merge into `package.json`, `.vscode/settings.json`,
 and `.lintstagedrc.json` round-trip (parse → mutate → write), never splice with `sed`.
 
+## Prerequisites & platform support
+
+The skill's own steps are agent-driven — there is no installer script, so the assistant applies
+every merge from this body. The host needs little beyond a shell at the project root. The
+dependencies below are for the hooks the skill wires, the bundled bootstrap, and the verifier.
+
+- **Node — hard, in every category.** husky, commitlint, lint-staged, and release-it are npm
+  packages declared in `package.json`, so a Python or SQL repo needs Node too. The skill creates a
+  minimal `package.json` for a greenfield repo; it does not install Node.
+- **Package manager — detected from the lockfile.** `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn,
+  `bun.lockb` → bun, anything else → npm. `initialize.sh` provisions pnpm and yarn through
+  `corepack`, and stops with an "install Node.js and retry" message when corepack is absent. npm
+  ships with Node; bun must already be installed.
+- **Runtime:** `bash` and `git`. `scripts/husky.sh install` sets `core.hooksPath` and refuses to
+  run outside a git working tree.
+- **Python repos only:** one of `uvx`, `uv`, `pipx`, or a `.venv` holding the tools, tried in that
+  order by `scripts/py-tool.sh`. With none of the first three, `initialize.sh` builds the `.venv`
+  with `python3 -m venv`, which needs `python3` 3.10+.
+- **Network:** `curl` fetches the `.gitignore` baseline from toptal.com.
+- **Verifier:** `scripts/verify-project-tooling.sh` needs `python3` to validate JSON and to render
+  `--json` output.
+- **Platform:** macOS and Linux are first-class. **Windows is supported via WSL only** — every
+  shipped script is bash with POSIX paths (`.venv/bin/<tool>`) and there is no PowerShell/cmd path.
+  The [`.gitattributes` baseline](#gitattributes) forces LF on `*.sh`, so the shipped hooks survive
+  a Windows checkout instead of failing on a `bash\r` shebang.
+
 ## Step 1 — Detect the language, recommend the category, confirm
 
 Read the repo first. **Detect** the package manager and language from filesystem signals;
