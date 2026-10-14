@@ -7,8 +7,24 @@ situations it is the right answer to.
 They are written for someone meeting these skills for the first time. If you are looking for the
 exact flags a command takes, the `SKILL.md` files are the reference; these pages are the map.
 
+## Start here — onboarding
+
+Read these in order the first time. Each one links to the next.
+
+| Guide                                                                  | Read it when                                                                                                                        |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [Onboarding — a new developer](onboarding-new-developer.md)            | You have GitHub, VS Code and your language toolchain, and nothing AI-related set up yet.                                            |
+| [Onboarding — an existing developer](onboarding-existing-developer.md) | You already use an assistant, but your hooks, global context, permissions or VS Code settings grew by hand. A fifteen-minute audit. |
+| [Onboarding — a project](onboarding-project.md)                        | A repo needs wiring: newly created, legacy with its own tooling, or half-migrated by someone who stopped partway.                   |
+| [Platforms](platforms.md)                                              | You are on Linux or Windows (WSL), or a hook works on one machine and not another.                                                  |
+| [Best practices](best-practices.md)                                    | You want the standard global context, a permission baseline, and the delegation and working habits behind them.                     |
+| [Daily prompts](daily-prompts.md)                                      | The setup is done and you want the prompts that get the most out of it.                                                             |
+
+## Suites
+
 | Guide                                                           | Read it when                                                                                                                                                  |
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Graph hooks](graph-hooks.md)                                   | An assistant should query a code graph instead of grepping — installing the tools, wiring a repo, choosing a search tier, repairing it.                       |
 | [Handoff](handoff.md)                                           | Two agents, two sessions or two repos need to work the same code without clobbering each other — or work has to survive a session.                            |
 | [Team and personal boards](handoff-team-and-personal-boards.md) | You work on a team that shares one handoff board and keep a board of your own — where each lives, which work goes on which, and how a draft reaches the team. |
 | [Secret guard](secret-guard.md)                                 | A credential file or a cluster read has to stay usable by an agent without its values landing in a transcript.                                                |
@@ -40,8 +56,8 @@ secret-guard diagram predates this and has no committed source yet.
 
 These pages deliberately do not restate any of the following. When they disagree, the sources win.
 
-- **[`CONTEXT.md`](../../CONTEXT.md)** — the glossary. Every term these guides use in bold is
-  defined there, with the near-synonyms to avoid. If a word here seems to be doing precise work, it
+- **[`CONTEXT.md`](../../CONTEXT.md)** — the glossary. A word these guides bold as a _term_ (not a
+  bold lead-in sentence) is defined there, with the near-synonyms to avoid. If a word here seems to be doing precise work, it
   is, and that is where the definition lives.
 - **[`docs/adr/`](../adr/)** — why each piece is shaped the way it is. The guides link an ADR
   wherever a design looks arbitrary, because it usually is not.
