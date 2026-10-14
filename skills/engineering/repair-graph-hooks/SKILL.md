@@ -33,6 +33,8 @@ force-pushes, and clears only empty lock directories (`rmdir`, never `rm -rf`).
   stale end-of-turn refresh owner → duplicate graph builds).
 - A checkout on a new machine / after a Windows clone (exec bit or CRLF may have broken a hook).
 - `code-review-graph` or `graphify` was reinstalled, upgraded, or moved and may be broken.
+- Two graph cheatsheets appear at session start, or the read nudge fires twice for one read: an
+  earlier generation of these hooks is still installed at the user level.
 
 Do **not** use this to do first-time setup — if `.graph-hooks/` is absent entirely, run
 [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md) instead.
@@ -127,6 +129,22 @@ from the old files, so a developer's own hooks stay. The hooks belong in the com
 VS Code chat runs the Claude-format hooks for every teammate, and reads `settings.local.json` as
 well without de-duplicating across files
 ([ADR 0024](../../../docs/adr/0024-vs-code-runs-the-claude-format-hooks-when-a-repo-wires-claude.md)).
+
+A `user_hooks.predecessor` warning means the predecessor generation of this layer is still live in
+the user's own config: scripts such as `graph-cheatsheet.py` or `session-status.sh` sit in
+`~/.claude/scripts/` and are wired from `~/.claude/settings.json`, so they fire beside
+`.graph-hooks/` in every repo on the machine. **Report it; do not fix it.** It is the user's global
+config, and this skill never edits outside the repo it was pointed at. Print what the user runs:
+
+```bash
+trash ~/.claude/scripts/graph-cheatsheet.py # one line per script the warning names
+```
+
+Trashing the scripts is enough. Each predecessor entry is wired as `[ -f "$S" ] && bash "$S"`, so
+once the script is gone the entry exits silently and the verifier reports it as a dead entry
+(`pass`). Removing the dead entries from `~/.claude/settings.json` is cosmetic. Background and the
+symptoms each pair of hooks causes:
+[Two generations of hooks](../../../docs/graph-tools-during-development.md#two-generations-of-hooks-the-failure-outside-the-repo).
 
 ### 2. Extend detection — the graph-state checks the verifier lacks
 
@@ -224,7 +242,8 @@ Healthy result is **0 failed**. If a `[FAIL]` persists, surface it and stop.
 ### 6. Report
 
 Summarize: each tool's integrity verdict, what was auto-repaired, any rebuild the user still needs
-to approve, and the final verifier summary line. Keep it short.
+to approve, any user-level predecessor script the user still has to trash, and the final verifier
+summary line. Keep it short.
 
 ## Verification
 

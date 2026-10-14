@@ -15,7 +15,7 @@
       "kind": "pre-state",
       "prompt": "Set up self-updating graph hooks so agents query the graph instead of grepping.",
       "fixture": "fixtures/fresh-wired",
-      "expected_output": "AGENTS.md present, no graph hooks yet. Installs the shared `.graph-hooks/` dispatcher + cores, a post-commit refresh, and the `<!-- graph-hooks -->` routing block in AGENTS.md. Exactly one end-of-turn refresh owner."
+      "expected_output": "AGENTS.md present, no graph hooks yet. Installs the shared `.graph-hooks/` dispatcher + cores, a post-commit refresh, and the `<!-- graph-hooks:begin` routing block in AGENTS.md. Exactly one end-of-turn refresh owner."
     },
     {
       "id": "all-wired",
@@ -72,6 +72,13 @@
       "prompt": "We use VS Code chat alongside Claude Code and Copilot. Make VS Code use the Claude hooks here.",
       "fixture": "fixtures/all-wired",
       "expected_output": "Behavioral case (ADR 0024), in a throwaway copy. Regression guards: setup-graph-hooks.sh with `--tools claude,copilot --primary claude` sets `chat.useClaudeHooks: true` and `.github/hooks/graph.json: false` in `.vscode/settings.json`, and the verifier reports `vscode.hook_source` as pass; re-running with `--primary copilot` removes the `graph.json` entry, since the Copilot file then carries the refresh; and with the Claude-format file gone but `graph.json` still switched off, the verifier reports `vscode.copilot_off_uncovered` as a failure."
+    },
+    {
+      "id": "user-predecessor-hooks",
+      "kind": "post-state",
+      "prompt": "I get two graph cheatsheets at the start of every session in this repo. Check the graph hooks.",
+      "fixture": "fixtures/all-wired",
+      "expected_output": "Behavioral case, not wiring: the grader seeds three throwaway user-level ~/.claude directories shaped like the predecessor generation's install and points GRAPH_HOOKS_USER_DIR at each. Regression guards: verify-graph-hooks.sh reports `user_hooks.predecessor` as a warning when a predecessor script is both wired in settings.json and present in scripts/; as pass when the entries are wired but their scripts are gone (they exit silently); as pass when nothing is wired; and it leaves every seeded user directory byte-identical, because the fix belongs to the user's global config and the verifier only reads."
     }
   ]
 }

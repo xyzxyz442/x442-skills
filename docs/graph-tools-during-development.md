@@ -77,7 +77,7 @@ those artifacts _fresh_ on the write path — the agent never has to think about
 
 ## The routing rule agents follow
 
-The `<!-- graph-hooks -->` block in [AGENTS.md](../AGENTS.md) (reached by every tool via its
+The graph-hooks block (between `<!-- graph-hooks:begin` and `<!-- graph-hooks:end -->`) in [AGENTS.md](../AGENTS.md) (reached by every tool via its
 `@AGENTS.md` import) tells assistants to prefer the graph **before** grep/find/glob or reading
 many files. Routing is **by intent**, not by what just failed — pick the lane for the question
 you are asking:
@@ -312,8 +312,9 @@ transitive dependents that a first-pass grep would miss.
   refresh. The invariant is enforced by a shared lock path, so it only binds refreshers that use
   it: a refresh hook installed **outside** `.graph-hooks` — most likely a predecessor generation
   still wired in your user-level config — takes its own lock, keeps its own PID file, and is
-  invisible to both this lock and `verify-graph-hooks.sh`. See
-  [Two generations of hooks](#two-generations-of-hooks-the-failure-the-verifier-cannot-see).
+  invisible to this lock and to the verifier's owner count. Only the verifier's
+  `user_hooks.predecessor` check sees it. See
+  [Two generations of hooks](#two-generations-of-hooks-the-failure-outside-the-repo).
 - **Read-path throttle.** The grep-steerer's "one allowance per repo per hour" means it
   pre-answers or denies at most once per hour per repo, so it never turns into nagging — the
   first grep teaches, later duplicate greps get the cached answer inline.
@@ -468,17 +469,18 @@ Common cases it fixes:
 - A new-machine or Windows checkout where the exec bit or CRLF broke a hook.
 - `code-review-graph` / `graphify` was reinstalled, upgraded, or moved and is now broken.
 
-### Two generations of hooks: the failure the verifier cannot see
+### Two generations of hooks: the failure outside the repo
 
-Both `verify-graph-hooks.sh` and `repair-graph-hooks` reason about **this repo's** wiring —
-`.graph-hooks/`, the per-tool config files, the git hook. Neither reads your **user-level** config
-(`~/.claude/settings.json` and friends). So a hook installed there is outside their field of view
-entirely, and the verifier will report `exactly 1 end-of-turn refresh owner — no duplication`
-while a second owner fires on every turn.
+Almost everything `verify-graph-hooks.sh` and `repair-graph-hooks` check is **this repo's** wiring —
+`.graph-hooks/`, the per-tool config files, the git hook. A hook installed in your **user-level**
+config (`~/.claude/settings.json`) is outside that, so the owner count still reports
+`exactly 1 end-of-turn refresh owner — no duplication` while a second owner fires on every turn.
+One check exists for exactly this: `user_hooks.predecessor`, described below.
 
 This is not hypothetical: it is what an **earlier generation of this same layer** leaves behind. The
 predecessor installed standalone scripts (`~/.claude/scripts/graph-cheatsheet.py`,
-`smart-grep-hook.sh`, `read-glob-nudge.sh`, `stop-graph-update.sh`) into the user-level config, where
+`smart-grep-hook.sh`, `read-glob-nudge.sh`, `stop-graph-update.sh`, `session-status.sh`,
+`session-setup-nudge.sh`) into the user-level config, where
 they survive every later repo-local install. Both generations then run, and they do not coordinate:
 
 | Behavior           | `.graph-hooks` (current)     | Predecessor (user-level) | Result when both fire                                   |
@@ -507,12 +509,23 @@ as a **symptom rather than a misconfiguration**. The warning describes the state
 "N vectors were written by X but embed.env resolves Y" — but if re-running the embed never settles
 it, the cause is a second writer, not a wrong setting.
 
-Diagnose it by asking which hooks actually fire, rather than which ones this repo installed:
+The verifier reports it. `user_hooks.predecessor` reads `~/.claude/settings.json` and
+`~/.claude/scripts/` (read-only) and sorts each predecessor script it finds wired:
+
+| State                               | Level  | Meaning                                                  |
+| ----------------------------------- | ------ | -------------------------------------------------------- |
+| wired **and** the script is present | `warn` | live — it fires beside `.graph-hooks` in every repo      |
+| wired, the script is gone           | `pass` | dead — the entry exits silently; removing it is cosmetic |
+| not wired                           | `pass` | nothing to do                                            |
+
+`GRAPH_HOOKS_USER_DIR` points the check at another directory; the harness passes an empty one so a
+grade never depends on the grading machine. To look by hand, or for a Gemini install the check does
+not cover:
 
 ```bash
 # any graph hook wired outside this repo's .graph-hooks layer?
 grep -l 'graph\|crg' ~/.claude/settings.json ~/.gemini/settings.json 2> /dev/null
-ls ~/.claude/scripts/ 2> /dev/null | grep -E 'graph|grep-hook|nudge'
+ls ~/.claude/scripts/ 2> /dev/null | grep -E 'graph|grep-hook|nudge|session-s'
 ```
 
 Two live tells need no commands at all: **two graph cheatsheets** at session start, or the read
@@ -520,7 +533,8 @@ nudge appearing **twice** for a single `Read`. Either one means two generations 
 
 The fix is to retire the predecessor, not to rewire this repo — this repo is already correct. Do it
 by hand: it is your global config, it affects every repo on the machine, and `repair-graph-hooks`
-deliberately does not reach outside the project it was pointed at.
+only _reports_ it, printing the `trash` command for each live script. It never edits outside the
+project it was pointed at.
 
 **Deleting the payload is enough, and is the safer half.** The predecessor wires its hooks as
 `S="…"; [ -f "$S" ] && bash "$S" || true`, so once `~/.claude/scripts/` no longer holds the scripts,
