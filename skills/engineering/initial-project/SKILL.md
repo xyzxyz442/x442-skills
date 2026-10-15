@@ -92,7 +92,8 @@ Run these in order from the target project root.
 6. **Recheck and run the setup chain.** `AGENTS.md` now exists — the shared precondition for the
    four setup skills that chain after this one. Walk them **in the order below**, treating this
    run like a fresh project: for each, recheck its "already-wired" marker _now_ (do not assume a
-   prior run's state). If the marker is present, report it and move on — no prompt. If it is
+   prior run's state). If the marker is present, report it and move on — no prompt (skill 4's home
+   layer is the one exception, below). If it is
    absent, offer to run it (in Claude Code, `AskUserQuestion`, `multiSelect: false`, yes/no,
    default **yes**); on yes, invoke the skill and let its own verifier run; on no, name it as a
    recommended next step. Each chained skill is itself idempotent, so this is safe to repeat.
@@ -102,7 +103,7 @@ Run these in order from the target project root.
    | 1     | [`setup-project-tooling`](../setup-project-tooling/SKILL.md) | `scripts/husky.sh` present                                      | commit enforcement, staged lint/format, editor + release |
    | 2     | [`setup-graph-hooks`](../setup-graph-hooks/SKILL.md)         | `<!-- graph-hooks:begin` in `AGENTS.md` **and** `.graph-hooks/` | self-updating code knowledge graph + routing             |
    | 3     | [`setup-handoff`](../setup-handoff/SKILL.md)                 | `<!-- handoff` block in `AGENTS.md` **and** `.agents/handoff/`  | lease-based cross-session/-repo handoff board            |
-   | 4     | [`setup-secret-guard`](../setup-secret-guard/SKILL.md)       | `<!-- secret-guard:begin` block in `AGENTS.md`                  | secret rules in `AGENTS.md`; the home guard if absent    |
+   | 4     | [`setup-secret-guard`](../setup-secret-guard/SKILL.md)       | `<!-- secret-guard:begin` block in `AGENTS.md` (repo half only) | secret rules in `AGENTS.md`; the home guard if absent    |
 
    Skill 1 installs the `commitlint.config.mjs` behind the commit conventions seeded in step 2.
    Its marker is the hook dispatcher it ships, not `.husky/` or a commitlint config: a repo wired
@@ -114,8 +115,10 @@ Run these in order from the target project root.
    present. **Check the home layer every run, marker or not**: a teammate cloning an onboarded repo
    has the block but not the guard. If `~/.claude/bin/redact-view` is absent, the home layer, the
    guard itself, is not installed on this machine. Offer it in the same step, because the repo block
-   alone enforces nothing. A first home install on any machine needs `--adopt` (see
-   [Install](../setup-secret-guard/SKILL.md#install)), and it backs up whatever it replaces.
+   alone enforces nothing. The home layer is a separate run with no path argument
+   (`setup-secret-guard.sh`); add `--adopt` when guard files already exist on the machine, since
+   the installer refuses to replace a diverged copy without it (see
+   [Install](../setup-secret-guard/SKILL.md#install)). It backs up whatever it replaces.
    Skills chained _downstream_ of these are named as next steps, not walked here:
    [`register-cross-repo-graph`](../register-cross-repo-graph/SKILL.md) and
    [`repair-graph-hooks`](../repair-graph-hooks/SKILL.md) after graph-hooks;
@@ -163,4 +166,5 @@ User: "init this project."
    `setup-project-tooling`. No `<!-- graph-hooks:begin` in `AGENTS.md` → ask, hand off to
    `setup-graph-hooks`. No `.agents/handoff/` → ask, hand off to `setup-handoff`. No
    `<!-- secret-guard:begin` block in `AGENTS.md` → ask, hand off to `setup-secret-guard`. Any
-   skill whose marker is already present is reported and skipped, not re-prompted.
+   skill whose marker is already present is reported and skipped, not re-prompted, except that
+   a missing `~/.claude/bin/redact-view` is still offered as the home-layer install.

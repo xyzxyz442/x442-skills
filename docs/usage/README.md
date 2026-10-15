@@ -9,7 +9,7 @@ exact flags a command takes, the `SKILL.md` files are the reference; these pages
 
 ## Start here — onboarding
 
-Read these in order the first time. Each one links to the next.
+Read these in order the first time.
 
 | Guide                                                                  | Read it when                                                                                                                        |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |

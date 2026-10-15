@@ -57,11 +57,11 @@ for link in "$DEST"/*; do
         # Recoverable removal only (house rule): with no trash command, say what to run and keep it.
         trash_cmd="$(command -v trash || command -v trash-put || true)"
         if [ -z "$trash_cmd" ]; then
-          echo "kept $name — no trash command found; install trash (or trash-cli), then: trash $link" >&2
+          echo "kept $name — no trash command found; install trash (or trash-cli), then: trash \"$link\"" >&2
         elif "$trash_cmd" "$link"; then
           echo "pruned $name" >&2
         else
-          echo "kept $name — $trash_cmd failed; remove it by hand: $link" >&2
+          echo "kept $name — $trash_cmd failed; remove it by hand: \"$link\"" >&2
         fi
         ;;
       *) echo "kept $name (declined)" >&2 ;;

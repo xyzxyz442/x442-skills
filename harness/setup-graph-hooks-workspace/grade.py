@@ -842,6 +842,28 @@ def grade_user_predecessor_hooks(target: Path) -> list[gc.Expectation]:
         ("dead", ["graph-cheatsheet.py", "stop-graph-update.sh"], [], "pass"),
         ("none", [], ["graph-cheatsheet.py"], "pass"),
     ]
+    # A name that only appears outside a scripts/ path is the user's own hook, not the predecessor.
+    unrelated = Path(tempfile.mkdtemp(prefix="graph-hooks-user-unrelated-"))
+    try:
+        (unrelated / "scripts").mkdir()
+        (unrelated / "scripts" / "session-status.sh").write_text(
+            "#!/usr/bin/env bash\n"
+        )
+        (unrelated / "settings.json").write_text(
+            json.dumps({"statusLine": {"command": "bash ~/bin/session-status.sh"}})
+            + "\n"
+        )
+        env = dict(os.environ, GRAPH_HOOKS_USER_DIR=str(unrelated))
+        exps.append(
+            gc.finding(
+                gc.verify_findings(VERIFY, target, env=env),
+                "user_hooks.predecessor",
+                "pass",
+                label="a same-named script wired from outside ~/.claude/scripts is not flagged",
+            )
+        )
+    finally:
+        shutil.rmtree(unrelated, ignore_errors=True)
     for label, wired, present, level in cases:
         user_dir = Path(tempfile.mkdtemp(prefix=f"graph-hooks-user-{label}-"))
         try:
@@ -881,6 +903,7 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     # empty directory so a grade never depends on what the grading machine has installed; the
     # user-predecessor-hooks case seeds its own.
     user_dir = tempfile.mkdtemp(prefix="graph-hooks-user-")
+    prior = os.environ.get("GRAPH_HOOKS_USER_DIR")
     os.environ["GRAPH_HOOKS_USER_DIR"] = user_dir
     try:
         graded, cleanup = gc.isolated_git_target(target)
@@ -894,7 +917,10 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         finally:
             cleanup()
     finally:
-        os.environ.pop("GRAPH_HOOKS_USER_DIR", None)
+        if prior is None:
+            os.environ.pop("GRAPH_HOOKS_USER_DIR", None)
+        else:
+            os.environ["GRAPH_HOOKS_USER_DIR"] = prior
         shutil.rmtree(user_dir, ignore_errors=True)
 
 
