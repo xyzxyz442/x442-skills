@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.21.0](https://github.com/xyzxyz442/x442-skills/compare/v0.20.2...v0.21.0) (2026-10-15)
+
+### 🚀 Features
+
+- **feature:** warn when user-level predecessor graph hooks are still live ([ddcc041](https://github.com/xyzxyz442/x442-skills/commit/ddcc041e4480010af7cf649cba35c6987ef67914))
+
+### 🐞 Bug Fixes
+
+- **bug:** match predecessor graph hooks by their wired scripts path ([4fe22c6](https://github.com/xyzxyz442/x442-skills/commit/4fe22c69cf133a7aee26e8fbde5f93f7792d5e5d))
+- **bug:** quote the link path in link-claude-skills kept messages ([e2b4c5c](https://github.com/xyzxyz442/x442-skills/commit/e2b4c5c02c95099deef7e87c33af225a491d269f))
+- **bug:** resolve chain, marker, status and prerequisite inconsistencies ([2a6aa23](https://github.com/xyzxyz442/x442-skills/commit/2a6aa2311a9be9e3e5b18bbc2876ebbd145a57f0))
+- **bug:** say the secret guard needs --adopt only over an existing copy ([e088eff](https://github.com/xyzxyz442/x442-skills/commit/e088eff55f501e475007c6b34a66e325b329cef7))
+- **deps:** update prettier to version 3.9.10 ([df9aefd](https://github.com/xyzxyz442/x442-skills/commit/df9aefdbb5947d93abed6e8cfcc402808f197eb4))
+
+### 📚 Documentation
+
+- **docs:** add onboarding, platform, best-practice and daily-prompt guides ([f9ad8cb](https://github.com/xyzxyz442/x442-skills/commit/f9ad8cb7dd4b026e385aa9b7de121a32ea9a2af6))
+
+### 🧹 Miscellaneous Chores
+
+- **setup:** ship the commitlint relaxations in the project-tooling payload ([7a787e7](https://github.com/xyzxyz442/x442-skills/commit/7a787e7b2e77d59f185d1fbe19e26621237ae473))
+- update pnpm lockfile ([c666c89](https://github.com/xyzxyz442/x442-skills/commit/c666c89a17396e3b36d5be3d19058b44f2e6827a))
+
 ## [0.20.2](https://github.com/xyzxyz442/x442-skills/compare/v0.20.1...v0.20.2) (2026-10-09)
 
 ### 🐞 Bug Fixes
