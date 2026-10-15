@@ -23,7 +23,8 @@ or graph is absent, so it is safe on any repo, with or without the tools install
 
 1. **Universal (tool-agnostic, always installed).** A git `post-commit` graph refresh, the
    `.code-review-graphignore` / `.graphifyignore` files, `.gitignore` entries, and the
-   `<!-- graph-hooks -->` routing block appended to `AGENTS.md`. Because every tool's entry
+   routing block (between `<!-- graph-hooks:begin` and `<!-- graph-hooks:end -->`) appended to
+   `AGENTS.md`. Because every tool's entry
    file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit.
 2. **Shared behavior cores (one source of truth).** The behaviors live once, protocol-free,
@@ -53,7 +54,7 @@ flowchart TD
     end
 
     subgraph l1["1. Universal (always installed)"]
-        AG["&lt;!-- graph-hooks --&gt; block<br/>in AGENTS.md"]
+        AG["graph-hooks block<br/>in AGENTS.md"]
         PC(["git post-commit"])
         IG[".code-review-graphignore<br/>.graphifyignore"]
     end
@@ -135,9 +136,9 @@ If either fails, report it and stop. Do not partially apply.
 Beyond the two preconditions above (`AGENTS.md` at root, and a git working tree), the installer,
 verifier, and hooks need:
 
-- **Hard runtime:** `bash`, `python3` (stdlib only — `json`, `sqlite3`, `argparse`; 3.6+ for
-  f-strings), and `git`. The graph read path uses `sqlite3` with FTS5 when available and falls
-  back to `LIKE` otherwise. No `node` or `jq` (husky is only _detected_, never executed).
+- **Hard runtime:** `bash`, `python3` (stdlib only — `json`, `sqlite3`, `argparse`; 3.7+ for
+  `subprocess.run(capture_output=True)`), and `git`. The graph read path uses `sqlite3` with FTS5
+  when available and falls back to `LIKE` otherwise. No `node` or `jq` (husky is only _detected_, never executed).
 - **Optional graph tools — dormant until built, never required to install the hooks:**
   `pipx install code-review-graph` (MCP tools + graph search), and `pipx install graphifyy` (note
   the double `y`: the PyPI package is `graphifyy`, the installed command is `graphify`). Every hook

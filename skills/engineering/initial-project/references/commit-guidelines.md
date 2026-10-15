@@ -5,7 +5,8 @@ Best practice for writing commits. These rules mirror the machine-enforced
 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) via
 [`@commitlint/config-conventional`](https://github.com/conventional-changelog/commitlint/tree/master/@commitlint/config-conventional)).
 `commitlint.config.mjs` is the single source of truth — if this prose and the config ever diverge,
-the config wins. `setup-project-tooling` installs the enforcement (husky `commit-msg` hook + CI);
+the config wins. `setup-project-tooling` installs the enforcement (a local husky `commit-msg`
+hook; no CI workflow ships);
 these conventions apply to every commit regardless of whether that tooling is wired yet.
 
 ## Format
@@ -15,7 +16,8 @@ type(scope): subject
 ```
 
 - **type** — required; one of the allowed types below.
-- **scope** — required by the config's `scope-enum`; one of the allowed scopes below.
+- **scope** — optional, but include one by default. When present it must be one of the allowed
+  scopes below: `scope-enum` restricts the value, and no rule requires one.
 - **subject** — lowercase, imperative mood ("add", not "added"/"adds"), no trailing period.
 
 Keep the subject short (~50 chars). Add a body (blank line, then wrapped prose) when the change
@@ -52,4 +54,4 @@ chore(deps): bump @commitlint/cli to ^21
 ```
 
 Avoid: `Fixed bug.` (no type/scope, capitalized, past tense, trailing period),
-`feat: stuff` (missing scope, vague subject).
+`feat: stuff` (vague subject; no scope, which the config allows but these conventions discourage).

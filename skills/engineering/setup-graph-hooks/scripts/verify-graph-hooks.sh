@@ -390,6 +390,29 @@ grep -q 'endturn.sh' .github/hooks/graph.json 2> /dev/null && OWNERS="${OWNERS:+
 N=$(printf '%s\n' $OWNERS | grep -c . || true)
 if [ "${N:-0}" -le 1 ]; then ok refresh.single_owner "exactly ${N:-0} end-of-turn refresh owner${OWNERS:+ ($OWNERS)} — no duplication"; else bad refresh.single_owner "MULTIPLE refresh owners ($OWNERS) — would duplicate the graph build"; fi
 
+# The owner count above reasons about THIS repo, so it cannot see the predecessor generation of
+# this layer: standalone scripts in ~/.claude/scripts, wired from ~/.claude/settings.json, which
+# survive every repo-local install and fire beside .graph-hooks (two cheatsheets, two refreshes on
+# unshared locks, embed provider flip-flop). This is the one check that looks outside the repo, and
+# it only reads: the fix is the user's global config, which neither this verifier nor
+# repair-graph-hooks edits. The predecessor wires each entry as `[ -f "$S" ] && bash "$S"`, so an
+# entry whose script is gone exits silently -- only wired AND present is live, and only live warns.
+# GRAPH_HOOKS_USER_DIR points the check elsewhere (graders pass an empty dir); default ~/.claude.
+USER_DIR="${GRAPH_HOOKS_USER_DIR:-$HOME/.claude}"
+LIVE=""
+DEAD=""
+for s in graph-cheatsheet.py smart-grep-hook.sh read-glob-nudge.sh stop-graph-update.sh session-status.sh session-setup-nudge.sh; do
+  grep -qF "$s" "$USER_DIR/settings.json" 2> /dev/null || continue
+  if [ -f "$USER_DIR/scripts/$s" ]; then LIVE="${LIVE:+$LIVE }$s"; else DEAD="${DEAD:+$DEAD }$s"; fi
+done
+if [ -n "$LIVE" ]; then
+  warn user_hooks.predecessor "predecessor graph hooks are live at user level ($LIVE in $USER_DIR/scripts) and fire beside .graph-hooks — trash those scripts (repair-graph-hooks prints the commands)"
+elif [ -n "$DEAD" ]; then
+  ok user_hooks.predecessor "no live user-level predecessor hooks (dead entries for $DEAD in $USER_DIR/settings.json exit silently — remove them when convenient)"
+else
+  ok user_hooks.predecessor "no user-level predecessor graph hooks"
+fi
+
 # lock smoke test: a held lock makes a second refresh a no-op
 KEY="$(pwd | { md5sum 2> /dev/null || md5 2> /dev/null; } | cut -c1-8)"
 LK="${TMPDIR:-/tmp}/crg-graph-${KEY:-x}.lock"

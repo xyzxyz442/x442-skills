@@ -35,7 +35,7 @@ if [ -L "$DEST" ]; then
   case "$resolved" in
     "$REPO" | "$REPO"/*)
       echo "error: $DEST is a symlink into this repo ($resolved)." >&2
-      echo "Remove it (rm \"$DEST\") and re-run; the script will recreate it as a real dir." >&2
+      echo "Move it to the trash (trash \"$DEST\") and re-run; the script will recreate it as a real dir." >&2
       exit 1
       ;;
   esac

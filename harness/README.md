@@ -199,10 +199,10 @@ and getting explicit confirmation. Default to at most 3 runs per configuration.
   deterministic controls proving the grader can both pass and fail: `announcement-good`
   (post-state, grades 1.00) and `violations` (breaks each rule, grades well below 1.00 with
   failing expectations naming the rule broken).
-- **All ten engineering skills now have a workspace** — every skill in `skills/README.md`'s
+- **All eleven engineering skills now have a workspace** — every skill in `skills/README.md`'s
   `engineering/` catalog table (`initial-project`, `setup-project-tooling`, `setup-graph-hooks`,
-  `repair-graph-hooks`, `register-cross-repo-graph`, `setup-handoff`, `run-handoff`,
-  `delegate-handoff`, `repair-handoff`, `register-cross-repo-handoff`). Every grader wraps its target with
+  `repair-graph-hooks`, `register-cross-repo-graph`, `setup-secret-guard`, `setup-handoff`,
+  `run-handoff`, `delegate-handoff`, `repair-handoff`, `register-cross-repo-handoff`). Every grader wraps its target with
   `isolated_git_target` (a fixture nested in this repo is relocated to its own git root, so the
   bundled `verify-*.sh` grades the fixture, not x442-skills) and may emit `skipped()` expectations —
   counted in `summary.skipped` and excluded from `pass_rate` — so a run that covers less (an

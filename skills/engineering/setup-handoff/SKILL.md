@@ -26,7 +26,7 @@ hooks are per-tool, and the user chooses which one tool gets **hard** enforcemen
    `handoff` lease script, `scripts/hooks.sh`, the generated `INDEX.md`, per-topic docs,
    `templates/` (the doc scaffolds), `.locks/` (gitignored on a board with no remote, committed on
    one that has it — see **A board is a git repo**), a committed `handoff.json` (topology,
-   policy, and the tooling-owned `_generated` block), and the `<!-- handoff -->` routing block
+   policy, and the tooling-owned `_generated` block), and the `<!-- handoff:begin` routing block
    appended to `AGENTS.md`. Because every tool's
    entry file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit. Machinery sits in `scripts/` + `templates/` so the board root holds

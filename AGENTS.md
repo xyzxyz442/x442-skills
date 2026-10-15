@@ -44,7 +44,7 @@ Every skill is a directory under `skills/` containing a `SKILL.md` with YAML fro
 ```markdown
 ---
 name: x442-kebab-case-skill-name
-description: One sentence that tells the assistant WHEN to use this skill. Be specific about triggers.
+description: Use when … — the triggers that tell the assistant WHEN to use this skill. Be specific.
 ---
 
 Skill body — instructions, examples, checklists, references.
@@ -59,7 +59,7 @@ Rules:
   personal or built-in skill) and shows on every install path — `npx skills add` and the Claude
   plugin marketplace read the frontmatter `name`, while the dev-loop link scripts also prefix the
   symlink directory.
-- **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"). Keep under ~200 chars.
+- **`description`**: the only thing the assistant sees at discovery time. Lead with trigger conditions ("Use when…"), then the concrete phrases a user would say, then one line on what it does, and, where it chains, end with it ("Chains after X."). Keep under ~600 chars: the trigger phrases are what make a skill fire, so do not trim them to hit a shorter target.
 - **No `:` in any frontmatter value** (`name`, `description`, `argument-hint`, …): a colon breaks how the frontmatter renders in markdown previews and naive parsers, even inside a `>-` block scalar where YAML itself would allow it. Use an em dash instead. Same rule as handoff titles.
 - **Markdown-first**: most skills ship markdown only, with supporting samples/data under `references/`. Setup and automation skills _may_ ship executables (shell, Python) and config payloads — put runnable scripts under `scripts/` and bundled payloads (templates, config) under `assets/`. The no-destructive-shell-commands house rule still applies to every shipped file.
 - **One skill, one purpose**: if a skill describes two unrelated workflows, split it.
@@ -88,8 +88,8 @@ Rules:
 | `personal`     | `run-delegate-agent`          | `experimental` | The assess → ask → brief → dispatch → verify → report discipline over an installed delegation setup: the user approves before anything is dispatched, and the sub-agent can ask back rather than guess. Chains after `setup-delegate-agent`.                                                                                                                                                                                                                                                      |
 
 **New to a suite?** The [usage guides](docs/usage/README.md) are the layer above `SKILL.md` — what
-a suite is for, what a real run looks like, and which situations it answers. Handoff and secret
-guard are written up; the rest follow the same template.
+a suite is for, what a real run looks like, and which situations it answers. The
+[index](docs/usage/README.md) lists every guide written so far.
 
 Full per-skill detail (prerequisites, verification harness, status meanings) lives in the
 [skills catalog](skills/README.md). Folders stay unprefixed; the `x442-` prefix lives in each

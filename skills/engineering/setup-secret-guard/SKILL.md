@@ -6,7 +6,7 @@ description: >-
   across projects. Installs a redacting read-path guard plus the shared detection and redaction
   engine (secret-scan, redact-view) into the .claude cascade, so a credential file stays usable
   while its values are replaced by stable fingerprints. Idempotent, and on by default for repos
-  that never installed it.
+  that never installed it. Chains after initial-project.
 ---
 
 # setup-secret-guard
@@ -152,6 +152,23 @@ has earned.
 on every machine that never installed the guard, which is the hard-dependency outcome ADR 0008
 rejects.
 
+## Prerequisites & platform support
+
+The installer, the verifier, and the guard itself are small and self-contained. The host needs:
+
+- **Runtime:** `bash` and `python3`. The installer is **bash 3.2 compatible**, which is what macOS
+  ships. `python3` is a hard requirement — the engine is Python, the installed hook runs as
+  `python3 "…/secret-file-guard.py"`, and the installer exits **69** without it. The engine and
+  the helper scripts import only the standard library, so there is nothing to `pip install`.
+- **Optional:** `jq`. One verifier check exercises a cluster-API read piped into `jq` and reports a
+  warning, not a failure, when it is absent.
+- **Repo layer:** an `AGENTS.md` at the repo root. The installer stops if it is missing and does
+  not create one — run [`initial-project`](../initial-project/SKILL.md) first.
+- **First install:** always needs `--adopt` once — see [Install](#install).
+- **Platform:** macOS and Linux are first-class. **Windows is supported via WSL only** — the
+  installer is bash and the verbs are `#!/usr/bin/env python3` scripts, with no PowerShell/cmd
+  path.
+
 ## Install
 
 ```bash
@@ -161,6 +178,12 @@ scripts/verify-secret-guard.sh [--json]    # read-only health check
 ```
 
 Idempotent: it byte-compares before writing, so a second run leaves `git status` clean.
+
+**Chained from [`initial-project`](../initial-project/SKILL.md)** as its fourth link. The repo
+layer is skipped when `AGENTS.md` already carries the `<!-- secret-guard:begin` block. The home
+layer is checked on every run whatever the marker says, and installed (with `--adopt` on a first
+install) when `~/.claude/bin/redact-view` is absent, since the repo block on its own enforces
+nothing.
 
 **Adoption is guarded.** The installer hash-compares what is already installed against the
 payload and **refuses on divergence** unless `--adopt` is passed, and it always backs up the

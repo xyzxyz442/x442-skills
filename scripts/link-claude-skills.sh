@@ -22,7 +22,7 @@ if [ -L "$DEST" ]; then
   case "$resolved" in
     "$REPO" | "$REPO"/* | "$GENERIC" | "$GENERIC"/*)
       echo "error: $DEST is a symlink into $resolved." >&2
-      echo "Remove it and re-run; the script will recreate it as a real dir." >&2
+      echo "Move it to the trash (trash \"$DEST\") and re-run; the script will recreate it as a real dir." >&2
       exit 1
       ;;
   esac
@@ -54,8 +54,15 @@ for link in "$DEST"/*; do
     read -r reply
     case "$reply" in
       [yY] | [yY][eE][sS])
-        if command -v trash > /dev/null 2>&1; then trash "$link"; else unlink "$link"; fi
-        echo "pruned $name" >&2
+        # Recoverable removal only (house rule): with no trash command, say what to run and keep it.
+        trash_cmd="$(command -v trash || command -v trash-put || true)"
+        if [ -z "$trash_cmd" ]; then
+          echo "kept $name — no trash command found; install trash (or trash-cli), then: trash $link" >&2
+        elif "$trash_cmd" "$link"; then
+          echo "pruned $name" >&2
+        else
+          echo "kept $name — $trash_cmd failed; remove it by hand: $link" >&2
+        fi
         ;;
       *) echo "kept $name (declined)" >&2 ;;
     esac

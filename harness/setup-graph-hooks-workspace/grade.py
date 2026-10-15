@@ -797,6 +797,78 @@ def grade_vscode_hook_source(target: Path) -> list[gc.Expectation]:
     return exps
 
 
+PREDECESSOR_WIRING = (
+    'S="$HOME/.claude/scripts/{name}"; [ -f "$S" ] && bash "$S" || true'
+)
+
+
+def _seed_user_dir(user_dir: Path, wired: list[str], present: list[str]) -> None:
+    """Shape a user-level ~/.claude the way the predecessor generation left it: entries in
+    settings.json, scripts in scripts/. `wired` and `present` vary independently, because only
+    an entry whose script still exists actually fires."""
+    (user_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    hooks = [
+        {"hooks": [{"type": "command", "command": PREDECESSOR_WIRING.format(name=n)}]}
+        for n in wired
+    ]
+    (user_dir / "settings.json").write_text(
+        json.dumps({"hooks": {"SessionStart": hooks}}, indent=2) + "\n"
+    )
+    for n in present:
+        (user_dir / "scripts" / n).write_text("#!/usr/bin/env bash\n")
+
+
+def _snapshot(root: Path) -> list[tuple[str, bytes]]:
+    """Every file under `root` with its bytes, so a before/after pair proves nothing was written."""
+    return sorted(
+        (str(p.relative_to(root)), p.read_bytes())
+        for p in root.rglob("*")
+        if p.is_file()
+    )
+
+
+def grade_user_predecessor_hooks(target: Path) -> list[gc.Expectation]:
+    """Assert the verifier sees predecessor hooks at the USER level, which no repo-local check can:
+    live (wired and present) warns, dead (wired, script gone) passes, none passes. The verifier
+    must also leave the user dir byte-identical -- it reads, it never repairs."""
+    exps: list[gc.Expectation] = []
+    cases = [
+        (
+            "live",
+            ["graph-cheatsheet.py", "stop-graph-update.sh"],
+            ["graph-cheatsheet.py"],
+            "warn",
+        ),
+        ("dead", ["graph-cheatsheet.py", "stop-graph-update.sh"], [], "pass"),
+        ("none", [], ["graph-cheatsheet.py"], "pass"),
+    ]
+    for label, wired, present, level in cases:
+        user_dir = Path(tempfile.mkdtemp(prefix=f"graph-hooks-user-{label}-"))
+        try:
+            _seed_user_dir(user_dir, wired, present)
+            before = _snapshot(user_dir)
+            env = dict(os.environ, GRAPH_HOOKS_USER_DIR=str(user_dir))
+            exps.append(
+                gc.finding(
+                    gc.verify_findings(VERIFY, target, env=env),
+                    "user_hooks.predecessor",
+                    level,
+                    label=f"{label} predecessor hooks at user level report {level}",
+                )
+            )
+            after = _snapshot(user_dir)
+            exps.append(
+                gc.expectation(
+                    f"verifier leaves the {label} user dir untouched",
+                    before == after,
+                    f"{len(before)} file(s) before, {len(after)} after",
+                )
+            )
+        finally:
+            shutil.rmtree(user_dir, ignore_errors=True)
+    return exps
+
+
 def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     """Grade in an isolated copy when `target` is nested in a larger repo.
 
@@ -805,15 +877,25 @@ def grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
     relocates it to its own git root first (no-op when it already is one).
     """
     gc.pre_state_hint(HERE, eval_id)
-    graded, cleanup = gc.isolated_git_target(target)
-    if graded != Path(target).resolve():
-        print(
-            f"[grade] isolated fixture to its own git root: {graded}", file=sys.stderr
-        )
+    # verify-graph-hooks.sh reads the user-level ~/.claude for predecessor hooks. Point it at an
+    # empty directory so a grade never depends on what the grading machine has installed; the
+    # user-predecessor-hooks case seeds its own.
+    user_dir = tempfile.mkdtemp(prefix="graph-hooks-user-")
+    os.environ["GRAPH_HOOKS_USER_DIR"] = user_dir
     try:
-        return _grade(graded, eval_id)
+        graded, cleanup = gc.isolated_git_target(target)
+        if graded != Path(target).resolve():
+            print(
+                f"[grade] isolated fixture to its own git root: {graded}",
+                file=sys.stderr,
+            )
+        try:
+            return _grade(graded, eval_id)
+        finally:
+            cleanup()
     finally:
-        cleanup()
+        os.environ.pop("GRAPH_HOOKS_USER_DIR", None)
+        shutil.rmtree(user_dir, ignore_errors=True)
 
 
 # Warnings a correctly wired fixture still legitimately emits, so no_findings_at can assert the
@@ -850,6 +932,8 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         return grade_claude_committed(target)
     if eval_id == "vscode-hook-source":
         return grade_vscode_hook_source(target)
+    if eval_id == "user-predecessor-hooks":
+        return grade_user_predecessor_hooks(target)
 
     exps = [gc.run_verify_script(VERIFY, target)]
     # The advisory half of the verifier. An AGENTS.md block that predates the search-tier ladder

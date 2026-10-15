@@ -449,7 +449,9 @@ Each step is independently verifiable; do them in order.
 4. Then **`setup-graph-hooks-workspace/`** — the richest branch set, and the only one that needs a
    behavioral fixture (a repo with a built graph) plus a precondition fixture (a repo with no
    `AGENTS.md`, where the skill must stop and defer to `initial-project`).
-5. **Done — `setup-project-tooling-workspace/`.** It ships no scaffolder script, so the fixtures are
+5. **Done — `setup-project-tooling-workspace/`.** _(Superseded in part: the tooling now uses
+   `install:dev` and a tracked `.husky/`, see AGENTS.md; the `prepare` chain below is history.)_
+   It ships no scaffolder script, so the fixtures are
    hand-assembled from its `assets/` (the verifier is Node-rooted for every language: a
    `commitlint.config.mjs` + a `package.json` carrying the six devDeps and a husky `prepare` chain
    with `commitlint --edit` + a lint-staged config + `.editorconfig`; everything else is warn-only).
