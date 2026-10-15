@@ -402,7 +402,9 @@ USER_DIR="${GRAPH_HOOKS_USER_DIR:-$HOME/.claude}"
 LIVE=""
 DEAD=""
 for s in graph-cheatsheet.py smart-grep-hook.sh read-glob-nudge.sh stop-graph-update.sh session-status.sh session-setup-nudge.sh; do
-  grep -qF "$s" "$USER_DIR/settings.json" 2> /dev/null || continue
+  # Match the wired path, not the bare name: session-status.sh is generic enough that a user's own
+  # unrelated hook or statusLine could share it.
+  grep -qF "scripts/$s" "$USER_DIR/settings.json" 2> /dev/null || continue
   if [ -f "$USER_DIR/scripts/$s" ]; then LIVE="${LIVE:+$LIVE }$s"; else DEAD="${DEAD:+$DEAD }$s"; fi
 done
 if [ -n "$LIVE" ]; then
