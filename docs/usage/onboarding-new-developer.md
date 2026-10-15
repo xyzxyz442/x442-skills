@@ -153,9 +153,9 @@ In any Claude Code session, ask:
 /x442-setup-secret-guard install the home layer
 ```
 
-The first install on any machine needs `--adopt`. The installer compares what is installed against
-what it ships and refuses on any difference, and a first install always differs. If it refuses, let
-the assistant re-run it with `--adopt`. Anything it replaces is backed up to
+A machine with no guard files installs cleanly. If an earlier copy exists (hand-installed, or an
+older version), the installer compares it against what it ships and refuses on any difference,
+which a first install over it always is. If it refuses, let the assistant re-run it with `--adopt`. Anything it replaces is backed up to
 `~/.secret-guard-backup/` first. It merges deny rules and a hook into `~/.claude/settings.json`; it does
 not overwrite the file.
 

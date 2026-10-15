@@ -16,8 +16,9 @@
 # the payload it supersedes lived unversioned in one directory with no history behind it. So the
 # installer hash-compares before writing, refuses on divergence without --adopt, and always backs
 # up first. The honest limit, stated because it would otherwise look like a guarantee: the shipped
-# payload is de-personalised, so the FIRST install on any machine always diverges and always needs
-# --adopt. It defends against later silent drift, not against a bad first install.
+# payload is de-personalised, so a first install over ANY existing copy (hand-installed, or an
+# older version) always diverges and needs --adopt. A machine with no guard files installs clean
+# without it. It defends against later silent drift, not against a bad first install.
 #
 # Idempotent: byte-compares before writing, so a second run leaves the tree clean.
 # bash 3.2 compatible, which is what macOS ships.

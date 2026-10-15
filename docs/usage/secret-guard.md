@@ -245,7 +245,7 @@ setup-secret-guard.sh REPO        # a repo's AGENTS.md block and pattern additio
 verify-secret-guard.sh [--json]   # read-only health check
 ```
 
-**The first install needs `--adopt`.** The installer compares what is already installed with its
+**A first install over an existing copy needs `--adopt`.** The installer compares what is already installed with its
 payload and refuses on any difference unless you pass `--adopt`, and it backs up the old copy first.
 The payload carries no personal paths, so it differs from any existing install on first contact. The
 check protects you from later silent drift, not from a bad first install.

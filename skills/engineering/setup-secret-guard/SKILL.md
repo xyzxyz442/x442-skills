@@ -164,7 +164,8 @@ The installer, the verifier, and the guard itself are small and self-contained. 
   warning, not a failure, when it is absent.
 - **Repo layer:** an `AGENTS.md` at the repo root. The installer stops if it is missing and does
   not create one — run [`initial-project`](../initial-project/SKILL.md) first.
-- **First install:** always needs `--adopt` once — see [Install](#install).
+- **First install over an existing copy:** needs `--adopt` once — see [Install](#install). A
+  machine with no guard files installs without it.
 - **Platform:** macOS and Linux are first-class. **Windows is supported via WSL only** — the
   installer is bash and the verbs are `#!/usr/bin/env python3` scripts, with no PowerShell/cmd
   path.
@@ -181,15 +182,16 @@ Idempotent: it byte-compares before writing, so a second run leaves `git status`
 
 **Chained from [`initial-project`](../initial-project/SKILL.md)** as its fourth link. The repo
 layer is skipped when `AGENTS.md` already carries the `<!-- secret-guard:begin` block. The home
-layer is checked on every run whatever the marker says, and installed (with `--adopt` on a first
-install) when `~/.claude/bin/redact-view` is absent, since the repo block on its own enforces
-nothing.
+layer is checked on every run whatever the marker says, and installed with a separate run
+(`setup-secret-guard.sh`, plus `--adopt` when guard files already exist) when
+`~/.claude/bin/redact-view` is absent, since the repo block on its own enforces nothing.
 
 **Adoption is guarded.** The installer hash-compares what is already installed against the
 payload and **refuses on divergence** unless `--adopt` is passed, and it always backs up the
 previous copy first — there may be no other copy anywhere. Note the honest limit: because the
-payload is de-personalised, the first install on any machine always diverges, so `--adopt` is
-always needed once. It defends against later silent drift, not against a bad first install.
+payload is de-personalised, a first install over any existing copy always diverges, so `--adopt` is
+needed once there. A machine with no guard files installs without it. It defends against later
+silent drift, not against a bad first install.
 
 ## What this skill does not do
 
