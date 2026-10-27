@@ -5183,10 +5183,19 @@ mirror_render() { # doc-path public(0|1) projection(summary|full) -> JSON line
       fi
     done <<< "$(children_of "$f")"
   fi
-  python3 - "$f" "${GROUP:-}" "$kids" "$(doc_type "$f")" "$(doc_env "$f")" "$public" "$BOARD_ID" "$projection" << 'PY'
-import json, re, sys
+  # The audience label names the registry alias, not the repository: a repository name is free to
+  # run past the tracker's label limit, and an alias is the board's own short name for it. This
+  # section's registration first, then the one registration anywhere on the board.
+  local aud aud_alias=""
+  aud="$(meta "$f" audience)"
+  if [ -n "$aud" ]; then
+    aud_alias="$(home_alias_for "$aud" "${GROUP:-}")"
+    [ -n "$aud_alias" ] || aud_alias="$(home_alias_for "$aud")"
+  fi
+  python3 - "$f" "${GROUP:-}" "$kids" "$(doc_type "$f")" "$(doc_env "$f")" "$public" "$BOARD_ID" "$projection" "$aud_alias" << 'PY'
+import hashlib, json, re, sys
 
-path, group, kids, dtype, env, public, bid, projection = sys.argv[1:9]
+path, group, kids, dtype, env, public, bid, projection, aud_alias = sys.argv[1:10]
 text = open(path).read()
 fm, _, body = text.partition("\n---\n") if text.startswith("---\n") else ("", "", text)
 meta = {}
@@ -5253,6 +5262,25 @@ else:
             parts.append("## %s\n\n%s" % (name, section(name)))
     if projection == "complete" and meta.get("verified_by"):
         parts.append("## Evidence\n\n%s" % meta["verified_by"])
+
+
+def fit(label, limit=50):
+    # GitHub refuses a label name over 50 characters, and the refusal stops the whole run. Cut the
+    # label and end it with a hash of all of it: the same label every run, and two names sharing a
+    # long prefix stay apart. The prefix survives the cut, so MANAGED still reconciles it.
+    if len(label) <= limit:
+        return label
+    tag = hashlib.sha1(label.encode("utf-8")).hexdigest()[:6]
+    return label[: limit - len(tag) - 1].rstrip("-") + "-" + tag
+
+
+audience = meta.get("audience", "")
+aud_label = fit("audience:%s" % (aud_alias or audience)) if audience else ""
+# A label that is not the audience verbatim -- an alias, or a cut name -- would lose who acts next,
+# so the issue body carries the full name. Only then: an unchanged label needs no second copy, and
+# adding one would rewrite every issue already mirrored.
+if dtype != "orchestrator" and aud_label and aud_label != "audience:" + audience:
+    parts.append("Acts next: `%s`" % audience)
 parts.append("---\n_Managed by the handoff mirror from `%s` — edits made here are overwritten on the next run._\n\n<!-- handoff:%s -->" % (marker, marker))
 labels = ["handoff-mirror", "status:%s" % meta.get("status", "open")]
 if dtype == "orchestrator":
@@ -5262,8 +5290,8 @@ else:
         labels.append("severity:%s" % meta["severity"])
     labels.append("env:%s" % env)
     # Who acts next, as a label: an audience flip relabels this issue and never moves it (ADR 0017).
-    if meta.get("audience"):
-        labels.append("audience:%s" % meta["audience"])
+    if aud_label:
+        labels.append(aud_label)
     # ADR 0015. The DOCUMENT is the source of truth and the label is a projection, exactly as
     # `status:` and `type:` are -- so a teammate reading the tracker can see how a piece of work is
     # being executed without opening the board. Only when the doc states a kind: a doc that was
@@ -5272,6 +5300,7 @@ else:
         labels.append("mode:%s" % meta["executed_by"])
 if group:
     labels.append("section:%s" % group)
+labels = [fit(l) for l in labels]
 # The reviewer pointer, projected as the tracker's assignee -- the only mechanism in this system
 # that actually reaches a PERSON (a `status:` label reaches whoever is already looking). It is a
 # list because trackers model assignment as one, not because the board has more than one reviewer.

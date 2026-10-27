@@ -112,11 +112,21 @@ is_managed() { # label -> 0 when it carries a prefix the request names as manage
   return 1
 }
 
-ensure_labels() { # labels... -> creates any that do not exist yet (idempotent)
-  local l
+ensure_labels() { # labels... -> creates any that do not exist yet (idempotent); 1 on a refusal
+  local l err
+  err="$(mktemp)" || return 1
   for l in "$@"; do
-    gh label create "$l" --repo "$repo" --force > /dev/null 2>&1 || true
+    gh label create "$l" --repo "$repo" --force > /dev/null 2> "$err" && continue
+    # A label that is already there is what a rerun should find. Anything else -- a name too long, no
+    # permission -- is printed and stops here: swallowed, it resurfaces one step later as `issue
+    # create`'s misleading "label not found", with the real reason gone.
+    grep -qi 'already exists' "$err" && continue
+    echo "tracker-github: could not create label '$l' in $repo:" >&2
+    cat "$err" >&2
+    rm -f "$err"
+    return 1
   done
+  rm -f "$err"
 }
 
 CAP=100 # GitHub's documented maximum sub-issues per parent issue
@@ -195,8 +205,8 @@ out = [{"number": i["number"], "state": i["state"].lower(), "title": i["title"],
 json.dump([i for i in out if not want or want in i["labels"]], sys.stdout)' "$label"
     ;;
   create)
+    ensure_labels "${labels[@]}" || exit 1
     bf="$(body_file)"
-    ensure_labels "${labels[@]}"
     args=(issue create --repo "$repo" --title "$title" --body-file "$bf")
     for l in "${labels[@]}"; do args+=(--label "$l"); done
     url="$(quiet_gh "${args[@]}")" || {
@@ -228,8 +238,8 @@ json.dump({"number": int(m.group(1)), "url": u}, sys.stdout)'
     # The text half is skipped entirely when the request carries none of it, so a link-only update
     # cannot blank a title or body by passing an empty one.
     if [ "$has_title" = 1 ] || [ "$has_body" = 1 ] || [ "$has_labels" = 1 ]; then
+      ensure_labels ${labels[@]+"${labels[@]}"} || exit 1
       bf="$(body_file)"
-      ensure_labels ${labels[@]+"${labels[@]}"}
       current="$(gh issue view "$number" --repo "$repo" --json labels | python3 -c 'import json, sys
 print("\n".join(l["name"] for l in json.load(sys.stdin).get("labels", [])))')"
       args=(issue edit "$number" --repo "$repo")
