@@ -464,6 +464,75 @@ chk "the old audience label is gone" "False" "$(fq "'audience:acme-api' in [i fo
 chk "no issue appears in the audience's tracker" "0" "$(fq "len([i for i in in_repo('acme/acme-web') if 'j-api-handoff' in i['body']])")"
 ST="$ST_SAVE"
 
+printf '\nmirror labels fit the tracker'"'"'s 50-character limit\n'
+ST_SAVE="$ST"
+ST="$(mktemp -d)/tracker.json"
+# Past 41 characters `audience:NAME` is over GitHub's limit. LA_REG is registered under a short
+# alias; LA_ONE and LA_TWO are not, and share far more than their first 41 characters.
+LA_REG="acme-very-long-repository-name-for-the-event-conversion-service"
+LA_ONE="acme-unregistered-repository-name-that-runs-past-the-limit-one"
+LA_TWO="acme-unregistered-repository-name-that-runs-past-the-limit-two"
+TLA="$(mkboard)"
+tr_cfg "$TLA/.agents/handoff" '{ "topology": "cross-repo", "schema": 4,
+  "_generated": { "repos": [ { "alias": "acme-evc", "audience": "'"$LA_REG"'" } ] },
+  "trackers": { "acme-evc": { "kind": "issues", "system": "github", "repo": "acme/evc", "refPattern": "#[0-9]+" } } }'
+trh "$TLA" new la-reg --title "Registered" --audience "$LA_REG" > /dev/null
+trh "$TLA" new la-one --title "One" --audience "$LA_ONE" --home acme-evc > /dev/null
+trh "$TLA" new la-two --title "Two" --audience "$LA_TWO" --home acme-evc > /dev/null
+git -C "$TLA" add -A && git -C "$TLA" commit -qm "docs"
+LA_OUT="$(trh "$TLA" mirror)"
+chk "a mirror with long audiences creates every issue" "3" "$(fq "len(in_repo('acme/evc'))")"
+la_label() { # doc-id -> its audience label
+  fq "[l for l in [i for i in in_repo('acme/evc') if '$1-handoff' in i['body']][0]['labels'] if l.startswith('audience:')][0]"
+}
+chk "a long audience with an alias is labelled by the alias" "audience:acme-evc" "$(la_label la-reg)"
+chk_contains "and its full name stays in the issue body" \
+  "$(fq "[i for i in in_repo('acme/evc') if 'la-reg-handoff' in i['body']][0]['body']")" "$LA_REG"
+LA_L1="$(la_label la-one)"
+LA_L2="$(la_label la-two)"
+chk "an unaliased long audience fits in 50 characters" "yes" "$([ "${#LA_L1}" -le 50 ] && [ "${#LA_L1}" -gt 9 ] && echo yes || echo no)"
+chk "and ends in a short hash" "yes" "$(printf '%s' "$LA_L1" | grep -Eq -- '-[0-9a-f]{6}$' && echo yes || echo no)"
+chk "two long names sharing a prefix get different labels" "yes" "$([ -n "$LA_L1" ] && [ "$LA_L1" != "$LA_L2" ] && echo yes || echo no)"
+chk "no label anywhere is over 50 characters" "True" "$(fq "all(len(l) <= 50 for i in db['issues'] for l in i['labels'])")"
+LA_UPD="$(fq "calls('update')")"
+trh "$TLA" mirror > /dev/null
+chk "the same input gives the same labels, so a rerun updates nothing" "$LA_UPD" "$(fq "calls('update')")"
+chk "the first run reported no adapter failure" "no" "$(has "$LA_OUT" "adapter failed")"
+ST="$ST_SAVE"
+
+printf '\nthe GitHub adapter stops on a label it could not create\n'
+GLB="$(mktemp -d)"
+GL_LOG="$GLB/gh.log"
+cat > "$GLB/gh" << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GL_LOG"
+case "$1 $2" in
+  "label create")
+    case "$3" in
+      bad-*) echo "HTTP 422: Validation Failed (name is too long (maximum is 50 characters))" >&2; exit 1 ;;
+      dup-*) echo "label with name \"$3\" already exists; use \`--force\` to update its color and description" >&2; exit 1 ;;
+    esac
+    ;;
+  "issue create") echo "https://github.com/acme/backlog/issues/7" ;;
+esac
+exit 0
+SH
+chmod +x "$GLB/gh"
+GL_ERR="$(printf '{"repo":"acme/backlog","title":"T","body":"B","labels":["handoff-mirror","bad-label"]}' \
+  | GL_LOG="$GL_LOG" PATH="$GLB:$PATH" bash "$SRC/tracker-github.sh" create 2>&1 > /dev/null)"
+GL_RC=$?
+chk "a refused label makes create exit non-zero" "1" "$GL_RC"
+chk_contains "with gh's own message on stderr" "$GL_ERR" "name is too long"
+chk "and no issue is created after it" "0" "$(grep -c '^issue create' "$GL_LOG")"
+: > "$GL_LOG"
+printf '{"repo":"acme/backlog","title":"T","body":"B","labels":["handoff-mirror","dup-label"]}' \
+  | GL_LOG="$GL_LOG" PATH="$GLB:$PATH" bash "$SRC/tracker-github.sh" create > /dev/null 2>&1
+chk "a label that already exists is not a failure" "0:1" "$?:$(grep -c '^issue create' "$GL_LOG")"
+: > "$GL_LOG"
+printf '{"repo":"acme/backlog","number":7,"title":"T","body":"B","labels":["bad-label"]}' \
+  | GL_LOG="$GL_LOG" PATH="$GLB:$PATH" bash "$SRC/tracker-github.sh" update > /dev/null 2>&1
+chk "a refused label stops update before the edit" "1:0" "$?:$(grep -c '^issue edit' "$GL_LOG")"
+
 printf '\n--ref, export --to-issue and import follow the home (ADR 0017)\n'
 ST_SAVE="$ST"
 ST="$(mktemp -d)/tracker.json"

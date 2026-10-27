@@ -370,7 +370,9 @@ under whichever account happens to be signed in — see
 
 **Who acts next is a label, not a move.** `audience` becomes an `audience:ALIAS` label on the issue,
 and the issue stays in its home repository for its whole life — one number, one history, one place a
-pull request can link to. So when the next step belongs to another team:
+pull request can link to. An audience the registry has no alias for is cut to fit GitHub's
+50-character label limit and ends in a short hash. Whenever the label is not the audience as written,
+the full name goes into the issue body. So when the next step belongs to another team:
 
 - **A quick hand-back** — they run a check and pass it straight back — is just the audience flip. The
   label and the assignee (`--reviewer`) change on the next mirror run.

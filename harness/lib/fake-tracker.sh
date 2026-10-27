@@ -70,6 +70,13 @@ def issue(number):
 
 out = {}
 links = not os.environ.get("FAKE_TRACKER_NO_LINKS")
+# GitHub refuses a label name over 50 characters, so the fake does too: a mirror that only ever
+# meets short fixture names would never find out it builds longer ones.
+if op in ("create", "update"):
+    for l in req.get("labels", []):
+        if len(l) > 50:
+            sys.stderr.write("fake-tracker: label '%s' is longer than 50 characters\n" % l)
+            sys.exit(1)
 if op == "list":
     out = []
     for i in db["issues"]:
