@@ -515,6 +515,12 @@ handoff release <id> --status done --verified-by "<how you verified LIVE code>"
   stripped; a handle with whitespace, a colon or a quote is refused rather than reshaped, since a
   mangled handle becomes an assignment to somebody who does not exist.
 
+- **Release only what you hold** (ADR 0027). `release` refuses a live lease held by another
+  session, the same lease `claim` refuses — wait for it to expire, or ask the holder. An expired
+  lease, or a doc nobody holds, can be released by anyone. A doc that is already `done` cannot be
+  closed again, so the first closer's `verified_by` stands. `release --status open` on an archived
+  doc **reopens** it: it moves back out of `archive/` and shows in `list` again. An `open` or
+  `done` release drops `blocked_on`, so there is nothing to clear by hand.
 - **The gate is about evidence, not identity** (ADR 0015). Nothing stops you closing work you
   yourself asked to have reviewed: a board has no roles, and the same person in tomorrow's session
   is a different session id, so a rule keyed on that would fire on honest work and miss the rest.

@@ -628,10 +628,12 @@ shell in its siblings' sessions. Reading it needs `python3`; a board still on th
   untrusted); it runs only with `--run-verify` + the install opt-in, and only for a local doc.
 - **Two invariants, ported intact.** Ownership lives only in `.locks/`; durable state only in
   frontmatter — they cannot desync. `INDEX.md` is generated and never hand-edited.
-  If the repo formats markdown (prettier, dprint, a markdown linter), exclude
-  `.agents/handoff/INDEX.md` from it — the generated tables are unaligned, a formatter rewrites them,
-  and the next `claim`/`release` regenerates them unaligned again, so the file churns on every
-  command. Treat it as generator-owned output, not source.
+  If the repo formats markdown (prettier, dprint, a markdown linter), exclude every board doc from
+  it with `.agents/handoff/**/*.md` — `**` reaches `archive/` and section subfolders, which a plain
+  `*.md` misses. The CLI owns their layout: `INDEX.md`'s generated tables are unaligned, so a
+  formatter rewrites them and the next `claim`/`release` regenerates them, churning the file on every
+  command; and a formatter wraps a long `children:` roster onto several lines. The CLI reads a
+  wrapped roster correctly, but the excluded docs stay byte-for-byte what it wrote.
 - **Naming: `<id>-handoff.md`, id always lowercase kebab-case.** Every board doc file ends
   `-handoff.md` and the id is the filename stem; `handoff new`/`import` auto-append the suffix
   (idempotent) and `claim`/`release` accept the short or full id. `norm_id` is the single

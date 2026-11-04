@@ -378,6 +378,13 @@ chk "the sprint tracker is never a pass" "0" "$(fq "calls('list', 'acme/plan')")
 
 LIST_API_BEFORE="$(fq "calls('list', 'acme/acme-api')")"
 LIST_WEB_BEFORE="$(fq "calls('list', 'acme/acme-web')")"
+# A doc homed at another TRACKED alias is out of --repo's scope, not homeless.
+REPO_OUT="$(trh "$TP" mirror --dry-run --repo acme-web)"
+chk "--repo does not call a doc homed at another tracker homeless" "no" \
+  "$(printf '%s' "$REPO_OUT" | grep -q 'home acme-api has no issue tracker' && echo yes || echo no)"
+chk_contains "--repo still names a home that truly has no tracker" "$REPO_OUT" "r-lib-handoff — home acme-lib has no issue tracker"
+LIST_API_BEFORE="$(fq "calls('list', 'acme/acme-api')")"
+LIST_WEB_BEFORE="$(fq "calls('list', 'acme/acme-web')")"
 trh "$TP" mirror --repo acme-web > /dev/null
 chk "--repo limits the run to one tracker" "$LIST_API_BEFORE" "$(fq "calls('list', 'acme/acme-api')")"
 chk "--repo still runs the tracker it names" "yes" "$([ "$(fq "calls('list', 'acme/acme-web')")" -gt "$LIST_WEB_BEFORE" ] && echo yes || echo no)"

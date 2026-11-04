@@ -233,9 +233,19 @@ check_payload_version "$(awk 'NR==1{print $2}' .graph-hooks/.version 2> /dev/nul
 
 # git hook + gitignore
 GH=""
+GIT_HOOKS="$(git rev-parse --git-common-dir 2> /dev/null)/hooks"
 [ -f .husky/post-commit ] && GH=.husky/post-commit
-[ -z "$GH" ] && [ -f .git/hooks/post-commit ] && GH=.git/hooks/post-commit
+[ -z "$GH" ] && [ -f "$GIT_HOOKS/post-commit" ] && GH="$GIT_HOOKS/post-commit"
 if [ -n "$GH" ]; then grep -q 'graph-hooks-managed' "$GH" 2> /dev/null && ok git.post_commit "post-commit installed: $GH" || warn git.post_commit "post-commit exists but no managed marker: $GH"; else warn git.post_commit.missing "no post-commit hook — commit-time refresh won't run"; fi
+# A hook git never runs is worse than a missing one: it reads as installed. With core.hooksPath set,
+# git reads only that directory (husky v9's `.husky/_` runs the hooks in `.husky/`), so a hook left in
+# git's own directory went dark when the path moved — setup-graph-hooks once put it there before
+# setup-project-tooling's `install:dev` had created `.husky/`.
+HP="$(git config core.hooksPath 2> /dev/null || true)"
+case "${HP%/}" in .husky/_) HP=.husky ;; esac
+if [ -n "$GH" ] && [ -n "$HP" ] && [ "$(dirname "$GH")" != "${HP%/}" ]; then
+  warn git.post_commit.unreached "post-commit is in $(dirname "$GH") but core.hooksPath is $HP, so git never runs it — re-run setup-graph-hooks to install it into $HP"
+fi
 # tr -d '\r' first: a CRLF .gitignore stores ".code-review-graph/\r", which no whole-line match
 # equals, so this warned "missing" on repos that excluded it correctly.
 for e in ".code-review-graph/" "graphify-out/"; do tr -d '\r' < .gitignore 2> /dev/null | grep -qxF "$e" && ok gitignore.excludes ".gitignore excludes $e" || warn gitignore.excludes ".gitignore missing $e"; done

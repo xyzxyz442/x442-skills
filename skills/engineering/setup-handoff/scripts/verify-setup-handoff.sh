@@ -1031,7 +1031,16 @@ while IFS= read -r doc; do
   # legitimate planning. The bug is never being told, and having no cheap way to close the gap —
   # `handoff children add --stub` is that way.
   if [ "$dtype" = "orchestrator" ] && [ "$darch" = 0 ]; then
-    kids="$(sed -n 's/^children:[[:space:]]*//p' "$doc" | head -1 | tr -d '[]' | tr ',' ' ')"
+    # The roster may continue onto indented lines — a formatter wraps a long one (Prettier writes
+    # `children:` then an indented `[`, one id per line, `]`) or writes it block-style (`- id`).
+    # Reading only the key's own line saw an empty roster on exactly those docs.
+    kids="$(awk '
+      NR == 1 { next }
+      $0 == "---" { exit }
+      !found && /^children:/ { sub(/^children:/, ""); print; found = 1; next }
+      found && /^[[:space:]]/ { print; next }
+      found { exit }
+    ' "$doc" | sed 's/^[[:space:]]*-[[:space:]]*//' | tr -d '[]' | tr ',\n' '  ')"
     dangling=""
     for k in $kids; do
       [ -n "$k" ] || continue
