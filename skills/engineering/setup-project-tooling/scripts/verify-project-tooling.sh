@@ -104,6 +104,31 @@ check_payload_version() { # installed-version skill-name   (caller reads the sta
 }
 
 is_json() { python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2> /dev/null; }
+# VS Code reads its .vscode/*.json files as JSONC: `//` and `/* */` comments and trailing commas
+# are legal there, and a repo's own extensions.json often carries them. Strict JSON failed those
+# files as invalid. Comments are stripped outside strings only, so a URL's `//` survives.
+is_jsonc() {
+  python3 - "$1" 2> /dev/null << 'PY'
+import json, re, sys
+src = open(sys.argv[1]).read()
+out, i, n = [], 0, len(src)
+while i < n:
+    c = src[i]
+    if c == '"':
+        j = i + 1
+        while j < n and src[j] != '"':
+            j += 2 if src[j] == "\\" else 1
+        out.append(src[i:j + 1]); i = j + 1
+    elif src.startswith("//", i):
+        while i < n and src[i] != "\n": i += 1
+    elif src.startswith("/*", i):
+        end = src.find("*/", i + 2)
+        i = n if end < 0 else end + 2
+    else:
+        out.append(c); i += 1
+json.loads(re.sub(r",(\s*[]}])", r"\1", "".join(out)))
+PY
+}
 
 echo "Repo: $ROOT"
 section "1. Commit conventions (commitlint)"
@@ -218,17 +243,17 @@ else
 fi
 if [ -f .prettierignore ]; then ok prettierignore.present ".prettierignore present"; else warn prettierignore.present ".prettierignore absent"; fi
 if [ -f .vscode/settings.json ]; then
-  if is_json .vscode/settings.json; then ok vscode.settings.valid ".vscode/settings.json present and valid JSON"; else bad vscode.settings.valid ".vscode/settings.json is not valid JSON"; fi
+  if is_jsonc .vscode/settings.json; then ok vscode.settings.valid ".vscode/settings.json present and valid JSON"; else bad vscode.settings.valid ".vscode/settings.json is not valid JSON (comments and trailing commas are allowed)"; fi
 else
   warn vscode.settings.present ".vscode/settings.json absent (editor format-on-save not configured)"
 fi
 if [ -f .vscode/extensions.json ]; then
-  if is_json .vscode/extensions.json; then ok vscode.extensions.valid ".vscode/extensions.json present and valid JSON"; else bad vscode.extensions.valid ".vscode/extensions.json is not valid JSON"; fi
+  if is_jsonc .vscode/extensions.json; then ok vscode.extensions.valid ".vscode/extensions.json present and valid JSON"; else bad vscode.extensions.valid ".vscode/extensions.json is not valid JSON (comments and trailing commas are allowed)"; fi
 else
   warn vscode.extensions.present ".vscode/extensions.json absent (no recommended extensions)"
 fi
 if [ -f .vscode/tasks.json ]; then
-  if is_json .vscode/tasks.json; then ok vscode.tasks.valid ".vscode/tasks.json present and valid JSON"; else bad vscode.tasks.valid ".vscode/tasks.json is not valid JSON"; fi
+  if is_jsonc .vscode/tasks.json; then ok vscode.tasks.valid ".vscode/tasks.json present and valid JSON"; else bad vscode.tasks.valid ".vscode/tasks.json is not valid JSON (comments and trailing commas are allowed)"; fi
 else
   warn vscode.tasks.present ".vscode/tasks.json absent (no workspace-bootstrap task)"
 fi

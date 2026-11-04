@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x442-payload-version: setup-project-tooling 5
+# x442-payload-version: setup-project-tooling 6
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
 #
 # The marker line above is this skill's payload stamp. setup-project-tooling has no single
@@ -56,8 +56,18 @@ command_exists() {
   command -v "$1" > /dev/null 2>&1
 }
 
-# section: node package manager (detect from lockfile)
+# section: node package manager (packageManager field, then lockfile)
 detect_pm() {
+  # The packageManager field (corepack's) names the manager outright, so it wins over lockfiles: a
+  # repo that gitignores its lockfile has none, and a yarn 4 repo then fell through to npm.
+  local declared=""
+  [ -f package.json ] && declared="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"\([a-z]*\)@.*/\1/p' package.json | head -1)"
+  case "$declared" in
+    npm | pnpm | yarn | bun)
+      echo "$declared"
+      return 0
+      ;;
+  esac
   if [ -f pnpm-lock.yaml ]; then
     echo "pnpm"
   elif [ -f yarn.lock ]; then
@@ -114,6 +124,28 @@ hook_body() {
   printf '#!/bin/sh\n\n%s %s "$@"\n' "$SELF" "$1"
 }
 
+adopt_default_hooks() {
+  # A hook in git's own hooks directory stops running the moment core.hooksPath moves to .husky/.
+  # setup-graph-hooks' post-commit landed there whenever that skill ran before this install, and
+  # then went dark without a word. Its hook is moved across (it is written to run from either
+  # place); any other hook is named, never touched. Nothing to do once a hooksPath is already set:
+  # git was not reading its own directory before this install either.
+  [ -z "$(git config core.hooksPath 2> /dev/null || true)" ] || return 0
+  local dir hook name
+  dir="$(git rev-parse --git-common-dir)/hooks"
+  for hook in "$dir"/*; do
+    [ -f "$hook" ] && [ -x "$hook" ] || continue
+    name="$(basename "$hook")"
+    case "$name" in *.sample) continue ;; esac
+    if [ ! -e ".husky/$name" ] && grep -q 'graph-hooks-managed' "$hook" 2> /dev/null; then
+      mv "$hook" ".husky/$name"
+      echo "Moved $hook to .husky/$name so it keeps running"
+    elif [ ! -e ".husky/$name" ]; then
+      echo "WARNING: $hook will stop running now that core.hooksPath is .husky — move it to .husky/$name to keep it." >&2
+    fi
+  done
+}
+
 install_hooks() {
   [ -f package.json ] || fail "no package.json in $(pwd); run this from the repo root."
 
@@ -133,10 +165,11 @@ install_hooks() {
   # `husky` the package is deliberately no longer invoked: calling it would reset core.hooksPath
   # back to .husky/_ and undo this on the next install.
   git rev-parse --git-dir > /dev/null 2>&1 || fail "not a git repository; cannot set core.hooksPath."
+  mkdir -p .husky
+  adopt_default_hooks
   git config core.hooksPath .husky
   echo "Set core.hooksPath to .husky"
 
-  mkdir -p .husky
   local hook
   for hook in $HOOKS; do
     hook_body "$hook" > ".husky/$hook"

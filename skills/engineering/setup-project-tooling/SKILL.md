@@ -49,8 +49,10 @@ dependencies below are for the hooks the skill wires, the bundled bootstrap, and
 - **Node — hard, in every category.** husky, commitlint, lint-staged, and release-it are npm
   packages declared in `package.json`, so a Python or SQL repo needs Node too. The skill creates a
   minimal `package.json` for a greenfield repo; it does not install Node.
-- **Package manager — detected from the lockfile.** `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn,
-  `bun.lockb` → bun, anything else → npm. `initialize.sh` provisions pnpm and yarn through
+- **Package manager — `packageManager`, then the lockfile.** A `packageManager` field in
+  `package.json` (`"yarn@4.5.0"`) names it outright and wins, so a repo that gitignores its lockfile
+  is not mistaken for npm. Otherwise `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `bun.lockb` → bun,
+  anything else → npm. `initialize.sh` provisions pnpm and yarn through
   `corepack`, and stops with an "install Node.js and retry" message when corepack is absent. npm
   ships with Node; bun must already be installed.
 - **Runtime:** `bash` and `git`. `scripts/husky.sh install` sets `core.hooksPath` and refuses to
@@ -71,12 +73,12 @@ dependencies below are for the hooks the skill wires, the bundled bootstrap, and
 Read the repo first. **Detect** the package manager and language from filesystem signals;
 **recommend** the category and let the user pick.
 
-| Dimension       | Detect from                                                                                                                | Support          |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| Package manager | `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun; no lockfile → default **npm**           | —                |
-| Language        | `tsconfig.json`/`*.ts`→**Node/TypeScript**; `pyproject.toml`/`*.py`→**Python**; `*.sql` alongside Python→**Python-stream** | fully supported  |
-| Language        | `*.csproj`/`*.sln`→C#; `Chart.yaml`→Helm; `go.mod`→Go; `Cargo.toml`→Rust; anything else                                    | common base only |
-| Framework       | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React                                                              | Node/TS touches  |
+| Dimension       | Detect from                                                                                                                                     | Support          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Package manager | `packageManager` field first; then `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun; neither → default **npm** | —                |
+| Language        | `tsconfig.json`/`*.ts`→**Node/TypeScript**; `pyproject.toml`/`*.py`→**Python**; `*.sql` alongside Python→**Python-stream**                      | fully supported  |
+| Language        | `*.csproj`/`*.sln`→C#; `Chart.yaml`→Helm; `go.mod`→Go; `Cargo.toml`→Rust; anything else                                                         | common base only |
+| Framework       | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React                                                                                   | Node/TS touches  |
 
 - **Category → always confirm.** Present the detected category as a recommendation and let the user
   choose. In Claude Code, use `AskUserQuestion` with options **frontend / backend / library / other**,
@@ -371,7 +373,7 @@ executable (`chmod +x initialize.sh`). It is committed (not gitignored) and idem
 missing dependencies and repairs Husky hooks so a freshly cloned or freshly opened workspace is ready
 to commit:
 
-- **Package-manager aware** — detects npm/pnpm/yarn/bun from the lockfile and runs `<pm> install`
+- **Package-manager aware** — detects npm/pnpm/yarn/bun from `packageManager`, else the lockfile, and runs `<pm> install`
   (provisioning yarn/pnpm via corepack when needed).
 - **Hook repair = re-run the hook-install command** — resolves the command name
   (`install:dev` → `prepare` → whichever script runs the installer), restores the executable bit
@@ -384,6 +386,10 @@ to commit:
   is `scripts/py-tool.sh` existing, **not** the presence of `*.py` files: a base-only repo can hold
   Python (test graders, a one-off script) without ever wiring the Python module, and bootstrapping
   it there would fail on the missing resolver and take the whole folder-open task down with it.
+- **uv project environment** — a repo with `pyproject.toml` **and** `uv.lock` also gets its own
+  dependencies: `full` runs `uv sync`, and `folder-open` runs it when `.venv` is missing. This is
+  separate from the lint tools above and keyed on `uv.lock`, because a `pyproject.toml` alone may be
+  poetry, hatch or pip. Without uv on `PATH` it says so and skips; it never installs uv.
 
 The `.vscode/tasks.json` task **Bootstrap Workspace** runs `bash ./initialize.sh folder-open --force`
 on `folderOpen`, so opening the workspace repairs only what is missing. `full` mode

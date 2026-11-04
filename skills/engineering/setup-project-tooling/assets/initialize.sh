@@ -3,15 +3,16 @@
 # Installs missing dependencies and repairs Husky hooks so a freshly cloned or freshly
 # opened workspace is ready to commit. Idempotent: it only acts on what is missing or broken.
 #
-# Package-manager aware (npm/pnpm/yarn/bun, detected from the lockfile). Python tooling is
-# resolved by scripts/py-tool.sh (uvx -> uv -> pipx -> .venv): with uv or pipx present this
-# just pre-fetches the pinned tools, and without either it creates the .venv fallback and
-# installs the versions py-tool.sh pins. Hooks are repaired by re-running the package.json
+# Package-manager aware (npm/pnpm/yarn/bun, from package.json's packageManager field, else the
+# lockfile). Python tooling is resolved by scripts/py-tool.sh (uvx -> uv -> pipx -> .venv): with uv
+# or pipx present this just pre-fetches the pinned tools, and without either it creates the .venv
+# fallback and installs the versions py-tool.sh pins. A uv project (pyproject.toml + uv.lock) also
+# gets its own environment built with `uv sync`, separately from the lint tools. Hooks are repaired by re-running the package.json
 # hook-install command (`install:dev` by default), which delegates to scripts/husky.sh and
 # regenerates the gitignored .husky/ hooks.
 #
 # Usage: ./initialize.sh [full|folder-open] [-f|--force]
-#   full         Full bootstrap (default): deps + hooks (+ Python tool cache when applicable)
+#   full         Full bootstrap (default): deps + hooks (+ Python tools and uv env when applicable)
 #   folder-open  Repair only what is missing/broken (used by the VS Code folderOpen task)
 #   -f, --force  Proceed without prompting
 #   -h, --help   Show usage information
@@ -72,8 +73,19 @@ parse_args() {
   done
 }
 
-# section: node package manager (detect from lockfile)
+# section: node package manager (packageManager field, then lockfile)
 detect_pm() {
+  # The packageManager field (corepack's) names the manager outright, so it wins over lockfiles: a
+  # repo that gitignores its lockfile has none, and a yarn 4 repo then fell through to npm, whose
+  # install wrote a package-lock.json beside it.
+  local declared=""
+  [ -f package.json ] && declared="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"\([a-z]*\)@.*/\1/p' package.json | head -1)"
+  case "$declared" in
+    npm | pnpm | yarn | bun)
+      echo "$declared"
+      return 0
+      ;;
+  esac
   if [ -f pnpm-lock.yaml ]; then
     echo "pnpm"
   elif [ -f yarn.lock ]; then
@@ -247,6 +259,25 @@ bootstrap_python() {
   "$VENV_DIR/bin/pip" install $specs
 }
 
+# section: python project environment (uv)
+# The lint tools above are the skill's; the project's own dependencies are the repo's. A uv project
+# declares them in uv.lock, and without this nothing built the .venv that pytest and the app's
+# imports need — users had to know to run `uv sync` by hand. Keyed on uv.lock, not pyproject.toml
+# alone, which may equally be poetry, hatch or pip.
+is_uv_project() {
+  [ -f pyproject.toml ] && [ -f uv.lock ]
+}
+
+sync_python_env() {
+  if ! command_exists uv; then
+    echo "uv.lock present but uv is not on PATH; skipping the project environment."
+    echo "  Install uv, then run: uv sync   (https://docs.astral.sh/uv/getting-started/installation/)"
+    return 0
+  fi
+  echo "Syncing the project environment with uv sync..."
+  uv sync
+}
+
 # section: execution
 run_full_bootstrap() {
   if [ -f package.json ]; then
@@ -263,6 +294,9 @@ run_full_bootstrap() {
     else
       echo "Python files present but $PY_TOOL is absent; this repo has the common base only. Skipping Python bootstrap."
     fi
+  fi
+  if is_uv_project; then
+    sync_python_env
   fi
 
   echo "Project bootstrap completed successfully."
@@ -304,6 +338,12 @@ run_folder_open_bootstrap() {
     echo "Python tooling is not runnable yet; bootstrapping"
     bootstrap_python
     acted=true
+  fi
+  if is_uv_project && [ ! -d "$VENV_DIR" ]; then
+    echo "$VENV_DIR is missing; will sync the uv project environment"
+    sync_python_env
+    # Without uv nothing was built, and saying "completed" would be false.
+    if command_exists uv; then acted=true; fi
   fi
 
   if [ "$acted" = true ]; then
