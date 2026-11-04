@@ -4135,5 +4135,11 @@ chk_contains "--verbose still works" "$(hb "$UF" list --verbose)" "STATUS"
 chk_contains "a typo'd flag AFTER a valid one is refused too" \
   "$(hb "$UF" list --verbose --bogusflag)" "unknown flag: --bogusflag"
 
+# The release and lease cases live in their own file, sourced here so they share this suite's
+# frozen payload, helpers and counters. This file sits at the size where Prettier's shell parser
+# runs out of WASM memory ("memory access out of bounds"), so new sections go there, not here.
+# shellcheck disable=SC1091
+. "$HERE/release.selftest.sh"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

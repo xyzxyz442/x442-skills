@@ -554,9 +554,27 @@ no_such() { # id -> never returns; the shared unresolvable-id error for claim/re
 # found", i.e. the two requirements (valid YAML / runnable command) were mutually exclusive.
 # The `t` branches after a successful double-quote strip so `"'x'"` loses one pair, not both.
 # Unquoted values pass through untouched, so docs written before this keep working.
+#
+# A value may CONTINUE onto indented lines after its key, because that is how a YAML formatter
+# wraps one. Prettier on a pre-commit hook rewrites a long `children: [a, b, c]` as `children:`
+# followed by an indented `[`, one id per line, and `]`. Reading only the key's own line saw an
+# empty roster, so the bundle silently read `0/0 done`. Continuation lines are joined with a space
+# (YAML's own folding for a wrapped flow value), and block-style `- item` lines become the
+# equivalent `[item, item]` flow list, so every consumer still sees the one-line shape it parses.
 meta() { # path key -> value from YAML frontmatter, minus one surrounding quote pair
-  sed -n '2,/^---$/p' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1 \
-    | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
+  awk -v k="$2:" '
+    NR == 1 { next }
+    $0 == "---" { exit }
+    !found && index($0, k) == 1 { v = substr($0, length(k) + 1); sub(/^[[:space:]]+/, "", v); found = 1; next }
+    found && /^[[:space:]]/ {
+      l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l)
+      if (l ~ /^-([[:space:]]|$)/) { sub(/^-[[:space:]]*/, "", l); items = items (n++ ? ", " : "") l; next }
+      if (l != "") v = (v == "" ? l : v " " l)
+      next
+    }
+    found { exit }
+    END { if (found) { if (n) v = "[" items "]"; print v } }
+  ' "$1" | sed -e 's/^"\(.*\)"$/\1/;t' -e "s/^'\(.*\)'\$/\1/"
 }
 
 # Extract one "## Heading" section's body from a doc, heading excluded. Used to lift Context /
@@ -603,16 +621,22 @@ result_block() { # path -> lines between the handoff:result markers
 # `splice_result` already applies to the Result body. getline reads raw bytes and interprets
 # nothing. `key` is never attacker-controlled (always a fixed literal from this file), so it can
 # stay on `-v`.
+#
+# The key's indented continuation lines go with it (see meta()): replacing only the key's own line
+# of a formatter-wrapped `children:` would leave the old `[`, ids and `]` dangling under the new
+# value — still parsed as part of it.
 set_field() {
   local f="$1" key="$2" val="$3" t vf rc=0
   t="$(mktemp)" || die "mktemp failed"
   vf="$(mktemp)" || die "mktemp failed"
   printf '%s' "$val" > "$vf"
-  awk -v k="$key" -v vf="$vf" '
+  awk -v k="$key" -v vf="$vf" -v drop="${4:-0}" '
     BEGIN { infm = 0; seen = 0; v = ""; getline v < vf; close(vf) }
     NR == 1 && $0 == "---" { infm = 1; print; next }
-    infm && $0 == "---" { if (!seen) print k": "v; infm = 0; print; next }
-    infm && $0 ~ "^"k":" { print k": "v; seen = 1; next }
+    infm && skip && /^[[:space:]]/ { next }
+    { skip = 0 }
+    infm && $0 == "---" { if (!seen && !drop) print k": "v; infm = 0; print; next }
+    infm && $0 ~ "^"k":" { if (!drop) print k": "v; seen = 1; skip = 1; next }
     { print }
   ' "$f" > "$t" && cat "$t" > "$f" || rc=1
   # Cleanup runs on BOTH paths. It used to sit after a `|| die`, so a genuine write failure
@@ -621,6 +645,9 @@ set_field() {
   rm -f "$t" "$vf"
   [ "$rc" -eq 0 ] || die "set_field: could not write $key into $f"
 }
+
+# Remove a frontmatter key (and its continuation lines) outright. A no-op when it is absent.
+drop_field() { set_field "$1" "$2" "" 1; }
 
 log_activity() { # path message -> append to the doc's Activity log
   local f="$1" msg="$2"
@@ -836,10 +863,10 @@ dep_path() { # entry active|archive -> the path that entry names, whether or not
 # them would either force free text into a machine-checkable field or discard the cases the board
 # genuinely cannot represent.
 #
-# Reads flow style (`[a, b]`) and block style (`- a`) alike, because meta() only ever sees the
-# key's own line and a block list would otherwise read as empty — the same trap repos_of documents.
+# Reads flow style (`[a, b]`) and block style (`- a`) alike: meta() folds a block list into the
+# equivalent flow list, so the one split below covers both.
 depends_of() { # path -> newline-separated entries, bare or group/ (canonicalized, ADR 0021)
-  local f="$1" inline rest
+  local f="$1" inline
   inline="$(meta "$f" depends_on)"
   # The brackets are QUOTED. `${var#[}` is an unterminated bracket EXPRESSION to bash, not a literal
   # `[`, so it silently strips nothing and every declared dependency reads as empty.
@@ -851,12 +878,6 @@ depends_of() { # path -> newline-separated entries, bare or group/ (canonicalize
   # none. Silent, and in exactly the wrong direction: an unchecked dependency looks like no
   # dependency at all.
   printf '%s\n' "$inline" | tr ',' '\n' | while IFS= read -r one; do
-    one="$(printf '%s' "$one" | tr -d '[:space:]')"
-    # norm_id prints no newline; without the echo every id after the first is glued onto it.
-    [ -n "$one" ] && dep_read "$one" 2> /dev/null && echo
-  done
-  rest="$(sed -n '/^depends_on:/,/^[a-z_]*:/p' "$f" | sed -n 's/^[[:space:]]*-[[:space:]]*//p')"
-  printf '%s\n' "$rest" | while IFS= read -r one; do
     one="$(printf '%s' "$one" | tr -d '[:space:]')"
     # norm_id prints no newline; without the echo every id after the first is glued onto it.
     [ -n "$one" ] && dep_read "$one" 2> /dev/null && echo
@@ -1704,6 +1725,30 @@ archive_doc() { # active-doc-path id
   err="$(mv "$f" "$dest" 2>&1)" && return 0
   printf 'archive failed: %s\n' "$err" >&2
   return 1
+}
+
+# The inverse of archive_doc, for a release that reopens a closed doc. `release --status open` on an
+# archived doc used to set the status and leave the file in archive/, which `list` never reads — the
+# reopened work vanished from every board it was meant to come back to. Prints the doc's path
+# afterwards (moved or not); fails, leaving the doc where it was, when the live slot is taken.
+reopen_if_archived() { # doc-path id -> the doc's path after the move
+  local f="$1" id="$2" dest err
+  [ "$f" = "$(arch_file "$id")" ] || {
+    printf '%s' "$f"
+    return 0
+  }
+  dest="$(doc_file "$id")"
+  if [ -e "$dest" ]; then
+    echo "handoff: cannot reopen $id — $dest already exists beside its archived copy. Resolve the duplicate first." >&2
+    return 1
+  fi
+  if ! git -C "$DIR" mv "$f" "$dest" 2> /dev/null && ! err="$(mv "$f" "$dest" 2>&1)"; then
+    echo "handoff: could not move $id back out of archive/: $err" >&2
+    return 1
+  fi
+  log_activity "$dest" "reopened from archive by $(whoami_id)."
+  echo "↩️  $id reopened — moved back out of archive/." >&2
+  printf '%s' "$dest"
 }
 
 # What every `done` path prints when archive_doc could not move the doc. The release itself already
@@ -3467,6 +3512,20 @@ warn_open_dependencies() { # doc-path id
   echo "    Claiming anyway — depends_on is advisory. If you are working around one, say so in the doc."
 }
 
+# An expired lease still has its directory on disk, so claim's atomic mkdir failed on it and the
+# documented takeover was unreachable until something ran `reap --force`. Cleared here — under a
+# mutex, re-reading the lease inside it: two claimers that both read `expired` must not both clear,
+# or the slower one deletes the faster one's fresh, LIVE lease. The mutex is a dot-dir, which every
+# `$LOCKS/*/` walk skips, and the claim's own mkdir stays the one atomic arbiter of who wins.
+clear_expired_lock() { # id key
+  mkdir "$LOCKS/.takeover-$2" 2> /dev/null \
+    || die "$1 is being taken over by another claim right now — re-run 'handoff list'"
+  local again
+  again="$(lock_state "$2")"
+  [ "${again%%|*}" = "expired" ] && clear_lock "$2"
+  rmdir "$LOCKS/.takeover-$2"
+}
+
 cmd_claim() {
   local id="${1:?usage: handoff claim <id> [note]}"
   shift || true
@@ -3513,6 +3572,7 @@ cmd_claim() {
   # .locks/ itself is gitignored and may not exist on a fresh install — create the
   # parent (non-atomic, fine) so the per-id mkdir (atomic, the real lock) can run.
   mkdir -p "$LOCKS"
+  [ "$kind" = "expired" ] && clear_expired_lock "$id" "$key"
   if ! mkdir "$LOCKS/$key" 2> /dev/null; then
     die "$id was just claimed by someone else — re-run 'handoff list'"
   fi
@@ -3560,6 +3620,9 @@ cmd_claim() {
       || die "could not record the claim on the board's remote, so nothing was claimed. Re-run 'handoff list' and retry."
     attempt=$((attempt + 1))
     mkdir -p "$LOCKS"
+    # The rollback restores whatever the remote holds, which can be the very expired lease this
+    # claim set out to take over.
+    [ "$kind" = "expired" ] && clear_expired_lock "$id" "$key"
     mkdir "$LOCKS/$key" 2> /dev/null || die "$id was just claimed by someone else — re-run 'handoff list'"
   done
 
@@ -3690,7 +3753,7 @@ if isinstance(v, str) and v:
 # second board's shell inside this one's process for a read `list` never needed to make. A glob
 # across all three shapes costs nothing B's own CLI would not already pay, and needs no shell at all.
 external_ref_status() { # host/owner/repo id -> status word ("not on that board" when absent), or
-                         # nothing when the reference cannot be trusted (unmapped or mismatched)
+  # nothing when the reference cannot be trusted (unmapped or mismatched)
   local key="$1" want="$2" path p st
   # annotate_blocked_on (the only caller) runs under `set -f` while it splits blocked_on on ";", and
   # that shell option survives into this command-substitution subshell — globbing MUST be back on
@@ -3783,14 +3846,20 @@ board_generic_adapter() { # -> adapter path on stdout, or empty with non-zero
 board_visibility() { # board-dir -> public|private|unknown, printed on stdout
   local dir="$1" origin provider adapter="" path vis
   origin="$(board_origin_norm "$dir")"
-  [ -n "$origin" ] || { printf 'unknown'; return 0; }
+  [ -n "$origin" ] || {
+    printf 'unknown'
+    return 0
+  }
   provider="$(repo_provider_of "$origin")"
   if [ "$provider" != github ]; then
     printf 'unknown'
     return 0
   fi
   adapter="$(board_generic_adapter)" || adapter=""
-  [ -n "$adapter" ] || { printf 'unknown'; return 0; }
+  [ -n "$adapter" ] || {
+    printf 'unknown'
+    return 0
+  }
   path="$(repo_path_of "$origin")"
   vis="$(printf '{"repo": "%s"}' "$path" | bash "$adapter" visibility 2> /dev/null \
     | python3 -c 'import json, sys
@@ -5118,8 +5187,9 @@ cmd_mirror() {
   MIRROR_MODE="$(tracker_mode)"
   [ "$MIRROR_MODE" != none ] || die "this board declares no tracker (no trackers block in $DIR/handoff.json; a single-repository board may use external) — nothing to mirror into."
   tracker_rules_reject_public
-  local aliases a known
+  local aliases all_aliases a known
   aliases="$(tracker_aliases)"
+  all_aliases="$aliases"
   if [ "$MIRROR_MODE" = trackers ]; then
     [ "$(board_schema)" -ge 4 ] \
       || die "this board is schema $(board_schema); routing by home needs schema 4 — run './handoff migrate' first (ADR 0017)."
@@ -5134,7 +5204,9 @@ cmd_mirror() {
       echo "This board declares no issue trackers — nothing to mirror."
       return 0
     fi
-    mirror_report_homeless "$aliases"
+    # Judged against EVERY tracker, not the --repo subset: a doc homed at another tracked alias is
+    # out of this run's scope, not homeless, and "has no issue tracker" was a false reason for it.
+    mirror_report_homeless "$all_aliases"
   else
     [ -z "$only" ] || die "--repo needs a board with per-repository trackers (ADR 0017)."
   fi
@@ -5680,16 +5752,25 @@ cmd_release() {
         force_secret="$2"
         shift 2
         ;;
+      # These three used `${2:?}`, which aborts the whole CLI with bash's own "parameter null or not
+      # set" and a line number — the only answer `--blocked-on ""` ever got, read by its user as the
+      # supported way to clear the field. An empty value is now refused with a reason instead.
       --status)
-        status="${2:?}"
+        require_value --status "$#" "${2:-}"
+        [ -n "$2" ] || die "--status needs a value (got an empty string) — one of open|blocked|done"
+        status="$2"
         shift 2
         ;;
       --verified-by)
-        verified_by="${2:?}"
+        require_value --verified-by "$#" "${2:-}"
+        [ -n "$2" ] || die "--verified-by needs a value (got an empty string) — say how you verified against live code"
+        verified_by="$2"
         shift 2
         ;;
       --blocked-on)
-        blocked_on="${2:?}"
+        require_value --blocked-on "$#" "${2:-}"
+        [ -n "$2" ] || die "--blocked-on needs a value (got an empty string). There is nothing to clear by hand: an open or done release drops blocked_on itself."
+        blocked_on="$2"
         shift 2
         ;;
       --ruled-out)
@@ -5745,6 +5826,28 @@ cmd_release() {
   local me
   me="$(whoami_id)"
 
+  # ADR 0027 — `release` honours the same lease `claim` does. Both gates run before anything below
+  # writes. Closing a doc that is already done would overwrite the first closer's verified_by; the
+  # earlier closure then survived only as a line in Activity.
+  if [ "$status" = "done" ] && [ "$(meta "$f" status)" = "done" ]; then
+    die "$id is already done (verified $(meta "$f" verified_at)) — there is nothing to close. To reopen it, release --status open."
+  fi
+  # A non-holder may not release a LIVE lease; it may release where `claim` could take over — an
+  # expired lease, or none. A lease that recorded no session id (advisory mode) proves nobody, so it
+  # cannot refuse anybody either: refusing there would lock the holder out of their own lease, which
+  # is what the advisory-mode decision exists to prevent. Bundles and standalone docs carry no lease.
+  if ! is_orchestrator "$f" && ! is_standalone "$f"; then
+    local lkey lkind lowner lexp lsess
+    lkey="$(lock_key "$id")"
+    IFS='|' read -r lkind lowner lexp <<< "$(lock_state "$lkey")"
+    if [ "$lkind" = "held" ]; then
+      lsess="$(sed -n 's/^session=//p' "$LOCKS/$lkey/owner" 2> /dev/null)"
+      if [ -n "$lsess" ] && [ "$lsess" != "$(session_id)" ]; then
+        die "$id is CLAIMED by $lowner until $(human "$lexp") — only its holder can release it. Wait for the lease to expire, or ask $lowner.$(advisory_hint)"
+      fi
+    fi
+  fi
+
   # The write-path scanner (ADR 0005), before ANY branch below writes a field, archives a doc, or
   # touches a lease. `release` is the command that most often carries pasted output — an evidence
   # line is frequently a copied terminal session, and terminal sessions are where credentials
@@ -5784,6 +5887,7 @@ cmd_release() {
     pout="${prog#*|*|}"
     case "$status" in
       open)
+        f="$(reopen_if_archived "$f" "$id")" || exit 1
         set_field "$f" status open
         set_field "$f" updated "$(today)"
         log_activity "$f" "updated (orchestrator, $pdone/$ptotal children done) by $me.${note}"
@@ -5814,6 +5918,7 @@ cmd_release() {
     # just retires it (archive) with no --verified-by. Only open|done apply.
     case "$status" in
       open)
+        f="$(reopen_if_archived "$f" "$id")" || exit 1
         set_field "$f" status open
         set_field "$f" updated "$(today)"
         log_activity "$f" "updated (standalone) by $me.${note}"
@@ -5971,9 +6076,13 @@ cmd_release() {
   # Last, after every check that can still refuse this release, so a refused release leaves the
   # section exactly as it was. Before `done` archives the doc, so the line travels with it.
   [ -n "$ruled_out" ] && append_ruled_out "$f" "$ruled_out"
+  [ "$status" = "done" ] || { f="$(reopen_if_archived "$f" "$id")" || exit 1; }
 
   set_field "$f" status "$status"
   set_field "$f" updated "$(today)"
+  # A doc that is no longer blocked is no longer blocked ON anything. Left in place, a done doc kept
+  # claiming its blocker in every bundle's children table.
+  [ "$status" = "blocked" ] || drop_field "$f" blocked_on
   if [ "$status" = "done" ]; then
     set_field "$f" verified_at "$(today)"
     # Persisted as a FIELD. It used to exist only as prose inside the activity log, which is why
