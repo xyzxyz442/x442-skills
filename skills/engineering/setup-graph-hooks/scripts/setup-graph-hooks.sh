@@ -142,14 +142,31 @@ install_hook() {
   chmod +x "$dest"
   echo "  + $dest"
 }
+# Where git will actually look. A configured core.hooksPath wins — husky v9's `.husky/_` runs the
+# user hooks in `.husky/`. Unset, a repo is still husky-shaped when setup-project-tooling has wired
+# it (`scripts/husky.sh`) but `install:dev` has not run yet: there is no `.husky/` and no `husky`
+# dependency (that layout no longer uses the package), and a hook put in git's own directory would
+# go dark the moment `install:dev` points core.hooksPath at `.husky/`. Git's own directory comes
+# from rev-parse, because in a linked worktree `.git` is a file, not a directory.
+post_commit_dir() {
+  local hp
+  hp="$(git config core.hooksPath 2> /dev/null || true)"
+  case "${hp%/}" in
+    .husky | .husky/_) echo .husky ;;
+    ?*) echo "${hp%/}" ;;
+    *)
+      if [ -d .husky ] || [ -f scripts/husky.sh ] || { [ -f package.json ] && grep -q '"husky"' package.json 2> /dev/null; }; then
+        echo .husky
+      else
+        echo "$(git rev-parse --git-common-dir)/hooks"
+      fi
+      ;;
+  esac
+}
 if [ -f "$HERE/post-commit" ]; then
-  if [ -d .husky ] || { [ -f package.json ] && grep -q '"husky"' package.json 2> /dev/null; }; then
-    mkdir -p .husky
-    install_hook .husky/post-commit
-  else
-    mkdir -p .git/hooks
-    install_hook .git/hooks/post-commit
-  fi
+  HOOKS_DIR="$(post_commit_dir)"
+  mkdir -p "$HOOKS_DIR"
+  install_hook "$HOOKS_DIR/post-commit"
 else
   echo "  ! post-commit missing next to installer — skipping git hook"
 fi
