@@ -19,7 +19,8 @@ otherwise be graded against x442-skills. See grade_common.isolated_git_target.
 Usage:
     python3 grade.py <produced-project-dir> [eval_id] [--out grading.json]
 
-`eval_id` is one of the ids in evals/evals.json (scaffolded | fresh | legacy-commitizen). With no eval_id, only the
+`eval_id` is one of the ids in evals/evals.json (scaffolded | unity-scaffolded | fresh |
+legacy-commitizen). With no eval_id, only the
 verifier-wrap assertion runs. Exits 0 iff nothing failed.
 """
 
@@ -77,6 +78,27 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         exps.append(gc.finding(findings, "payload.version", "pass"))
         # release-it is optional per profile and this fixture deliberately omits it; everything
         # else advisory must be silent.
+        exps.append(gc.no_findings_at(findings, "warn", ignore={"releaseit.present"}))
+    elif eval_id == "unity-scaffolded":
+        # Post-state: the draft Unity module applied by hand. The base checks hold as for
+        # `scaffolded`, and every section-5b check passes. LFS is declined (the default), so no
+        # unity.lfs.* finding may appear at all.
+        exps.append(gc.git_diff_empty(target))
+        findings = gc.verify_findings(VERIFY, target)
+        exps.append(gc.finding(findings, "gitattributes.eol_lf", "pass"))
+        exps.append(gc.finding(findings, "gitignore.husky", "pass"))
+        for fid in (
+            "unity.detected",
+            "unity.ignore.Library",
+            "unity.ignore.UserSettings",
+            "unity.meta_tracked",
+            "unity.scripts_tracked",
+            "unity.yaml_merge",
+            "unity.eol_lf",
+            "unity.binary_not_text",
+            "unity.manifest",
+        ):
+            exps.append(gc.finding(findings, fid, "pass"))
         exps.append(gc.no_findings_at(findings, "warn", ignore={"releaseit.present"}))
     elif eval_id == "fresh":
         # Pre-state: the post-scaffold markers must appear. Both fail on the raw fixture by design.

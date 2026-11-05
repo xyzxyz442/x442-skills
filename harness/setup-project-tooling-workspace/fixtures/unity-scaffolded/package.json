@@ -1,0 +1,20 @@
+{
+  "name": "unity-tooling-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "install:dev": "npm install && scripts/husky.sh install",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write --list-different .",
+    "lint-staged": "lint-staged"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@commitlint/types": "^21.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.8.4",
+    "prettier-plugin-sh": "^0.18.1"
+  }
+}

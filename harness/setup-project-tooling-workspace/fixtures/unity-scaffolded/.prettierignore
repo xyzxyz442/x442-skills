@@ -1,0 +1,60 @@
+node_modules
+dist
+coverage
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.code-review-graphignore
+
+# Unity-generated folders (also gitignored; named here as the same safety net as above)
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/ProjectSettings/
+
+# Unity serialized YAML — the Editor owns the format (custom tags, trailing spaces)
+*.anim
+*.asset
+*.brush
+*.controller
+*.flare
+*.fontsettings
+*.giparams
+*.guiskin
+*.lighting
+*.mask
+*.mat
+*.meta
+*.mixer
+*.overrideController
+*.physicMaterial
+*.physicsMaterial2D
+*.playable
+*.prefab
+*.preset
+*.renderTexture
+*.scenetemplate
+*.shadervariants
+*.signal
+*.spriteatlas
+*.spriteatlasv2
+*.terrainlayer
+*.unity
+
+# Unity-generated JSON — reformatting churns every time the Editor rewrites it
+*.inputactions
+*.shadergraph
+*.shadersubgraph
+Packages/packages-lock.json
+
+# Third-party code
+Assets/Plugins/
+
+# The upstream Unity .gitattributes, kept verbatim so a re-sync is a plain diff. Its column
+# alignment is not shell, but the base .prettierrc loads prettier-plugin-sh, which claims the file
+# and collapses the columns, so `prettier --check .` fails on it.
+.gitattributes

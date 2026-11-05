@@ -1,0 +1,29 @@
+{
+  "chat.agentFilesLocations": {
+    ".": true
+  },
+  "compareFolders.respectGitIgnore": true,
+  "editor.formatOnSave": true,
+  "editor.inlineSuggest.enabled": true,
+  "editor.suggestSelection": "first",
+  "files.eol": "\n",
+  "sonarlint.disableTelemetry": true,
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  },
+  "[json][jsonc][yaml][markdown][css]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "files.associations": {
+    "*.uss": "css",
+    "*.tss": "css"
+  },
+  "files.exclude": {
+    "**/*.meta": true,
+    "Library/": true,
+    "Logs/": true,
+    "Obj/": true,
+    "Temp/": true,
+    "UserSettings/": true
+  }
+}
