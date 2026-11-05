@@ -249,6 +249,19 @@ fi
 # tr -d '\r' first: a CRLF .gitignore stores ".code-review-graph/\r", which no whole-line match
 # equals, so this warned "missing" on repos that excluded it correctly.
 for e in ".code-review-graph/" "graphify-out/"; do tr -d '\r' < .gitignore 2> /dev/null | grep -qxF "$e" && ok gitignore.excludes ".gitignore excludes $e" || warn gitignore.excludes ".gitignore missing $e"; done
+# Unity: before the first commit code-review-graph walks the whole tree, Library/ included, so the
+# graph ignore files must carry the Unity block (scripts/graphignore-unity). Any spelling that
+# names Library/ counts; a hand-written rule is as good as the installer's.
+if [ -f ProjectSettings/ProjectVersion.txt ] && [ -d Assets ]; then
+  for ig in .code-review-graphignore .graphifyignore; do
+    [ -f "$ig" ] || continue
+    if tr -d '\r' < "$ig" | grep -qxE '/?Library/?(\*\*)?'; then
+      ok graphignore.unity "$ig excludes Unity's generated folders"
+    else
+      warn graphignore.unity "$ig does not exclude Library/ on a Unity project — the graph indexes thousands of package .cs files before the first commit; re-run setup-graph-hooks"
+    fi
+  done
+fi
 
 section "2. Wired tools + config validity"
 WIRED=""

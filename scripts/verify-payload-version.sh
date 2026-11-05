@@ -41,7 +41,7 @@ cd "$ROOT" || exit 2
 #
 # Format: <skill dir> <payload path>...   (paths are relative to the skill dir)
 PAYLOADS="
-skills/engineering/setup-graph-hooks|scripts/graph-hooks scripts/setup-embeddings.sh scripts/post-commit scripts/graphignore assets
+skills/engineering/setup-graph-hooks|scripts/graph-hooks scripts/setup-embeddings.sh scripts/post-commit scripts/graphignore scripts/graphignore-unity assets
 skills/engineering/setup-handoff|scripts/payload assets
 skills/engineering/setup-project-tooling|assets
 skills/engineering/setup-secret-guard|scripts/payload assets

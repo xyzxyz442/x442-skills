@@ -1,0 +1,28 @@
+# graph-hooks: unity — Unity's generated folders and project files. Appended by setup-graph-hooks
+# when the repo is a Unity project (ProjectSettings/ProjectVersion.txt plus Assets/).
+#
+# A committed Unity repo with a Unity .gitignore needs none of this: code-review-graph reads only
+# `git ls-files`, and graphify merges .gitignore. It matters before the first commit, when
+# code-review-graph finds nothing tracked and walks the whole tree (Library/PackageCache holds
+# thousands of package .cs files), and on a repo whose .gitignore lacks the Unity rules.
+#
+# Anchored, so Assets/Build/ and Assets/Plugins/Logs/ stay indexed. Spelled out per case rather than
+# as `/[Ll]ibrary/`: code-review-graph compares directory patterns segment by segment as literal
+# strings, so a bracket class never matches there.
+/Library/
+/library/
+/Temp/
+/temp/
+/Obj/
+/obj/
+/Build/
+/build/
+/Builds/
+/builds/
+/Logs/
+/logs/
+/UserSettings/
+/usersettings/
+*.csproj
+*.sln
+*.slnx
