@@ -313,6 +313,87 @@ else
   warn gitattributes.present ".gitattributes absent (line endings not normalized; a CRLF checkout breaks the shipped .sh payloads)"
 fi
 
+# Unity (draft module, see "Unity (draft — in progress)" in SKILL.md). Silent on any other repo.
+# Probes are paths that need not exist: check-ignore --no-index and check-attr answer for a path
+# from the rules alone, so an empty Assets/ is graded the same as a full one.
+UPM_ASMDEF=""
+if [ -f package.json ] && [ ! -d ProjectSettings ]; then
+  UPM_ASMDEF=$(find . -maxdepth 3 -name '*.asmdef' -not -path './node_modules/*' 2> /dev/null | head -1)
+fi
+if [ -f ProjectSettings/ProjectVersion.txt ] && [ -d Assets ]; then
+  section "5b. Unity project (draft module)"
+  ok unity.detected "Unity project (ProjectSettings/ProjectVersion.txt + Assets/)"
+  if [ -f pyproject.toml ] || [ -f tsconfig.json ]; then
+    warn unity.mixed "Unity plus a second language's project file — the Unity module does not cover mixed repos yet; apply the common base with the Unity guards only"
+  fi
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    for probe in Library/x UserSettings/x; do
+      if git check-ignore -q --no-index "$probe" 2> /dev/null; then
+        ok "unity.ignore.${probe%%/*}" ".gitignore ignores ${probe%%/*}/"
+      else
+        bad "unity.ignore.${probe%%/*}" ".gitignore does not ignore ${probe%%/*}/ — Unity regenerates it, and committing it bloats every clone; a regenerated .gitignore body drops it"
+      fi
+    done
+    if git check-ignore -q --no-index Assets/x.cs.meta 2> /dev/null; then
+      bad unity.meta_tracked ".gitignore ignores *.meta under Assets/ — Unity loses every asset reference on the next clone (toptal's csharp/visualstudio templates carry an unanchored *.meta)"
+    else
+      ok unity.meta_tracked "*.meta files under Assets/ stay tracked"
+    fi
+    if git check-ignore -q --no-index Assets/Scripts/x.cs 2> /dev/null; then
+      bad unity.scripts_tracked ".gitignore ignores Assets/Scripts/ — an unanchored [Ss]cripts rule (virtualenv template) swallows the project's code"
+    else
+      ok unity.scripts_tracked "Assets/Scripts/ stays tracked"
+    fi
+    if [ "$(git check-attr merge -- x.unity 2> /dev/null | sed 's/.*: //')" = unityyamlmerge ]; then
+      ok unity.yaml_merge ".gitattributes routes Unity YAML through unityyamlmerge"
+    else
+      warn unity.yaml_merge ".gitattributes does not set merge=unityyamlmerge on *.unity (scene and prefab merges fall back to text)"
+    fi
+    # Probe C#, not *.sh: the base check above already covers the scripts, and *.cs is what a
+    # Windows editor rewrites to CRLF when only the scripts are pinned.
+    if [ "$(git check-attr eol -- x.cs 2> /dev/null | sed 's/.*: //')" = lf ]; then
+      ok unity.eol_lf ".gitattributes keeps every text file LF (*.cs included), so a Windows clone checks out LF"
+    else
+      warn unity.eol_lf ".gitattributes does not force LF on *.cs — add \`* text=auto eol=lf\` ABOVE the Unity rules (a Windows clone checks out CRLF)"
+    fi
+    # The placement mistake the eol probe cannot see: a `* text=auto` AFTER the Unity rules still
+    # gives *.cs LF, but it overrides upstream's -text on every binary, LFS-routed or not.
+    if [ "$(git check-attr text -- x.png 2> /dev/null | sed 's/.*: //')" = unset ]; then
+      ok unity.binary_not_text "binaries stay -text (no later \`*\` text rule overrides the Unity rules)"
+    else
+      warn unity.binary_not_text "*.png is not -text — a \`* text\` rule placed after the Unity rules overrides them; move it above"
+    fi
+    if [ "$(git check-attr filter -- x.png 2> /dev/null | sed 's/.*: //')" = lfs ]; then
+      HOOKS_DIR="$(git config core.hooksPath 2> /dev/null || true)"
+      case "${HOOKS_DIR%/}" in
+        .husky/_) HOOKS_DIR=.husky ;;
+        "") HOOKS_DIR="$(git rev-parse --git-common-dir)/hooks" ;;
+      esac
+      for hook in pre-push post-checkout post-commit post-merge; do
+        if grep -q "git lfs $hook" "${HOOKS_DIR%/}/$hook" 2> /dev/null; then
+          ok "unity.lfs.$hook" "LFS $hook hook present in ${HOOKS_DIR%/}/"
+        elif [ "$hook" = pre-push ]; then
+          bad unity.lfs.pre-push "binaries route through Git LFS but ${HOOKS_DIR%/}/pre-push does not run git lfs pre-push — a push sends pointers without objects"
+        else
+          warn "unity.lfs.$hook" "binaries route through Git LFS but ${HOOKS_DIR%/}/$hook does not run git lfs $hook (git lfs install stops short when a post-commit already exists)"
+        fi
+      done
+    fi
+  else
+    warn unity.git "not a git work tree — Unity ignore and attribute checks skipped"
+  fi
+  if [ -f Packages/manifest.json ]; then
+    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(1 if {'devDependencies','scripts','lint-staged'} & set(d) else 0)" Packages/manifest.json 2> /dev/null; then
+      ok unity.manifest "Packages/manifest.json carries no npm keys"
+    else
+      bad unity.manifest "Packages/manifest.json has npm keys (devDependencies, scripts or lint-staged) or does not parse — it is Unity's package manifest; move them to the root package.json"
+    fi
+  fi
+elif [ -n "$UPM_ASMDEF" ]; then
+  section "5b. Unity project (draft module)"
+  warn unity.upm_package "a root package.json beside ${UPM_ASMDEF#./} and no ProjectSettings/ — this looks like a Unity package, whose package.json is Unity's manifest; the Unity module does not cover package repos yet"
+fi
+
 section "6. Release automation (release-it) — optional per profile"
 if [ -f .release-it.json ]; then
   if is_json .release-it.json; then ok releaseit.valid ".release-it.json present and valid JSON"; else bad releaseit.valid ".release-it.json is not valid JSON"; fi

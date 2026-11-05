@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x442-payload-version: setup-project-tooling 6
+# x442-payload-version: setup-project-tooling 7
 # husky.sh — git-hook dispatcher for a repo wired by setup-project-tooling.
 #
 # The marker line above is this skill's payload stamp. setup-project-tooling has no single
