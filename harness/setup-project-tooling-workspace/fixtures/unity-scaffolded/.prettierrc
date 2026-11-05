@@ -1,0 +1,22 @@
+{
+  "singleQuote": true,
+  "trailingComma": "all",
+  "endOfLine": "lf",
+  "plugins": ["prettier-plugin-sh"],
+  "overrides": [
+    {
+      "files": "*.sh",
+      "options": {
+        "parser": "sh",
+        "binaryNextLine": true,
+        "keepComments": true
+      }
+    },
+    {
+      "files": ["*.uss", "*.tss"],
+      "options": {
+        "parser": "css"
+      }
+    }
+  ]
+}

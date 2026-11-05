@@ -1,0 +1,20 @@
+{
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp"
+  },
+  "[json][jsonc][yaml][markdown][css]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "files.associations": {
+    "*.uss": "css",
+    "*.tss": "css"
+  },
+  "files.exclude": {
+    "**/*.meta": true,
+    "Library/": true,
+    "Logs/": true,
+    "Obj/": true,
+    "Temp/": true,
+    "UserSettings/": true
+  }
+}

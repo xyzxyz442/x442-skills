@@ -12,6 +12,13 @@
       "expected_output": "Post-state / idempotency case: a fully wired Node/TS project — commitlint.config.mjs, a package.json with the six devDependencies and the single hook-install command (`\"install:dev\": \"npm install && scripts/husky.sh install\"`) plus the unscoped format/format:fix pair, an executable scripts/husky.sh carrying `commitlint --edit`, a .lintstagedrc.json, .editorconfig, .prettierrc/.prettierignore, a .gitignore ignoring only .husky/_ (never .husky itself), a .gitattributes forcing LF on *.sh, .vscode/{settings,extensions,tasks}.json, and an executable initialize.sh. verify-project-tooling.sh reports 0 failed (the one remaining warning is the optional .release-it.json, which a non-library omits), and re-running the skill produces an EMPTY diff."
     },
     {
+      "id": "unity-scaffolded",
+      "kind": "post-state",
+      "prompt": "Set up commit conventions, staged-file formatting, and a VS Code workspace for this Unity 6 project.",
+      "fixture": "fixtures/unity-scaffolded",
+      "expected_output": "Post-state / idempotency case for the draft Unity module: the common base (commitlint.config.mjs, package.json with the devDependencies and install:dev, scripts/husky.sh, .lintstagedrc.json, initialize.sh) plus the Unity fragments. .gitignore ignores Library/ and UserSettings/ but never *.meta or Assets/Scripts/, .gitattributes is the upstream Unity file with the x442 prefix (`* text=auto eol=lf` above upstream's rules, so *.cs checks out LF on Windows), the [attr]lfs macro declined, and the x442 eol=lf pins, Packages/manifest.json carries no npm keys, and .vscode/settings.json drops the global prettier formatter and tabSize. verify-project-tooling.sh reports 0 failed, every unity.* finding passes with no unity.lfs.* finding, the only warning is the optional .release-it.json, and re-running the skill produces an EMPTY diff."
+    },
+    {
       "id": "fresh",
       "kind": "pre-state",
       "prompt": "Set up project tooling (commitlint, husky, lint-staged, editor config) for this repo.",
