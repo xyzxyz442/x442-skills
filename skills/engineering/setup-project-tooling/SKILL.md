@@ -820,8 +820,10 @@ Settled 2026-11-05; do not reopen these without the user.
 - **Git LFS is opt-in**, applied as the one-line macro edit under `.gitattributes` above.
 - **Every text file is LF** — `* text=auto eol=lf` in the x442 prefix, above upstream's rules, so
   a Windows clone never converts to CRLF. Reversed 2026-11-05 from "pin scripts and hooks only".
-- **The draft lives on a feature branch** with the payload bumped in its first commit, and merges
-  only at promotion, so no install is told it is behind for files the skill does not yet apply.
+- **The draft is merged ahead of promotion** (2026-11-05, reversing "merge only at promotion"),
+  with payload 7. An install at 6 is told it is behind; re-running the skill changes nothing on a
+  non-Unity repo, and on a Unity repo it still only offers the fragments. The promotion edits are
+  payload edits too, so they bump the payload again.
 - **Unity is a language, not a category.** Category only sets the release-it default, and Unity has
   no release shape of its own.
 - **v1 covers a plain Unity project only.** Mixed repos and UPM package repos are detected and
