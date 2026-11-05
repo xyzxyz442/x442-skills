@@ -196,6 +196,24 @@ if [ -f "$HERE/graphignore" ]; then
 else
   echo "  ! graphignore template missing next to installer — skipping ignore files"
 fi
+# A Unity project also gets the Unity block, appended once even to a customized file: the block is
+# additive and marked, so a re-run finds its first line and leaves the file alone.
+if [ -f ProjectSettings/ProjectVersion.txt ] && [ -d Assets ] && [ -f "$HERE/graphignore-unity" ]; then
+  UNITY_MARK="$(head -1 "$HERE/graphignore-unity")"
+  for ignore in .code-review-graphignore .graphifyignore; do
+    [ -f "$ignore" ] || continue
+    if grep -qxF "$UNITY_MARK" "$ignore"; then
+      echo "  = $ignore has the Unity block"
+    else
+      {
+        [ -s "$ignore" ] && [ -n "$(tail -c1 "$ignore")" ] && echo
+        echo
+        cat "$HERE/graphignore-unity"
+      } >> "$ignore"
+      echo "  + $ignore (Unity block)"
+    fi
+  done
+fi
 
 # ---- Layer 2: per-tool hook config -----------------------------------------------------
 echo

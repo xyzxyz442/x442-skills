@@ -831,9 +831,9 @@ Settled 2026-11-05; do not reopen these without the user.
 - **No shell formatter in the VS Code fragment.** `[shellscript]` → prettier needs
   `prettier-plugin-sh`, which a Unity repo with its own `.prettierrc` does not have, so the
   fragment leaves shell files alone.
-- **Graph ignore rules for Unity belong to `setup-graph-hooks`**, not to this module. It should
-  detect Unity itself, so the rules land whichever skill runs first, and in repos that never run
-  this one.
+- **Graph ignore rules for Unity belong to `setup-graph-hooks`**, not to this module. It detects
+  Unity itself and appends its own block, so the rules land whichever skill runs first, and in
+  repos that never run this one.
 
 #### Open questions / TODO (Unity)
 
@@ -847,16 +847,12 @@ What remains before promoting this module out of draft. None of it is a design q
   headers from the asset fragments, and drop the `.gitignore` four-line supplement if the template
   source moves to upstream's `Unity.gitignore`.
 
-Found by a first manual run of the chain on a Unity 6 repo (each was worked around by hand). The
-`setup-graph-hooks` post-commit hook landing outside `core.hooksPath` was found here too; it is
-fixed for every language (`setup-graph-hooks` now treats `scripts/husky.sh` as a husky layout, and
-`husky.sh install` moves a stray hook into `.husky/`), so the `mkdir -p .husky` workaround is gone.
+Found by a first manual run of the chain on a Unity 6 repo (each was worked around by hand). Two
+more were found there and are fixed in `setup-graph-hooks`: the post-commit hook landing outside
+`core.hooksPath` (it now treats `scripts/husky.sh` as a husky layout, and `husky.sh install` moves a
+stray hook into `.husky/`), and graph ignore files with no Unity rules (it now appends a Unity
+block on a Unity project). Neither workaround is needed any more.
 
-- **Graph ignore files know nothing about Unity.** `.code-review-graphignore` / `.graphifyignore`
-  from `setup-graph-hooks` omit `Library/`, `Temp/`, `Obj/`, `Logs/`, `UserSettings/`, `Build(s)/`
-  and the generated `*.csproj` / `*.sln` / `*.slnx`. `Library/PackageCache` holds thousands of
-  package `.cs` files. The fix belongs in `setup-graph-hooks` (see **Decided**); until it lands,
-  append those lines to both files by hand.
 - **Prettier-ignore entries the root tooling adds.** An existing Unity `.prettierignore` still
   needs the base asset's `pnpm-lock.yaml` (else lint-staged reformats the lockfile) and
   `.agents/handoff/**/*.md` lines, and `.mcp.json` (rewritten by `code-review-graph install` /

@@ -22,8 +22,8 @@ or graph is absent, so it is safe on any repo, with or without the tools install
 ## Architecture: three layers
 
 1. **Universal (tool-agnostic, always installed).** A git `post-commit` graph refresh, the
-   `.code-review-graphignore` / `.graphifyignore` files, `.gitignore` entries, and the
-   routing block (between `<!-- graph-hooks:begin` and `<!-- graph-hooks:end -->`) appended to
+   `.code-review-graphignore` / `.graphifyignore` files (plus a marked Unity block on a Unity
+   project, below), `.gitignore` entries, and the routing block (between `<!-- graph-hooks:begin` and `<!-- graph-hooks:end -->`) appended to
    `AGENTS.md`. Because every tool's entry
    file `@AGENTS.md`-imports (set up by `initial-project`), the routing block reaches all
    tools with no per-tool edit.
@@ -417,6 +417,18 @@ query it instead of grepping.
 
 ## Notes
 
+- **Unity projects get a second ignore block.** When the repo has
+  `ProjectSettings/ProjectVersion.txt` and `Assets/`, the installer appends
+  `scripts/graphignore-unity` to both graph ignore files, once, even to a customized file: it is
+  additive, and its first line is the marker a re-run looks for. It excludes `Library/`, `Temp/`,
+  `Obj/`, `Build(s)/`, `Logs/`, `UserSettings/`, and the generated `*.csproj` / `*.sln` / `*.slnx`.
+  A committed repo with a Unity `.gitignore` already skips these, since code-review-graph reads
+  only `git ls-files` and graphify merges `.gitignore`. The block matters before the first commit,
+  when code-review-graph finds nothing tracked and walks the whole tree (`Library/PackageCache`
+  alone holds thousands of package `.cs` files), and on a thin `.gitignore`. The patterns are
+  anchored, so `Assets/Build/` stays indexed, and each case spelling is listed literally:
+  code-review-graph compares directory patterns as literal segments, so `/[Ll]ibrary/` never
+  matches there. The verifier warns `graphignore.unity` when either file lacks it.
 - **One refresh owner.** The refresh is duplication-sensitive — if every wired tool ran it, N
   tools (or two concurrent sessions) would trigger N redundant builds. Only the `--primary`
   tool's end-of-turn hook runs it, and `graph-refresh.sh` additionally takes a repo-global lock
@@ -447,7 +459,8 @@ sentence-transformers`) into `/dev/null`, after paying a torch import to discove
   vectors exist that nothing can refresh.
 - **Bundled files:** `scripts/setup-graph-hooks.sh` (installer), `scripts/setup-embeddings.sh`
   (opt-in semantic search), `scripts/verify-graph-hooks.sh` (verifier), `scripts/post-commit`
-  (git refresh), `scripts/graphignore` (ignore template), `scripts/config/{render,merge}.py`
+  (git refresh), `scripts/graphignore` (ignore template), `scripts/graphignore-unity` (the Unity
+  block), `scripts/config/{render,merge}.py`
   (per-tool config + JSON merge), and `scripts/graph-hooks/` (the `.graph-hooks/` payload:
   `hook.sh`, `core/`, `copilot/`). `assets/agents-knowledge-graph.md` is the canonical AGENTS.md
   routing block.
