@@ -215,8 +215,14 @@ bash "$SKILL_DIR/scripts/setup-handoff.sh" "$REPO" \
   --tools <comma-list> --primary <tool|none> \
   [--topology single-repo|cross-repo] [--handoff-dir <path>] \
   [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring] [--no-vendor-cli] \
-  [--ignore exclude|gitignore]
+  [--ignore exclude|gitignore] [--repo-id <audience>]
 ```
+
+`--repo-id` is for a cross-repo member: it names the audience this repo files and filters under,
+and the session banner shows only open docs addressed to it.
+[`register-cross-repo-handoff`](../register-cross-repo-handoff/SKILL.md) passes it on every sync.
+By hand, leave it off. The installer then keeps the identity already recorded in the repo's
+`.agents/handoff.json` and falls back to the folder's name only on a first install.
 
 `--no-vendor-cli` skips the board's vendored CLI and writes the user-level copy instead — the
 one flag that makes the installer write outside the repo and its board. Do not offer it on an

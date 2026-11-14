@@ -112,6 +112,18 @@ def _member_group(repo: Path) -> str:
     (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
     literal was deliberately removed so a rename cannot strand a stale copy inside a tool config.
     """
+    return _member_key(repo, "group")
+
+
+def _member_repo(repo: Path) -> str:
+    """The identity a member repo files and filters under. The session banner shows a doc only when
+    its `audience` equals this value, so it must be the member's registered audience — never the
+    folder's basename, which agrees with it only when a fleet happened to name the folder that way.
+    """
+    return _member_key(repo, "repo")
+
+
+def _member_key(repo: Path, key: str) -> str:
     for name in (
         "handoff.json",
         "handoff.config.json",
@@ -120,7 +132,7 @@ def _member_group(repo: Path) -> str:
         if not js.is_file():
             continue
         try:
-            return str(json.loads(js.read_text(encoding="utf-8")).get("group") or "")
+            return str(json.loads(js.read_text(encoding="utf-8")).get(key) or "")
         except ValueError:
             return ""
     return ""
@@ -248,6 +260,7 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             ("board.groups", "each board records its groups"),
             ("board.layout", "each board records its layout"),
             ("member.section", "each member resolves to its section"),
+            ("member.identity", "each member files under its registered audience"),
             (
                 "registry.projection",
                 "each board's registry still projects the manifest",
@@ -288,10 +301,12 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         )
 
         # each member wired to its own section (AGENTS.md block + HANDOFF_GROUP in the hook command)
-        for name, group in (
-            ("api", "auth-suite"),
-            ("kubernetes", "infra"),
-            ("monolith", "legacy"),
+        # The audience column is the point of `kubernetes`/`k8s` and `monolith`/`mono`: an alias that
+        # differs from its folder name is exactly where a basename-derived identity goes wrong.
+        for name, group, audience in (
+            ("api", "auth-suite", "api"),
+            ("kubernetes", "infra", "k8s"),
+            ("monolith", "legacy", "mono"),
         ):
             agents = (work / name / "AGENTS.md").read_text(encoding="utf-8")
             block_ok = (
@@ -321,6 +336,14 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
                     f"{tag} {name} resolves to section {group}",
                     got_group == group,
                     f".agents/handoff.json group={got_group or 'unset'}",
+                )
+            )
+            got_repo = _member_repo(work / name)
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} files under its audience {audience}",
+                    got_repo == audience,
+                    f".agents/handoff.json repo={got_repo or 'unset'}",
                 )
             )
 

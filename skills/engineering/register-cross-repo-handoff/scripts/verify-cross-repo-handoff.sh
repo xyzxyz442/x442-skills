@@ -267,8 +267,8 @@ PY
 
 echo
 section "3. member repos"
-# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire<TAB>layout
-while IFS=$'\t' read -r group board alias repo exists has_agents wire layout; do
+# MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire<TAB>layout<TAB>audience
+while IFS=$'\t' read -r group board alias repo exists has_agents wire layout audience; do
   [ -n "$alias" ] || continue
   if [ "$exists" != 1 ]; then
     fail member.exists "$group/$alias — $repo not on disk"
@@ -319,6 +319,21 @@ raise SystemExit(0 if isinstance(d, dict) and d.get("localWiring") is True else 
   else
     warn member.claude_hook "$group/$alias has no .claude/$(basename "$cfg") (claude not wired — advisory only if another tool is primary)"
   fi
+  # The identity the member files and filters under. The session banner keeps an open doc only when
+  # its `audience` equals this `repo`, so a member recorded under anything else -- its folder's
+  # basename, say, where the folder is not named after the alias -- sees none of its own work, and
+  # every other check here still passes. Read from the member's own config, where merge-hooks.py
+  # writes it.
+  got_repo="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+r = d.get("repo") if isinstance(d, dict) else None
+print(r if isinstance(r, str) else "")' "$repo/.agents/handoff.json" 2> /dev/null || true)"
+  if [ "$got_repo" = "$audience" ]; then
+    pass member.identity "$group/$alias files under its audience $audience"
+  else
+    fail member.identity "$group/$alias records repo '${got_repo:-unset}', not its audience '$audience' — docs filed to $audience never reach its session banner. Re-run the sync"
+  fi
   if hc="$(board_config "$board" "$repo")" && [ -n "$hc" ]; then
     eval "$hc"
     if [ "$layout" = flat ]; then
@@ -344,7 +359,8 @@ for g in d["groups"]:
     for m in g["members"]:
         print("\t".join([g["group"], g["board"], m["alias"], m["path"],
                          "1" if m["exists"] else "0", "1" if m["has_agents_md"] else "0",
-                         "1" if m.get("wire", True) else "0", g["layout"]]))
+                         "1" if m.get("wire", True) else "0", g["layout"],
+                         m.get("audience") or m["alias"]]))
 PY
 )
 

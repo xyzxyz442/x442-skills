@@ -202,16 +202,20 @@ while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exis
     continue
   fi
   note "wire $group/$alias ($repo) -> $board"
+  # --repo-id carries the member's AUDIENCE, the name its docs are filed under. Left to itself the
+  # installer would fall back to the folder's basename, and a member whose folder is not named after
+  # its alias would never see its own open work on the session banner.
   # A flat board has no section to scope a member to, so it gets no --group at all.
   tmpl="$BLOCK_TMPL"
   if [ "$layout" = flat ]; then
     tmpl="$BLOCK_TMPL_FLAT"
     run bash "$SETUP_HANDOFF" "$repo" --tools "$TOOLS" --primary "$PRIMARY" \
-      --topology cross-repo --handoff-dir "$board" --groups "" --layout ""
+      --topology cross-repo --handoff-dir "$board" --groups "" --layout "" \
+      --repo-id "$audience"
   else
     run bash "$SETUP_HANDOFF" "$repo" --tools "$TOOLS" --primary "$PRIMARY" \
       --topology cross-repo --handoff-dir "$board" \
-      --group "$group" --groups "$bgroups" --layout "$layout"
+      --group "$group" --groups "$bgroups" --layout "$layout" --repo-id "$audience"
   fi
   # the path this repo uses to reach the board (matches setup-handoff's own HDPATH)
   board_rel="$(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$board" "$repo")"

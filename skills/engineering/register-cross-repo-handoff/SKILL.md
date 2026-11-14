@@ -137,6 +137,10 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
   handoff block. The section itself is written to the member's own `.agents/handoff.json`,
   **not** baked into the hook command — so renaming a group cannot strand a stale literal inside a
   tool config where nobody reading the board would see it.
+- Passes each member's **audience** as `--repo-id`, which becomes `repo` in that same file. The
+  session banner shows a member only the open docs whose `audience` equals its `repo`, so a member
+  recorded under its folder's basename (`kubernetes/` registered as `k8s`) would see none of its
+  own work. The verifier's `member.identity` check fails on that mismatch.
 - Splices the peer-listing block with `scripts/manifest/render.py`.
 - Projects the resolved manifest into each board's `handoff.json`, under `_generated`, via
   `scripts/manifest/registry.py` — see **Brief repo identity** below. Each member's `origin` (its
