@@ -104,6 +104,7 @@ so the default install stays safe to run on any checkout.
 - **Formatting**: defer to [.editorconfig](.editorconfig) — UTF-8, LF, 2-space indent, final newline. Markdown files keep trailing whitespace (line-break semantics).
 - **No emojis** in skill content — `SKILL.md`, references, and docs — unless a skill is explicitly about emoji usage. Runtime output printed by a shipped script is not skill content.
 - **No destructive shell commands** in examples. Use `trash` instead of `rm`; never demonstrate `rm -rf`, `git push --force`, or `git reset --hard` without an explicit safety rail.
+  - **Exception — shipped tooling:** a script under `scripts/` or `skills/*/*/scripts/` may `rm -f` a single named file it created itself (a `mktemp` scratch file, its own lease or cache file), then `rmdir` the empty directory. Never `rm -r`, never a literal path, never a file it did not create; a temp tree it cannot delete by name is left for the OS. [`scripts/verify-no-rm.sh`](scripts/verify-no-rm.sh) enforces the shape at `pre-commit` and in CI ([ADR 0028](docs/adr/0028-shipped-tooling-deletes-only-a-named-file-it-created.md)).
 - **Cite sources** when a skill encodes external API behavior or a vendor convention — link to the upstream doc so future-you can verify it still holds.
 - **Voice**: imperative, second person ("Do X", "Avoid Y"). No marketing language.
 - **Standalone repo — never reference another project.** This repo is the _source_ of skills, not a
