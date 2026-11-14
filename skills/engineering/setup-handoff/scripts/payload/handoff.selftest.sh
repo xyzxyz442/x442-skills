@@ -107,8 +107,8 @@ chk "gitlab host is dropped too" "acme/acme-api" "$(repo_path_of 'gitlab.com/acm
 chk "self-hosted keeps its host" "git.acme-corp.internal/acme/acme-api" "$(repo_path_of 'git.acme-corp.internal/acme/acme-api')"
 
 printf '\ndoc_section\n'
+# Left for the OS to reap, like every temp tree here. Never `rm -rf` (ADR 0028).
 DS="$(mktemp -d)"
-trap 'rm -rf "$DS"' EXIT
 cat > "$DS/doc.md" << 'DOCEOF'
 ---
 id: rbac-gap-handoff
