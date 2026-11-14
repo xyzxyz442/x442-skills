@@ -174,3 +174,26 @@ chk "a doc in the session's own section is still gated by its own lease" "allow"
   "$(xs_gate xs-sess "$XS/alpha/a-work-handoff.md")"
 chk_contains "and its claim hint carries no section override" "$(xs_gate xs-sess "$XS/alpha/a-more-handoff.md")" \
   "handoff claim a-more-handoff"
+
+printf '\nposttool-edit renews a lease held in the section the edited doc lives in\n'
+# The gate above lets a session edit a doc it claimed in another section, but posttool-edit renewed
+# only the leases in the SESSION's section, so that lease lapsed at its TTL mid-edit.
+xs_post() { # session doc-path; the hook runs as section alpha
+  printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" "$2" \
+    | HANDOFF_GROUP=alpha bash "$XS/scripts/hooks.sh" --kind posttool-edit --tool claude > /dev/null 2>&1
+}
+xs_expire_soon() { # lock dir -> set its expires= to one minute from now
+  grep -v '^expires=' "$1/owner" > "$1/owner.t"
+  printf 'expires=%s\n' "$(($(now) + 60))" >> "$1/owner.t"
+  mv "$1/owner.t" "$1/owner"
+}
+HANDOFF_GROUP=beta "$XS/handoff" new b-other --title "Other beta work" --audience acme-api > /dev/null 2>&1
+HANDOFF_SESSION_ID=xs-other HANDOFF_GROUP=beta "$XS/handoff" claim b-other "someone else" > /dev/null 2>&1
+xs_expire_soon "$XS/beta/.locks/b-work-handoff"
+xs_expire_soon "$XS/beta/.locks/b-other-handoff"
+XS_OTHER_EXP="$(sed -n 's/^expires=//p' "$XS/beta/.locks/b-other-handoff/owner")"
+xs_post xs-sess "$XS_B"
+chk "an edit renews the holder's lease in the doc's own section" "yes" \
+  "$([ "$(sed -n 's/^expires=//p' "$XS/beta/.locks/b-work-handoff/owner")" -gt "$(($(now) + 3600))" ] && echo yes || echo no)"
+chk "a lease in that section held by another session is not touched" "$XS_OTHER_EXP" \
+  "$(sed -n 's/^expires=//p' "$XS/beta/.locks/b-other-handoff/owner")"

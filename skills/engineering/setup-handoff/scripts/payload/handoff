@@ -3185,8 +3185,8 @@ cmd_list() {
   # each_doc's glob matches nothing. An empty table at exit 0 makes "there is no work" and "you
   # cannot see the work" indistinguishable — and this is the reachable case, not a corner one,
   # because a `handoff list` typed by hand inherits no HANDOFF_GROUP (only the tool hooks carry it).
-  # Silence here is what let a member repo read its own board as empty. Notice goes to stderr so
-  # stdout stays exactly the table its readers parse.
+  # Silence here is what let a member repository read its own board as empty. Notice goes to
+  # stderr so stdout stays exactly the table its readers parse.
   if board_is_grouped && [ -z "$GROUP" ]; then
     echo "handoff: this board is sectioned ($BOARD_GROUPS) and no HANDOFF_GROUP is set," >&2
     echo "         so nothing below is scoped to you. Re-run as: HANDOFF_GROUP=<section> handoff list" >&2

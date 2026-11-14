@@ -425,6 +425,13 @@ reap_expired() { # auto-reap: clear leases whose TTL has passed (self-heal crash
   done
   return 0
 }
+doc_section_dir() { # doc path -> the board dir whose .locks holds that doc's lease
+  local d
+  d="$(cd "$(dirname "$1")" 2> /dev/null && pwd)"
+  [ "$(basename "$d")" = archive ] && d="$(dirname "$d")"
+  case "$d" in "$DIR" | "$DIR"/*) ;; *) d="$(sec_dir)" ;; esac
+  printf '%s' "$d"
+}
 touch_my_leases() { # auto-touch: extend every lease held by THIS session so active work never expires
   local sess="$1" committed=0 exp d
   [ -n "$sess" ] || return 0
@@ -805,9 +812,7 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     # The lease lives in the section the DOC sits in: a subfolder board keeps one .locks per section,
     # and a doc's path names its section. The session's own section is only the default for a path
     # that names none. Flat and prefix boards keep every lock in $DIR/.locks, so nothing changes there.
-    ddir="$(dirname "$cpath")"
-    [ "$(basename "$ddir")" = archive ] && ddir="$(dirname "$ddir")"
-    case "$ddir" in "$DIR" | "$DIR"/*) ;; *) ddir="$(sec_dir)" ;; esac
+    ddir="$(doc_section_dir "$path")"
     LOCKS="$ddir/.locks"
     claim_env=""
     [ "$ddir" != "$DIR" ] && [ "$ddir" != "$(sec_dir)" ] && claim_env="HANDOFF_GROUP=$(basename "$ddir") "
@@ -833,6 +838,10 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
     path="$(field path)"
     [ -n "$path" ] || exit 0
     doc_id_of "$path" > /dev/null || exit 0
+    # A doc claimed in another section keeps its lease in that section's .locks (the rule the
+    # pretool-edit gate reads by), which the touch above never reaches.
+    ddir="$(doc_section_dir "$path")"
+    [ "$ddir/.locks" != "$LOCKS" ] && LOCKS="$ddir/.locks" && touch_my_leases "$session"
     "$DIR/handoff" index > /dev/null 2>&1 || true # index can never drift from the docs
     ;;
 

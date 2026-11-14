@@ -302,9 +302,9 @@ if repo:
 
 # `groups` carries the section names, and it is accepted in either fidelity. A board records the
 # bare list of sections it hosts; a workspace manifest records the same names mapped to their
-# member repos. They are the same fact at two levels of detail, so they share one key rather than
-# splitting into `groups` and `groupDefs` — the resolver that needs the members reads the map, and
-# everything that only needs the names reads the keys.
+# member repositories. They are the same fact at two levels of detail, so they share one key
+# rather than splitting into `groups` and `groupDefs` — the resolver that needs the members reads
+# the map, and everything that only needs the names reads the keys.
 groups = cfg.get("groups") or []
 if isinstance(groups, dict):
     groups = [g for g, v in sorted(groups.items())
