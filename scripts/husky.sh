@@ -201,6 +201,11 @@ run_pre_commit() {
     echo "husky: verify-standalone"
     scripts/verify-standalone.sh --staged
   fi
+  # Shipped tooling may only `rm -f` a named file it created; never a recursive delete (ADR 0028).
+  if [ -x scripts/verify-no-rm.sh ]; then
+    echo "husky: verify-no-rm"
+    scripts/verify-no-rm.sh --staged
+  fi
   # A payload edit must move that skill's payload.version. Nothing else catches this: the fixture
   # check below compares fixtures against the payload, and no fixture carries the CLI, so a
   # CLI-only edit drifts nothing and passes every other gate. Staged set, because the bump has to

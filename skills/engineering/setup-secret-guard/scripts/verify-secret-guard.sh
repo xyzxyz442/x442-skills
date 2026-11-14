@@ -45,8 +45,8 @@ TMP="$(mktemp -d)"
 SECTION=""
 cleanup() {
   rm -f "$FINDINGS"
-  find "$TMP" -type f -delete 2> /dev/null
-  find "$TMP" -depth -type d -exec rmdir {} \; 2> /dev/null
+  # $TMP holds names built at runtime and a subdirectory, so it is left for the OS to reap rather
+  # than deleted recursively (ADR 0028).
 }
 trap cleanup EXIT
 

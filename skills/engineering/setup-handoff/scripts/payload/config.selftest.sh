@@ -3,8 +3,8 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/config.sh"
+# The temp tree is left for the OS to reap. Shipped tooling never deletes recursively (ADR 0028).
 T="$(mktemp -d)"
-trap 'rm -rf "$T"' EXIT
 P=0
 F=0
 chk() { # label expected actual

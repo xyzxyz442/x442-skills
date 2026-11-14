@@ -73,6 +73,20 @@ run_limited() {
 #
 # Known coverage limit: trivy's default ruleset does not flag bare AWS access-key pairs. This is a
 # net, not a wall — it is the second line of defence behind never-delegate paths and env scrubbing.
+# The scan copies the text it checks into a temp directory, so a refused brief would otherwise
+# leave the credential it was refused for on disk. Only the two named files are ever written there,
+# so they are deleted by name and the empty directory removed after them — never `rm -rf`
+# (ADR 0028). An EXIT trap, not RETURN: every refusal path leaves through `exit 78`, and a RETURN
+# trap never runs on exit, nor when `set -e` stops the script mid-function.
+_SCAN_TMP=""
+_scan_clean() {
+  [ -n "$_SCAN_TMP" ] || return 0
+  rm -f "$_SCAN_TMP/canary.txt" "$_SCAN_TMP/scan.txt"
+  rmdir "$_SCAN_TMP" 2> /dev/null || true
+  _SCAN_TMP=""
+}
+trap _scan_clean EXIT
+
 scan_secrets() {
   local target="$1" label="$2"
   command -v trivy > /dev/null 2>&1 || {
@@ -81,7 +95,7 @@ scan_secrets() {
   }
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  _SCAN_TMP="$tmp"
 
   # Canary: built at runtime so no literal credential ever appears in this file.
   local canary
@@ -98,7 +112,10 @@ scan_secrets() {
   cp "$target" "${tmp}/scan.txt"
   local n
   n="$(_trivy_count "${tmp}/scan.txt")"
-  [ "$n" -eq 0 ] && return 0
+  if [ "$n" -eq 0 ]; then
+    _scan_clean
+    return 0
+  fi
   local kinds
   kinds="$(trivy fs --scanners secret --quiet --format json "${tmp}/scan.txt" 2> /dev/null \
     | jq -r '[.Results[]?.Secrets[]?.RuleID] | unique | join(", ")' 2> /dev/null)"

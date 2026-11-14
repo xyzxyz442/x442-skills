@@ -27,7 +27,6 @@
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 
@@ -135,141 +134,139 @@ def main(argv: list) -> int:
 
 
 def _selftest() -> int:
+    # The temp tree is left for the OS to reap. Shipped tooling never deletes recursively (ADR 0028).
     tmp = tempfile.mkdtemp(prefix="vscode-hooks-")
     graph = ".github/hooks/graph.json"
-    try:
 
-        def fresh(copilot: bool = False) -> str:
-            d = tempfile.mkdtemp(dir=tmp)
-            if copilot:
-                os.makedirs(os.path.join(d, ".github/hooks"))
-                open(os.path.join(d, graph), "w").close()
-            return d
+    def fresh(copilot: bool = False) -> str:
+        d = tempfile.mkdtemp(dir=tmp)
+        if copilot:
+            os.makedirs(os.path.join(d, ".github/hooks"))
+            open(os.path.join(d, graph), "w").close()
+        return d
 
-        def write(repo: str, data) -> None:
-            os.makedirs(os.path.join(repo, ".vscode"), exist_ok=True)
-            with open(os.path.join(repo, SETTINGS), "w") as f:
-                f.write(data if isinstance(data, str) else json.dumps(data, indent=2))
+    def write(repo: str, data) -> None:
+        os.makedirs(os.path.join(repo, ".vscode"), exist_ok=True)
+        with open(os.path.join(repo, SETTINGS), "w") as f:
+            f.write(data if isinstance(data, str) else json.dumps(data, indent=2))
 
-        def read(repo: str) -> str:
-            with open(os.path.join(repo, SETTINGS)) as f:
-                return f.read()
+    def read(repo: str) -> str:
+        with open(os.path.join(repo, SETTINGS)) as f:
+            return f.read()
 
-        # Covered: Claude-format hooks on, and only OUR Copilot file switched off.
-        r = fresh()
-        assert apply(r, graph, claude=True, covered=True) == 0
-        s = load(r)
-        assert s["chat.useClaudeHooks"] is True, s
-        assert s["chat.hookFilesLocations"] == {graph: False}, s
+    # Covered: Claude-format hooks on, and only OUR Copilot file switched off.
+    r = fresh()
+    assert apply(r, graph, claude=True, covered=True) == 0
+    s = load(r)
+    assert s["chat.useClaudeHooks"] is True, s
+    assert s["chat.hookFilesLocations"] == {graph: False}, s
 
-        # Every other key survives -- the user's, and the other skill's switch.
-        r = fresh()
-        write(
-            r,
-            {
-                "editor.tabSize": 2,
-                "chat.hookFilesLocations": {
-                    "custom/hooks": True,
-                    ".github/hooks/handoff.json": False,
-                },
+    # Every other key survives -- the user's, and the other skill's switch.
+    r = fresh()
+    write(
+        r,
+        {
+            "editor.tabSize": 2,
+            "chat.hookFilesLocations": {
+                "custom/hooks": True,
+                ".github/hooks/handoff.json": False,
             },
-        )
-        apply(r, graph, claude=True, covered=True)
-        s = load(r)
-        assert s["editor.tabSize"] == 2, s
-        assert s["chat.hookFilesLocations"] == {
-            "custom/hooks": True,
-            ".github/hooks/handoff.json": False,
-            graph: False,
-        }, s
+        },
+    )
+    apply(r, graph, claude=True, covered=True)
+    s = load(r)
+    assert s["editor.tabSize"] == 2, s
+    assert s["chat.hookFilesLocations"] == {
+        "custom/hooks": True,
+        ".github/hooks/handoff.json": False,
+        graph: False,
+    }, s
 
-        # Not covered (Copilot is the primary): our earlier false comes out, and an empty map with it.
-        r = fresh()
-        write(r, {"chat.hookFilesLocations": {graph: False}})
-        apply(r, graph, claude=True, covered=False)
-        s = load(r)
-        assert "chat.hookFilesLocations" not in s, s
-        assert s["chat.useClaudeHooks"] is True, s
+    # Not covered (Copilot is the primary): our earlier false comes out, and an empty map with it.
+    r = fresh()
+    write(r, {"chat.hookFilesLocations": {graph: False}})
+    apply(r, graph, claude=True, covered=False)
+    s = load(r)
+    assert "chat.hookFilesLocations" not in s, s
+    assert s["chat.useClaudeHooks"] is True, s
 
-        # A true the user set on our file is theirs: never removed, never flipped.
-        r = fresh()
-        write(r, {"chat.hookFilesLocations": {graph: True}})
-        apply(r, graph, claude=False, covered=False)
-        assert load(r)["chat.hookFilesLocations"] == {graph: True}
+    # A true the user set on our file is theirs: never removed, never flipped.
+    r = fresh()
+    write(r, {"chat.hookFilesLocations": {graph: True}})
+    apply(r, graph, claude=False, covered=False)
+    assert load(r)["chat.hookFilesLocations"] == {graph: True}
 
-        # JSONC (comments, trailing comma) is refused untouched: rewriting would drop the comments.
-        r = fresh()
-        raw = '{\n  // mine\n  "editor.tabSize": 2,\n}\n'
-        write(r, raw)
-        assert apply(r, graph, claude=True, covered=True) == 3
-        assert read(r) == raw
+    # JSONC (comments, trailing comma) is refused untouched: rewriting would drop the comments.
+    r = fresh()
+    raw = '{\n  // mine\n  "editor.tabSize": 2,\n}\n'
+    write(r, raw)
+    assert apply(r, graph, claude=True, covered=True) == 3
+    assert read(r) == raw
 
-        # A re-run with nothing to change does not rewrite the file.
-        r = fresh()
-        apply(r, graph, claude=True, covered=True)
-        before = os.stat(os.path.join(r, SETTINGS)).st_mtime_ns
-        assert apply(r, graph, claude=True, covered=True) == 0
-        assert os.stat(os.path.join(r, SETTINGS)).st_mtime_ns == before
+    # A re-run with nothing to change does not rewrite the file.
+    r = fresh()
+    apply(r, graph, claude=True, covered=True)
+    before = os.stat(os.path.join(r, SETTINGS)).st_mtime_ns
+    assert apply(r, graph, claude=True, covered=True) == 0
+    assert os.stat(os.path.join(r, SETTINGS)).st_mtime_ns == before
 
-        # A repo that does not wire Claude gets no .vscode/settings.json from us.
-        r = fresh()
-        apply(r, graph, claude=False, covered=False)
-        assert not os.path.exists(os.path.join(r, SETTINGS))
+    # A repo that does not wire Claude gets no .vscode/settings.json from us.
+    r = fresh()
+    apply(r, graph, claude=False, covered=False)
+    assert not os.path.exists(os.path.join(r, SETTINGS))
 
-        # check: the teammate regression -- our Copilot file off with no committed Claude twin.
-        r = fresh(copilot=True)
-        write(
-            r,
-            {"chat.useClaudeHooks": True, "chat.hookFilesLocations": {graph: False}},
-        )
-        got = check(r, graph, claude=False, covered=False)
-        assert got.startswith("fail vscode.copilot_off_uncovered"), got
+    # check: the teammate regression -- our Copilot file off with no committed Claude twin.
+    r = fresh(copilot=True)
+    write(
+        r,
+        {"chat.useClaudeHooks": True, "chat.hookFilesLocations": {graph: False}},
+    )
+    got = check(r, graph, claude=False, covered=False)
+    assert got.startswith("fail vscode.copilot_off_uncovered"), got
 
-        # check: Claude committed and covering, but VS Code still reads only the Copilot file.
-        r = fresh(copilot=True)
-        got = check(r, graph, claude=True, covered=True)
-        assert got.startswith("warn vscode.claude_hooks_off"), got
+    # check: Claude committed and covering, but VS Code still reads only the Copilot file.
+    r = fresh(copilot=True)
+    got = check(r, graph, claude=True, covered=True)
+    assert got.startswith("warn vscode.claude_hooks_off"), got
 
-        # check: both on, Copilot file not switched off -> every hook runs twice in VS Code.
-        r = fresh(copilot=True)
-        write(r, {"chat.useClaudeHooks": True})
-        got = check(r, graph, claude=True, covered=True)
-        assert got.startswith("warn vscode.double_run"), got
+    # check: both on, Copilot file not switched off -> every hook runs twice in VS Code.
+    r = fresh(copilot=True)
+    write(r, {"chat.useClaudeHooks": True})
+    got = check(r, graph, claude=True, covered=True)
+    assert got.startswith("warn vscode.double_run"), got
 
-        # check: the applied state is ok, and JSONC is a warning rather than a crash.
-        r = fresh(copilot=True)
-        apply(r, graph, claude=True, covered=True)
-        got = check(r, graph, claude=True, covered=True)
-        assert got.startswith("ok vscode.hook_source"), got
-        r = fresh(copilot=True)
-        write(r, "{ // x\n}")
-        got = check(r, graph, claude=True, covered=True)
-        assert got.startswith("warn vscode.unreadable"), got
+    # check: the applied state is ok, and JSONC is a warning rather than a crash.
+    r = fresh(copilot=True)
+    apply(r, graph, claude=True, covered=True)
+    got = check(r, graph, claude=True, covered=True)
+    assert got.startswith("ok vscode.hook_source"), got
+    r = fresh(copilot=True)
+    write(r, "{ // x\n}")
+    got = check(r, graph, claude=True, covered=True)
+    assert got.startswith("warn vscode.unreadable"), got
 
-        # check: no Copilot file of ours, nothing switched -> nothing to judge.
-        r = fresh()
-        got = check(r, graph, claude=True, covered=True)
-        assert got.startswith("ok vscode.hook_source"), got
+    # check: no Copilot file of ours, nothing switched -> nothing to judge.
+    r = fresh()
+    got = check(r, graph, claude=True, covered=True)
+    assert got.startswith("ok vscode.hook_source"), got
 
-        # The two shipped copies must not drift: each skill installs on its own, so each carries
-        # one, and a fix to either has to reach both.
-        here = os.path.realpath(__file__)
-        for sibling in (
-            os.path.join(
-                os.path.dirname(here),
-                "../../../setup-handoff/scripts/vscode-hooks.py",
-            ),
-            os.path.join(
-                os.path.dirname(here),
-                "../../setup-graph-hooks/scripts/config/vscode-hooks.py",
-            ),
-        ):
-            sibling = os.path.realpath(sibling)
-            if sibling != here and os.path.isfile(sibling):
-                with open(here, "rb") as a, open(sibling, "rb") as b:
-                    assert a.read() == b.read(), f"{sibling} differs from {here}"
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    # The two shipped copies must not drift: each skill installs on its own, so each carries
+    # one, and a fix to either has to reach both.
+    here = os.path.realpath(__file__)
+    for sibling in (
+        os.path.join(
+            os.path.dirname(here),
+            "../../../setup-handoff/scripts/vscode-hooks.py",
+        ),
+        os.path.join(
+            os.path.dirname(here),
+            "../../setup-graph-hooks/scripts/config/vscode-hooks.py",
+        ),
+    ):
+        sibling = os.path.realpath(sibling)
+        if sibling != here and os.path.isfile(sibling):
+            with open(here, "rb") as a, open(sibling, "rb") as b:
+                assert a.read() == b.read(), f"{sibling} differs from {here}"
 
     print("vscode-hooks.py selftest: OK")
     return 0
