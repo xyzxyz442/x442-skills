@@ -3,8 +3,9 @@ minimumReleaseAgeExclude:
   - lint-staged@17.1.1
 
 overrides:
-  basic-ftp@<=6.2.0: ^6.2.1
+  basic-ftp@<=6.2.3: ^6.2.4
   conventional-changelog: 8.1.0
+  fast-uri@>=3.0.0 <3.1.9: ^3.1.9
   fast-uri@>=4.0.0 <4.1.5: ^4.1.5
-  ip-address@<=10.5.0: ^10.5.1
-  undici@>=7.28.0 <7.29.1: ^7.29.1
+  ip-address@<=10.7.3: ^10.7.4
+  undici@>=7.0.0 <7.30.1: ^7.30.1
