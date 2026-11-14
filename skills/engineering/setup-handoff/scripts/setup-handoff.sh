@@ -9,7 +9,12 @@
 #   setup-handoff.sh <repo> --tools claude,gemini,copilot --primary claude \
 #       [--topology single-repo|cross-repo] [--handoff-dir <path>] \
 #       [--group <section>] [--groups <csv>] [--layout subfolder|prefix] \
-#       [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring]
+#       [--repo-id <audience>] [--migrate <legacy-dir>] [--allow-verify-cmd] [--local-wiring]
+#
+#   --repo-id <audience> (cross-repo) names the identity this repo files and filters under -- the
+#   member's registered audience. The cross-repo sync always passes it. Without it, an identity
+#   already recorded in the repo's .agents/handoff.json is kept, and only a first install falls
+#   back to the folder's basename.
 #
 #   --local-wiring writes NOTHING the repo would commit: claude's hooks go to
 #   .claude/settings.local.json and the AGENTS.md routing block is skipped. For a repo that is a
@@ -446,6 +451,7 @@ FORCE_DOWNGRADE=0
 # GROUP_LIST, not GROUPS: `GROUPS` is a bash built-in (the user's gids), and assigning it here aborts
 # the whole assignment line, leaving later vars unset under `set -u`.
 GROUP="" GROUP_LIST="" LAYOUT="" BOARD_ONLY="" BOARD_REMOTE="" MIRROR_WORKFLOW=0
+REPO_ID=""
 # GROUP_LIST_SET/LAYOUT_SET: whether --groups/--layout were PASSED at all (any value, including
 # an explicit empty string), as distinct from not passed. write_board_config needs this to tell
 # "override with empty" (flag passed as "") apart from "leave alone" (flag absent) — a plain
@@ -509,6 +515,11 @@ while [ $# -gt 0 ]; do
     --group)
       require_value --group "$#" "${2:-}"
       GROUP="${2:-}"
+      shift 2
+      ;;
+    --repo-id)
+      require_value --repo-id "$#" "${2:-}"
+      REPO_ID="${2:-}"
       shift 2
       ;;
     --groups)
@@ -1144,8 +1155,23 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   # both for a fresh install (nothing to migrate yet) and to override a migrated legacy prefix
   # with what this run actually knows. Single-repo leaves HANDOFF_REPO empty, so merge-hooks.py
   # writes no repo config there and the command stays byte-identical to a pre-existing one.
+  #
+  # The identity is the member's AUDIENCE: the session banner keeps an open doc only when its
+  # `audience` equals it. The folder's basename agrees with that only when a fleet named the folder
+  # after its alias -- a repo registered as `acme-web` at ../workspace/web-client came out as
+  # `web-client`, every doc filed to `acme-web` vanished from its banner, and nothing warned.
+  # So: the sync's --repo-id, else the identity this repo already records (a manual re-run must not
+  # undo what the sync wrote), else the basename on a first install with nothing better to go on.
   local repo_id=""
-  [ "$TOPOLOGY" = "cross-repo" ] && repo_id="$(basename "$REPO")"
+  if [ "$TOPOLOGY" = "cross-repo" ]; then
+    repo_id="$REPO_ID"
+    [ -n "$repo_id" ] || repo_id="$(python3 -c 'import json,sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: raise SystemExit(0)
+r = d.get("repo") if isinstance(d, dict) else None
+print(r if isinstance(r, str) else "")' "$REPO/.agents/handoff.json" 2> /dev/null || true)"
+    [ -n "$repo_id" ] || repo_id="$(basename "$REPO")"
+  fi
   HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \
     python3 "$SKILL_DIR/scripts/merge-hooks.py" "$cfg" --board "$HDPATH" --repo-root "$REPO" \
     && echo "  wired $tool ($([ "$primary" = 1 ] && echo 'hard enforcement' || echo advisory)): $cfg" \

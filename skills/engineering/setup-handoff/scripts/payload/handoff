@@ -1764,7 +1764,17 @@ cmd_new() {
   local id="" title="" audience="" severity="medium" note="" type="coordination" children="" group="${HANDOFF_GROUP:-}"
   local environment="" depends="" role="" spec="" sensitivity="normal" force_secret="" ext_ref="" share=""
   local reviewer="" reviewer_set=0 home="" home_named="" home_src="" home_sec=""
-  id="${1:?usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--home REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--reviewer HANDLE] [--note N]}"
+  local usage="usage: handoff new <id> [--title T] [--type coordination|standalone|orchestrator] [--standalone] [--orchestrator --children a,b,c] [--role steering|spec|reference|brief-archive] [--audience REPO] [--home REPO] [--group G] [--severity S] [--env ENV] [--after ID[,ID]] [--spec REF] [--sensitivity normal|restricted] [--reviewer HANDLE] [--note N]"
+  # An id is a name, never a flag. `$1` used to be taken unconditionally and the slugifier folds
+  # `--help` to `help`, so asking for the usage filed a real `help-handoff.md` on the board.
+  case "${1:-}" in
+    -h | --help)
+      echo "$usage"
+      return 0
+      ;;
+    -*) die "an id must not start with \"-\" (got \"$1\") — $usage" ;;
+  esac
+  id="${1:?$usage}"
   shift
   # Before the arg loop, because no flag can make this safe and nothing below should run on a
   # board this CLI must not add to. The board stamp is board-wide, so --group cannot change it.

@@ -112,6 +112,18 @@ def _member_group(repo: Path) -> str:
     (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
     literal was deliberately removed so a rename cannot strand a stale copy inside a tool config.
     """
+    return _member_key(repo, "group")
+
+
+def _member_repo(repo: Path) -> str:
+    """The identity a member repo files and filters under. The session banner shows a doc only when
+    its `audience` equals this value, so it must be the member's registered audience — never the
+    folder's basename, which agrees with it only when a fleet happened to name the folder that way.
+    """
+    return _member_key(repo, "repo")
+
+
+def _member_key(repo: Path, key: str) -> str:
     for name in (
         "handoff.json",
         "handoff.config.json",
@@ -120,7 +132,7 @@ def _member_group(repo: Path) -> str:
         if not js.is_file():
             continue
         try:
-            return str(json.loads(js.read_text(encoding="utf-8")).get("group") or "")
+            return str(json.loads(js.read_text(encoding="utf-8")).get(key) or "")
         except ValueError:
             return ""
     return ""
@@ -248,6 +260,7 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             ("board.groups", "each board records its groups"),
             ("board.layout", "each board records its layout"),
             ("member.section", "each member resolves to its section"),
+            ("member.identity", "each member files under its registered audience"),
             (
                 "registry.projection",
                 "each board's registry still projects the manifest",
@@ -288,10 +301,12 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         )
 
         # each member wired to its own section (AGENTS.md block + HANDOFF_GROUP in the hook command)
-        for name, group in (
-            ("api", "auth-suite"),
-            ("kubernetes", "infra"),
-            ("monolith", "legacy"),
+        # The audience column is the point of `kubernetes`/`k8s` and `monolith`/`mono`: an alias that
+        # differs from its folder name is exactly where a basename-derived identity goes wrong.
+        for name, group, audience in (
+            ("api", "auth-suite", "api"),
+            ("kubernetes", "infra", "k8s"),
+            ("monolith", "legacy", "mono"),
         ):
             agents = (work / name / "AGENTS.md").read_text(encoding="utf-8")
             block_ok = (
@@ -323,6 +338,14 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
                     f".agents/handoff.json group={got_group or 'unset'}",
                 )
             )
+            got_repo = _member_repo(work / name)
+            exps.append(
+                gc.expectation(
+                    f"{tag} {name} files under its audience {audience}",
+                    got_repo == audience,
+                    f".agents/handoff.json repo={got_repo or 'unset'}",
+                )
+            )
 
         # ledger recorded
         # The ledger moved INSIDE the workspace's own handoff.json, under `_generated`, when every
@@ -345,6 +368,8 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
                 f"members={got_paths or 'unset'}",
             )
         )
+
+        exps.append(_banner_probe(work, env, tag))
 
         # idempotency: commit the FIRST sync's output as the baseline, then re-sync and assert every
         # member repo's git status is clean (the second sync changed nothing).
@@ -506,6 +531,49 @@ def _grade_local_wiring_member(fixture: Path) -> list:
         ]
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _banner_probe(work: Path, env: dict, tag: str) -> dict:
+    """A doc addressed to `k8s` reaches the session banner of the member at `kubernetes/`.
+
+    The `repo` assertions above check the precondition; this checks the symptom the bug report
+    named. It fires the SessionStart command exactly as the sync wired it into the member's
+    .claude/settings.json, so a wiring change that bypasses the member's config is caught too.
+    With the folder's basename as the identity, the banner leaves the doc out and says nothing.
+    The doc lands on the board, outside every member repo, so the idempotency check that follows
+    is unaffected.
+    """
+    member = work / "kubernetes"
+    probe = "banner-probe"
+    subprocess.run(
+        ["bash", str(work / ".agents/handoff/handoff"), "new", probe]
+        + ["--title", "Banner probe", "--audience", "k8s"],
+        cwd=str(member),
+        capture_output=True,
+        text=True,
+        env={**env, "HANDOFF_GROUP": "infra"},
+    )
+    settings = _read_json(member / ".claude/settings.json")
+    cmds = [
+        h.get("command", "")
+        for g in (settings.get("hooks") or {}).get("SessionStart") or []
+        for h in g.get("hooks") or []
+    ]
+    banner = ""
+    if cmds:
+        banner = subprocess.run(
+            ["bash", "-c", cmds[0]],
+            cwd=str(member),
+            input='{"session_id":"sess-BANNER"}',
+            capture_output=True,
+            text=True,
+            env={**env, "CLAUDE_PROJECT_DIR": str(member)},
+        ).stdout
+    return gc.expectation(
+        f"{tag} a doc for k8s reaches the kubernetes member's session banner",
+        f"{probe}-handoff" in banner,
+        f"SessionStart command wired: {bool(cmds)}; probe in banner: {probe in banner}",
+    )
 
 
 def _run_sync(work: Path, env: dict, *extra: str) -> subprocess.CompletedProcess:
