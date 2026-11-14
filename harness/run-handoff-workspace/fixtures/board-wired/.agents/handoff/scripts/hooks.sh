@@ -802,6 +802,16 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
       case "$(meta "$cpath" type)" in standalone | orchestrator) exit 0 ;; esac
     fi
 
+    # The lease lives in the section the DOC sits in: a subfolder board keeps one .locks per section,
+    # and a doc's path names its section. The session's own section is only the default for a path
+    # that names none. Flat and prefix boards keep every lock in $DIR/.locks, so nothing changes there.
+    ddir="$(dirname "$cpath")"
+    [ "$(basename "$ddir")" = archive ] && ddir="$(dirname "$ddir")"
+    case "$ddir" in "$DIR" | "$DIR"/*) ;; *) ddir="$(sec_dir)" ;; esac
+    LOCKS="$ddir/.locks"
+    claim_env=""
+    [ "$ddir" != "$DIR" ] && [ "$ddir" != "$(sec_dir)" ] && claim_env="HANDOFF_GROUP=$(basename "$ddir") "
+
     session="$(field session)"
     if lock_live "$id"; then
       # A legacy lease with no recorded session can't be matched; allow rather than
@@ -811,9 +821,9 @@ Re-run setup-handoff to update it, or fix config.json if it exists but is malfor
       deny "'$id' is CLAIMED by $(lock_owner "$id"). Do not work on it and do not edit its doc — pick another handoff, or tell the user who holds it."
     fi
     if [ -d "$LOCKS/$id" ]; then
-      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: ${hd}/handoff claim $id \"note\" — the takeover gets logged."
+      deny "'$id' has a STALE lease from $(lock_owner "$id"). Take it over first: ${claim_env}${hd}/handoff claim $id \"note\" — the takeover gets logged."
     fi
-    deny "You do not hold the lease on '$id'. Claim it before editing: ${hd}/handoff claim $id \"what you're doing\" — then re-try this edit."
+    deny "You do not hold the lease on '$id'. Claim it before editing: ${claim_env}${hd}/handoff claim $id \"what you're doing\" — then re-try this edit."
     ;;
 
   posttool-edit)

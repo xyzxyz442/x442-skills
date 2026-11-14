@@ -173,8 +173,10 @@ id instead of "no such handoff". The rendered AGENTS.md block spells these comma
 repo's own group already filled in.
 
 The board root `INDEX.md` is a **roll-up** across every section; each group also has its own
-sub-index. The session board and edit gate a repo sees are filtered to its own group, so groups on
-a dedicated board never collide, and ids may repeat across groups without clashing.
+sub-index. The session board a repo sees is filtered to its own group, so groups on a dedicated
+board never collide, and ids may repeat across groups without clashing. The edit gate reads a
+doc's lease from the section the doc lives in, so a lease claimed with `HANDOFF_GROUP=<other>` lets
+its holder edit that doc from any member.
 
 ## Brief repo identity — `_generated.repos`
 
