@@ -137,7 +137,7 @@ def _board_json(board):
 
 
 def _repo_json(repo):
-    """A member repo's own handoff config (the `group` it resolves to), pre-consolidation name
+    """A member repository's own handoff config (the `group` it resolves to), pre-consolidation name
     accepted as a fallback."""
     for name in ("handoff.config.json", "handoff.json"):
         try:
@@ -258,7 +258,7 @@ def grade_schema_forward(target):
     says nothing about writing, which means an older CLI could read a schema-99 doc, release it,
     and silently drop every field it did not understand — shipping only the read half is worse
     than shipping neither. The doc here is stamped by hand at a schema no CLI will ever reach,
-    which is what a member repo sees the day a teammate's board upgrades first.
+    which is what a member repository sees the day a teammate's board upgrades first.
     """
     e = []
     doc = Path(target) / HD
@@ -2921,6 +2921,61 @@ def grade_cross_repo(_target):
                 f"exit {r_noid.returncode}: {r_noid.stderr.strip()[:100]}",
             )
         )
+
+        # Identity precedence on a re-run by hand: --repo-id, else the identity the member
+        # repository already records, else its folder's basename. The recorded identity may still
+        # sit in the pre-consolidation .agents/handoff.config.json, which merge-hooks.py carries
+        # forward — an installer that looked only at .agents/handoff.json fell through to the
+        # basename there, and the live value it handed merge-hooks.py overwrote the carried one.
+        def repo_id_of(r):
+            try:
+                return json.loads((r / ".agents/handoff.json").read_text()).get("repo")
+            except (OSError, ValueError):
+                return None
+
+        legacy = parent / "repo-c"
+        legacy.mkdir()
+        sh(["git", "init", "-q"], legacy)
+        (legacy / "AGENTS.md").write_text("# AGENTS.md\n")
+        (legacy / ".agents").mkdir()
+        (legacy / ".agents/handoff.config.json").write_text('{"repo": "acme-c"}\n')
+        install(legacy)
+        e.append(
+            gc.expectation(
+                "a re-run keeps the identity recorded in the legacy handoff.config.json",
+                repo_id_of(legacy) == "acme-c",
+                f"repo={repo_id_of(legacy)!r} (folder repo-c)",
+            )
+        )
+        install(legacy)
+        e.append(
+            gc.expectation(
+                "a second re-run keeps it once it lives in handoff.json",
+                repo_id_of(legacy) == "acme-c",
+                f"repo={repo_id_of(legacy)!r}",
+            )
+        )
+        sh(
+            [
+                "bash",
+                str(SETUP),
+                str(legacy),
+                "--tools",
+                "claude",
+                "--primary",
+                "claude",
+            ]
+            + ["--topology", "cross-repo", "--handoff-dir", "../handoff"]
+            + ["--repo-id", "acme-renamed"],
+            legacy,
+        )
+        e.append(
+            gc.expectation(
+                "--repo-id overrides the recorded identity",
+                repo_id_of(legacy) == "acme-renamed",
+                f"repo={repo_id_of(legacy)!r}",
+            )
+        )
         return e
     finally:
         shutil.rmtree(parent, ignore_errors=True)
@@ -2930,7 +2985,7 @@ def _scope_notice_expectations(sh, ho, board, tag):
     """A sectioned board must never read as an empty board, nor report a real id as unknown just
     because it sits in another section. This is the reachable path, not a corner one: the AGENTS.md
     block's own documented commands are typed by hand and inherit no HANDOFF_GROUP (only the tool
-    hooks carry it), which is how a member repo came to read its own board as empty. Assumes the
+    hooks carry it), which is how a member repository came to read its own board as empty. Assumes the
     grouped-board scaffold, where `node-drain` exists only in the infra section."""
     e = []
     noscope = {"HANDOFF_REPO": "auth", "HANDOFF_GROUP": ""}

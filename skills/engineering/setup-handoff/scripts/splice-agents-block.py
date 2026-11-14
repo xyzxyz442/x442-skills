@@ -56,7 +56,7 @@ def splice(existing: str, block: str) -> str:
     # followed it. That was invisible while this was the only managed block in the file, and it
     # became a permanent one-line diff the moment a sibling skill spliced a block directly below
     # (register-cross-repo-handoff does exactly that). Each sync then flipped the line back and
-    # forth, so `sync-cross-repo-handoff.sh` was never idempotent across every member repo —
+    # forth, so `sync-cross-repo-handoff.sh` was never idempotent across every member repository —
     # contradicting the promise four lines up, and dirtying four repos on every re-run.
     return head + block + ("\n" + rest if rest else "")
 
@@ -83,7 +83,7 @@ def _selftest() -> int:
     assert splice(splice(one, blk), blk) == splice(one, blk), "must be idempotent"
 
     # THE REGRESSION: a sibling skill's managed block directly below this one. The blank line
-    # between them is ours to keep — without it, each sync flipped that line and no member repo
+    # between them is ours to keep — without it, each sync flipped that line and no member repository
     # of a synced fleet was ever clean after a re-run.
     sib = "<!-- cross-repo-handoff:begin -->\nx\n"
     two = "# A\n\n" + BEGIN + " -->\nold\n" + END + "\n\n" + sib

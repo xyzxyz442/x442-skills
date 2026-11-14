@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # resolve.py — resolve the .handoff-repos.json cascade into ONE effective set of groups, their
-# boards, and their member repos.
+# boards, and their member repositories.
 #
 #   resolve.py --scope <dir> [--from <dir>]
 #
@@ -505,7 +505,7 @@ def _selftest() -> int:
 
     # --- "wire": false — a member registered for its root commit and origin, never wired ------------
     # A board's own repository can be a handoff's home (a bundle whose issue belongs on the board),
-    # but it is not a member repo: it has no AGENTS.md and must never be wired. It still needs a
+    # but it is not a member repository: it has no AGENTS.md and must never be wired. It still needs a
     # registry entry, because a home names a registered repository.
     with tempfile.TemporaryDirectory() as td:
         mf = os.path.join(td, "handoff.json")

@@ -233,7 +233,7 @@ def _sibling_expectations(agents_md: Path) -> list[dict]:
     )
 
     # THE REGRESSION, stated as a re-run: applying each splice a second time must change nothing.
-    # This is what the fleet sync saw as "M AGENTS.md" on every member repo, for two minutes,
+    # This is what the fleet sync saw as "M AGENTS.md" on every member repository, for two minutes,
     # with nothing to say which of the two blocks moved.
     unstable = []
     for p, (mod, begin, end) in loaded:

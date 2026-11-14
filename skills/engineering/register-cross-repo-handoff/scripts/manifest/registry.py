@@ -4,7 +4,7 @@
 #
 #   registry.py --resolved <resolve.py-output.json> --board <dir> [--write | --check]
 #
-# Why the projection exists at all: the payload CLI ships INSIDE the member repos and inside a
+# Why the projection exists at all: the payload CLI ships INSIDE the member repositories and inside a
 # repo-less shared board. It can reach neither this skill (to run resolve.py) nor the cascade's
 # --scope, so it cannot resolve `.handoff-repos.json` for itself. The manifest's owner therefore
 # writes the answer down where the CLI can read it. Before this file existed, `handoff export`

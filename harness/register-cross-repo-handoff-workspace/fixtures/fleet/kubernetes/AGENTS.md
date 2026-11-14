@@ -1,3 +1,3 @@
 # kubernetes
 
-Clusters + manifests. Fixture member repo for the register-cross-repo-handoff eval.
+Clusters + manifests. Fixture member repository for the register-cross-repo-handoff eval.

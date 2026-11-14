@@ -258,7 +258,7 @@ board ([ADR 0022](../../../docs/adr/0022-the-team-board-is-the-one-setup-finds-a
 **When the checkout belongs to a team board, record the own board in the `boards` map, not with
 `--local-board`.** `--local-board` makes it this checkout's board, and every claim then lands where
 the team does not look; setup warns before it does that when this repo's committed `.agents/handoff.json` (or an in-repo
-`.agents/handoff/`) names a different board — the normal state of a member repo once setup has run. Reach the own board through its own CLI
+`.agents/handoff/`) names a different board — the normal state of a member repository once setup has run. Reach the own board through its own CLI
 and promote a draft with `handoff move --to`.
 
 Create it with `--board-only <path>` if it does not exist. When it is
@@ -554,7 +554,7 @@ child of), `acceptChildren` (the cross-owner children this board accepts back), 
 single-repo board only, and the tooling-owned `_generated` block (the projected repo registry and
 the payload version stamp).
 **`<repo>/.agents/handoff.json`** is per-consumer and written only for cross-repo installs — `repo`,
-`group`, `board`. A dedicated board is read by every member repo, so no member's identity may live in
+`group`, `board`. A dedicated board is read by every member repository, so no member's identity may live in
 the board file; the last installer would clobber the rest. The full key table ships in the board's
 own [`README.md`](scripts/payload/README.md) — JSON has no comments, so that table is the
 documentation.

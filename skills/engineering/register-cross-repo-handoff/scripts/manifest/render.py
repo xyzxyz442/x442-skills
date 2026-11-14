@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# render.py — render the AGENTS.md cross-repo-handoff block for ONE member repo and splice it into
+# render.py — render the AGENTS.md cross-repo-handoff block for ONE member repository and splice it into
 # that repo's AGENTS.md in place, touching not one byte outside the markers.
 #
 #   resolve.py --scope … | render.py --file <repo>/AGENTS.md --template assets/agents-cross-repo-handoff.md \
@@ -116,7 +116,7 @@ def _without_cell_padding(text: str) -> str:
 def same_block(a: str, b: str) -> bool:
     """True when a and b differ only in the padding of this block's table cells.
 
-    A formatter a member repo runs on commit (prettier pads tables by display width) must not read
+    A formatter a member repository runs on commit (prettier pads tables by display width) must not read
     as drift, or every sync rewrites the block and every commit pads it back. A table outside the
     markers is not ours, so a difference there is compared byte for byte.
     """
@@ -188,7 +188,7 @@ def _selftest() -> int:
     assert "`web`" in out, "a member with no wire key is wired, as before"
     assert "PEERS `web`" in out, out
 
-    # A member repo whose pre-commit runs prettier pads the peer table on commit. That padded block is
+    # A member repository whose pre-commit runs prettier pads the peer table on commit. That padded block is
     # the same block: comparing bytes rewrote it on every sync, and the next commit padded it again.
     def inb(s: str) -> str:
         return "# A\n\n" + BEGIN + " -->\n" + s + END + "\n"
