@@ -4135,30 +4135,6 @@ chk_contains "--verbose still works" "$(hb "$UF" list --verbose)" "STATUS"
 chk_contains "a typo'd flag AFTER a valid one is refused too" \
   "$(hb "$UF" list --verbose --bogusflag)" "unknown flag: --bogusflag"
 
-printf '\nnew — help and dash-led ids\n'
-# `new` took $1 as the id with no check, so `handoff new --help` slugified the flag to `help` and
-# filed a real doc (plus a regenerated INDEX.md) on the board. Reading the usage must be free.
-NH="$(mkboard)"
-NHB="$NH/.agents/handoff"
-NH_BEFORE="$(ls -A "$NHB")"
-for NH_FLAG in --help -h; do
-  NH_OUT="$(hb "$NH" new "$NH_FLAG")"
-  NH_RC=$?
-  chk "new $NH_FLAG exits 0" "0" "$NH_RC"
-  chk_contains "new $NH_FLAG prints the usage" "$NH_OUT" "usage: handoff new <id>"
-done
-chk "new --help files no help doc" "no" "$([ -e "$NHB/help-handoff.md" ] && echo yes || echo no)"
-chk "new --help and -h leave the board untouched" "$NH_BEFORE" "$(ls -A "$NHB")"
-for NH_BAD in -foo --title; do
-  NH_OUT="$(hb "$NH" new "$NH_BAD" x)"
-  NH_RC=$?
-  chk "new $NH_BAD as the id is refused" "1" "$NH_RC"
-  chk_contains "new $NH_BAD as the id names the usage" "$NH_OUT" "usage: handoff new <id>"
-done
-chk "a dash-led id files nothing" "$NH_BEFORE" "$(ls -A "$NHB")"
-hb "$NH" new help-ok --title "Still works" > /dev/null
-chk "a plain id still creates its doc" "yes" "$([ -f "$NHB/help-ok-handoff.md" ] && echo yes || echo no)"
-
 # The release and lease cases live in their own file, sourced here so they share this suite's
 # frozen payload, helpers and counters. This file sits at the size where Prettier's shell parser
 # runs out of WASM memory ("memory access out of bounds"), so new sections go there, not here.

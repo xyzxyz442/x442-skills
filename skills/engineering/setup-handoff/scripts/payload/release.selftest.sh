@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Release and lease cases for the handoff CLI: claim's expired-lease takeover, release's holder
 # gate (ADR 0027), reopening an archived doc, blocked_on clearing, and formatter-wrapped rosters.
+# Also the overflow for sections added after handoff.selftest.sh outgrew Prettier's shell
+# parser: `new` refusing a flag-shaped id.
 # Not run on its own — handoff.selftest.sh sources it, so it uses that suite's frozen payload
 # ($SRC), its helpers (mkboard, hb, chk, chk_contains, now) and its pass/fail counters.
 # Run: bash handoff.selftest.sh
@@ -121,3 +123,27 @@ chk_contains "list counts the new child" "$(hb "$ML" list | grep '^ml-bundle-han
 # Block style is the other shape a YAML formatter may emit.
 awk '/^children:/ { print "children:"; print "  - ml-one-handoff"; print "  - ml-two-handoff"; next } { print }' "$MLDOC" > "$MLDOC.t" && mv "$MLDOC.t" "$MLDOC"
 chk_contains "a block-style roster is read too" "$(hb "$ML" list | grep '^ml-bundle-handoff ')" "0/2"
+
+printf '\nnew — help and dash-led ids\n'
+# `new` took $1 as the id with no check, so `handoff new --help` slugified the flag to `help` and
+# filed a real doc (plus a regenerated INDEX.md) on the board. Reading the usage must be free.
+NH="$(mkboard)"
+NHB="$NH/.agents/handoff"
+NH_BEFORE="$(ls -A "$NHB")"
+for NH_FLAG in --help -h; do
+  NH_OUT="$(hb "$NH" new "$NH_FLAG")"
+  NH_RC=$?
+  chk "new $NH_FLAG exits 0" "0" "$NH_RC"
+  chk_contains "new $NH_FLAG prints the usage" "$NH_OUT" "usage: handoff new <id>"
+done
+chk "new --help files no help doc" "no" "$([ -e "$NHB/help-handoff.md" ] && echo yes || echo no)"
+chk "new --help and -h leave the board untouched" "$NH_BEFORE" "$(ls -A "$NHB")"
+for NH_BAD in -foo --title; do
+  NH_OUT="$(hb "$NH" new "$NH_BAD" x)"
+  NH_RC=$?
+  chk "new $NH_BAD as the id is refused" "1" "$NH_RC"
+  chk_contains "new $NH_BAD as the id names the usage" "$NH_OUT" "usage: handoff new <id>"
+done
+chk "a dash-led id files nothing" "$NH_BEFORE" "$(ls -A "$NHB")"
+hb "$NH" new help-ok --title "Still works" > /dev/null
+chk "a plain id still creates its doc" "yes" "$([ -f "$NHB/help-ok-handoff.md" ] && echo yes || echo no)"

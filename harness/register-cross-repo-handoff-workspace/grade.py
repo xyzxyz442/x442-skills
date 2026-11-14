@@ -369,6 +369,8 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
             )
         )
 
+        exps.append(_banner_probe(work, env, tag))
+
         # idempotency: commit the FIRST sync's output as the baseline, then re-sync and assert every
         # member repo's git status is clean (the second sync changed nothing).
         for name in MEMBERS:
@@ -529,6 +531,49 @@ def _grade_local_wiring_member(fixture: Path) -> list:
         ]
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _banner_probe(work: Path, env: dict, tag: str) -> dict:
+    """A doc addressed to `k8s` reaches the session banner of the member at `kubernetes/`.
+
+    The `repo` assertions above check the precondition; this checks the symptom the bug report
+    named. It fires the SessionStart command exactly as the sync wired it into the member's
+    .claude/settings.json, so a wiring change that bypasses the member's config is caught too.
+    With the folder's basename as the identity, the banner leaves the doc out and says nothing.
+    The doc lands on the board, outside every member repo, so the idempotency check that follows
+    is unaffected.
+    """
+    member = work / "kubernetes"
+    probe = "banner-probe"
+    subprocess.run(
+        ["bash", str(work / ".agents/handoff/handoff"), "new", probe]
+        + ["--title", "Banner probe", "--audience", "k8s"],
+        cwd=str(member),
+        capture_output=True,
+        text=True,
+        env={**env, "HANDOFF_GROUP": "infra"},
+    )
+    settings = _read_json(member / ".claude/settings.json")
+    cmds = [
+        h.get("command", "")
+        for g in (settings.get("hooks") or {}).get("SessionStart") or []
+        for h in g.get("hooks") or []
+    ]
+    banner = ""
+    if cmds:
+        banner = subprocess.run(
+            ["bash", "-c", cmds[0]],
+            cwd=str(member),
+            input='{"session_id":"sess-BANNER"}',
+            capture_output=True,
+            text=True,
+            env={**env, "CLAUDE_PROJECT_DIR": str(member)},
+        ).stdout
+    return gc.expectation(
+        f"{tag} a doc for k8s reaches the kubernetes member's session banner",
+        f"{probe}-handoff" in banner,
+        f"SessionStart command wired: {bool(cmds)}; probe in banner: {probe in banner}",
+    )
 
 
 def _run_sync(work: Path, env: dict, *extra: str) -> subprocess.CompletedProcess:
