@@ -8,10 +8,10 @@ Why this grader RUNS the skill (sync), like register-cross-repo-graph's grader
 ------------------------------------------------------------------------------
 A synced fleet cannot ship as a static fixture: its post-state embeds absolute, machine-specific
 paths (board paths, the wired hook commands, the AGENTS.md block). So the fixtures ship only the
-PORTABLE inputs (a workspace with a relative-path .handoff-repos.json + stub member repos, each with
+PORTABLE inputs (a workspace with a relative-path .handoff-repos.json + stub member repositories, each with
 an AGENTS.md), and this grader manufactures the machine-specific state hermetically:
 
-  * copy the fixture into a throwaway sandbox and `git init` each member repo,
+  * copy the fixture into a throwaway sandbox and `git init` each member repository,
   * point `$HOME` at a throwaway dir (so no user-layer ~/.agents/handoff-repos.json leaks in),
   * run the skill's own deterministic, LLM-free sync-cross-repo-handoff.sh,
   * then run the verifier under the same sandboxed `$HOME`.
@@ -108,7 +108,7 @@ def _groups_csv(cfg: dict) -> str:
 
 
 def _member_group(repo: Path) -> str:
-    """The section a member repo resolves to. It lives in the repo's own .agents/handoff.json
+    """The section a member repository resolves to. It lives in the repo's own .agents/handoff.json
     (written by merge-hooks.py), NOT baked into the hook command as HANDOFF_GROUP=<group> — that
     literal was deliberately removed so a rename cannot strand a stale copy inside a tool config.
     """
@@ -116,7 +116,7 @@ def _member_group(repo: Path) -> str:
 
 
 def _member_repo(repo: Path) -> str:
-    """The identity a member repo files and filters under. The session banner shows a doc only when
+    """The identity a member repository files and filters under. The session banner shows a doc only when
     its `audience` equals this value, so it must be the member's registered audience — never the
     folder's basename, which agrees with it only when a fleet happened to name the folder that way.
     """
@@ -372,7 +372,7 @@ def _grade_fleet_layout(fixture: Path, layout: str) -> list:
         exps.append(_banner_probe(work, env, tag))
 
         # idempotency: commit the FIRST sync's output as the baseline, then re-sync and assert every
-        # member repo's git status is clean (the second sync changed nothing).
+        # member repository's git status is clean (the second sync changed nothing).
         for name in MEMBERS:
             gc.git_init_commit(work / name, "post-sync baseline")
         subprocess.run(
@@ -540,7 +540,7 @@ def _banner_probe(work: Path, env: dict, tag: str) -> dict:
     named. It fires the SessionStart command exactly as the sync wired it into the member's
     .claude/settings.json, so a wiring change that bypasses the member's config is caught too.
     With the folder's basename as the identity, the banner leaves the doc out and says nothing.
-    The doc lands on the board, outside every member repo, so the idempotency check that follows
+    The doc lands on the board, outside every member repository, so the idempotency check that follows
     is unaffected.
     """
     member = work / "kubernetes"

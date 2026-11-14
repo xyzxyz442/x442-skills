@@ -8,7 +8,7 @@
 #   1. scaffolds each distinct board as a STANDALONE board (--board-only), owned by no repo;
 #  1b. projects the manifest into each board as repos.json, so the board's own CLI can resolve a
 #      handoff's `audience` to a real repo (attested by that repo's root commit) instead of guessing;
-#   2. wires each member repo to its board + section (cross-repo topology, --group);
+#   2. wires each member repository to its board + section (cross-repo topology, --group);
 #   3. splices the cross-repo-handoff AGENTS.md block into each member (render.py);
 #   4. records a state ledger so --prune can report members that have left scope.
 #
@@ -161,7 +161,7 @@ while IFS=$'\t' read -r kind path groups layout remote; do
 done <<< "$PLAN"
 
 # --- 1b. project the manifest into each board as repos.json --------------------------------------
-# The board's `handoff` CLI cannot resolve the cascade for itself: it ships inside the member repos
+# The board's `handoff` CLI cannot resolve the cascade for itself: it ships inside the member repositories
 # (and inside a repo-less shared board), so it can reach neither this skill's resolver nor --scope.
 # The manifest's owner therefore writes the ANSWER down where the CLI can read it, and `handoff
 # export` resolves a cross-repo brief's target repo from that file instead of guessing a sibling
@@ -181,7 +181,7 @@ while IFS=$'\t' read -r kind path groups layout remote; do
   fi
 done <<< "$PLAN"
 
-# --- 2. wire each member repo + 3. render its AGENTS.md block ------------------------------------
+# --- 2. wire each member repository + 3. render its AGENTS.md block ------------------------------------
 note "== members =="
 while IFS=$'\t' read -r kind group board bgroups layout alias audience repo exists has_agents wire; do
   [ "$kind" = "MEMBER" ] || continue

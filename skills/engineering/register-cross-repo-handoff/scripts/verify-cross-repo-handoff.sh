@@ -4,7 +4,7 @@
 #   verify-cross-repo-handoff.sh <dir> | --scope <dir> [--from <dir>] [--json]
 #
 # Confirms the manifest cascade parses, each board is scaffolded with the expected group facts, each
-# member repo is wired to its board + section, the AGENTS.md block matches the resolved set, and
+# member repository is wired to its board + section, the AGENTS.md block matches the resolved set, and
 # each board's handoff.json still projects the manifest (the file `handoff export` resolves a
 # cross-repo brief's target repo from — drift there is what silently degrades every brief).
 # Distinguishes "not configured" (no manifest -> exit 0) from "broken" (-> exit 1). Writes nothing.
@@ -27,7 +27,7 @@ RESOLVE="$SKILL_DIR/scripts/manifest/resolve.py"
 REGISTRY="$SKILL_DIR/scripts/manifest/registry.py"
 # The payload's own config resolver, used here instead of grepping a filename. Board facts live in
 # handoff.json on any board the current installer wrote, in a legacy config.json or KEY=value
-# `config` on older ones, and a member repo's own identity lives in its .agents/handoff.json — with a
+# `config` on older ones, and a member repository's own identity lives in its .agents/handoff.json — with a
 # precedence between them. This file already decides all of that for `handoff` and `hooks.sh`;
 # re-deriving it here is how this verifier came to report FAIL on every healthy board.
 #
@@ -147,7 +147,7 @@ print(json.dumps({
 PY
 }
 
-# Print one board's (optionally one member repo's) effective config as HC_* assignments, via the
+# Print one board's (optionally one member repository's) effective config as HC_* assignments, via the
 # payload resolver. Non-zero + no output when it cannot be resolved, so a caller must branch on the
 # status BEFORE eval-ing: `eval "$(f)"` reports eval's own status, never the callee's, and a silent
 # empty eval would leave the PREVIOUS board's HC_* values in scope and grade this board on them.
@@ -266,7 +266,7 @@ PY
 )
 
 echo
-section "3. member repos"
+section "3. member repositories"
 # MEMBER<TAB>group<TAB>board<TAB>alias<TAB>repo<TAB>exists<TAB>has_agents<TAB>wire<TAB>layout<TAB>audience
 while IFS=$'\t' read -r group board alias repo exists has_agents wire layout audience; do
   [ -n "$alias" ] || continue
@@ -397,7 +397,7 @@ PY
 echo
 section "5. board substrate (git, remote, lease visibility)"
 # A standalone board is the board of record: it holds documents that exist nowhere else, and it is
-# the thing every member repo coordinates through. Three properties decide whether it can actually
+# the thing every member repository coordinates through. Three properties decide whether it can actually
 # do that job, and each one fails silently on its own (ADR 0002).
 while IFS= read -r bpath; do
   [ -n "$bpath" ] || continue

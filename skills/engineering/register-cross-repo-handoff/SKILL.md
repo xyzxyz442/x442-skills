@@ -7,7 +7,7 @@ description: Use when several repos should coordinate handoffs together — a fl
 
 Coordinate handoffs across a **group (or several groups) of peer repos** without seeding the board
 from any one project. You declare the groups and their members in an `.agents/handoff.json` manifest
-at a workspace directory; the sync scaffolds a dedicated board and wires every member repo
+at a workspace directory; the sync scaffolds a dedicated board and wires every member repository
 to its own **sub-indexed section** of that board.
 
 This is the multi-repo counterpart to [setup-handoff](../setup-handoff/SKILL.md), which installs a
@@ -27,7 +27,7 @@ Do **not** use it for a single repo's own handoffs — that is plain `setup-hand
 
 - `setup-handoff` present in this repo of skills (the sync reuses its installer).
 - `python3` on PATH (the resolver, the AGENTS.md splicer, and the enforcement gate need it).
-- Each member repo already has an `AGENTS.md` (run `initial-project` there first) — the sync
+- Each member repository already has an `AGENTS.md` (run `initial-project` there first) — the sync
   refuses to fabricate one.
 
 ## The manifest — `.agents/handoff.json`
@@ -42,7 +42,7 @@ A cascade, lowest precedence first, nearest wins (exactly like `AGENTS.md` / `CL
 2. **workspace** — `<scope>/.agents/handoff.json` (the default; committed if the workspace is a repo)
 3. **subdir** — `<dir>/.agents/handoff.json` for dirs between scope and where you sync from
 
-It is the **same filename** the board and each member repo use. A layer is identified by where it
+It is the **same filename** the board and each member repository use. A layer is identified by where it
 sits, not by what it is called. The predecessor `.handoff-repos.json` is still read at each layer,
 below the file that replaced it there, so an existing workspace keeps resolving until it moves.
 
@@ -157,7 +157,7 @@ Editing the manifest later is the same loop: change it, re-sync, re-verify. The 
 
 ## Working the board
 
-A member repo's section is selected by `HANDOFF_GROUP`. The wiring bakes it into each tool's hook
+A member repository's section is selected by `HANDOFF_GROUP`. The wiring bakes it into each tool's hook
 command, so the session board and the edit gate are scoped automatically — but a command run by
 hand inherits nothing, so pass it:
 
@@ -183,7 +183,7 @@ different repo and mean something else there, so the brief carries the target re
 and both the executor's preflight and `import --result` check it. On a grouped board the target is
 whatever the handoff's `audience` names — a different repo from the one export runs in.
 
-The board's CLI cannot resolve the cascade for itself: it ships inside the member repos, so it can
+The board's CLI cannot resolve the cascade for itself: it ships inside the member repositories, so it can
 reach neither `resolve.py` nor `--scope`. The sync therefore writes the answer down where the CLI
 can read it — the `_generated` block of `<board>/handoff.json`, generated, never hand-edited:
 
@@ -331,7 +331,7 @@ the protocol — do not add them to it. Export a brief instead, and see
   them rather than flipping a coin — every brief aimed at that audience renders `unverified` until
   the manifest is fixed. Across groups the same audience is fine; lookup is section-scoped.
 - **`--prune` is advisory.** The sync reports members that left scope but does not unwire them (that
-  is a `merge-hooks` strip in the member repo); remove their hooks by hand if they should stop
+  is a `merge-hooks` strip in the member repository); remove their hooks by hand if they should stop
   coordinating.
 - **Secrets.** Handoff docs are committed to git history — never paste keys, secrets, or PII; record
   a name and supply the value out of band.

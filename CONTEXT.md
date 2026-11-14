@@ -51,6 +51,11 @@ A named partition of a dedicated board, holding one set of peer repositories. A 
 many; a board with one is the ordinary case.
 _Avoid_: team, workspace, namespace
 
+**Member repository**:
+One repository of a group, wired to the group's section of a dedicated board. It files and
+filters under its **audience**, which defaults to its alias and is never its folder's name.
+_Avoid_: member repo
+
 **Section**:
 Where a group's documents physically live on the board — a subfolder or an id prefix. A
 group's layout, not the group itself. A **flat** board has no sections: its one group's documents
