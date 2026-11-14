@@ -147,3 +147,30 @@ done
 chk "a dash-led id files nothing" "$NH_BEFORE" "$(ls -A "$NHB")"
 hb "$NH" new help-ok --title "Still works" > /dev/null
 chk "a plain id still creates its doc" "yes" "$([ -f "$NHB/help-ok-handoff.md" ] && echo yes || echo no)"
+
+printf '\nthe edit gate reads a doc'"'"'s lease from the section the doc lives in\n'
+# A subfolder board keeps one .locks per section. The gate looked only in the SESSION's section, so
+# a lease claimed with HANDOFF_GROUP=<other> still refused the holder's edit of that doc.
+XS="$(mkshared_grouped)"
+cp "$SRC/hooks.sh" "$XS/scripts/hooks.sh"
+XS="$(cd "$XS" && pwd -P)"
+xs_gate() { # session doc-path -> "allow", or the deny payload; the hook runs as section alpha
+  local out
+  out="$(printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" "$2" \
+    | HANDOFF_GROUP=alpha bash "$XS/scripts/hooks.sh" --kind pretool-edit --tool claude 2> /dev/null)"
+  case "$out" in *'"deny"'*) printf '%s' "$out" ;; *) echo allow ;; esac
+}
+XS_B="$XS/beta/b-work-handoff.md"
+XS_OUT="$(xs_gate xs-sess "$XS_B")"
+chk_contains "an unclaimed doc in another section is refused" "$XS_OUT" "do not hold the lease"
+chk_contains "and the claim it suggests names that section" "$XS_OUT" "HANDOFF_GROUP=beta"
+HANDOFF_SESSION_ID=xs-sess HANDOFF_GROUP=beta "$XS/handoff" claim b-work "cross-section" > /dev/null 2>&1
+chk "the lease is in beta's own locks" "xs-sess" \
+  "$(sed -n 's/^session=//p' "$XS/beta/.locks/b-work-handoff/owner")"
+chk "its holder may edit the doc from a session in another section" "allow" "$(xs_gate xs-sess "$XS_B")"
+chk_contains "another session is still refused by beta's lease" "$(xs_gate xs-other "$XS_B")" "CLAIMED by"
+HANDOFF_SESSION_ID=xs-sess HANDOFF_GROUP=alpha "$XS/handoff" claim a-work "home" > /dev/null 2>&1
+chk "a doc in the session's own section is still gated by its own lease" "allow" \
+  "$(xs_gate xs-sess "$XS/alpha/a-work-handoff.md")"
+chk_contains "and its claim hint carries no section override" "$(xs_gate xs-sess "$XS/alpha/a-more-handoff.md")" \
+  "handoff claim a-more-handoff"
