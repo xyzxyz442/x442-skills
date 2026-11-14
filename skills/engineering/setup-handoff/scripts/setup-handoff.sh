@@ -287,7 +287,7 @@ install_cli() { # board-dir
 # values OVERRIDE — that is what keeps the sync authoritative. When they are ABSENT (e.g. a
 # hand-typed re-run of setup-handoff.sh against an already-sectioned board), the existing values
 # are PRESERVED rather than wiped, with a warning on stderr — wiping them silently would reroute
-# every member repo's handoffs to the board root and break the sub-indexes. Passing an explicit
+# every member repository's handoffs to the board root and break the sub-indexes. Passing an explicit
 # empty value (--groups "") is a deliberate CLEAR, distinct from not passing the flag at all; see
 # GROUP_LIST_SET/LAYOUT_SET below for how "flag absent" is told apart from "flag passed empty".
 # ttlHours is a POLICY knob the user owns: there is no installer flag for it, so an existing value
@@ -864,7 +864,7 @@ mirror_workflow_step() { # board-dir
 # --- --board-only: scaffold a standalone shared board, owned by no repo -----------------
 # Copies the payload + writes a cross-repo config (with any group facts), then exits. No per-tool
 # wiring, no AGENTS.md edit, no git/AGENTS.md precondition — the board is a plain directory the
-# cross-repo sync stands up before it wires the member repos that point at it. Idempotent.
+# cross-repo sync stands up before it wires the member repositories that point at it. Idempotent.
 if [ -n "$BOARD_ONLY" ]; then
   case "$BOARD_ONLY" in /*) HDEST="$BOARD_ONLY" ;; *) HDEST="$(pwd)/$BOARD_ONLY" ;; esac
   # ADR 0018, before anything is written: --remote names the board's home, or a re-run finds one
@@ -1162,14 +1162,20 @@ render_and_merge() { # $1 = tool  $2 = is_primary(1|0)
   # `web-client`, every doc filed to `acme-web` vanished from its banner, and nothing warned.
   # So: the sync's --repo-id, else the identity this repo already records (a manual re-run must not
   # undo what the sync wrote), else the basename on a first install with nothing better to go on.
+  # "Records" means either file merge-hooks.py reads, in its precedence: .agents/handoff.json, then
+  # the pre-consolidation .agents/handoff.config.json. Reading only the first fell through to the
+  # basename on an old member repository, and that live value overwrote the one being carried over.
   local repo_id=""
   if [ "$TOPOLOGY" = "cross-repo" ]; then
     repo_id="$REPO_ID"
     [ -n "$repo_id" ] || repo_id="$(python3 -c 'import json,sys
-try: d = json.load(open(sys.argv[1]))
-except Exception: raise SystemExit(0)
-r = d.get("repo") if isinstance(d, dict) else None
-print(r if isinstance(r, str) else "")' "$REPO/.agents/handoff.json" 2> /dev/null || true)"
+for p in sys.argv[1:]:
+    try: d = json.load(open(p))
+    except Exception: continue
+    r = d.get("repo") if isinstance(d, dict) else None
+    if isinstance(r, str) and r:
+        print(r)
+        break' "$REPO/.agents/handoff.json" "$REPO/.agents/handoff.config.json" 2> /dev/null || true)"
     [ -n "$repo_id" ] || repo_id="$(basename "$REPO")"
   fi
   HANDOFF_TOOL="$tool" HANDOFF_PRIMARY="$primary" HANDOFF_REPO="$repo_id" HANDOFF_GROUP="$GROUP" \
