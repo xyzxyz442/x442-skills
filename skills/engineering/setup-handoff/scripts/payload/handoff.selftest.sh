@@ -1077,10 +1077,10 @@ chk "the table is inserted ABOVE the activity log, not appended under it" "befor
     "$(grep -n '## Activity' "$CTB/legacy-bundle-handoff.md" | cut -d: -f1)" ] && echo before || echo after)"
 
 # --- a SHARED board: its own git repo, with a remote (ADR 0002) ------------------------
-# Every case above runs on a board nested inside a member repo, where the repo's remote is not the
-# board's — leases_shared is false there and the CLI must behave exactly as it always has. These
-# cases build the other shape: a standalone board that owns its repository and has a remote of its
-# own, which is the only shape push-CAS applies to.
+# Every case above runs on a board nested inside a member repository, where the repo's remote is
+# not the board's — leases_shared is false there and the CLI must behave exactly as it always has.
+# These cases build the other shape: a standalone board that owns its repository and has a remote
+# of its own, which is the only shape push-CAS applies to.
 mkshared() { # -> board dir (its own repo, pushed to a bare remote beside it)
   local base bare b
   base="$(mktemp -d)"
