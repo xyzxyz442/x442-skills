@@ -176,7 +176,7 @@ The board root `INDEX.md` is a **roll-up** across every section; each group also
 sub-index. The session board a repo sees is filtered to its own group, so groups on a dedicated
 board never collide, and ids may repeat across groups without clashing. The edit gate reads a
 doc's lease from the section the doc lives in, so a lease claimed with `HANDOFF_GROUP=<other>` lets
-its holder edit that doc from any member.
+its holder edit that doc from any member repository.
 
 ## Brief repo identity — `_generated.repos`
 
