@@ -427,7 +427,11 @@ setup-handoff.sh --board-only <board> --with-mirror-workflow
 board's _repository_ root — which is not always the board directory, since a board at
 `.agents/handoff` inside a project has its root two levels up — and the job cds into the board from
 there. The workflow runs `handoff mirror` once per section the board hosts — once, for the whole
-board, when it hosts none — on every push to the board's default branch and on demand. It checks the
+board, when it hosts none — on every push to the board's default branch and on demand. It then
+rebuilds the board-root `INDEX.md` and commits it on its own when it changed: a lease commit rebuilds
+only its own section (ADR 0019), so on a board with a remote this step is what keeps the roll-up's
+links current. A board without the workflow keeps its roll-up current by hand, with a board-level
+`handoff index` and a commit. It checks the
 board out with plain `git` at full history and runs no JavaScript action, so the job needs no Node
 runtime at all.
 
@@ -681,7 +685,8 @@ shell in its siblings' sessions. Reading it needs `python3`; a board still on th
   and never claimed. Its progress is **derived** from the children's own frontmatter at read time
   and never stored — a written count is stale the moment a child closes — a child naming no doc
   reads as `MISSING` rather than done, and `release --status done` refuses while any child is
-  outstanding. The bundle doc carries that derivation as a **generated `## Children` table** (one
+  outstanding. When the last child closes `done` with its evidence, the bundle closes itself in the
+  same release (ADR 0029). The bundle doc carries that derivation as a **generated `## Children` table** (one
   row per child: status, acts-next, severity, blocked-on, lease) so a fresh session can continue a
   bundle from the doc alone; it is rebuilt between `handoff:children` markers on every `index` run,
   and an existing bundle doc gains the section on the next run. `handoff children add|rm <parent>

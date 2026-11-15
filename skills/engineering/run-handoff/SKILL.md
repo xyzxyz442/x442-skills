@@ -188,6 +188,16 @@ one row per child — so a session opening the doc cold can pick up the bundle w
 child first. A child that names no doc shows as `MISSING`, and `release --status done` refuses while
 anything is outstanding.
 
+**A bundle closes itself** when its last child closes `done`
+([ADR 0029](../../../docs/adr/0029-a-bundle-closes-itself-once-every-child-is-verified.md)). The
+child's release checks the bundle first: every child done and archived, each with its evidence
+(`verified_by` on a coordination child, `verified_at` on a nested bundle, nothing on a retired
+standalone doc), and none awaiting review. When that holds, the bundle is archived in the same
+release, and its own parent is checked next. When it does not, the bundle stays open and the release
+names each child that failed and why. Fix that child, then close the bundle by hand. The manual
+close runs the same check. A bundle that carries its own `verify:` command is never closed
+automatically, because a command never runs on its own. Run it, then close the bundle yourself.
+
 Everything between the doc's `handoff:children` markers is generated on every `index` run, exactly
 like `INDEX.md`. Never write child status into it by hand: your copy is stale the moment a child
 closes, and the next index run overwrites it anyway. Only the prose sections — **Bundle**,

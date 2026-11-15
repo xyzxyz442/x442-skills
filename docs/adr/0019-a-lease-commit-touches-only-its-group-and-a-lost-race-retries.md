@@ -53,5 +53,9 @@ ADR 0002.
 
 - The roll-up index can lag between `index` runs. Nothing treats that as a failure: the verifier
   does not check index freshness, and `handoff index` or CI brings the roll-up up to date.
+  - _2026-11-15:_ the CI half was not shipped at first, so on a shared board the roll-up froze and
+    linked archived docs. The generated mirror workflow now ends with a step that rebuilds and
+    commits the roll-up, and the verifier warns (`board.mirror_workflow.rollup`) when an installed
+    workflow lacks it. A board without the workflow still needs a manual `handoff index` and commit.
 - A payload version bump.
 - A harness case for two concurrent claims.

@@ -197,3 +197,87 @@ chk "an edit renews the holder's lease in the doc's own section" "yes" \
   "$([ "$(sed -n 's/^expires=//p' "$XS/beta/.locks/b-work-handoff/owner")" -gt "$(($(now) + 3600))" ] && echo yes || echo no)"
 chk "a lease in that section held by another session is not touched" "$XS_OTHER_EXP" \
   "$(sed -n 's/^expires=//p' "$XS/beta/.locks/b-other-handoff/owner")"
+
+printf '\na bundle closes itself when its last child closes verified (ADR 0029)\n'
+# A bundle holds no work of its own, so "every child done and verified" is its whole definition of
+# done. Closing it was a separate manual step nothing prompted, and a 5/5 bundle sat open for days.
+AC="$(mkboard)"
+ACB="$AC/.agents/handoff"
+hb "$AC" new ac-one --title "One" > /dev/null
+hb "$AC" new ac-two --title "Two" > /dev/null
+hb "$AC" new ac-bundle --orchestrator --children ac-one,ac-two --title "AC bundle" > /dev/null
+hb "$AC" new ac-top --orchestrator --children ac-bundle --title "AC top" > /dev/null
+hb "$AC" new ac-waiter --title "Waits on the bundle" > /dev/null
+hb "$AC" release ac-waiter --status blocked --blocked-on ac-bundle > /dev/null
+AC_OUT="$(hb "$AC" release ac-one --status done --verified-by "ran one.sh:1")"
+chk "a bundle with an open child stays open" "yes" "$([ -f "$ACB/ac-bundle-handoff.md" ] && echo yes || echo no)"
+chk "and the release says nothing about the bundle" "no" "$(grep -q 'ac-bundle' <<< "$AC_OUT" && echo yes || echo no)"
+AC_OUT="$(hb "$AC" release ac-two --status done --verified-by "ran two.sh:1")"
+chk_contains "the last verified child closes the bundle" "$AC_OUT" "Bundle ac-bundle-handoff complete"
+chk "the bundle is archived" "yes" "$([ -f "$ACB/archive/ac-bundle-handoff.md" ] && echo yes || echo no)"
+chk "its status is done" "done" "$(sed -n 's/^status: //p' "$ACB/archive/ac-bundle-handoff.md" 2> /dev/null | head -1)"
+chk "it is stamped verified_at" "yes" \
+  "$([ -n "$(sed -n 's/^verified_at: //p' "$ACB/archive/ac-bundle-handoff.md" 2> /dev/null)" ] && echo yes || echo no)"
+chk_contains "its verified_by says it closed itself" \
+  "$(sed -n 's/^verified_by: //p' "$ACB/archive/ac-bundle-handoff.md" 2> /dev/null)" "all 2 children done and verified"
+chk_contains "its log names the child that completed it" "$(cat "$ACB/archive/ac-bundle-handoff.md" 2> /dev/null)" \
+  "closed automatically when ac-two-handoff closed"
+chk "a nested parent closes in the same release" "yes" "$([ -f "$ACB/archive/ac-top-handoff.md" ] && echo yes || echo no)"
+chk_contains "a doc blocked on the bundle is surfaced" "$AC_OUT" "ac-waiter-handoff"
+
+printf '\na bundle that cannot be verified stays open and says why (ADR 0029)\n'
+AV="$(mkboard)"
+AVB="$AV/.agents/handoff"
+hb "$AV" new av-legacy --title "Legacy" > /dev/null
+hb "$AV" new av-last --title "Last" > /dev/null
+hb "$AV" new av-bundle --orchestrator --children av-legacy,av-last --title "AV bundle" > /dev/null
+hb "$AV" release av-legacy --status done --verified-by "ran legacy.sh:1" > /dev/null
+# A doc closed before evidence was a field: done, dated, no verified_by.
+grep -v '^verified_by:' "$AVB/archive/av-legacy-handoff.md" > "$AVB/av.t" && mv "$AVB/av.t" "$AVB/archive/av-legacy-handoff.md"
+AV_OUT="$(hb "$AV" release av-last --status done --verified-by "ran last.sh:1")"
+chk "a child with no evidence keeps the bundle open" "yes" "$([ -f "$AVB/av-bundle-handoff.md" ] && echo yes || echo no)"
+chk_contains "and the release says which child and why" "$AV_OUT" "av-legacy-handoff closed with no verified_by"
+chk_contains "a manual close refuses on the same check" "$(hb "$AV" release av-bundle --status done)" \
+  "av-legacy-handoff closed with no verified_by"
+awk '/^verified_at:/ { print; print "verified_by: \"ran legacy.sh:1\""; print "review: pending"; next } { print }' \
+  "$AVB/archive/av-legacy-handoff.md" > "$AVB/av.t" && mv "$AVB/av.t" "$AVB/archive/av-legacy-handoff.md"
+chk_contains "a child awaiting review keeps the bundle open" "$(hb "$AV" release av-bundle --status done)" \
+  "av-legacy-handoff is awaiting review"
+grep -v '^review:' "$AVB/archive/av-legacy-handoff.md" > "$AVB/av.t" && mv "$AVB/av.t" "$AVB/archive/av-legacy-handoff.md"
+chk_contains "once the evidence is there, the manual close goes through" "$(hb "$AV" release av-bundle --status done)" \
+  "Bundle av-bundle-handoff complete"
+
+# A verify: command never runs automatically, so a bundle that carries one is closed by a person.
+hb "$AV" new avv-kid --title "Kid" > /dev/null
+hb "$AV" new avv-bundle --orchestrator --children avv-kid --title "Gated bundle" > /dev/null
+awk 'NR > 1 && /^---$/ && !d { print "verify: \"bash integration.sh\""; d = 1 } { print }' \
+  "$AVB/avv-bundle-handoff.md" > "$AVB/av.t" && mv "$AVB/av.t" "$AVB/avv-bundle-handoff.md"
+AV_OUT="$(hb "$AV" release avv-kid --status done --verified-by "ran kid.sh:1")"
+chk "a bundle with its own verify: command stays open" "yes" "$([ -f "$AVB/avv-bundle-handoff.md" ] && echo yes || echo no)"
+chk_contains "and the release names the command to close it by hand" "$AV_OUT" \
+  "handoff release avv-bundle-handoff --status done"
+
+# A standalone child makes no live-code claim, so it owes no evidence.
+hb "$AV" new avs-ref --standalone --title "Reference" > /dev/null
+hb "$AV" new avs-work --title "Work" > /dev/null
+hb "$AV" new avs-bundle --orchestrator --children avs-ref,avs-work --title "Mixed bundle" > /dev/null
+hb "$AV" release avs-ref --status done > /dev/null
+chk_contains "a retired standalone child does not block the close" \
+  "$(hb "$AV" release avs-work --status done --verified-by "ran work.sh:1")" "Bundle avs-bundle-handoff complete"
+
+hb "$AV" new avm-kid --title "Kid" > /dev/null
+hb "$AV" new avm-bundle --orchestrator --children avm-kid,avm-ghost --title "Dangling bundle" > /dev/null
+hb "$AV" release avm-kid --status done --verified-by "ran kid.sh:2" > /dev/null
+chk "a MISSING child keeps the bundle open" "yes" "$([ -f "$AVB/avm-bundle-handoff.md" ] && echo yes || echo no)"
+
+printf '\non a shared board the closed bundle rides the child'"'"'s release commit\n'
+AS="$(mkshared)"
+"$AS/handoff" new as-kid --title "Kid" --audience acme-api > /dev/null
+"$AS/handoff" new as-bundle --orchestrator --children as-kid --title "Shared bundle" --audience acme-api > /dev/null
+git -C "$AS" add -A && git -C "$AS" commit -qm "seed" && git -C "$AS" push -q
+"$AS/handoff" claim as-kid "closing it" > /dev/null 2>&1
+"$AS/handoff" release as-kid --status done --verified-by "ran kid.sh:3" > /dev/null 2>&1
+chk "the archived bundle is in the pushed commit" "yes" \
+  "$(git -C "$AS" cat-file -e origin/HEAD:archive/as-bundle-handoff.md 2> /dev/null \
+    || git -C "$AS" cat-file -e "@{upstream}:archive/as-bundle-handoff.md" 2> /dev/null && echo yes || echo no)"
+chk "and nothing about it is left uncommitted" "" "$(git -C "$AS" status --porcelain -- as-bundle-handoff.md archive/as-bundle-handoff.md)"

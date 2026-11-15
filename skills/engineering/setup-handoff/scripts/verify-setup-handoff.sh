@@ -539,6 +539,15 @@ PY
   else
     ok board.mirror_workflow.token "the mirror workflow passes its token by reference, never by value"
   fi
+  # ADR 0019: lease commits rebuild only their own section, so on a board with a remote the root
+  # roll-up is rebuilt by this workflow and nothing else. A workflow rendered before it carried the
+  # step leaves INDEX.md frozen, linking docs long since archived. A warning, not a failure: the
+  # mirror itself still works, and the ADR already lets the roll-up lag.
+  if grep -q 'name: Rebuild the board-root index' "$WF"; then
+    ok board.mirror_workflow.rollup "the mirror workflow rebuilds the board-root index on every push"
+  else
+    warn board.mirror_workflow.rollup "the mirror workflow does not rebuild the board-root index, so INDEX.md goes stale and links archived docs — re-run setup-handoff"
+  fi
   # A failure, not a warning: the CLI refuses a shallow board outright (ADR 0017), so a workflow
   # rendered before the template carried a full-history checkout fails EVERY run and mirrors
   # nothing — there is no degraded mode to warn about. Full history is either the template's plain

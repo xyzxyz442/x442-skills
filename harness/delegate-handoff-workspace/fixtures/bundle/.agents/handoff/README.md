@@ -126,7 +126,10 @@ of its own — the children do — so it is never claimed. Its progress is **der
 own frontmatter every time `list` runs, never stored: a written-down count is stale the moment a
 child closes, which is the rot an orchestrator exists to prevent. A child naming no file is reported
 `MISSING` rather than counted as done, and `release --status done` refuses while anything is
-outstanding, so a bundle cannot be closed on a doc that says it is finished.
+outstanding, so a bundle cannot be closed on a doc that says it is finished. When the last child
+closes `done`, the bundle closes itself in the same release, but only if every child also carries its
+evidence and none is awaiting review. Otherwise it stays open, and the release says which child
+failed and why (ADR 0029).
 
 The bundle doc carries that derivation as a **generated children table**, so a session that opens it
 cold can pick up the bundle without reading every child first — which child is next, who holds it,

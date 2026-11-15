@@ -22,7 +22,7 @@ note: PLACEHOLDER_NOTE
      frontmatter on every `handoff index`, and a hand-written count is exactly the rot this
      doc type exists to prevent. Change the roster with `handoff children add|rm`, never by
      editing `children:` directly. `release --status done` refuses while any child is still
-     outstanding. -->
+     outstanding, and the bundle closes itself once its last child closes done with evidence. -->
 
 ## Bundle
 

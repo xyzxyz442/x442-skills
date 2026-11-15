@@ -620,5 +620,43 @@ chk "sweep: a file already staged on the board is not in the install commit" "0"
   "$(git -C "$BS" show --name-only --format= HEAD | grep -c 'stray.md')"
 chk "sweep: and it is still staged afterwards" "A  stray.md" "$(git -C "$BS" status --short -- stray.md)"
 
+printf '\nthe mirror workflow rebuilds the board-root index (ADR 0019)\n'
+# Lease commits rebuild only their own section, and a session's local rebuild of the roll-up is
+# dropped before every fast-forward, so nothing rebuilt the root INDEX.md: a live board's stayed
+# frozen for a week, linking seven archived docs. The workflow step is what ADR 0019 relied on.
+# The push goes to a bare repository on local disk, never a network remote (see SAFETY above).
+rollup_step() { # workflow-file -> the run: body of its roll-up step, dedented
+  sed -n '/name: Rebuild the board-root index/,$p' "$1" | sed -n '/run: |/,$p' | tail -n +2 | sed 's/^          //'
+}
+chk_contains "roll-up: the rendered workflow carries the step" "$(cat "$WF5")" "Rebuild the board-root index"
+RU_BARE="$(mktemp -d)/origin.git"
+git init --quiet --bare "$RU_BARE"
+RU="$(mkgitboard)"
+git -C "$RU" config user.email "test@example.com"
+git -C "$RU" config user.name "test"
+"$INSTALLER" --board-only "$RU" --groups "alpha,beta" > /dev/null 2>&1
+printf '%s\n' "| [Archived long ago](./alpha/gone-handoff.md) | \`open\` | x | low | 2026-01-01 | — |" >> "$RU/INDEX.md"
+git -C "$RU" add -A
+git -C "$RU" commit --quiet -m "a stale roll-up"
+git -C "$RU" remote add origin "$RU_BARE"
+git -C "$RU" push --quiet -u origin HEAD 2> /dev/null
+rollup_step "$WF5" > "$RU/.rollup-step.sh"
+RU_OUT="$(cd "$RU" && bash .rollup-step.sh 2>&1)"
+chk "roll-up: the step exits 0" "0" "$?"
+chk "roll-up: the rebuilt index drops the archived row" "0" "$(grep -c 'gone-handoff' "$RU/INDEX.md" | tr -d ' ')"
+chk "roll-up: the rebuild is committed on its own" "chore(other): rebuild the board-root index" \
+  "$(git -C "$RU" log -1 --format=%s)"
+chk "roll-up: the commit carries only INDEX.md" "INDEX.md" "$(git -C "$RU" show --name-only --format= HEAD)"
+chk "roll-up: and it was pushed" "$(git -C "$RU" rev-parse HEAD)" "$(git -C "$RU_BARE" rev-parse HEAD)"
+RU_HEAD="$(git -C "$RU" rev-parse HEAD)"
+RU_OUT="$(cd "$RU" && bash .rollup-step.sh 2>&1)"
+chk_contains "roll-up: an unchanged roll-up commits nothing" "$RU_OUT" "nothing to commit"
+chk "roll-up: and leaves HEAD where it was" "$RU_HEAD" "$(git -C "$RU" rev-parse HEAD)"
+# A workflow rendered before the step existed: the verifier warns, and a re-run is the fix.
+sed '/name: Rebuild the board-root index/,$d' "$WFC" > "$WFC.tmp" && mv "$WFC.tmp" "$WFC"
+chk "roll-up: a workflow without the step draws a warning" "warn" "$(vfind "$MC" board.mirror_workflow.rollup)"
+"$INSTALLER" "$MC" --tools claude --primary none > /dev/null 2>&1
+chk "roll-up: a re-run restores the step" "pass" "$(vfind "$MC" board.mirror_workflow.rollup)"
+
 printf '\n--- %d passed, %d failed ---\n' "$P" "$F"
 [ "$F" -eq 0 ]

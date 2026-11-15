@@ -1197,6 +1197,85 @@ child_progress() { # path -> "done|total|outstanding-csv"
   printf '%s|%s|%s' "$done" "$total" "$out"
 }
 
+# ADR 0029: the one definition of "safe to close" for a bundle, shared by a manual close and the
+# automatic one. child_progress counts statuses; this also asks for the evidence behind each `done`,
+# because a status is the one field anyone can set by hand. Prints one reason per line; no output
+# means the bundle is verified. A bundle's own `verify:` command is not checked here — only the
+# automatic close cares, since a command never runs on its own and a person closing by hand has it.
+bundle_unverified() { # orchestrator-path -> reasons, one per line
+  local c cf n=0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    n=$((n + 1))
+    cf="$(arch_file "$c")"
+    if [ ! -f "$cf" ]; then
+      cf="$(doc_file "$c")"
+      if [ ! -f "$cf" ]; then
+        echo "$c names no doc (MISSING)"
+      elif [ "$(meta "$cf" status)" = "done" ]; then
+        echo "$c is done but was never moved to archive/"
+      else
+        echo "$c is $(meta "$cf" status)"
+      fi
+      continue
+    fi
+    if [ "$(meta "$cf" status)" != "done" ]; then
+      echo "$c is $(meta "$cf" status)"
+      continue
+    fi
+    [ "$(meta "$cf" review)" = "pending" ] && echo "$c is awaiting review"
+    if is_standalone "$cf"; then
+      : # retired, not verified: a standalone doc makes no live-code claim to give evidence for
+    elif is_orchestrator "$cf"; then
+      [ -n "$(meta "$cf" verified_at)" ] || echo "$c closed with no verified_at"
+    elif [ -z "$(meta "$cf" verified_by)" ] || [ -z "$(meta "$cf" verified_at)" ]; then
+      echo "$c closed with no verified_by evidence"
+    fi
+  done <<< "$(children_of "$1")"
+  [ "$n" -gt 0 ] || echo "it has no children"
+}
+
+# ADR 0029: a child that just closed `done` may have been the last thing its bundle waited on. Close
+# every bundle in this section that it completes, in the same release, and repeat upwards through
+# nested bundles. A bundle that is complete by status but fails verification stays open and says
+# why, so the gap is seen at the moment it matters instead of on the next audit.
+close_completed_bundles() { # child-id
+  local child="$1" p pid prog ptotal reasons
+  while IFS= read -r p; do
+    [ -f "$p" ] || continue # a nested close below may already have archived a doc this list named
+    is_orchestrator "$p" || continue
+    grep -qxF "$child" <<< "$(children_of "$p")" || continue
+    pid="$(basename "$p" .md)"
+    case "$LAYOUT" in prefix) [ -n "$GROUP" ] && pid="${pid#"$GROUP"--}" ;; esac
+    prog="$(child_progress "$p")"
+    ptotal="$(printf '%s' "$prog" | cut -d'|' -f2)"
+    [ "${prog%%|*}" -eq "$ptotal" ] || continue # siblings still open: nothing to say yet
+    if [ -n "$(meta "$p" verify)" ]; then
+      echo "ℹ️  Bundle $pid has all $ptotal children done, but carries its own verify: command, which never runs on its own."
+      echo "    Run it, then close the bundle: handoff release $pid --status done"
+      continue
+    fi
+    reasons="$(bundle_unverified "$p")"
+    if [ -n "$reasons" ]; then
+      echo "⚠️  Bundle $pid has all $ptotal children done but stays open — it cannot be verified:"
+      printf '%s\n' "$reasons" | sed 's/^/    - /'
+      continue
+    fi
+    set_field "$p" status done
+    set_field "$p" updated "$(today)"
+    set_field "$p" verified_at "$(today)"
+    set_field "$p" verified_by "\"auto — all $ptotal children done and verified\""
+    log_activity "$p" "bundle complete — all $ptotal children done and verified — closed automatically when $child closed (by $(whoami_id))."
+    if archive_doc "$p" "$pid"; then
+      echo "✅ Bundle $pid complete ($ptotal/$ptotal children done and verified) → archive/."
+    else
+      warn_archive_failed "$pid"
+    fi
+    surface_unblocked "$pid"
+    close_completed_bundles "$pid"
+  done < <(each_doc)
+}
+
 # The same derivation, rendered as a table INTO the orchestrator doc itself.
 #
 # `list` and INDEX.md already derive bundle progress, but neither is what a fresh session reads when
@@ -5906,6 +5985,10 @@ cmd_release() {
       done)
         [ "$ptotal" -gt 0 ] || die "$id has no children — add them with 'handoff children add $id <child>' before closing the bundle"
         [ "$pdone" -eq "$ptotal" ] || die "$id still has outstanding children: $pout"
+        local reasons
+        reasons="$(bundle_unverified "$f")"
+        [ -z "$reasons" ] || die "$id cannot be verified as done (ADR 0029):
+$(printf '%s\n' "$reasons" | sed 's/^/  - /')"
         set_field "$f" status done
         set_field "$f" updated "$(today)"
         set_field "$f" verified_at "$(today)"
@@ -5916,6 +5999,7 @@ cmd_release() {
           warn_archive_failed "$id"
         fi
         surface_unblocked "$id" # a doc may be blocked on this bundle landing
+        close_completed_bundles "$id"
         ;;
       *) die "orchestrators support --status open|done (a bundle has no lease to block on)" ;;
     esac
@@ -5946,6 +6030,7 @@ cmd_release() {
         # Every path that closes a doc must announce its dependents. This branch is newer than the
         # unblock feature and originally skipped it, so anything blocked on a standalone deadlocked.
         surface_unblocked "$id"
+        close_completed_bundles "$id"
         ;;
       *) die "standalone handoffs support --status open|done (there is no lease to block on)" ;;
     esac
@@ -6116,6 +6201,7 @@ cmd_release() {
     fi
     echo "🔒 This doc is committed to git history — confirm no secrets/keys/passwords/PII remain."
     surface_unblocked "$id"
+    close_completed_bundles "$id"
   elif [ "$for_review" = 1 ]; then
     # The SECOND writer of `review: pending` (ADR 0015). `import --result` is the first, for work
     # done off the board; this is the same hold for a collaborator who is on it. Setting the existing
