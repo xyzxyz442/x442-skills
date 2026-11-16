@@ -376,7 +376,10 @@ staged.
    and shell.
 2. `.vscode/settings.json` → round-trip **deep JSON merge** of
    [`assets/vscode/base.json`](assets/vscode/base.json) plus the language fragment(s). Preserve any
-   existing keys (e.g. `chat.agentFilesLocations` set by `initial-project`).
+   existing keys (e.g. `chat.agentFilesLocations` set by `initial-project`). VS Code reads its
+   `.vscode/*.json` files as JSONC, so an existing file can hold comments and trailing commas — parse
+   it tolerantly. A strict JSON parser rejects the `settings.json` that Unity's URP template ships.
+   Plain JSON is valid output, but carry any existing comments over rather than dropping them.
 3. `.vscode/extensions.json` → union the recommendations for the detected stack (table under each
    language module). Merge into an existing file; never drop entries.
 4. `.vscode/tasks.json` → merge [`assets/tasks.json`](assets/tasks.json) (union the `tasks` array by
@@ -772,6 +775,11 @@ and generated folders that must not be.
   `.prettierrc` loads `prettier-plugin-sh`, which claims the file and collapses upstream's column
   alignment, so `prettier --check .` fails on the verbatim file.
 
+  A fresh project fails `prettier --check .` before anyone edits it: the URP template ships
+  `.vscode/launch.json` and `Assets/TutorialInfo/StyleSheets/*.uss` unformatted. lint-staged
+  formats `launch.json` when the tooling commit stages it. The stylesheets are not staged, so after
+  the tooling commit run `<pm> run format:fix` once and commit the result as its own `style` commit.
+
 - **editorconfig** → append [`assets/editorconfig/unity`](assets/editorconfig/unity) to the base:
   C# at 4 spaces, UTF-8 BOM, and Allman braces with Unity-friendly .NET rules; shaders at 4;
   serialized YAML left alone (no trailing-space trim, no final-newline); Editor-written JSON at 4;
@@ -787,7 +795,9 @@ and generated folders that must not be.
   holds either skipped key, report it as a conflict and leave it; do not delete it silently.
   `dotnet.defaultSolution` names the solution file Unity generates, so it is project-specific and
   **not** in the fragment. When a `.sln` / `.slnx` exists, tell the user the key is available; do
-  not write it.
+  not write it. The URP template already ships `.vscode/settings.json` with this key and its own
+  `files.exclude`. Keep the key, and union the fragment's `files.exclude` entries into the
+  template's.
 - **extensions** → `visualstudiotoolsforunity.vstuc`, `ms-dotnettools.csdevkit`,
   `ms-dotnettools.csharp`, `editorconfig.editorconfig`, `esbenp.prettier-vscode`.
 - **Root `package.json` and `node_modules/`** → safe. Unity compiles and imports only `Assets/` and
@@ -839,9 +849,6 @@ Settled 2026-11-05; do not reopen these without the user.
 
 What remains before promoting this module out of draft. None of it is a design question.
 
-- **Run it on a real Unity 6 project**, not only the hand-assembled harness fixture: apply the
-  module end to end, open the project in the Editor, and confirm nothing it writes is reimported or
-  rewritten.
 - **Promote:** drop the draft banner and the "offer the fragments only if the user opts in" rule,
   change the Step 1 table's Unity row from `draft (not yet)` to supported, strip the `DRAFT`
   headers from the asset fragments, and drop the `.gitignore` four-line supplement if the template
