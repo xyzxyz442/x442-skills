@@ -2298,23 +2298,35 @@ def grade_script_behavior(target):
     for kid in ("kid-a", "kid-b"):
         _handoff(target, "claim", kid)
         _handoff(target, "release", kid, "--status", "done", "--verified-by", "grader")
-    _handoff(target, "new", "kid-c", "--title", "Child C")
-    _handoff(target, "claim", "kid-c")
-    _handoff(target, "release", "kid-c", "--status", "done", "--verified-by", "grader")
+    # Read progress while a child is still outstanding: once the last one closes, the bundle
+    # closes with it (ADR 0029) and leaves the Orchestrators list.
     lst = _handoff(target, "list").stdout
     e.append(
         gc.expectation(
             "progress tracks children with no edit to the orchestrator doc",
-            "3/3 done" in lst,
+            "2/3 done" in lst and (doc / "bundle-handoff.md").is_file(),
             f"list: {lst[lst.find('Orchestrator'):][:200]!r}",
+        )
+    )
+    _handoff(target, "new", "kid-c", "--title", "Child C")
+    _handoff(target, "claim", "kid-c")
+    r = _handoff(
+        target, "release", "kid-c", "--status", "done", "--verified-by", "grader"
+    )
+    archived = (doc / "archive/bundle-handoff.md").is_file()
+    e.append(
+        gc.expectation(
+            "bundle closes itself when its last child closes done (ADR 0029)",
+            r.returncode == 0 and archived and not (doc / "bundle-handoff.md").exists(),
+            f"exit {r.returncode}; archived: {archived}",
         )
     )
     r = _handoff(target, "release", "bundle", "--status", "done")
     e.append(
         gc.expectation(
-            "bundle closes once every child is done",
-            r.returncode == 0 and (doc / "archive/bundle-handoff.md").is_file(),
-            f"exit {r.returncode}; archived: {(doc / 'archive/bundle-handoff.md').is_file()}",
+            "a manual close of the self-closed bundle is refused (a done doc closes once)",
+            r.returncode != 0 and archived,
+            f"exit {r.returncode}: {r.stderr.strip()[:100]}",
         )
     )
 
