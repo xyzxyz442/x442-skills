@@ -46,6 +46,12 @@ cp "$HERE/../setup-handoff.sh" "$ASSETS/mirror-workflow.yml" "$SRC/lint/"
 # general form of that fix: ownership becomes a property of the fixture instead of the terminal.
 # Blocks that need a different identity still export their own over the top of this.
 export HANDOFF_SESSION_ID="selftest-$$"
+# The same applies to the user-level CLI rung (handoff_cli_home, under XDG_DATA_HOME). A developer
+# who ran setup-handoff has one, a CI runner never does, and a fixture that relied on it passed
+# here while CI failed for five days (the cross-section gate cases). Point it at an empty dir so a
+# local run sees exactly what CI sees; a block that needs the rung must provide its own.
+XDG_DATA_HOME="$(mktemp -d)"
+export XDG_DATA_HOME
 
 P=0
 F=0

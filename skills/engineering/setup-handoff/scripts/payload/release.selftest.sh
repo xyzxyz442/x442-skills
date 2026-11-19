@@ -153,6 +153,10 @@ printf '\nthe edit gate reads a doc'"'"'s lease from the section the doc lives i
 # a lease claimed with HANDOFF_GROUP=<other> still refused the holder's edit of that doc.
 XS="$(mkshared_grouped)"
 cp "$SRC/hooks.sh" "$XS/scripts/hooks.sh"
+# The gate fails open when no CLI rung resolves, and mkshared's root `handoff` is not a rung. Vendor
+# one, as a real install does: without it these cases pass only on a machine whose user-level CLI
+# (~/.local/share/handoff) happens to exist, and every CI runner reads "allow" for every deny.
+cp "$SRC/handoff" "$XS/scripts/handoff-cli"
 XS="$(cd "$XS" && pwd -P)"
 xs_gate() { # session doc-path -> "allow", or the deny payload; the hook runs as section alpha
   local out
