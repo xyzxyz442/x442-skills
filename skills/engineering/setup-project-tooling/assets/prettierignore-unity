@@ -1,5 +1,5 @@
 
-# DRAFT — Unity module, not yet applied by the skill. Appended after `prettierignore`.
+# Unity module — appended after `prettierignore`.
 
 # Unity-generated folders (also gitignored; named here as the same safety net as above)
 /[Ll]ibrary/

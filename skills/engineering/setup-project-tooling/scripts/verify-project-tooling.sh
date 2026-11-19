@@ -313,7 +313,7 @@ else
   warn gitattributes.present ".gitattributes absent (line endings not normalized; a CRLF checkout breaks the shipped .sh payloads)"
 fi
 
-# Unity (draft module, see "Unity (draft — in progress)" in SKILL.md). Silent on any other repo.
+# Unity (see "Unity" in SKILL.md). Silent on any other repo.
 # Probes are paths that need not exist: check-ignore --no-index and check-attr answer for a path
 # from the rules alone, so an empty Assets/ is graded the same as a full one.
 UPM_ASMDEF=""
@@ -321,7 +321,7 @@ if [ -f package.json ] && [ ! -d ProjectSettings ]; then
   UPM_ASMDEF=$(find . -maxdepth 3 -name '*.asmdef' -not -path './node_modules/*' 2> /dev/null | head -1)
 fi
 if [ -f ProjectSettings/ProjectVersion.txt ] && [ -d Assets ]; then
-  section "5b. Unity project (draft module)"
+  section "5b. Unity project"
   ok unity.detected "Unity project (ProjectSettings/ProjectVersion.txt + Assets/)"
   if [ -f pyproject.toml ] || [ -f tsconfig.json ]; then
     warn unity.mixed "Unity plus a second language's project file — the Unity module does not cover mixed repos yet; apply the common base with the Unity guards only"
@@ -390,7 +390,7 @@ if [ -f ProjectSettings/ProjectVersion.txt ] && [ -d Assets ]; then
     fi
   fi
 elif [ -n "$UPM_ASMDEF" ]; then
-  section "5b. Unity project (draft module)"
+  section "5b. Unity project"
   warn unity.upm_package "a root package.json beside ${UPM_ASMDEF#./} and no ProjectSettings/ — this looks like a Unity package, whose package.json is Unity's manifest; the Unity module does not cover package repos yet"
 fi
 

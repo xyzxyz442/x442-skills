@@ -80,7 +80,7 @@ def _grade(target: Path, eval_id: str | None) -> list[gc.Expectation]:
         # else advisory must be silent.
         exps.append(gc.no_findings_at(findings, "warn", ignore={"releaseit.present"}))
     elif eval_id == "unity-scaffolded":
-        # Post-state: the draft Unity module applied by hand. The base checks hold as for
+        # Post-state: the Unity module applied by hand. The base checks hold as for
         # `scaffolded`, and every section-5b check passes. LFS is declined (the default), so no
         # unity.lfs.* finding may appear at all.
         exps.append(gc.git_diff_empty(target))

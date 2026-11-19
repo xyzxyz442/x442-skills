@@ -1,5 +1,5 @@
-# DRAFT — Unity module, not yet applied by the skill. Appended after `editorconfig/base`, which
-# already covers [*], markdown, JSON/YAML and shell.
+# Unity module — appended after `editorconfig/base`, which already covers [*], markdown, JSON/YAML
+# and shell.
 
 # C# — Unity's script templates are UTF-8 with BOM and 4-space indent
 [*.cs]

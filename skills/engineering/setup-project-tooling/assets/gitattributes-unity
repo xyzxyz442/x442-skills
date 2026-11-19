@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------------------------
-# x442 prefix — DRAFT, not yet applied by the skill. Every text file is LF in the index and on
-# checkout on every platform, so a Windows clone never converts to CRLF. Keep it ABOVE the upstream
-# template: a later line overrides an earlier one, so placed after it, `* text=auto` would undo
-# upstream's `-text` on the LFS binaries and its explicit `text` on *.cs.
+# x442 prefix — every text file is LF in the index and on checkout on every platform, so a Windows
+# clone never converts to CRLF. Keep it ABOVE the upstream template: a later line overrides an
+# earlier one, so placed after it, `* text=auto` would undo upstream's `-text` on the LFS binaries
+# and its explicit `text` on *.cs.
 # ---------------------------------------------------------------------------------------------
 * text=auto eol=lf
 # cmd.exe mis-parses a batch file stored with LF
@@ -181,10 +181,10 @@ Packages/packages-lock.json linguist-generated
 LightingData.asset     binary
 
 # ---------------------------------------------------------------------------------------------
-# x442 layer — DRAFT, not yet applied by the skill. Everything between the x442 prefix and this
-# line is the upstream template, kept verbatim so a re-sync is a plain diff. Everything below is the
-# lines setup-project-tooling needs that upstream lacks. Apply the prefix and the block below to a
-# repo that already carries its own Unity .gitattributes; never replace that file.
+# x442 layer — everything between the x442 prefix and this line is the upstream template, kept
+# verbatim so a re-sync is a plain diff. Everything below is the lines setup-project-tooling needs
+# that upstream lacks. Apply the prefix and the block below to a repo that already carries its own
+# Unity .gitattributes; never replace that file.
 #
 # Git LFS is opt-in. Unless the user accepts it, the one upstream line the skill edits is the
 # `[attr]lfs` macro above, which becomes `[attr]lfs -diff -merge -text` (see SKILL.md).

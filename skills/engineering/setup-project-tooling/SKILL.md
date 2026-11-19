@@ -5,13 +5,13 @@ description: >-
   (commitlint + husky), staged-file lint/format (lint-staged), a VS Code workspace, or release
   automation (release-it), including migrating off commitizen and standard-version. Detects the
   language and recommends a category for you to confirm, then applies a common base plus
-  per-language config. Fully supports Python and Node/TypeScript (strict); other languages get the
-  common base to customize.
+  per-language config. Fully supports Python, Node/TypeScript (strict) and Unity projects; other
+  languages get the common base to customize.
 ---
 
 # setup-project-tooling
 
-> **Status: beta.** Usable on Node/TypeScript and Python repos, with one rough edge — there is no
+> **Status: beta.** Usable on Node/TypeScript, Python, and Unity repos, with one rough edge — there is no
 > installer script, so every merge below is applied by the agent from this body. Review the diff
 > before committing it.
 
@@ -22,10 +22,10 @@ Node-rooted: husky, commitlint, lint-staged, and release-it live in `package.jso
 `package.json` must exist (the skill creates a minimal one for a greenfield repo) even when the code
 itself is Python or SQL.
 
-Fully supported languages today: **Python** (plus a **Python-stream** Flink-SQL flavor) and
-**Node/TypeScript strict** (NestJS / Next.js). Any other language (C#, Helm, Go, Rust, …) gets the
-**common base only** — the user adds their own language-specific config from there. A **Unity**
-module is drafted but **not supported yet** — see [Unity (draft — in progress)](#unity-draft--in-progress).
+Fully supported languages today: **Python** (plus a **Python-stream** Flink-SQL flavor),
+**Node/TypeScript strict** (NestJS / Next.js), and **Unity** projects (see [Unity](#unity)). Any
+other language (C#, Helm, Go, Rust, …) gets the **common base only** — the user adds their own
+language-specific config from there.
 
 Runs as a repo-onboarding step, typically right after [`initial-project`](../initial-project/SKILL.md)
 has created `AGENTS.md`. It is separate from `initial-project` on purpose: that skill owns
@@ -78,7 +78,7 @@ Read the repo first. **Detect** the package manager and language from filesystem
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | Package manager | `packageManager` field first; then `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, `package-lock.json`→npm, `bun.lockb`→bun; neither → default **npm** | —                |
 | Language        | `tsconfig.json`/`*.ts`→**Node/TypeScript**; `pyproject.toml`/`*.py`→**Python**; `*.sql` alongside Python→**Python-stream**                      | fully supported  |
-| Language        | `ProjectSettings/ProjectVersion.txt` + `Assets/`→**Unity** (checked **before** C#)                                                              | draft (not yet)  |
+| Language        | `ProjectSettings/ProjectVersion.txt` + `Assets/`→**Unity** (checked **before** C#)                                                              | fully supported  |
 | Language        | `*.csproj`/`*.sln`→C#; `Chart.yaml`→Helm; `go.mod`→Go; `Cargo.toml`→Rust; anything else                                                         | common base only |
 | Framework       | `next` dep→Next.js, `@nestjs/*` dep→NestJS, `react` dep→React                                                                                   | Node/TS touches  |
 
@@ -94,8 +94,7 @@ Read the repo first. **Detect** the package manager and language from filesystem
   files that are not the project's source of truth. Match on `ProjectSettings/ProjectVersion.txt`
   plus an `Assets/` directory; `Packages/manifest.json` corroborates it but is not required, since
   projects created before the package manager lack it. Unity wins over the C# row whenever both
-  match. The module is a draft, so report it as **Unity (draft)** and follow the banner under
-  [Unity (draft — in progress)](#unity-draft--in-progress).
+  match. Report it as **Unity** and apply the [Unity](#unity) module.
 - **Legacy commit and release tooling → detect, then always prompt.** Look for commitizen,
   standard-version, and their helpers (signals under
   [Migrating off commitizen and standard-version](#migrating-off-commitizen-and-standard-version)).
@@ -225,9 +224,9 @@ curl -sS "https://www.toptal.com/developers/gitignore/api/linux,macos,dotenv,win
 Only add a stack's templates when that stack is present — a Python-only repo should not carry
 `node_modules/` and the whole yarn Zero-installs block.
 
-> **Unity repo (draft).** Do not regenerate the body: the base above carries no `unity` template,
+> **Unity repo.** Do not regenerate the body from the base above: it carries no `unity` template,
 > and a wholesale regeneration would drop `Library/`, `Temp/`, and the rest of the Unity rules. See
-> [`.gitignore` under the Unity module](#unity-draft--in-progress).
+> [`.gitignore` under the Unity module](#unity).
 
 **Two patches to re-apply after every regeneration.** Both correct upstream rules that over-match
 in a real repo; a wholesale regeneration silently drops them, so re-apply them before committing:
@@ -309,8 +308,8 @@ package-lock.json linguist-generated=true -diff
 A `#` only starts a comment at the **start of a line** here — git reads a trailing `# ...` as more
 attribute names, so keep comments on their own lines.
 
-> **Unity repo (draft).** The baseline above lacks Unity's LFS and `unityyamlmerge` macros. Do not
-> copy it over a Unity repo; see [`.gitattributes` under the Unity module](#unity-draft--in-progress).
+> **Unity repo.** The baseline above lacks Unity's LFS and `unityyamlmerge` macros. Do not
+> copy it over a Unity repo; see [`.gitattributes` under the Unity module](#unity).
 
 Greenfield (no `.gitattributes`): copy the asset wholesale. Existing `.gitattributes`: append only
 the missing patterns, and **never rewrite a pattern the repo already declares** — an existing
@@ -646,15 +645,12 @@ lint` with no path has nothing to lint.
   executable path is omitted for the same reason as the Python module).
 - **extensions** → `sqlfluff.sqlfluff`.
 
-### Unity (draft — in progress)
+### Unity
 
-> **Status: draft — in progress. Not a supported module and not yet applied by the skill.** The
-> assets named below exist under `assets/` but nothing wires them in, and the items under
-> [Open questions / TODO](#open-questions--todo-unity) are not done. The verifier already grades a
-> Unity repo (section 5b). When Step 1 detects Unity: say so, apply the **common base** only, and offer the
-> fragments below only if the user opts in. Two base steps are **unsafe on a Unity repo** and must
-> be guarded even while this is a draft — never regenerate the `.gitignore` body, and never replace
-> an existing `.gitattributes` (rules below).
+When Step 1 detects Unity, apply the common base with the guards below, then every fragment in this
+section. Two base steps are **unsafe on a Unity repo** — never regenerate the `.gitignore` body from
+the base templates, and never replace an existing `.gitattributes` (rules below). The verifier
+grades a Unity repo in section 5b.
 
 Targets a Unity 6 project (URP or otherwise). Unity imports only `Assets/` and `Packages/`, so the
 Node-rooted base sits beside it without interference; the work is stopping the base from fighting
@@ -686,7 +682,8 @@ and generated folders that must not be.
   Toptal's `unity` template trails the upstream
   [`Unity.gitignore`](https://github.com/github/gitignore/blob/main/Unity.gitignore) — it lacks
   `*.slnx`, `*.log`, `mono_crash.*`, and `*.DotSettings.user`, among others — so add at least those
-  four lines after it.
+  four lines after it. If the body ever moves to upstream's `Unity.gitignore`, drop this
+  supplement.
 
   **If the existing `.gitignore` already carries Unity rules, do not regenerate.** Treat it as
   Unity-aware when it ignores both `Library` and `UserSettings` (any anchoring or case form, such as
@@ -780,6 +777,13 @@ and generated folders that must not be.
   formats `launch.json` when the tooling commit stages it. The stylesheets are not staged, so after
   the tooling commit run `<pm> run format:fix` once and commit the result as its own `style` commit.
 
+  A Unity repo that already has a prettier config keeps it, with two adjustments. Line-merge the
+  base asset's `pnpm-lock.yaml` and `.agents/handoff/**/*.md` entries into its `.prettierignore`
+  (else lint-staged reformats the lockfile and the board docs), plus `.mcp.json` when the repo has
+  one (`code-review-graph install` and `portable-mcp.py` rewrite it). Then format the copied
+  `commitlint.config.mjs` with the repo's own prettier: the asset is formatted with this skill's
+  single-quote config, so `prettier --check .` fails on it otherwise.
+
 - **editorconfig** → append [`assets/editorconfig/unity`](assets/editorconfig/unity) to the base:
   C# at 4 spaces, UTF-8 BOM, and Allman braces with Unity-friendly .NET rules; shaders at 4;
   serialized YAML left alone (no trailing-space trim, no final-newline); Editor-written JSON at 4;
@@ -830,10 +834,10 @@ Settled 2026-11-05; do not reopen these without the user.
 - **Git LFS is opt-in**, applied as the one-line macro edit under `.gitattributes` above.
 - **Every text file is LF** — `* text=auto eol=lf` in the x442 prefix, above upstream's rules, so
   a Windows clone never converts to CRLF. Reversed 2026-11-05 from "pin scripts and hooks only".
-- **The draft is merged ahead of promotion** (2026-11-05, reversing "merge only at promotion"),
-  with payload 7. An install at 6 is told it is behind; re-running the skill changes nothing on a
-  non-Unity repo, and on a Unity repo it still only offers the fragments. The promotion edits are
-  payload edits too, so they bump the payload again.
+- **Supported since payload 8** (2026-11-19), after an end-to-end run on a fresh Unity 6000.6.8f1
+  URP project: Editor open, scene save and close left every tooling file untouched. An install at
+  payload 7 or earlier is told it is behind; re-running the skill changes nothing on a non-Unity
+  repo.
 - **Unity is a language, not a category.** Category only sets the release-it default, and Unity has
   no release shape of its own.
 - **v1 covers a plain Unity project only.** Mixed repos and UPM package repos are detected and
@@ -845,33 +849,11 @@ Settled 2026-11-05; do not reopen these without the user.
   Unity itself and appends its own block, so the rules land whichever skill runs first, and in
   repos that never run this one.
 
-#### Open questions / TODO (Unity)
-
-What remains before promoting this module out of draft. None of it is a design question.
-
-- **Promote:** drop the draft banner and the "offer the fragments only if the user opts in" rule,
-  change the Step 1 table's Unity row from `draft (not yet)` to supported, strip the `DRAFT`
-  headers from the asset fragments, and drop the `.gitignore` four-line supplement if the template
-  source moves to upstream's `Unity.gitignore`.
-
-Found by a first manual run of the chain on a Unity 6 repo (each was worked around by hand). Two
-more were found there and are fixed in `setup-graph-hooks`: the post-commit hook landing outside
-`core.hooksPath` (it now treats `scripts/husky.sh` as a husky layout, and `husky.sh install` moves a
-stray hook into `.husky/`), and graph ignore files with no Unity rules (it now appends a Unity
-block on a Unity project). Neither workaround is needed any more.
-
-- **Prettier-ignore entries the root tooling adds.** An existing Unity `.prettierignore` still
-  needs the base asset's `pnpm-lock.yaml` (else lint-staged reformats the lockfile) and
-  `.agents/handoff/**/*.md` lines, and `.mcp.json` (rewritten by `code-review-graph install` /
-  `portable-mcp.py`), which the base asset lacks too.
-- **The copied `commitlint.config.mjs` fails a repo with its own `.prettierrc`** — the asset is
-  formatted with this skill's single-quote config. Format it with the repo's prettier after copying.
-
 ### Everything else → common base only
 
 For a recognized-but-unsupported language (C#, Helm, Go, Rust, …), apply the **common base** only,
 then tell the user to add their own language-specific config from there. A Unity repo is **not**
-plain C#: it is the draft module above, with the guards its banner names.
+plain C#: it gets the [Unity](#unity) module above, with its guards.
 
 - Add a lint-staged `glob → command` pair to `.lintstagedrc.json` following the same shape as the
   supported modules (e.g. `"*.go": ["gofmt -w", "golangci-lint run"]`).
@@ -885,11 +867,9 @@ them fill it.
 
 Not yet supported as first-class modules; they currently get the common base only.
 
-- **Unity** → drafted, not supported: see [Unity (draft — in progress)](#unity-draft--in-progress)
-  for the assets, the merge rules, and the open questions that block promotion.
 - **C#** (non-Unity) → likely `dotnet format` / csharpier via lint-staged (or Husky.Net if going
-  native), plus `.editorconfig` Roslyn analyzer rules. The Unity draft's formatter question
-  overlaps this one.
+  native), plus `.editorconfig` Roslyn analyzer rules. The Unity module's decision against a C#
+  formatter in the hooks (see [Decided](#decided-unity)) overlaps this one.
 - **Helm** → likely `helm lint` + `yamllint` + `kubeconform` + `helm-docs`.
 
 ## Verification
